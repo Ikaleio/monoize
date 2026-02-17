@@ -1,0 +1,48 @@
+[package]
+name = "monoize"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(embed_frontend)'] }
+
+[dependencies]
+async-trait = "0.1.89"
+axum = { version = "0.8.8", features = ["macros", "multipart"] }
+base64 = "0.22.1"
+bytes = "1.11.0"
+chrono = { version = "0.4.42", features = ["serde"] }
+eventsource-stream = "0.2.3"
+futures-util = "0.3.31"
+include_dir = "0.7.4"
+metrics = "0.24.3"
+metrics-exporter-prometheus = "0.18.1"
+mime = "0.3.17"
+mime_guess = "2.0.5"
+pdf-extract = "0.10.0"
+regex = "1.12.2"
+reqwest = { version = "0.13.1", features = ["json", "stream", "rustls-native-certs", "query"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "macros", "chrono", "uuid"] }
+thiserror = "2.0.17"
+tiktoken-rs = "0.9.1"
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-stream = "0.1.18"
+tokio-tungstenite = "0.28.0"
+tower-http = { version = "0.6.8", features = ["trace", "request-id", "cors"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1.19.0", features = ["v4", "serde"] }
+argon2 = { version = "0.5", features = ["std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+jsonwebtoken = "9"
+inventory = "0.3.21"
+
+[dev-dependencies]
+http-body-util = "0.1.3"
+hyper = "1.8.1"
+once_cell = "1.21.3"
+tempfile = "3.24.0"
+tower = "0.5.2"

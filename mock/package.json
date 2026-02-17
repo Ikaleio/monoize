@@ -1,0 +1,8 @@
+{
+  "name": "monoize-mock-upstream",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run server.ts"
+  }
+}

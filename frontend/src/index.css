@@ -1,0 +1,139 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
+@import url('https://fontsapi.zeoseven.com/487/main/result.css');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	:root {
+		--background: 220 14% 96%;
+		--foreground: 240 10% 3.9%;
+		--card: 0 0% 100%;
+		--card-foreground: 240 10% 3.9%;
+		--grid-color: 220 9% 88%;
+		--popover: 0 0% 100%;
+		--popover-foreground: 240 10% 3.9%;
+		--primary: 207 47% 43%;
+		--primary-foreground: 0 0% 100%;
+		--secondary: 240 4.8% 95.9%;
+		--secondary-foreground: 240 5.9% 10%;
+		--muted: 240 4.8% 95.9%;
+		--muted-foreground: 240 3.8% 46.1%;
+		--accent: 207 47% 43%;
+		--accent-foreground: 0 0% 100%;
+		--destructive: 0 84.2% 60.2%;
+		--destructive-foreground: 0 0% 98%;
+		--border: 240 5.9% 90%;
+		--input: 240 5.9% 90%;
+		--ring: 207 47% 43%;
+		--radius: 0.5rem;
+		--sidebar-background: 0 0% 98%;
+		--sidebar-foreground: 240 5.3% 26.1%;
+		--sidebar-primary: 207 47% 43%;
+		--sidebar-primary-foreground: 0 0% 100%;
+		--sidebar-accent: 240 4.8% 95.9%;
+		--sidebar-accent-foreground: 240 5.9% 10%;
+		--sidebar-border: 240 5.9% 90%;
+		--sidebar-ring: 207 47% 43%;
+		--chart-1: 207 47% 43%;
+		--chart-2: 207 47% 53%;
+		--chart-3: 207 47% 63%;
+		--chart-4: 207 47% 33%;
+		--chart-5: 207 47% 23%;
+		--font-sans-cjk:
+			'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+			'Segoe UI', sans-serif;
+		--font-code:
+			'Milky Han Mono CN', ui-monospace, SFMono-Regular, 'SF Mono', Menlo,
+			Consolas, 'Liberation Mono', monospace;
+	}
+
+	.dark {
+		--background: 240 10% 6%;
+		--foreground: 0 0% 98%;
+		--card: 240 10% 10%;
+		--card-foreground: 0 0% 98%;
+		--grid-color: 240 5% 12%;
+		--popover: 240 10% 3.9%;
+		--popover-foreground: 0 0% 98%;
+		--primary: 207 47% 50%;
+		--primary-foreground: 0 0% 100%;
+		--secondary: 240 3.7% 15.9%;
+		--secondary-foreground: 0 0% 98%;
+		--muted: 240 3.7% 15.9%;
+		--muted-foreground: 240 5% 64.9%;
+		--accent: 207 47% 50%;
+		--accent-foreground: 0 0% 100%;
+		--destructive: 0 62.8% 30.6%;
+		--destructive-foreground: 0 0% 98%;
+		--border: 240 3.7% 15.9%;
+		--input: 240 3.7% 15.9%;
+		--ring: 207 47% 50%;
+		--sidebar-background: 240 5.9% 10%;
+		--sidebar-foreground: 240 4.8% 95.9%;
+		--sidebar-primary: 207 47% 50%;
+		--sidebar-primary-foreground: 0 0% 100%;
+		--sidebar-accent: 240 3.7% 15.9%;
+		--sidebar-accent-foreground: 240 4.8% 95.9%;
+		--sidebar-border: 240 3.7% 15.9%;
+		--sidebar-ring: 207 47% 50%;
+	}
+
+	* {
+		@apply border-border;
+	}
+
+	body {
+		@apply bg-background text-foreground antialiased;
+		font-family: var(--font-sans-cjk);
+		min-height: 100vh;
+		background-image:
+			linear-gradient(to right, hsl(var(--grid-color)) 1px, transparent 1px),
+			linear-gradient(to bottom, hsl(var(--grid-color)) 1px, transparent 1px);
+		background-size: 24px 24px;
+	}
+
+	code,
+	pre,
+	kbd,
+	samp {
+		font-family: var(--font-code);
+	}
+}
+
+@layer components {
+	.sidebar-item {
+		@apply flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-foreground hover:bg-accent/50;
+	}
+
+	.sidebar-item.active {
+		@apply bg-primary/10 text-primary font-medium;
+	}
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: hsl(var(--muted));
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+	background: hsl(var(--muted-foreground) / 0.3);
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Firefox scrollbar */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: hsl(var(--muted-foreground) / 0.3) hsl(var(--muted));
+}

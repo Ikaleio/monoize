@@ -1,0 +1,25 @@
+[
+  {
+    "logical_model": "gpt-4o-mini",
+    "provider_id": "mock",
+    "upstream_model": "mock-model",
+    "capabilities": {
+      "max_context_tokens": 8192,
+      "max_output_tokens": 1024,
+      "supports_streaming": true,
+      "supports_tools": true,
+      "supports_parallel_tool_calls": true,
+      "supports_structured_output": false,
+      "supports_reasoning_controls": {
+        "supported": false,
+        "mode": "none",
+        "effort_levels": [],
+        "max_reasoning_tokens": null
+      },
+      "supports_image_input": { "supported": false, "max_images": null },
+      "supports_file_input": { "supported": false, "max_files": null },
+      "supports_image_output": { "supported": false },
+      "tokenizer": "cl100k_base"
+    }
+  }
+]

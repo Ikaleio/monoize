@@ -1,0 +1,7 @@
+/target
+/data/
+.playwright-mcp
+frontend/playwright-report/
+frontend/test-results/
+.env
+.env.*
