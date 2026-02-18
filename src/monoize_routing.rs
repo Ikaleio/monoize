@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Pool, Row, Sqlite};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +67,18 @@ pub struct MonoizeChannel {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive_failure_threshold_override: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive_cooldown_seconds_override: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive_window_seconds_override: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive_min_samples_override: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive_failure_rate_threshold_override: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub _healthy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _failure_count: Option<u32>,
@@ -107,6 +119,18 @@ pub struct CreateMonoizeChannelInput {
     pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub passive_failure_threshold_override: Option<u32>,
+    #[serde(default)]
+    pub passive_cooldown_seconds_override: Option<u64>,
+    #[serde(default)]
+    pub passive_window_seconds_override: Option<u64>,
+    #[serde(default)]
+    pub passive_min_samples_override: Option<u32>,
+    #[serde(default)]
+    pub passive_failure_rate_threshold_override: Option<f64>,
+    #[serde(default)]
+    pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -154,6 +178,10 @@ pub struct MonoizeRuntimeConfig {
     pub request_timeout_ms: u64,
     pub passive_failure_threshold: u32,
     pub passive_cooldown_seconds: u64,
+    pub passive_window_seconds: u64,
+    pub passive_min_samples: u32,
+    pub passive_failure_rate_threshold: f64,
+    pub passive_rate_limit_cooldown_seconds: u64,
     pub active_enabled: bool,
     pub active_interval_seconds: u64,
     pub active_success_threshold: u32,
@@ -167,6 +195,10 @@ impl Default for MonoizeRuntimeConfig {
             request_timeout_ms: 30_000,
             passive_failure_threshold: 3,
             passive_cooldown_seconds: 60,
+            passive_window_seconds: 30,
+            passive_min_samples: 20,
+            passive_failure_rate_threshold: 0.6,
+            passive_rate_limit_cooldown_seconds: 15,
             active_enabled: true,
             active_interval_seconds: 30,
             active_success_threshold: 1,
@@ -174,6 +206,12 @@ impl Default for MonoizeRuntimeConfig {
             active_probe_model: None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PassiveHealthSample {
+    pub at_ts: i64,
+    pub failed: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -184,6 +222,7 @@ pub struct ChannelHealthState {
     pub cooldown_until: Option<i64>,
     pub probe_success_count: u32,
     pub last_probe_at: Option<i64>,
+    pub passive_samples: VecDeque<PassiveHealthSample>,
 }
 
 impl ChannelHealthState {
@@ -195,6 +234,7 @@ impl ChannelHealthState {
             cooldown_until: None,
             probe_success_count: 0,
             last_probe_at: None,
+            passive_samples: VecDeque::new(),
         }
     }
 
@@ -283,6 +323,12 @@ impl MonoizeRoutingStore {
                 api_key TEXT NOT NULL,
                 weight INTEGER NOT NULL DEFAULT 1,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                passive_failure_threshold_override INTEGER,
+                passive_cooldown_seconds_override INTEGER,
+                passive_window_seconds_override INTEGER,
+                passive_min_samples_override INTEGER,
+                passive_failure_rate_threshold_override REAL,
+                passive_rate_limit_cooldown_seconds_override INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )"#,
@@ -382,6 +428,102 @@ impl MonoizeRoutingStore {
         if !has_active_probe_model_override_column {
             sqlx::query(
                 "ALTER TABLE monoize_providers ADD COLUMN active_probe_model_override TEXT",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_channel_passive_failure_threshold_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_channels') WHERE name = 'passive_failure_threshold_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_channel_passive_failure_threshold_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_channels ADD COLUMN passive_failure_threshold_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_channel_passive_cooldown_seconds_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_channels') WHERE name = 'passive_cooldown_seconds_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_channel_passive_cooldown_seconds_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_channels ADD COLUMN passive_cooldown_seconds_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_channel_passive_window_seconds_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_channels') WHERE name = 'passive_window_seconds_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_channel_passive_window_seconds_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_channels ADD COLUMN passive_window_seconds_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_channel_passive_min_samples_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_channels') WHERE name = 'passive_min_samples_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_channel_passive_min_samples_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_channels ADD COLUMN passive_min_samples_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_channel_passive_failure_rate_threshold_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_channels') WHERE name = 'passive_failure_rate_threshold_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_channel_passive_failure_rate_threshold_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_channels ADD COLUMN passive_failure_rate_threshold_override REAL",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_channel_passive_rate_limit_cooldown_seconds_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_channels') WHERE name = 'passive_rate_limit_cooldown_seconds_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_channel_passive_rate_limit_cooldown_seconds_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_channels ADD COLUMN passive_rate_limit_cooldown_seconds_override INTEGER",
             )
             .execute(&pool)
             .await
@@ -683,18 +825,64 @@ impl MonoizeRoutingStore {
         provider_id: &str,
         channels: &[CreateMonoizeChannelInput],
     ) -> Result<(), String> {
-        // Fetch existing api_keys keyed by channel id; preserved when input omits api_key.
-        let existing_rows =
-            sqlx::query("SELECT id, api_key FROM monoize_channels WHERE provider_id = ?")
-                .bind(provider_id)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
-        let mut existing_keys: HashMap<String, String> = HashMap::new();
+        // Fetch existing channel fields keyed by channel id; preserved when input omits value.
+        let existing_rows = sqlx::query(
+            "SELECT id, api_key,
+                    passive_failure_threshold_override,
+                    passive_cooldown_seconds_override,
+                    passive_window_seconds_override,
+                    passive_min_samples_override,
+                    passive_failure_rate_threshold_override,
+                    passive_rate_limit_cooldown_seconds_override
+             FROM monoize_channels
+             WHERE provider_id = ?",
+        )
+        .bind(provider_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        #[derive(Clone)]
+        struct ExistingChannel {
+            api_key: String,
+            passive_failure_threshold_override: Option<u32>,
+            passive_cooldown_seconds_override: Option<u64>,
+            passive_window_seconds_override: Option<u64>,
+            passive_min_samples_override: Option<u32>,
+            passive_failure_rate_threshold_override: Option<f64>,
+            passive_rate_limit_cooldown_seconds_override: Option<u64>,
+        }
+        let mut existing_channels: HashMap<String, ExistingChannel> = HashMap::new();
         for row in &existing_rows {
             let id: String = row.try_get("id").map_err(|e| e.to_string())?;
-            let key: String = row.try_get("api_key").map_err(|e| e.to_string())?;
-            existing_keys.insert(id, key);
+            existing_channels.insert(
+                id,
+                ExistingChannel {
+                    api_key: row.try_get("api_key").map_err(|e| e.to_string())?,
+                    passive_failure_threshold_override: row
+                        .try_get::<Option<i64>, _>("passive_failure_threshold_override")
+                        .map_err(|e| e.to_string())?
+                        .map(|v| v as u32),
+                    passive_cooldown_seconds_override: row
+                        .try_get::<Option<i64>, _>("passive_cooldown_seconds_override")
+                        .map_err(|e| e.to_string())?
+                        .map(|v| v as u64),
+                    passive_window_seconds_override: row
+                        .try_get::<Option<i64>, _>("passive_window_seconds_override")
+                        .map_err(|e| e.to_string())?
+                        .map(|v| v as u64),
+                    passive_min_samples_override: row
+                        .try_get::<Option<i64>, _>("passive_min_samples_override")
+                        .map_err(|e| e.to_string())?
+                        .map(|v| v as u32),
+                    passive_failure_rate_threshold_override: row
+                        .try_get("passive_failure_rate_threshold_override")
+                        .map_err(|e| e.to_string())?,
+                    passive_rate_limit_cooldown_seconds_override: row
+                        .try_get::<Option<i64>, _>("passive_rate_limit_cooldown_seconds_override")
+                        .map_err(|e| e.to_string())?
+                        .map(|v| v as u64),
+                },
+            );
         }
 
         sqlx::query("DELETE FROM monoize_channels WHERE provider_id = ?")
@@ -711,18 +899,44 @@ impl MonoizeRoutingStore {
 
             let api_key = match input.api_key.as_deref() {
                 Some(k) if !k.trim().is_empty() => k.to_string(),
-                _ => existing_keys.get(&id).cloned().ok_or_else(|| {
-                    format!(
-                        "channel api_key must not be empty for new channel '{}'",
-                        input.name
-                    )
-                })?,
+                _ => existing_channels
+                    .get(&id)
+                    .map(|c| c.api_key.clone())
+                    .ok_or_else(|| {
+                        format!(
+                            "channel api_key must not be empty for new channel '{}'",
+                            input.name
+                        )
+                    })?,
             };
+            let existing = existing_channels.get(&id);
+            let passive_failure_threshold_override = input
+                .passive_failure_threshold_override
+                .or_else(|| existing.and_then(|c| c.passive_failure_threshold_override));
+            let passive_cooldown_seconds_override = input
+                .passive_cooldown_seconds_override
+                .or_else(|| existing.and_then(|c| c.passive_cooldown_seconds_override));
+            let passive_window_seconds_override = input
+                .passive_window_seconds_override
+                .or_else(|| existing.and_then(|c| c.passive_window_seconds_override));
+            let passive_min_samples_override = input
+                .passive_min_samples_override
+                .or_else(|| existing.and_then(|c| c.passive_min_samples_override));
+            let passive_failure_rate_threshold_override = input
+                .passive_failure_rate_threshold_override
+                .or_else(|| existing.and_then(|c| c.passive_failure_rate_threshold_override));
+            let passive_rate_limit_cooldown_seconds_override = input
+                .passive_rate_limit_cooldown_seconds_override
+                .or_else(|| existing.and_then(|c| c.passive_rate_limit_cooldown_seconds_override));
 
             sqlx::query(
                 r#"INSERT INTO monoize_channels
-                   (id, provider_id, name, base_url, api_key, weight, enabled, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                   (id, provider_id, name, base_url, api_key, weight, enabled,
+                    passive_failure_threshold_override, passive_cooldown_seconds_override,
+                    passive_window_seconds_override, passive_min_samples_override,
+                    passive_failure_rate_threshold_override, passive_rate_limit_cooldown_seconds_override,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             )
             .bind(&id)
             .bind(provider_id)
@@ -731,6 +945,12 @@ impl MonoizeRoutingStore {
             .bind(&api_key)
             .bind(input.weight)
             .bind(input.enabled)
+            .bind(passive_failure_threshold_override.map(|v| v as i64))
+            .bind(passive_cooldown_seconds_override.map(|v| v as i64))
+            .bind(passive_window_seconds_override.map(|v| v as i64))
+            .bind(passive_min_samples_override.map(|v| v as i64))
+            .bind(passive_failure_rate_threshold_override)
+            .bind(passive_rate_limit_cooldown_seconds_override.map(|v| v as i64))
             .bind(Utc::now().to_rfc3339())
             .bind(Utc::now().to_rfc3339())
             .execute(&self.pool)
@@ -774,7 +994,13 @@ impl MonoizeRoutingStore {
         }
 
         let channel_rows = sqlx::query(
-            r#"SELECT id, name, base_url, api_key, weight, enabled
+            r#"SELECT id, name, base_url, api_key, weight, enabled,
+                      passive_failure_threshold_override,
+                      passive_cooldown_seconds_override,
+                      passive_window_seconds_override,
+                      passive_min_samples_override,
+                      passive_failure_rate_threshold_override,
+                      passive_rate_limit_cooldown_seconds_override
                FROM monoize_channels
                WHERE provider_id = ?
                ORDER BY created_at ASC"#,
@@ -793,6 +1019,29 @@ impl MonoizeRoutingStore {
                 api_key: cr.try_get("api_key").map_err(|e| e.to_string())?,
                 weight: cr.try_get("weight").map_err(|e| e.to_string())?,
                 enabled: cr.try_get("enabled").map_err(|e| e.to_string())?,
+                passive_failure_threshold_override: cr
+                    .try_get::<Option<i64>, _>("passive_failure_threshold_override")
+                    .map_err(|e| e.to_string())?
+                    .map(|v| v as u32),
+                passive_cooldown_seconds_override: cr
+                    .try_get::<Option<i64>, _>("passive_cooldown_seconds_override")
+                    .map_err(|e| e.to_string())?
+                    .map(|v| v as u64),
+                passive_window_seconds_override: cr
+                    .try_get::<Option<i64>, _>("passive_window_seconds_override")
+                    .map_err(|e| e.to_string())?
+                    .map(|v| v as u64),
+                passive_min_samples_override: cr
+                    .try_get::<Option<i64>, _>("passive_min_samples_override")
+                    .map_err(|e| e.to_string())?
+                    .map(|v| v as u32),
+                passive_failure_rate_threshold_override: cr
+                    .try_get("passive_failure_rate_threshold_override")
+                    .map_err(|e| e.to_string())?,
+                passive_rate_limit_cooldown_seconds_override: cr
+                    .try_get::<Option<i64>, _>("passive_rate_limit_cooldown_seconds_override")
+                    .map_err(|e| e.to_string())?
+                    .map(|v| v as u64),
                 _healthy: None,
                 _failure_count: None,
                 _last_success_at: None,
@@ -893,6 +1142,41 @@ fn validate_channels(
         if c.weight < 0 {
             return Err("channel weight must be >= 0".to_string());
         }
+        if let Some(v) = c.passive_failure_threshold_override {
+            if v < 1 {
+                return Err("channel passive_failure_threshold_override must be >= 1".to_string());
+            }
+        }
+        if let Some(v) = c.passive_cooldown_seconds_override {
+            if v < 1 {
+                return Err("channel passive_cooldown_seconds_override must be >= 1".to_string());
+            }
+        }
+        if let Some(v) = c.passive_window_seconds_override {
+            if v < 1 {
+                return Err("channel passive_window_seconds_override must be >= 1".to_string());
+            }
+        }
+        if let Some(v) = c.passive_min_samples_override {
+            if v < 1 {
+                return Err("channel passive_min_samples_override must be >= 1".to_string());
+            }
+        }
+        if let Some(v) = c.passive_failure_rate_threshold_override {
+            if !(v.is_finite() && (0.01..=1.0).contains(&v)) {
+                return Err(
+                    "channel passive_failure_rate_threshold_override must be in [0.01, 1.0]"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(v) = c.passive_rate_limit_cooldown_seconds_override {
+            if v < 1 {
+                return Err(
+                    "channel passive_rate_limit_cooldown_seconds_override must be >= 1".to_string(),
+                );
+            }
+        }
         if let Some(id) = &c.id {
             if !ids.insert(id.clone()) {
                 return Err("duplicate channel id".to_string());
@@ -950,7 +1234,7 @@ pub async fn probe_channel_completion(
             let url = format!("{base}/v1/messages");
             let body = serde_json::json!({
                 "model": model,
-                "max_tokens": 1,
+                "max_tokens": 16,
                 "messages": [{"role": "user", "content": "hi"}]
             });
             (url, body)
@@ -959,7 +1243,7 @@ pub async fn probe_channel_completion(
             let url = format!("{base}/v1/chat/completions");
             let body = serde_json::json!({
                 "model": model,
-                "max_tokens": 1,
+                "max_tokens": 16,
                 "messages": [{"role": "user", "content": "hi"}]
             });
             (url, body)

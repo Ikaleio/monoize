@@ -32,6 +32,16 @@ Runtime-only state MUST be maintained in memory:
 - `_healthy: boolean` default `true`
 - `_failure_count: integer` default `0`
 - `_last_success_at: timestamp | null`
+- `_passive_samples: sequence<{at_ts: timestamp, failed: boolean}>` (bounded by time-window pruning)
+
+Channel-level passive breaker override fields MAY be present:
+
+- `passive_failure_threshold_override: integer? (>= 1)`
+- `passive_cooldown_seconds_override: integer? (>= 1)`
+- `passive_window_seconds_override: integer? (>= 1)`
+- `passive_min_samples_override: integer? (>= 1)`
+- `passive_failure_rate_threshold_override: number? ([0.01, 1.0])`
+- `passive_rate_limit_cooldown_seconds_override: integer? (>= 1)`
 
 ### 2.2 Model Entry
 
@@ -63,6 +73,13 @@ The router subsystem MUST support:
 - ordered provider list
 - `request_timeout_ms` default `30000`
 - health-check config with passive and active sections
+- global passive breaker defaults:
+  - `passive_failure_threshold` default `3`
+  - `passive_cooldown_seconds` default `60`
+  - `passive_window_seconds` default `30`
+  - `passive_min_samples` default `20`
+  - `passive_failure_rate_threshold` default `0.6`
+  - `passive_rate_limit_cooldown_seconds` default `15`
 
 CFG-1. Provider configuration decoding MUST be fail-fast: invalid serialized provider fields (including `transforms`, `created_at`, `updated_at`) MUST return an explicit error and MUST NOT be silently coerced to defaults.
 
@@ -76,6 +93,11 @@ CFG-2. Each provider MAY define probe override fields:
 CFG-3. Probe precedence MUST be provider override first, then global settings fallback.
 
 CFG-4. Global active probe settings MUST be treated as defaults. If global `enabled == false`, providers with `active_probe_enabled_override == true` MUST still be active-probed. Providers with `active_probe_enabled_override == false` MUST remain excluded regardless of global value.
+
+CFG-5. Passive breaker effective parameters MUST be resolved per channel with precedence:
+
+1. channel override field (if present)
+2. global passive breaker setting
 
 ## 3. Request Routing Parameters
 
@@ -134,10 +156,25 @@ STRM-2. Provider/channel fallback is allowed only before first downstream byte i
 
 - `failure_threshold` default `3`
 - `cooldown_seconds` default `60`
+- `window_seconds` default `30`
+- `min_samples` default `20`
+- `failure_rate_threshold` default `0.6`
+- `rate_limit_cooldown_seconds` default `15`
 
-PHS-1. When consecutive retryable failures reach threshold, channel MUST become unhealthy.
+PHS-1. For retryable failures classified as transient (`5xx`, timeout/network), channel consecutive failure counter MUST increment by `1`.
 
-PHS-2. Unhealthy channel MUST not receive normal traffic during cooldown.
+PHS-2. On successful attempts, channel consecutive failure counter MUST reset to `0`.
+
+PHS-3. Channel MUST append one passive sample per completed attempt (`failed=true/false`) and MUST prune samples older than `window_seconds`.
+
+PHS-4. Channel MUST become unhealthy when either condition is true:
+
+- consecutive transient failures `>= failure_threshold`; or
+- `sample_count >= min_samples` and `failed_count / sample_count >= failure_rate_threshold`.
+
+PHS-5. When unhealthy is triggered by retryable `429`, cooldown MUST use `rate_limit_cooldown_seconds`. Otherwise cooldown MUST use `cooldown_seconds`.
+
+PHS-6. Unhealthy channel MUST not receive normal traffic while `now < cooldown_until`.
 
 ### 6.2 Active
 
@@ -153,7 +190,7 @@ AHS-2. Channel MUST return to healthy only after reaching success threshold.
 
 AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using `probe_model` when configured; otherwise it MUST use the provider's first model from its model map. If no model can be resolved, probing for that provider/channel MUST be skipped.
 
-AHS-4. The completion probe request MUST use `max_tokens: 1` and a minimal single-user-message payload to minimize cost and latency.
+AHS-4. The completion probe request MUST use `max_tokens: 16` and a minimal single-user-message payload to minimize cost and latency.
 
 AHS-5. Probe results MUST be logged at debug level with channel ID, provider name, probe model, and success/failure status.
 

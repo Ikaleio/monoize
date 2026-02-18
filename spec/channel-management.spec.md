@@ -115,7 +115,7 @@ All endpoints require an authenticated dashboard admin session.
 - Method/Path: `POST /api/dashboard/providers/{provider_id}/channels/{channel_id}/test`
 - Body (optional):
   - `model?: string` — If provided, test with this specific model. If omitted, use the provider's configured active probe model override, falling back to global probe model, falling back to the provider's first model key.
-- Semantics: Sends a minimal completion request (`max_tokens: 1`, `messages: [{"role":"user","content":"hi"}]`) to the channel using the provider's `provider_type` to determine the wire format. Measures wall-clock time from request start to response completion.
+- Semantics: Sends a minimal completion request (`max_tokens: 16`, `messages: [{"role":"user","content":"hi"}]`) to the channel using the provider's `provider_type` to determine the wire format. Measures wall-clock time from request start to response completion.
 - Response: `200`
   ```json
   {
