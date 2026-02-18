@@ -20,6 +20,10 @@ fn is_valid_username(username: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn is_reserved_internal_username(username: &str) -> bool {
+    UserStore::is_reserved_internal_username(username)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
     pub username: String,
@@ -49,6 +53,8 @@ pub struct UserResponse {
     pub balance_nano_usd: String,
     pub balance_usd: String,
     pub balance_unlimited: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 impl From<User> for UserResponse {
@@ -63,6 +69,7 @@ impl From<User> for UserResponse {
             balance_usd: format_nano_to_usd(u.balance_nano_usd.parse::<i128>().unwrap_or(0)),
             balance_nano_usd: u.balance_nano_usd,
             balance_unlimited: u.balance_unlimited,
+            email: u.email,
         }
     }
 }
@@ -83,6 +90,7 @@ pub struct UpdateUserRequest {
     pub balance_nano_usd: Option<String>,
     pub balance_usd: Option<String>,
     pub balance_unlimited: Option<bool>,
+    pub email: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +190,10 @@ pub struct UpdateSettingsRequest {
     pub site_description: Option<String>,
     pub api_base_url: Option<String>,
     pub reasoning_suffix_map: Option<std::collections::HashMap<String, String>>,
+    pub monoize_active_probe_enabled: Option<bool>,
+    pub monoize_active_probe_interval_seconds: Option<u64>,
+    pub monoize_active_probe_success_threshold: Option<u32>,
+    pub monoize_active_probe_model: Option<Option<String>>,
 }
 
 fn extract_session_token(headers: &HeaderMap) -> Option<String> {
@@ -281,6 +293,14 @@ pub async fn register(
         ));
     }
 
+    if is_reserved_internal_username(&body.username) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "reserved_username",
+            "username prefix _monoize_ is reserved",
+        ));
+    }
+
     if body.password.len() < 8 {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -329,6 +349,14 @@ pub async fn login(
     Json(body): Json<LoginRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user_store = &state.user_store;
+
+    if is_reserved_internal_username(&body.username) {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "reserved_username",
+            "username prefix _monoize_ is reserved",
+        ));
+    }
 
     let user = user_store
         .get_user_by_username(&body.username)
@@ -401,6 +429,43 @@ pub async fn get_me(
     Ok(Json(UserResponse::from(user)))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateMeRequest {
+    pub email: Option<Option<String>>,
+}
+
+pub async fn update_me(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateMeRequest>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+
+    let user_store = &state.user_store;
+
+    user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            body.email.as_ref().map(|e| e.as_deref()),
+        )
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    let updated_user = user_store
+        .get_user_by_id(&user.id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "user not found"))?;
+
+    Ok(Json(UserResponse::from(updated_user)))
+}
+
 pub async fn list_users(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -464,6 +529,14 @@ pub async fn create_user(
             StatusCode::BAD_REQUEST,
             "invalid_username",
             "username must be 3-22 characters, only letters, digits and underscores",
+        ));
+    }
+
+    if is_reserved_internal_username(&body.username) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "reserved_username",
+            "username prefix _monoize_ is reserved",
         ));
     }
 
@@ -539,6 +612,13 @@ pub async fn update_user(
                 "username must be 3-22 characters, only letters, digits and underscores",
             ));
         }
+        if is_reserved_internal_username(username) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "reserved_username",
+                "username prefix _monoize_ is reserved",
+            ));
+        }
     }
 
     if let Some(ref password) = body.password {
@@ -578,6 +658,7 @@ pub async fn update_user(
             body.enabled,
             None,
             None,
+            body.email.as_ref().map(|e| e.as_deref()),
         )
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
@@ -983,6 +1064,25 @@ pub async fn update_settings(
     if let Some(v) = body.reasoning_suffix_map {
         settings.reasoning_suffix_map = v;
     }
+    if let Some(v) = body.monoize_active_probe_enabled {
+        settings.monoize_active_probe_enabled = v;
+    }
+    if let Some(v) = body.monoize_active_probe_interval_seconds {
+        settings.monoize_active_probe_interval_seconds = v.max(1);
+    }
+    if let Some(v) = body.monoize_active_probe_success_threshold {
+        settings.monoize_active_probe_success_threshold = v.max(1);
+    }
+    if let Some(v) = body.monoize_active_probe_model {
+        settings.monoize_active_probe_model = v.and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+    }
 
     settings_store
         .update_all(&settings)
@@ -1067,6 +1167,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<imp
         "registration_enabled": settings.registration_enabled,
         "site_name": settings.site_name,
         "site_description": settings.site_description,
+        "api_base_url": settings.api_base_url,
     })))
 }
 
@@ -1634,6 +1735,78 @@ pub async fn fetch_channel_models(
     Ok(Json(json!({ "models": models })))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TestChannelRequest {
+    pub model: Option<String>,
+}
+
+pub async fn test_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((provider_id, channel_id)): Path<(String, String)>,
+    body: Option<Json<TestChannelRequest>>,
+) -> AppResult<impl IntoResponse> {
+    require_admin(&headers, &state).await?;
+
+    let provider = state
+        .monoize_store
+        .get_provider(&provider_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found"))?;
+
+    let channel = provider
+        .channels
+        .iter()
+        .find(|c| c.id == channel_id)
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "channel not found"))?;
+
+    let requested_model = body.and_then(|b| b.model.clone());
+
+    let settings = state
+        .settings_store
+        .get_all()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    let probe_model = requested_model
+        .or_else(|| provider.active_probe_model_override.clone())
+        .or_else(|| settings.monoize_active_probe_model.clone())
+        .or_else(|| provider.models.keys().next().cloned());
+
+    let Some(model_name) = probe_model else {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "no model available for testing; specify a model or add models to this provider",
+        ));
+    };
+
+    let started_at = std::time::Instant::now();
+    let (ok, _usage) = crate::monoize_routing::probe_channel_completion(
+        &state.http,
+        channel,
+        state.monoize_runtime.request_timeout_ms,
+        &model_name,
+        provider.provider_type,
+    )
+    .await;
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+
+    let error_msg = if ok {
+        None
+    } else {
+        Some("upstream returned non-2xx status or connection failed".to_string())
+    };
+
+    Ok(Json(json!({
+        "success": ok,
+        "latency_ms": latency_ms,
+        "model": model_name,
+        "error": error_msg,
+    })))
+}
+
 pub async fn get_transform_registry(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
     let mut items: Vec<Value> = state
         .transform_registry
@@ -1660,7 +1833,11 @@ pub async fn get_provider_presets() -> AppResult<impl IntoResponse> {
 
 fn build_models_list_url(base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
-    format!("{base}/v1/models")
+    if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    }
 }
 
 #[cfg(test)]
@@ -1677,14 +1854,14 @@ mod tests {
     }
 
     #[test]
-    fn build_models_list_url_keeps_user_provided_v1_suffix() {
+    fn build_models_list_url_avoids_duplicate_v1_suffix() {
         assert_eq!(
             build_models_list_url("https://openrouter.ai/api/v1"),
-            "https://openrouter.ai/api/v1/v1/models"
+            "https://openrouter.ai/api/v1/models"
         );
         assert_eq!(
             build_models_list_url("https://openrouter.ai/api/v1/"),
-            "https://openrouter.ai/api/v1/v1/models"
+            "https://openrouter.ai/api/v1/models"
         );
     }
 

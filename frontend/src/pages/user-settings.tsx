@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save, User, Lock, Globe } from "lucide-react";
+import { Save, User, Lock, Globe, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,19 +12,25 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { PageWrapper, StaggerList, StaggerItem, motion, transitions } from "@/components/ui/motion";
 import { setLanguage, getCurrentLanguage } from "@/i18n";
+import { updateMeOptimistic } from "@/lib/swr";
+import { getGravatarUrl } from "@/lib/utils";
 
 export function UserSettingsPage() {
   const { t } = useTranslation();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const { theme, setTheme } = useTheme();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [email, setEmail] = useState(user?.email || "");
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [savedEmail, setSavedEmail] = useState(false);
   const currentLang = getCurrentLanguage();
 
   const handleSavePassword = async () => {
@@ -39,6 +45,27 @@ export function UserSettingsPage() {
       setTimeout(() => setSaved(false), 2000);
     }, 1000);
   };
+
+  const handleSaveEmail = async () => {
+    setSavingEmail(true);
+    try {
+      const emailValue = email.trim() || null;
+      await updateMeOptimistic(
+        { email: emailValue },
+        user ?? undefined,
+        (error) => console.error("Failed to update email", error)
+      );
+      await refreshUser();
+      setSavedEmail(true);
+      setTimeout(() => setSavedEmail(false), 2000);
+    } catch {
+      // Error handled by optimistic update
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
+  const gravatarUrl = getGravatarUrl(email || user?.email, 96);
 
   const themeLabels = {
     light: t("theme.light"),
@@ -68,12 +95,45 @@ export function UserSettingsPage() {
               <CardDescription>{t("userSettings.profileDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex items-center gap-4">
+                <Avatar className="h-16 w-16">
+                  {gravatarUrl && <AvatarImage src={gravatarUrl} alt={user?.username} />}
+                  <AvatarFallback className="text-lg">
+                    {user?.username?.[0]?.toUpperCase() || "U"}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1 space-y-2">
+                  <Label>{t("auth.username")}</Label>
+                  <Input value={user?.username || ""} disabled />
+                  <p className="text-sm text-muted-foreground">
+                    {t("userSettings.usernameCannotChange")}
+                  </p>
+                </div>
+              </div>
+              <Separator />
               <div className="space-y-2">
-                <Label>{t("auth.username")}</Label>
-                <Input value={user?.username || ""} disabled />
+                <Label htmlFor="email">
+                  <Mail className="mr-1 inline h-4 w-4" />
+                  {t("userSettings.email")}
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                />
                 <p className="text-sm text-muted-foreground">
-                  {t("userSettings.usernameCannotChange")}
+                  {t("userSettings.emailDescription")}
                 </p>
+                <Button
+                  onClick={handleSaveEmail}
+                  disabled={savingEmail}
+                  size="sm"
+                >
+                  <Save className="mr-2 h-4 w-4" />
+                  {savingEmail ? t("common.saving") : savedEmail ? t("common.saved") : t("common.save")}
+                </Button>
               </div>
             </CardContent>
           </Card>

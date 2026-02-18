@@ -110,6 +110,29 @@ All endpoints require an authenticated dashboard admin session.
   - `400 invalid_request` if array is empty
   - `400 invalid_request` if ids are duplicated or missing existing providers
 
+### 3.7 Test channel liveness
+
+- Method/Path: `POST /api/dashboard/providers/{provider_id}/channels/{channel_id}/test`
+- Body (optional):
+  - `model?: string` — If provided, test with this specific model. If omitted, use the provider's configured active probe model override, falling back to global probe model, falling back to the provider's first model key.
+- Semantics: Sends a minimal completion request (`max_tokens: 1`, `messages: [{"role":"user","content":"hi"}]`) to the channel using the provider's `provider_type` to determine the wire format. Measures wall-clock time from request start to response completion.
+- Response: `200`
+  ```json
+  {
+    "success": boolean,
+    "latency_ms": integer,
+    "model": string,
+    "error": string | null
+  }
+  ```
+  - `success`: `true` if the upstream returned a 2xx status.
+  - `latency_ms`: Wall-clock milliseconds from request send to response body received.
+  - `model`: The model name used for the probe.
+  - `error`: If `success` is `false`, a human-readable error string. `null` otherwise.
+- Errors:
+  - `404 not_found` if provider or channel does not exist
+  - `400 invalid_request` if provider has no models and no model is specified
+
 ## 4. Security
 
 CP-SEC-1. `api_key` MUST be accepted in create/update payloads.

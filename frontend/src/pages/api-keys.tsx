@@ -18,14 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { TableVirtuoso } from "react-virtuoso";
 import {
   Tooltip,
   TooltipContent,
@@ -69,7 +62,7 @@ export function ApiKeysPage() {
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [createdKey, setCreatedKey] = useState<ApiKeyCreated | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const resetCreateForm = () => {
     setNewKeyName("");
@@ -207,8 +200,8 @@ export function ApiKeysPage() {
 
   const handleCopy = async (key: string) => {
     await navigator.clipboard.writeText(key);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
   };
 
   const openEditDialog = (key: ApiKey) => {
@@ -441,7 +434,7 @@ export function ApiKeysPage() {
                     size="icon"
                     onClick={() => handleCopy(createdKey.key)}
                   >
-                    {copied ? (
+                    {copiedKey === createdKey.key ? (
                       <Check className="h-4 w-4" />
                     ) : (
                       <Copy className="h-4 w-4" />
@@ -480,154 +473,178 @@ export function ApiKeysPage() {
                 {t("apiKeys.noKeys")}
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[50px]">
+              <TableVirtuoso
+                style={{ height: "calc(100vh - 280px)", minHeight: 400 }}
+                data={keys}
+                components={{
+                  Table: (props) => (
+                    <table
+                      {...props}
+                      className="w-full caption-bottom text-sm"
+                    />
+                  ),
+                  TableHead: (props) => (
+                    <thead {...props} className="[&_tr]:border-b" />
+                  ),
+                  TableRow: (props) => (
+                    <tr
+                      {...props}
+                      className="border-b transition-colors hover:bg-muted/50"
+                    />
+                  ),
+                  TableBody: (props) => (
+                    <tbody {...props} className="[&_tr:last-child]:border-0" />
+                  ),
+                }}
+                fixedHeaderContent={() => (
+                  <tr className="border-b bg-background">
+                    <th className="h-10 px-4 align-middle font-medium text-muted-foreground w-[50px]">
                       <Checkbox
                         checked={selectedKeys.length === keys.length && keys.length > 0}
                         onCheckedChange={toggleSelectAll}
                       />
-                    </TableHead>
-                    <TableHead>{t("common.name")}</TableHead>
-                    <TableHead>{t("apiKeys.keyPrefix")}</TableHead>
-                    <TableHead>{t("apiKeys.quota")}</TableHead>
-                    <TableHead>{t("apiKeys.restrictions")}</TableHead>
-                    <TableHead>{t("apiKeys.expires")}</TableHead>
-                    <TableHead>{t("common.status")}</TableHead>
-                    <TableHead className="w-[100px]">{t("common.actions")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {keys.map((key, index) => (
-                    <motion.tr
-                      key={key.id}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.05, ...transitions.normal }}
-                      className="border-b transition-colors hover:bg-muted/50"
-                    >
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedKeys.includes(key.id)}
-                          onCheckedChange={() => toggleSelectKey(key.id)}
-                        />
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        <div>
-                          {key.name}
-                          {key.group !== "default" && (
-                            <Badge variant="outline" className="ml-2 text-xs">
-                              {key.group}
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <code className="rounded bg-muted px-2 py-0.5 text-sm">
-                            {key.key ? `${key.key.slice(0, 12)}...` : `${key.key_prefix}...`}
-                          </code>
-                          {key.key && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() => handleCopy(key.key)}
-                            >
-                              {copied ? (
-                                <Check className="h-3 w-3" />
-                              ) : (
-                                <Copy className="h-3 w-3" />
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {key.quota_unlimited ? (
-                          <Badge variant="secondary">{t("apiKeys.unlimited")}</Badge>
-                        ) : (
-                          <span>{key.quota_remaining?.toLocaleString() ?? 0}</span>
+                    </th>
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                      {t("common.name")}
+                    </th>
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                      {t("apiKeys.keyPrefix")}
+                    </th>
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                      {t("apiKeys.quota")}
+                    </th>
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                      {t("apiKeys.restrictions")}
+                    </th>
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                      {t("apiKeys.expires")}
+                    </th>
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                      {t("common.status")}
+                    </th>
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[100px]">
+                      {t("common.actions")}
+                    </th>
+                  </tr>
+                )}
+                itemContent={(_index, key) => (
+                  <>
+                    <td className="p-4 align-middle">
+                      <Checkbox
+                        checked={selectedKeys.includes(key.id)}
+                        onCheckedChange={() => toggleSelectKey(key.id)}
+                      />
+                    </td>
+                    <td className="p-4 align-middle font-medium">
+                      <div>
+                        {key.name}
+                        {key.group !== "default" && (
+                          <Badge variant="outline" className="ml-2 text-xs">
+                            {key.group}
+                          </Badge>
                         )}
-                      </TableCell>
-                      <TableCell>
-                        <TooltipProvider>
-                          <div className="flex gap-1">
-                            {key.model_limits_enabled && key.model_limits.length > 0 && (
-                              <Tooltip>
-                                <TooltipTrigger>
-                                  <Layers className="h-4 w-4 text-muted-foreground" />
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>{t("apiKeys.modelLimits")}: {key.model_limits.join(", ")}</p>
-                                </TooltipContent>
-                              </Tooltip>
+                      </div>
+                    </td>
+                    <td className="p-4 align-middle">
+                      <div className="flex items-center gap-1">
+                        <code className="rounded bg-muted px-2 py-0.5 text-sm">
+                          {key.key ? `${key.key.slice(0, 12)}...` : `${key.key_prefix}...`}
+                        </code>
+                        {key.key && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => handleCopy(key.key)}
+                          >
+                            {copiedKey === key.key ? (
+                              <Check className="h-3 w-3" />
+                            ) : (
+                              <Copy className="h-3 w-3" />
                             )}
-                            {key.ip_whitelist.length > 0 && (
-                              <Tooltip>
-                                <TooltipTrigger>
-                                  <Globe className="h-4 w-4 text-muted-foreground" />
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>{t("apiKeys.ipWhitelist")}: {key.ip_whitelist.join(", ")}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            )}
-                            {key.max_multiplier != null && (
-                              <Tooltip>
-                                <TooltipTrigger>
-                                  <Badge variant="outline" className="text-xs px-1.5">
-                                    ≤{key.max_multiplier}x
-                                  </Badge>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>{t("apiKeys.maxMultiplier")}: {key.max_multiplier}x</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            )}
-                            {!key.model_limits_enabled && key.ip_whitelist.length === 0 && key.max_multiplier == null && (
-                              <span className="text-muted-foreground">-</span>
-                            )}
-                          </div>
-                        </TooltipProvider>
-                      </TableCell>
-                      <TableCell>
-                        {key.expires_at ? formatDate(key.expires_at) : t("common.never")}
-                      </TableCell>
-                      <TableCell>
-                        <Switch
-                          checked={key.enabled}
-                          onCheckedChange={() => handleToggleEnabled(key)}
-                        />
-                      </TableCell>
-                      <TableCell>
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-4 align-middle">
+                      {key.quota_unlimited ? (
+                        <Badge variant="secondary">{t("apiKeys.unlimited")}</Badge>
+                      ) : (
+                        <span>{key.quota_remaining?.toLocaleString() ?? 0}</span>
+                      )}
+                    </td>
+                    <td className="p-4 align-middle">
+                      <TooltipProvider>
                         <div className="flex gap-1">
-                          <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => openEditDialog(key)}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                          </motion.div>
-                          <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDelete(key.id)}
-                              className="text-destructive hover:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </motion.div>
+                          {key.model_limits_enabled && key.model_limits.length > 0 && (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Layers className="h-4 w-4 text-muted-foreground" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{t("apiKeys.modelLimits")}: {key.model_limits.join(", ")}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                          {key.ip_whitelist.length > 0 && (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Globe className="h-4 w-4 text-muted-foreground" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{t("apiKeys.ipWhitelist")}: {key.ip_whitelist.join(", ")}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                          {key.max_multiplier != null && (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Badge variant="outline" className="text-xs px-1.5">
+                                  ≤{key.max_multiplier}x
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{t("apiKeys.maxMultiplier")}: {key.max_multiplier}x</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                          {!key.model_limits_enabled && key.ip_whitelist.length === 0 && key.max_multiplier == null && (
+                            <span className="text-muted-foreground">-</span>
+                          )}
                         </div>
-                      </TableCell>
-                    </motion.tr>
-                  ))}
-                </TableBody>
-              </Table>
+                      </TooltipProvider>
+                    </td>
+                    <td className="p-4 align-middle">
+                      {key.expires_at ? formatDate(key.expires_at) : t("common.never")}
+                    </td>
+                    <td className="p-4 align-middle">
+                      <Switch
+                        checked={key.enabled}
+                        onCheckedChange={() => handleToggleEnabled(key)}
+                      />
+                    </td>
+                    <td className="p-4 align-middle">
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEditDialog(key)}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(key.id)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </td>
+                  </>
+                )}
+              />
             )}
           </CardContent>
         </Card>

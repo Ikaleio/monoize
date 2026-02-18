@@ -47,6 +47,7 @@ Monoize MUST implement:
 - `POST /v1/chat/completions` (adapter)
 - `POST /v1/messages` (adapter)
 - `POST /v1/embeddings` (pass-through)
+- `GET /v1/models` (model listing)
 
 Alias:
 
@@ -524,6 +525,34 @@ DE8. Downstream response body MUST preserve upstream payload structure, except t
 
 DE9. Embeddings endpoint is non-streaming only.
 
+### 7.10 Downstream endpoint: `GET /v1/models`
+
+DMO1. Monoize MUST require forwarding bearer authentication for `GET /v1/models` exactly as defined in §2.1 and `spec/api-key-authentication.spec.md`.
+
+DMO2. Monoize MUST load provider definitions from the dashboard-managed provider routing store.
+
+DMO3. The response body MUST be JSON with the shape:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "<logical_model>",
+      "object": "model",
+      "created": 0,
+      "owned_by": "monoize"
+    }
+  ]
+}
+```
+
+DMO4. `data` MUST contain the set union of logical model keys across all configured providers.
+
+DMO5. If a logical model key appears in 2 or more providers, `data` MUST include exactly one item for that key.
+
+DMO6. `data` MUST be sorted by `id` in ascending lexicographic order.
+
 ## 8. Streaming requirements (Responses downstream)
 
 When the downstream endpoint is `POST /v1/responses` with `stream=true`, Monoize MUST respond using SSE and MUST emit:
@@ -543,3 +572,25 @@ STR1. Each SSE event `data` MUST be a JSON object containing:
 ```
 
 STR2. `sequence_number` MUST be monotonically increasing starting from 1 within a single response stream.
+
+## 9. Stream error termination
+
+When a streaming request (`stream=true`) encounters an error — either before any upstream data is received (e.g. no available provider) or mid-stream (e.g. upstream connection failure) — Monoize MUST:
+
+1. Emit a protocol-appropriate error event to the downstream client.
+2. Emit a final `data: [DONE]` SSE event.
+3. Close the SSE connection.
+
+### 9.1 Pre-stream errors
+
+SE1. If an error occurs before any data has been streamed (e.g. routing failure, no available provider), Monoize MUST return an SSE response (not a JSON error response) containing:
+
+- For `POST /v1/chat/completions`: one `data` event with an OpenAI-compatible error JSON object, followed by `data: [DONE]`.
+- For `POST /v1/responses`: one named `event: error` with a sequence-numbered error payload, followed by `data: [DONE]`.
+- For `POST /v1/messages`: one named `event: error` with an Anthropic-compatible error object, followed by `data: [DONE]`.
+
+### 9.2 Mid-stream errors
+
+SE2. If an error occurs after streaming has begun (e.g. upstream disconnects, parse failure), Monoize MUST emit a protocol-appropriate error event followed by `data: [DONE]` on the existing SSE connection, then close it.
+
+SE3. If the downstream channel sender is already closed (client disconnected), Monoize MAY silently discard the error event.

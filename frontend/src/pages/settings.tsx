@@ -350,6 +350,87 @@ export function SettingsPage() {
             </CardContent>
           </Card>
         </StaggerItem>
+
+        <StaggerItem>
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("settings.healthMonitoring")}</CardTitle>
+              <CardDescription>{t("settings.healthMonitoringDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <motion.div
+                whileHover={{ x: 4 }}
+                transition={{ type: "spring", stiffness: 300 }}
+                className="flex items-center justify-between"
+              >
+                <div className="space-y-0.5">
+                  <Label>{t("settings.activeProbeEnabled")}</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.activeProbeEnabledDescription")}
+                  </p>
+                </div>
+                <Switch
+                  checked={currentSettings.monoize_active_probe_enabled}
+                  onCheckedChange={(checked) =>
+                    handleChange({ monoize_active_probe_enabled: checked })
+                  }
+                />
+              </motion.div>
+              <Separator />
+              <div className="space-y-2">
+                <Label htmlFor="probe_interval_seconds">{t("settings.activeProbeIntervalSeconds")}</Label>
+                <Input
+                  id="probe_interval_seconds"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_active_probe_interval_seconds}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_active_probe_interval_seconds: Math.max(1, parseInt(e.target.value) || 30),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.activeProbeIntervalSecondsDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="probe_success_threshold">{t("settings.activeProbeSuccessThreshold")}</Label>
+                <Input
+                  id="probe_success_threshold"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_active_probe_success_threshold}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_active_probe_success_threshold: Math.max(1, parseInt(e.target.value) || 1),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.activeProbeSuccessThresholdDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="probe_model">{t("settings.activeProbeModel")}</Label>
+                <Input
+                  id="probe_model"
+                  value={currentSettings.monoize_active_probe_model ?? ""}
+                  onChange={(e) =>
+                    handleChange({ monoize_active_probe_model: e.target.value || null })
+                  }
+                  placeholder={t("settings.activeProbeModelPlaceholder")}
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.activeProbeModelDescription")}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </StaggerItem>
       </StaggerList>
     </PageWrapper>
   );

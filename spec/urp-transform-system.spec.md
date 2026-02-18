@@ -195,6 +195,7 @@ HEALTH-1. Passive health check defaults:
 HEALTH-2. Active probe defaults:
 - enabled = `true`
 - interval seconds = `30`
+- probe model = `null` (fallback to provider first model)
 - success threshold = `1`
 
 HEALTH-3. Runtime health states MUST include `healthy`, `unhealthy`, `probing`.

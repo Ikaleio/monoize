@@ -8,7 +8,7 @@ use crate::transforms::{self, Phase, TransformRuleConfig};
 use crate::upstream::{self, UpstreamCallError, UpstreamErrorKind};
 use crate::urp;
 use crate::users::BillingErrorKind;
-use crate::users::InsertRequestLog;
+use crate::users::{InsertRequestLog, REQUEST_LOG_STATUS_ERROR, REQUEST_LOG_STATUS_SUCCESS};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -23,6 +23,35 @@ use tokio::sync::{Mutex, mpsc};
 
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     state.metrics.render()
+}
+
+pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    let _auth = auth_tenant(&headers, &state).await?;
+    let providers =
+        state.monoize_store.list_providers().await.map_err(|e| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e)
+        })?;
+
+    let mut model_ids: Vec<String> = providers
+        .into_iter()
+        .flat_map(|provider| provider.models.into_keys())
+        .collect();
+    model_ids.sort();
+    model_ids.dedup();
+
+    let data: Vec<Value> = model_ids
+        .into_iter()
+        .map(|id| {
+            json!({
+                "id": id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "monoize"
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "object": "list", "data": data })).into_response())
 }
 
 pub async fn create_response(
@@ -51,17 +80,21 @@ pub async fn create_response(
     }
 
     if req.stream.unwrap_or(false) {
-        let stream = forward_stream_typed(
+        let downstream = DownstreamProtocol::Responses;
+        match forward_stream_typed(
             state.clone(),
             auth.clone(),
             req,
             max_multiplier,
-            DownstreamProtocol::Responses,
+            downstream,
             request_id.clone(),
             request_ip.clone(),
         )
-        .await?;
-        return Ok(Sse::new(stream).into_response());
+        .await
+        {
+            Ok(stream) => return Ok(Sse::new(stream).into_response()),
+            Err(err) => return Ok(Sse::new(error_to_sse_stream(&err, downstream)).into_response()),
+        }
     }
 
     let value = forward_nonstream_typed(
@@ -90,17 +123,21 @@ pub async fn create_chat_completions(
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
     if req.stream.unwrap_or(false) {
-        let stream = forward_stream_typed(
+        let downstream = DownstreamProtocol::ChatCompletions;
+        match forward_stream_typed(
             state.clone(),
             auth.clone(),
             req,
             max_multiplier,
-            DownstreamProtocol::ChatCompletions,
+            downstream,
             request_id.clone(),
             request_ip.clone(),
         )
-        .await?;
-        return Ok(Sse::new(stream).into_response());
+        .await
+        {
+            Ok(stream) => return Ok(Sse::new(stream).into_response()),
+            Err(err) => return Ok(Sse::new(error_to_sse_stream(&err, downstream)).into_response()),
+        }
     }
     let value = forward_nonstream_typed(
         &state,
@@ -128,17 +165,21 @@ pub async fn create_messages(
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
     if req.stream.unwrap_or(false) {
-        let stream = forward_stream_typed(
+        let downstream = DownstreamProtocol::AnthropicMessages;
+        match forward_stream_typed(
             state.clone(),
             auth.clone(),
             req,
             max_multiplier,
-            DownstreamProtocol::AnthropicMessages,
+            downstream,
             request_id.clone(),
             request_ip.clone(),
         )
-        .await?;
-        return Ok(Sse::new(stream).into_response());
+        .await
+        {
+            Ok(stream) => return Ok(Sse::new(stream).into_response()),
+            Err(err) => return Ok(Sse::new(error_to_sse_stream(&err, downstream)).into_response()),
+        }
     }
     let value = forward_nonstream_typed(
         &state,
@@ -210,7 +251,17 @@ pub async fn create_embeddings(
     let started_at = std::time::Instant::now();
     let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
     let attempts = build_monoize_attempts(&state, &routing_stub).await?;
+    insert_pending_request_log(
+        &state,
+        &auth,
+        &logical_model,
+        false,
+        request_id.as_deref(),
+        request_ip.as_deref(),
+    )
+    .await;
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
+    let mut tried_providers: Vec<TriedProvider> = Vec::new();
 
     for attempt in attempts {
         let mut upstream_body = body.clone();
@@ -263,6 +314,8 @@ pub async fn create_embeddings(
                     request_ip.clone(),
                     attempt.channel_id.clone(),
                     None,
+                    None,
+                    tried_providers,
                 );
 
                 return Ok(Json(value).into_response());
@@ -282,10 +335,17 @@ pub async fn create_embeddings(
                         request_id.clone(),
                         request_ip.clone(),
                         &app_err,
+                        None,
+                        tried_providers,
                     );
                     return Err(app_err);
                 }
                 if retryable {
+                    tried_providers.push(TriedProvider {
+                        provider_id: attempt.provider_id.clone(),
+                        channel_id: attempt.channel_id.clone(),
+                        error: app_err.message.clone(),
+                    });
                     mark_channel_retryable_failure(&state, &attempt.channel_id).await;
                     last_failed_attempt = Some(attempt.clone());
                     continue;
@@ -300,6 +360,8 @@ pub async fn create_embeddings(
                     request_id.clone(),
                     request_ip.clone(),
                     &app_err,
+                    None,
+                    tried_providers,
                 );
                 return Err(app_err);
             }
@@ -324,6 +386,21 @@ pub async fn create_embeddings(
             request_id,
             request_ip,
             &final_err,
+            None,
+            tried_providers,
+        );
+    } else {
+        spawn_request_log_error_no_attempt(
+            &state,
+            &auth,
+            &logical_model,
+            false,
+            started_at,
+            request_id,
+            request_ip,
+            &final_err,
+            None,
+            tried_providers,
         );
     }
     Err(final_err)
@@ -383,6 +460,13 @@ struct MonoizeAttempt {
     upstream_model: String,
     model_multiplier: f64,
     provider_transforms: Vec<TransformRuleConfig>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct TriedProvider {
+    provider_id: String,
+    channel_id: String,
+    error: String,
 }
 
 #[derive(Clone, Copy)]
@@ -862,7 +946,17 @@ async fn execute_nonstream_typed(
     resolve_model_suffix(state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(state, &routing_stub).await?;
+    insert_pending_request_log(
+        state,
+        auth,
+        &req.model,
+        false,
+        request_id.as_deref(),
+        request_ip.as_deref(),
+    )
+    .await;
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
+    let mut tried_providers: Vec<TriedProvider> = Vec::new();
     for attempt in attempts {
         let mut req_attempt = req.clone();
         req_attempt.model = attempt.upstream_model.clone();
@@ -912,6 +1006,8 @@ async fn execute_nonstream_typed(
                     request_ip.clone(),
                     attempt.channel_id.clone(),
                     None,
+                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    tried_providers,
                 );
                 return Ok((resp, req.model.clone()));
             }
@@ -930,10 +1026,17 @@ async fn execute_nonstream_typed(
                         request_id.clone(),
                         request_ip.clone(),
                         &app_err,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
                     );
                     return Err(app_err);
                 }
                 if retryable {
+                    tried_providers.push(TriedProvider {
+                        provider_id: attempt.provider_id.clone(),
+                        channel_id: attempt.channel_id.clone(),
+                        error: app_err.message.clone(),
+                    });
                     mark_channel_retryable_failure(state, &attempt.channel_id).await;
                     last_failed_attempt = Some(attempt.clone());
                     continue;
@@ -948,6 +1051,8 @@ async fn execute_nonstream_typed(
                     request_id.clone(),
                     request_ip.clone(),
                     &app_err,
+                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    tried_providers,
                 );
                 return Err(app_err);
             }
@@ -960,8 +1065,30 @@ async fn execute_nonstream_typed(
     );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
-            state, auth, &attempt, &req.model, false, started_at, request_id, request_ip,
+            state,
+            auth,
+            &attempt,
+            &req.model,
+            false,
+            started_at,
+            request_id,
+            request_ip,
             &final_err,
+            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            tried_providers,
+        );
+    } else {
+        spawn_request_log_error_no_attempt(
+            state,
+            auth,
+            &req.model,
+            false,
+            started_at,
+            request_id,
+            request_ip,
+            &final_err,
+            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            tried_providers,
         );
     }
     Err(final_err)
@@ -1398,6 +1525,37 @@ async fn maybe_charge_response(
     maybe_charge_usage(state, auth, attempt, logical_model, usage).await
 }
 
+async fn insert_pending_request_log(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    model: &str,
+    is_stream: bool,
+    request_id: Option<&str>,
+    request_ip: Option<&str>,
+) {
+    let Some(user_id) = auth.user_id.as_deref() else {
+        return;
+    };
+    let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
+        return;
+    };
+
+    if let Err(e) = state
+        .user_store
+        .insert_request_log_pending(
+            request_id,
+            user_id,
+            auth.api_key_id.as_deref(),
+            model,
+            is_stream,
+            request_ip,
+        )
+        .await
+    {
+        tracing::warn!("failed to insert pending request log: {e}");
+    }
+}
+
 fn spawn_request_log(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -1412,6 +1570,8 @@ fn spawn_request_log(
     request_ip: Option<String>,
     channel_id: String,
     ttfb_ms: Option<u64>,
+    reasoning_effort: Option<String>,
+    tried_providers: Vec<TriedProvider>,
 ) {
     let Some(user_id) = auth.user_id.clone() else {
         return;
@@ -1424,6 +1584,11 @@ fn spawn_request_log(
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let user_store = state.user_store.clone();
     let usage_breakdown_json = usage.as_ref().map(build_usage_breakdown);
+    let tried_providers_json = if tried_providers.is_empty() {
+        None
+    } else {
+        serde_json::to_value(&tried_providers).ok()
+    };
 
     tokio::spawn(async move {
         let log = InsertRequestLog {
@@ -1441,7 +1606,7 @@ fn spawn_request_log(
             reasoning_tokens: usage.as_ref().and_then(|u| u.reasoning_tokens),
             provider_multiplier: Some(model_multiplier),
             charge_nano_usd,
-            status: "success".to_string(),
+            status: REQUEST_LOG_STATUS_SUCCESS.to_string(),
             usage_breakdown_json,
             billing_breakdown_json,
             error_code: None,
@@ -1450,9 +1615,12 @@ fn spawn_request_log(
             duration_ms: Some(duration_ms),
             ttfb_ms,
             request_ip,
+            reasoning_effort,
+            tried_providers_json,
+            request_kind: None,
         };
-        if let Err(e) = user_store.insert_request_log(log).await {
-            tracing::warn!("failed to insert request log: {e}");
+        if let Err(e) = user_store.finalize_request_log(log).await {
+            tracing::warn!("failed to finalize request log: {e}");
         }
     });
 }
@@ -1467,6 +1635,8 @@ fn spawn_request_log_error(
     request_id: Option<String>,
     request_ip: Option<String>,
     error: &AppError,
+    reasoning_effort: Option<String>,
+    tried_providers: Vec<TriedProvider>,
 ) {
     let Some(user_id) = auth.user_id.clone() else {
         return;
@@ -1482,6 +1652,11 @@ fn spawn_request_log_error(
     let error_code = Some(error.code.clone());
     let error_message = Some(error.message.clone());
     let error_http_status = Some(error.status.as_u16());
+    let tried_providers_json = if tried_providers.is_empty() {
+        None
+    } else {
+        serde_json::to_value(&tried_providers).ok()
+    };
 
     tokio::spawn(async move {
         let log = InsertRequestLog {
@@ -1499,7 +1674,7 @@ fn spawn_request_log_error(
             reasoning_tokens: None,
             provider_multiplier: Some(model_multiplier),
             charge_nano_usd: None,
-            status: "error".to_string(),
+            status: REQUEST_LOG_STATUS_ERROR.to_string(),
             usage_breakdown_json: None,
             billing_breakdown_json: None,
             error_code,
@@ -1508,9 +1683,75 @@ fn spawn_request_log_error(
             duration_ms: Some(duration_ms),
             ttfb_ms: None,
             request_ip,
+            reasoning_effort,
+            tried_providers_json,
+            request_kind: None,
         };
-        if let Err(e) = user_store.insert_request_log(log).await {
-            tracing::warn!("failed to insert request log: {e}");
+        if let Err(e) = user_store.finalize_request_log(log).await {
+            tracing::warn!("failed to finalize request log: {e}");
+        }
+    });
+}
+
+fn spawn_request_log_error_no_attempt(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    model: &str,
+    is_stream: bool,
+    started_at: std::time::Instant,
+    request_id: Option<String>,
+    request_ip: Option<String>,
+    error: &AppError,
+    reasoning_effort: Option<String>,
+    tried_providers: Vec<TriedProvider>,
+) {
+    let Some(user_id) = auth.user_id.clone() else {
+        return;
+    };
+    let api_key_id = auth.api_key_id.clone();
+    let model = model.to_string();
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    let user_store = state.user_store.clone();
+    let error_code = Some(error.code.clone());
+    let error_message = Some(error.message.clone());
+    let error_http_status = Some(error.status.as_u16());
+    let tried_providers_json = if tried_providers.is_empty() {
+        None
+    } else {
+        serde_json::to_value(&tried_providers).ok()
+    };
+
+    tokio::spawn(async move {
+        let log = InsertRequestLog {
+            request_id,
+            user_id,
+            api_key_id,
+            model,
+            provider_id: None,
+            upstream_model: None,
+            channel_id: None,
+            is_stream,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            reasoning_tokens: None,
+            provider_multiplier: None,
+            charge_nano_usd: None,
+            status: REQUEST_LOG_STATUS_ERROR.to_string(),
+            usage_breakdown_json: None,
+            billing_breakdown_json: None,
+            error_code,
+            error_message,
+            error_http_status,
+            duration_ms: Some(duration_ms),
+            ttfb_ms: None,
+            request_ip,
+            reasoning_effort,
+            tried_providers_json,
+            request_kind: None,
+        };
+        if let Err(e) = user_store.finalize_request_log(log).await {
+            tracing::warn!("failed to finalize request log: {e}");
         }
     });
 }
@@ -1655,10 +1896,20 @@ async fn forward_stream_typed(
 > {
     let started_at = std::time::Instant::now();
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
+    let mut tried_providers: Vec<TriedProvider> = Vec::new();
     apply_transform_rules_request(&state, &mut req, &auth.transforms)?;
     resolve_model_suffix(&state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(&state, &routing_stub).await?;
+    insert_pending_request_log(
+        &state,
+        &auth,
+        &req.model,
+        true,
+        request_id.as_deref(),
+        request_ip.as_deref(),
+    )
+    .await;
 
     for attempt in attempts {
         let mut req_attempt = req.clone();
@@ -1718,17 +1969,24 @@ async fn forward_stream_typed(
                         request_ip.clone(),
                         attempt.channel_id.clone(),
                         Some(started_at.elapsed().as_millis() as u64),
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
                     );
                     let (tx, rx) = mpsc::channel::<Event>(64);
                     let logical_model_for_stream = logical_model.clone();
                     tokio::spawn(async move {
-                        let _ = emit_synthetic_stream_from_urp_response(
+                        let tx_err = tx.clone();
+                        if let Err(err) = emit_synthetic_stream_from_urp_response(
                             downstream,
                             &logical_model_for_stream,
                             &resp,
                             tx,
                         )
-                        .await;
+                        .await
+                        {
+                            let _ = tx_err.send(Event::default().data("[DONE]")).await;
+                            tracing::warn!("synthetic stream failed: {}", err.message);
+                        }
                     });
                     return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
                 }
@@ -1747,10 +2005,17 @@ async fn forward_stream_typed(
                             request_id.clone(),
                             request_ip.clone(),
                             &app_err,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
                         );
                         return Err(app_err);
                     }
                     if retryable {
+                        tried_providers.push(TriedProvider {
+                            provider_id: attempt.provider_id.clone(),
+                            channel_id: attempt.channel_id.clone(),
+                            error: app_err.message.clone(),
+                        });
                         mark_channel_retryable_failure(&state, &attempt.channel_id).await;
                         last_failed_attempt = Some(attempt.clone());
                         continue;
@@ -1765,6 +2030,8 @@ async fn forward_stream_typed(
                         request_id.clone(),
                         request_ip.clone(),
                         &app_err,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
                     );
                     return Err(app_err);
                 }
@@ -1799,7 +2066,11 @@ async fn forward_stream_typed(
                 let request_id_for_log = request_id.clone();
                 let request_ip_for_log = request_ip.clone();
                 let channel_id_for_log = attempt.channel_id.clone();
+                let reasoning_effort_for_log =
+                    req.reasoning.as_ref().and_then(|r| r.effort.clone());
+                let tried_providers_for_log = tried_providers.clone();
                 tokio::spawn(async move {
+                    let tx_err = tx.clone();
                     let stream_result = match downstream {
                         DownstreamProtocol::Responses => match provider_type {
                             ProviderType::Responses => {
@@ -1947,10 +2218,40 @@ async fn forward_stream_typed(
                         request_ip_for_log,
                         channel_id_for_log,
                         ttfb_ms,
+                        reasoning_effort_for_log,
+                        tried_providers_for_log,
                     );
 
                     if let Err(err) = stream_result {
                         tracing::warn!("stream passthrough adapter failed: {}", err.message);
+                        let error_json = json!({
+                            "error": {
+                                "message": err.message,
+                                "type": err.error_type,
+                                "code": err.code,
+                                "param": err.param,
+                            }
+                        });
+                        match downstream {
+                            DownstreamProtocol::Responses => {
+                                let _ = tx_err.send(
+                                    Event::default().event("error").data(error_json.to_string())
+                                ).await;
+                            }
+                            DownstreamProtocol::ChatCompletions => {
+                                let _ = tx_err.send(
+                                    Event::default().data(error_json.to_string())
+                                ).await;
+                            }
+                            DownstreamProtocol::AnthropicMessages => {
+                                let _ = tx_err.send(
+                                    Event::default().event("error").data(
+                                        json!({"type": "error", "error": {"type": err.code, "message": err.message}}).to_string()
+                                    )
+                                ).await;
+                            }
+                        }
+                        let _ = tx_err.send(Event::default().data("[DONE]")).await;
                     }
                 });
                 return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
@@ -1970,10 +2271,17 @@ async fn forward_stream_typed(
                         request_id.clone(),
                         request_ip.clone(),
                         &app_err,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
                     );
                     return Err(app_err);
                 }
                 if retryable {
+                    tried_providers.push(TriedProvider {
+                        provider_id: attempt.provider_id.clone(),
+                        channel_id: attempt.channel_id.clone(),
+                        error: app_err.message.clone(),
+                    });
                     mark_channel_retryable_failure(&state, &attempt.channel_id).await;
                     last_failed_attempt = Some(attempt.clone());
                     continue;
@@ -1988,6 +2296,8 @@ async fn forward_stream_typed(
                     request_id.clone(),
                     request_ip.clone(),
                     &app_err,
+                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                    tried_providers,
                 );
                 return Err(app_err);
             }
@@ -2000,8 +2310,30 @@ async fn forward_stream_typed(
     );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
-            &state, &auth, &attempt, &req.model, true, started_at, request_id, request_ip,
+            &state,
+            &auth,
+            &attempt,
+            &req.model,
+            true,
+            started_at,
+            request_id,
+            request_ip,
             &final_err,
+            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            tried_providers,
+        );
+    } else {
+        spawn_request_log_error_no_attempt(
+            &state,
+            &auth,
+            &req.model,
+            true,
+            started_at,
+            request_id,
+            request_ip,
+            &final_err,
+            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            tried_providers,
         );
     }
     Err(final_err)
@@ -2994,11 +3326,16 @@ async fn mark_channel_success(state: &AppState, channel_id: &str) {
     let entry = health
         .entry(channel_id.to_string())
         .or_insert_with(crate::monoize_routing::ChannelHealthState::new);
+    let was_unhealthy = !entry.healthy;
     entry.healthy = true;
     entry.failure_count = 0;
     entry.cooldown_until = None;
     entry.last_success_at = Some(now);
     entry.probe_success_count = 0;
+    entry.last_probe_at = None;
+    if was_unhealthy {
+        tracing::info!(channel_id = %channel_id, "channel recovered to healthy after success");
+    }
 }
 
 async fn mark_channel_retryable_failure(state: &AppState, channel_id: &str) {
@@ -3012,12 +3349,54 @@ async fn mark_channel_retryable_failure(state: &AppState, channel_id: &str) {
         entry.healthy = false;
         entry.cooldown_until = Some(now + state.monoize_runtime.passive_cooldown_seconds as i64);
         entry.probe_success_count = 0;
+        entry.last_probe_at = None;
+        tracing::info!(
+            channel_id = %channel_id,
+            failure_count = entry.failure_count,
+            cooldown_seconds = state.monoize_runtime.passive_cooldown_seconds,
+            "channel marked unhealthy after consecutive failures"
+        );
     }
 }
-
 fn upstream_error_to_app(err: UpstreamCallError) -> AppError {
     let status = err.status.unwrap_or(StatusCode::BAD_GATEWAY);
     AppError::new(status, "upstream_error", err.message)
+}
+
+fn error_to_sse_stream(
+    err: &AppError,
+    downstream: DownstreamProtocol,
+) -> impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static {
+    let error_json = json!({
+        "error": {
+            "message": err.message,
+            "type": err.error_type,
+            "code": err.code,
+            "param": err.param,
+        }
+    });
+    let mut events: Vec<Event> = Vec::new();
+    match downstream {
+        DownstreamProtocol::Responses => {
+            let mut seq: u64 = 0;
+            let payload = json!({ "sequence_number": seq, "data": error_json });
+            seq += 1;
+            events.push(Event::default().event("error").data(payload.to_string()));
+            let _ = seq;
+        }
+        DownstreamProtocol::ChatCompletions => {
+            events.push(Event::default().data(error_json.to_string()));
+        }
+        DownstreamProtocol::AnthropicMessages => {
+            events.push(
+                Event::default()
+                    .event("error")
+                    .data(json!({"type": "error", "error": {"type": err.code, "message": err.message}}).to_string()),
+            );
+        }
+    }
+    events.push(Event::default().data("[DONE]"));
+    futures_util::stream::iter(events.into_iter().map(Ok))
 }
 
 fn wrap_responses_event(seq: &mut u64, name: &str, data: Value) -> Event {

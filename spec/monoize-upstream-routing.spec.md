@@ -64,6 +64,19 @@ The router subsystem MUST support:
 - `request_timeout_ms` default `30000`
 - health-check config with passive and active sections
 
+CFG-1. Provider configuration decoding MUST be fail-fast: invalid serialized provider fields (including `transforms`, `created_at`, `updated_at`) MUST return an explicit error and MUST NOT be silently coerced to defaults.
+
+CFG-2. Each provider MAY define probe override fields:
+
+- `active_probe_enabled_override: boolean?`
+- `active_probe_interval_seconds_override: integer? (>= 1)`
+- `active_probe_success_threshold_override: integer? (>= 1)`
+- `active_probe_model_override: string?`
+
+CFG-3. Probe precedence MUST be provider override first, then global settings fallback.
+
+CFG-4. Global active probe settings MUST be treated as defaults. If global `enabled == false`, providers with `active_probe_enabled_override == true` MUST still be active-probed. Providers with `active_probe_enabled_override == false` MUST remain excluded regardless of global value.
+
 ## 3. Request Routing Parameters
 
 The router MUST read:
@@ -130,12 +143,21 @@ PHS-2. Unhealthy channel MUST not receive normal traffic during cooldown.
 
 - `enabled` default `true`
 - `interval_seconds` default `30`
-- `method` default `list_models`
+- `method` default `completion`
+- `probe_model` default `null` (when null, use provider first model)
 - `success_threshold` default `1`
 
 AHS-1. Active probing MUST target unhealthy channels whose cooldown has elapsed.
 
 AHS-2. Channel MUST return to healthy only after reaching success threshold.
+
+AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using `probe_model` when configured; otherwise it MUST use the provider's first model from its model map. If no model can be resolved, probing for that provider/channel MUST be skipped.
+
+AHS-4. The completion probe request MUST use `max_tokens: 1` and a minimal single-user-message payload to minimize cost and latency.
+
+AHS-5. Probe results MUST be logged at debug level with channel ID, provider name, probe model, and success/failure status.
+
+AHS-6. Probe scheduler MUST enforce provider-level probe interval independently. A channel that is probe-eligible MUST be skipped until `now - last_probe_at >= effective_interval_seconds`.
 
 ## 7. Dashboard Requirements
 

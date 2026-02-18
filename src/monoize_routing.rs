@@ -1,6 +1,7 @@
 use crate::transforms::TransformRuleConfig;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sqlx::{Pool, Row, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -85,6 +86,10 @@ pub struct MonoizeProvider {
     pub max_retries: i32,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
+    pub active_probe_enabled_override: Option<bool>,
+    pub active_probe_interval_seconds_override: Option<u64>,
+    pub active_probe_success_threshold_override: Option<u32>,
+    pub active_probe_model_override: Option<String>,
     pub enabled: bool,
     pub priority: i32,
     pub created_at: DateTime<Utc>,
@@ -114,6 +119,10 @@ pub struct CreateMonoizeProviderInput {
     pub max_retries: i32,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
+    pub active_probe_enabled_override: Option<bool>,
+    pub active_probe_interval_seconds_override: Option<u64>,
+    pub active_probe_success_threshold_override: Option<u32>,
+    pub active_probe_model_override: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub priority: Option<i32>,
@@ -127,6 +136,10 @@ pub struct UpdateMonoizeProviderInput {
     pub channels: Option<Vec<CreateMonoizeChannelInput>>,
     pub max_retries: Option<i32>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
+    pub active_probe_enabled_override: Option<Option<bool>>,
+    pub active_probe_interval_seconds_override: Option<Option<u64>>,
+    pub active_probe_success_threshold_override: Option<Option<u32>>,
+    pub active_probe_model_override: Option<Option<String>>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
 }
@@ -145,6 +158,7 @@ pub struct MonoizeRuntimeConfig {
     pub active_interval_seconds: u64,
     pub active_success_threshold: u32,
     pub active_method: String,
+    pub active_probe_model: Option<String>,
 }
 
 impl Default for MonoizeRuntimeConfig {
@@ -156,7 +170,8 @@ impl Default for MonoizeRuntimeConfig {
             active_enabled: true,
             active_interval_seconds: 30,
             active_success_threshold: 1,
-            active_method: "list_models".to_string(),
+            active_method: "completion".to_string(),
+            active_probe_model: None,
         }
     }
 }
@@ -168,6 +183,7 @@ pub struct ChannelHealthState {
     pub last_success_at: Option<i64>,
     pub cooldown_until: Option<i64>,
     pub probe_success_count: u32,
+    pub last_probe_at: Option<i64>,
 }
 
 impl ChannelHealthState {
@@ -178,6 +194,7 @@ impl ChannelHealthState {
             last_success_at: None,
             cooldown_until: None,
             probe_success_count: 0,
+            last_probe_at: None,
         }
     }
 
@@ -228,6 +245,10 @@ impl MonoizeRoutingStore {
                 provider_type TEXT NOT NULL CHECK (provider_type IN ('responses', 'chat_completion', 'messages', 'gemini', 'grok')),
                 max_retries INTEGER NOT NULL DEFAULT -1,
                 transforms TEXT NOT NULL DEFAULT '[]',
+                active_probe_enabled_override INTEGER,
+                active_probe_interval_seconds_override INTEGER,
+                active_probe_success_threshold_override INTEGER,
+                active_probe_model_override TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 priority INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
@@ -290,15 +311,81 @@ impl MonoizeRoutingStore {
         )
         .fetch_one(&pool)
         .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
+        .map_err(|e| e.to_string())?
+            > 0;
         if !has_transforms_column {
             sqlx::query(
                 "ALTER TABLE monoize_providers ADD COLUMN transforms TEXT NOT NULL DEFAULT '[]'",
             )
             .execute(&pool)
             .await
-            .ok();
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_active_probe_enabled_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_providers') WHERE name = 'active_probe_enabled_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_active_probe_enabled_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_providers ADD COLUMN active_probe_enabled_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_active_probe_interval_seconds_override_column: bool =
+            sqlx::query_scalar::<_, i32>(
+                "SELECT COUNT(*) FROM pragma_table_info('monoize_providers') WHERE name = 'active_probe_interval_seconds_override'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| e.to_string())?
+                > 0;
+        if !has_active_probe_interval_seconds_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_providers ADD COLUMN active_probe_interval_seconds_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_active_probe_success_threshold_override_column: bool =
+            sqlx::query_scalar::<_, i32>(
+                "SELECT COUNT(*) FROM pragma_table_info('monoize_providers') WHERE name = 'active_probe_success_threshold_override'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| e.to_string())?
+                > 0;
+        if !has_active_probe_success_threshold_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_providers ADD COLUMN active_probe_success_threshold_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_active_probe_model_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_providers') WHERE name = 'active_probe_model_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_active_probe_model_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_providers ADD COLUMN active_probe_model_override TEXT",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
         }
 
         Ok(Self { pool })
@@ -313,7 +400,10 @@ impl MonoizeRoutingStore {
 
     pub async fn list_providers(&self) -> Result<Vec<MonoizeProvider>, String> {
         let rows = sqlx::query(
-            r#"SELECT id, name, provider_type, max_retries, transforms, enabled, priority, created_at, updated_at
+            r#"SELECT id, name, provider_type, max_retries, transforms,
+                      active_probe_enabled_override, active_probe_interval_seconds_override,
+                      active_probe_success_threshold_override, active_probe_model_override,
+                      enabled, priority, created_at, updated_at
                FROM monoize_providers
                ORDER BY priority ASC, created_at ASC"#,
         )
@@ -330,7 +420,10 @@ impl MonoizeRoutingStore {
 
     pub async fn get_provider(&self, id: &str) -> Result<Option<MonoizeProvider>, String> {
         let row = sqlx::query(
-            r#"SELECT id, name, provider_type, max_retries, transforms, enabled, priority, created_at, updated_at
+            r#"SELECT id, name, provider_type, max_retries, transforms,
+                      active_probe_enabled_override, active_probe_interval_seconds_override,
+                      active_probe_success_threshold_override, active_probe_model_override,
+                      enabled, priority, created_at, updated_at
                FROM monoize_providers
                WHERE id = ?"#,
         )
@@ -351,6 +444,16 @@ impl MonoizeRoutingStore {
         input: CreateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
         validate_provider_input(&input.name, &input.models, &input.channels)?;
+        if let Some(v) = input.active_probe_interval_seconds_override {
+            if v == 0 {
+                return Err("active_probe_interval_seconds_override must be >= 1".to_string());
+            }
+        }
+        if let Some(v) = input.active_probe_success_threshold_override {
+            if v == 0 {
+                return Err("active_probe_success_threshold_override must be >= 1".to_string());
+            }
+        }
 
         let id = generate_short_id();
         let now = Utc::now();
@@ -368,14 +471,30 @@ impl MonoizeRoutingStore {
         };
 
         sqlx::query(
-            r#"INSERT INTO monoize_providers (id, name, provider_type, max_retries, transforms, enabled, priority, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            r#"INSERT INTO monoize_providers (
+                    id, name, provider_type, max_retries, transforms,
+                    active_probe_enabled_override, active_probe_interval_seconds_override,
+                    active_probe_success_threshold_override, active_probe_model_override,
+                    enabled, priority, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&id)
         .bind(&input.name)
         .bind(input.provider_type.as_str())
         .bind(input.max_retries)
         .bind(serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?)
+        .bind(input.active_probe_enabled_override)
+        .bind(
+            input
+                .active_probe_interval_seconds_override
+                .map(|v| v as i64),
+        )
+        .bind(
+            input
+                .active_probe_success_threshold_override
+                .map(|v| v as i64),
+        )
+        .bind(input.active_probe_model_override.as_deref())
         .bind(input.enabled)
         .bind(priority)
         .bind(now.to_rfc3339())
@@ -408,11 +527,33 @@ impl MonoizeRoutingStore {
         if let Some(channels) = &input.channels {
             validate_channels(channels, false)?;
         }
+        if let Some(Some(v)) = input.active_probe_interval_seconds_override {
+            if v == 0 {
+                return Err("active_probe_interval_seconds_override must be >= 1".to_string());
+            }
+        }
+        if let Some(Some(v)) = input.active_probe_success_threshold_override {
+            if v == 0 {
+                return Err("active_probe_success_threshold_override must be >= 1".to_string());
+            }
+        }
 
         let name = input.name.unwrap_or(existing.name.clone());
         let provider_type = input.provider_type.unwrap_or(existing.provider_type);
         let max_retries = input.max_retries.unwrap_or(existing.max_retries);
         let transforms = input.transforms.unwrap_or(existing.transforms.clone());
+        let active_probe_enabled_override = input
+            .active_probe_enabled_override
+            .unwrap_or(existing.active_probe_enabled_override);
+        let active_probe_interval_seconds_override = input
+            .active_probe_interval_seconds_override
+            .unwrap_or(existing.active_probe_interval_seconds_override);
+        let active_probe_success_threshold_override = input
+            .active_probe_success_threshold_override
+            .unwrap_or(existing.active_probe_success_threshold_override);
+        let active_probe_model_override = input
+            .active_probe_model_override
+            .unwrap_or(existing.active_probe_model_override.clone());
         let enabled = input.enabled.unwrap_or(existing.enabled);
         let priority = input.priority.unwrap_or(existing.priority);
 
@@ -420,13 +561,22 @@ impl MonoizeRoutingStore {
 
         sqlx::query(
             r#"UPDATE monoize_providers
-               SET name = ?, provider_type = ?, max_retries = ?, transforms = ?, enabled = ?, priority = ?, updated_at = ?
+               SET name = ?, provider_type = ?, max_retries = ?, transforms = ?,
+                   active_probe_enabled_override = ?,
+                   active_probe_interval_seconds_override = ?,
+                   active_probe_success_threshold_override = ?,
+                   active_probe_model_override = ?,
+                   enabled = ?, priority = ?, updated_at = ?
                WHERE id = ?"#,
         )
         .bind(&name)
         .bind(provider_type.as_str())
         .bind(max_retries)
         .bind(serde_json::to_string(&transforms).map_err(|e| e.to_string())?)
+        .bind(active_probe_enabled_override)
+        .bind(active_probe_interval_seconds_override.map(|v| v as i64))
+        .bind(active_probe_success_threshold_override.map(|v| v as i64))
+        .bind(active_probe_model_override.as_deref())
         .bind(enabled)
         .bind(priority)
         .bind(now.to_rfc3339())
@@ -650,31 +800,55 @@ impl MonoizeRoutingStore {
             });
         }
 
+        let transforms_raw: String = row
+            .try_get("transforms")
+            .map_err(|e| format!("provider {id} missing transforms column: {e}"))?;
+        let transforms: Vec<TransformRuleConfig> = serde_json::from_str(&transforms_raw)
+            .map_err(|e| format!("provider {id} invalid transforms JSON: {e}"))?;
+        let active_probe_enabled_override: Option<bool> = row
+            .try_get("active_probe_enabled_override")
+            .map_err(|e| format!("provider {id} invalid active_probe_enabled_override: {e}"))?;
+        let active_probe_interval_seconds_override: Option<u64> = row
+            .try_get::<Option<i64>, _>("active_probe_interval_seconds_override")
+            .map_err(|e| {
+                format!("provider {id} invalid active_probe_interval_seconds_override: {e}")
+            })?
+            .map(|v| v as u64);
+        let active_probe_success_threshold_override: Option<u32> = row
+            .try_get::<Option<i64>, _>("active_probe_success_threshold_override")
+            .map_err(|e| {
+                format!("provider {id} invalid active_probe_success_threshold_override: {e}")
+            })?
+            .map(|v| v as u32);
+        let active_probe_model_override: Option<String> = row
+            .try_get("active_probe_model_override")
+            .map_err(|e| format!("provider {id} invalid active_probe_model_override: {e}"))?;
+
         Ok(MonoizeProvider {
-            id,
+            id: id.clone(),
             name: row.try_get("name").map_err(|e| e.to_string())?,
             provider_type,
             models,
             channels,
             max_retries: row.try_get("max_retries").map_err(|e| e.to_string())?,
-            transforms: serde_json::from_str(
-                &row.try_get::<String, _>("transforms")
-                    .unwrap_or_else(|_| "[]".to_string()),
-            )
-            .unwrap_or_default(),
+            transforms,
+            active_probe_enabled_override,
+            active_probe_interval_seconds_override,
+            active_probe_success_threshold_override,
+            active_probe_model_override,
             enabled: row.try_get("enabled").map_err(|e| e.to_string())?,
             priority: row.try_get("priority").map_err(|e| e.to_string())?,
             created_at: DateTime::parse_from_rfc3339(
                 &row.try_get::<String, _>("created_at")
                     .map_err(|e| e.to_string())?,
             )
-            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("provider {id} invalid created_at RFC3339: {e}"))?
             .with_timezone(&Utc),
             updated_at: DateTime::parse_from_rfc3339(
                 &row.try_get::<String, _>("updated_at")
                     .map_err(|e| e.to_string())?,
             )
-            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("provider {id} invalid updated_at RFC3339: {e}"))?
             .with_timezone(&Utc),
         })
     }
@@ -759,5 +933,77 @@ pub async fn probe_channel_list_models(
     match result {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
+    }
+}
+
+pub async fn probe_channel_completion(
+    client: &reqwest::Client,
+    channel: &MonoizeChannel,
+    timeout_ms: u64,
+    model: &str,
+    provider_type: MonoizeProviderType,
+) -> (bool, Option<Value>) {
+    let base = channel.base_url.trim_end_matches('/');
+
+    let (url, body) = match provider_type {
+        MonoizeProviderType::Messages => {
+            let url = format!("{base}/v1/messages");
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, body)
+        }
+        _ => {
+            let url = format!("{base}/v1/chat/completions");
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            (url, body)
+        }
+    };
+
+    let result = client
+        .post(&url)
+        .timeout(Duration::from_millis(timeout_ms))
+        .bearer_auth(&channel.api_key)
+        .json(&body)
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                return (false, None);
+            }
+            let usage = match resp.json::<Value>().await {
+                Ok(value) => extract_probe_usage(&value),
+                Err(_) => None,
+            };
+            (true, usage)
+        }
+        Err(_) => (false, None),
+    }
+}
+
+fn extract_probe_usage(body: &Value) -> Option<Value> {
+    let usage = body.get("usage")?;
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| usage.get("input_tokens").and_then(Value::as_u64));
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| usage.get("output_tokens").and_then(Value::as_u64));
+
+    match (prompt_tokens, completion_tokens) {
+        (Some(prompt_tokens), Some(completion_tokens)) => {
+            Some(json!({"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}))
+        }
+        _ => None,
     }
 }

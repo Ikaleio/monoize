@@ -104,6 +104,14 @@ export function RequestLogsPage() {
 		isValidating,
 		mutate
 	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters)
+	const { data: newestPageData } = useRequestLogs(
+		REQUEST_LOGS_PAGE_SIZE,
+		0,
+		activeFilters,
+		{
+			refreshInterval: 2000
+		}
+	)
 
 	useEffect(() => {
 		if (!pageData) return
@@ -121,6 +129,22 @@ export function RequestLogsPage() {
 		})
 	}, [pageData, requestOffset])
 
+	useEffect(() => {
+		if (!newestPageData) return
+
+		setTotalCount(newestPageData.total)
+		setLoadedLogs(prev => {
+			if (prev.length === 0 || requestOffset === 0) {
+				return newestPageData.data
+			}
+
+			const newestIds = new Set(newestPageData.data.map(log => log.id))
+			const tail = prev.filter(log => !newestIds.has(log.id))
+			const merged = [...newestPageData.data, ...tail]
+			return merged.slice(0, newestPageData.total)
+		})
+	}, [newestPageData, requestOffset])
+
 	const isInitialLoading = isLoading && loadedLogs.length === 0
 	const hasMore = loadedLogs.length < totalCount
 
@@ -131,7 +155,19 @@ export function RequestLogsPage() {
 		return new Intl.NumberFormat('en-US', {
 			style: 'currency',
 			currency: 'USD',
-			minimumFractionDigits: 4,
+			minimumSignificantDigits: 6,
+			maximumSignificantDigits: 6
+		}).format(cost)
+	}
+
+	const formatCostFullPrecision = (nanoUsd: string | undefined) => {
+		if (nanoUsd == null) return '-'
+		const cost = Number(nanoUsd) / 1e9
+		if (!Number.isFinite(cost)) return '-'
+		return new Intl.NumberFormat('en-US', {
+			style: 'currency',
+			currency: 'USD',
+			minimumFractionDigits: 6,
 			maximumFractionDigits: 6
 		}).format(cost)
 	}
@@ -285,6 +321,9 @@ export function RequestLogsPage() {
 							<SelectItem value='all'>
 								{t('requestLogs.allStatuses')}
 							</SelectItem>
+							<SelectItem value='pending'>
+								{t('requestLogs.pending')}
+							</SelectItem>
 							<SelectItem value='success'>
 								{t('requestLogs.success')}
 							</SelectItem>
@@ -351,7 +390,7 @@ export function RequestLogsPage() {
 							Table: props => (
 								<table
 									{...props}
-									className='w-full table-fixed text-xs'
+									className='w-full table-auto text-xs'
 									style={{ minWidth: '60rem' }}
 								/>
 							),
@@ -376,7 +415,7 @@ export function RequestLogsPage() {
 								<th className='w-[5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
 									{t('requestLogs.requestId')}
 								</th>
-								<th className='w-[12rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+								<th className='min-w-[13.5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
 									{t('requestLogs.model')}
 								</th>
 								<th className='w-[5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
@@ -401,10 +440,10 @@ export function RequestLogsPage() {
 								<th className='w-[3.25rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
 									{t('requestLogs.output')}
 								</th>
-								<th className='w-[4.5rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+								<th className='min-w-[8.5rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
 									{t('requestLogs.cost')}
 								</th>
-								<th className='text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+								<th className='text-left font-medium text-muted-foreground pl-2 pr-2 py-1.5 whitespace-nowrap'>
 									{t('requestLogs.requestIp')}
 								</th>
 							</tr>
@@ -415,6 +454,7 @@ export function RequestLogsPage() {
 								isAdmin={isAdmin}
 								showIp={showIp}
 								formatCost={formatCost}
+								formatCostFullPrecision={formatCostFullPrecision}
 								formatDuration={formatDuration}
 								formatTime={formatTime}
 								t={t}
@@ -432,6 +472,7 @@ function LogRowCells({
 	isAdmin,
 	showIp,
 	formatCost,
+	formatCostFullPrecision,
 	formatDuration,
 	formatTime,
 	t
@@ -440,14 +481,18 @@ function LogRowCells({
 	isAdmin: boolean
 	showIp: boolean
 	formatCost: (v: string | undefined) => string
+	formatCostFullPrecision: (v: string | undefined) => string
 	formatDuration: (v: number | null | undefined) => string | null
 	formatTime: (v: string) => string
 	t: (key: string) => string
 }) {
+	const isConnectivityTest =
+		log.request_kind === 'active_probe_connectivity' && !log.api_key_name
 	const duration = formatDuration(log.duration_ms)
 	const ttfb = formatDuration(log.ttfb_ms)
 	const channelDisplay = log.channel_name?.trim() || log.channel_id || null
-	const costDisplay = formatCost(log.charge_nano_usd)
+	const providerDisplay = log.provider_name?.trim() || log.provider_id || null
+	const costDisplay = formatCostFullPrecision(log.charge_nano_usd)
 	const usageSnapshot = asObject(log.usage_breakdown_json)
 	const usageInput = asObject(usageSnapshot?.input)
 	const usageOutput = asObject(usageSnapshot?.output)
@@ -587,6 +632,11 @@ function LogRowCells({
 		readNanoString(billingOutput, 'reasoning_unit_price_nano'),
 		readNanoString(billingOutput, 'reasoning_charge_nano')
 	)
+	const statusIndicatorClass =
+		log.status === 'success' ? 'bg-emerald-500'
+		: log.status === 'pending' ? 'bg-sky-500'
+		: log.status === 'error' ? 'bg-red-500'
+		: 'bg-zinc-400'
 	const baseCharge = readNanoString(billingSnapshot, 'base_charge_nano')
 	const finalCharge =
 		readNanoString(billingSnapshot, 'final_charge_nano') ||
@@ -609,13 +659,13 @@ function LogRowCells({
 									<span
 										className={cn(
 											'h-1.5 w-1.5 rounded-full',
-											log.status === 'success' ? 'bg-emerald-500' : 'bg-red-500'
+											statusIndicatorClass
 										)}
 									/>
 								</span>
 							</TooltipTrigger>
 							<TooltipContent>
-								<div className='text-xs space-y-0.5 max-w-[360px]'>
+								<div className='text-xs space-y-0.5 max-w-[480px]'>
 									<div className='font-mono'>{log.request_id}</div>
 									{log.status === 'error' && (
 										<>
@@ -631,12 +681,37 @@ function LogRowCells({
 												</div>
 											)}
 											{log.error_message && (
-												<div className='break-words'>
+												<div className='break-words whitespace-pre-wrap'>
 													{t('requestLogs.errorMessage')}: {log.error_message}
 												</div>
 											)}
 										</>
 									)}
+									{log.tried_providers_json &&
+										log.tried_providers_json.length > 0 && (
+											<div className='border-t border-border/50 pt-1 mt-1'>
+												<div className='font-medium mb-0.5'>
+													{t('requestLogs.triedProviders')}:
+												</div>
+												{log.tried_providers_json.map(
+													(
+														tp: {
+															provider_id: string
+															channel_id: string
+															error: string
+														},
+														i: number
+													) => (
+														<div
+															key={i}
+															className='text-muted-foreground break-words'
+														>
+															{tp.provider_id}/{tp.channel_id}: {tp.error}
+														</div>
+													)
+												)}
+											</div>
+										)}
 								</div>
 							</TooltipContent>
 						</Tooltip>
@@ -644,13 +719,57 @@ function LogRowCells({
 				:	<span className='text-muted-foreground/50'>-</span>}
 			</td>
 
-			<td className='px-2 py-1 align-middle max-w-[7.5rem] truncate'>
-				<ModelBadge
-					model={log.model}
-					multiplier={log.provider_multiplier}
-					showDetails={false}
-					className='text-[10px] h-5 px-1.5'
-				/>
+			<td className='px-2 py-1 align-middle whitespace-nowrap'>
+				<TooltipProvider delayDuration={200}>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<span className='cursor-default'>
+								<ModelBadge
+									model={log.model}
+									multiplier={log.provider_multiplier}
+									showDetails={false}
+									truncateModelText={false}
+									className='text-[10px] h-5 px-1.5 min-w-max'
+								/>
+							</span>
+						</TooltipTrigger>
+						<TooltipContent>
+							<div className='text-xs space-y-0.5 min-w-[180px]'>
+								<div className='flex items-center justify-between gap-3'>
+									<span>{t('requestLogs.model')}</span>
+									<span className='font-mono'>{log.model}</span>
+								</div>
+								{log.upstream_model && log.upstream_model !== log.model && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.upstreamModel')}</span>
+										<span className='font-mono'>{log.upstream_model}</span>
+									</div>
+								)}
+								{log.provider_id && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.modelProvider')}</span>
+										<span className='font-mono'>{log.provider_id}</span>
+									</div>
+								)}
+								{log.provider_multiplier != null &&
+									log.provider_multiplier !== 1 && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.multiplier')}</span>
+											<span className='font-mono'>
+												{log.provider_multiplier}x
+											</span>
+										</div>
+									)}
+								{log.reasoning_effort && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.reasoningEffort')}</span>
+										<span className='font-mono'>{log.reasoning_effort}</span>
+									</div>
+								)}
+							</div>
+						</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
 			</td>
 
 			<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
@@ -658,11 +777,17 @@ function LogRowCells({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
-								{log.api_key_name || '-'}
+								{isConnectivityTest ?
+									t('requestLogs.connectivityTest')
+								:	log.api_key_name || '-'}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>
-							<span className='text-xs'>{log.api_key_name || '-'}</span>
+							<span className='text-xs'>
+								{isConnectivityTest ?
+									t('requestLogs.connectivityTest')
+								:	log.api_key_name || '-'}
+							</span>
 						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
@@ -678,18 +803,17 @@ function LogRowCells({
 
 			{isAdmin && (
 				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
-					{channelDisplay ?
+					{providerDisplay ?
 						<TooltipProvider delayDuration={200}>
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<span className='inline-flex h-4 items-center cursor-default max-w-[80px] truncate'>
-										{channelDisplay}
+										{providerDisplay}
 									</span>
 								</TooltipTrigger>
 								<TooltipContent>
 									<div className='text-xs space-y-0.5'>
-										{log.channel_id && <div>Channel ID: {log.channel_id}</div>}
-										<div>Provider: {log.provider_id || '-'}</div>
+										{channelDisplay && <div>Channel: {channelDisplay}</div>}
 										{log.upstream_model && log.upstream_model !== log.model && (
 											<div>Upstream: {log.upstream_model}</div>
 										)}
@@ -707,15 +831,43 @@ function LogRowCells({
 			<td className='px-2 py-1 whitespace-nowrap align-middle'>
 				<div className='flex items-center gap-px'>
 					{duration && (
-						<Badge
-							variant='secondary'
-							className={cn(
-								'text-[10px] h-5 px-1 font-mono rounded-full border-0',
-								'bg-muted text-muted-foreground'
-							)}
-						>
-							{duration}
-						</Badge>
+						<TooltipProvider delayDuration={200}>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Badge
+										variant='secondary'
+										className={cn(
+											'text-[10px] h-5 px-1 font-mono rounded-full border-0 cursor-default',
+											'bg-muted text-muted-foreground'
+										)}
+									>
+										{duration}
+									</Badge>
+								</TooltipTrigger>
+								<TooltipContent>
+									<div className='text-xs space-y-0.5 min-w-[140px]'>
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.duration')}</span>
+											<span className='font-mono'>{duration}</span>
+										</div>
+										{log.duration_ms != null &&
+											log.duration_ms > 0 &&
+											(log.completion_tokens ?? 0) > 0 && (
+												<div className='flex items-center justify-between gap-3'>
+													<span>{t('requestLogs.avgTps')}</span>
+													<span className='font-mono'>
+														{(
+															(log.completion_tokens ?? 0) /
+															(log.duration_ms / 1000)
+														).toFixed(2)}{' '}
+														t/s
+													</span>
+												</div>
+											)}
+									</div>
+								</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
 					)}
 					{ttfb && (
 						<Badge
@@ -795,7 +947,7 @@ function LogRowCells({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span
-								className='inline-block max-w-[66px] truncate align-bottom cursor-default'
+								className='inline-flex items-center whitespace-nowrap align-bottom cursor-default'
 								title={costDisplay}
 							>
 								{costDisplay}
@@ -860,13 +1012,21 @@ function LogRowCells({
 										{t('requestLogs.detailsUnavailable')}
 									</div>
 								)}
+								<div className='border-t border-muted pt-2 mt-2'>
+									<div className='flex items-center justify-between gap-3'>
+										<span className='text-xs text-muted-foreground'>Total</span>
+										<span className='font-mono text-xs'>
+											{formatCostFullPrecision(log.charge_nano_usd)}
+										</span>
+									</div>
+								</div>
 							</div>
 						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
 			</td>
 
-			<td className='px-2 py-1 whitespace-nowrap font-mono text-muted-foreground text-[11px] align-middle'>
+			<td className='pl-2 pr-2 py-1 whitespace-nowrap font-mono text-muted-foreground text-[11px] align-middle'>
 				<span
 					className={cn(
 						'inline-block align-bottom transition-[filter] duration-150',

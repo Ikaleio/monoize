@@ -27,6 +27,7 @@ U1. User read model exposed by dashboard/auth APIs MUST include:
 - `balance_nano_usd: string`
 - `balance_usd: string`
 - `balance_unlimited: boolean`
+- `email: string | null`
 
 U2. `balance_usd` MUST be computed from `balance_nano_usd` with nano precision and no binary floating conversion.
 
@@ -34,6 +35,21 @@ U3. New users created by register or dashboard create-user MUST default to:
 
 - `balance_nano_usd = "0"`
 - `balance_unlimited = false`
+- `email = null`
+
+U4. Usernames with prefix `_monoize_` (case-insensitive) are reserved for internal system accounts and MUST NOT be allowed in public register/login flows or admin create/update username operations.
+
+U5. Internal reserved users (`username` prefix `_monoize_`) MUST be excluded from user list APIs and user-count metrics used by dashboard/admin UI.
+
+U6. Monoize active-probe subsystem MUST ensure an internal user `_monoize_active_probe` exists before each probe attempt and MUST force this user to `balance_unlimited = true`.
+
+U7. `email` is an optional field (`TEXT NULL` in SQLite). When set, it MUST be a non-empty string. The server MUST NOT validate email format beyond non-emptiness; the field is used solely for Gravatar URL generation.
+
+U8. Any authenticated user MAY update their own `email` field via `PUT /api/dashboard/auth/me` with optional body field `email: string | null`. Setting `email` to `null` or empty string MUST clear the stored value.
+
+U9. Admin users MAY also update a user's `email` via `PUT /api/dashboard/users/{user_id}` with optional body field `email: string | null`.
+
+U10. Dashboard frontend MUST generate Gravatar URLs from user email using the MD5 hash of the lowercase-trimmed email, per the Gravatar protocol (`https://www.gravatar.com/avatar/{md5}?d=identicon&s={size}`). If the user has no email set, the frontend MUST fall back to displaying the first character of the username as the avatar.
 
 ## 3. Admin mutation rules
 
@@ -44,6 +60,7 @@ A2. `PUT /api/dashboard/users/{user_id}` MUST accept optional fields:
 - `balance_nano_usd: string`
 - `balance_usd: string`
 - `balance_unlimited: boolean`
+- `email: string | null`
 
 A3. If both `balance_nano_usd` and `balance_usd` are provided, server MUST use `balance_nano_usd`.
 
@@ -215,7 +232,10 @@ UF1. Admin endpoint `POST /api/dashboard/providers/{provider_id}/fetch-models` M
 1. Look up the provider by `provider_id` from `MonoizeRoutingStore`.
 2. If the provider has no channels, return `400` with code `no_channels`.
 3. Pick the first enabled channel (or the first channel if none are enabled).
-4. Build the upstream models URL as `GET {trim_trailing_slash(channel.base_url)}/v1/models`.
+4. Let `base = trim_trailing_slash(channel.base_url)`. Build the upstream models URL as:
+   - `GET {base}/models` when `base` ends with `/v1`;
+   - otherwise `GET {base}/v1/models`.
+   This rule MUST produce exactly one `/v1` segment before `/models`.
    The request MUST include `Authorization: Bearer {channel.api_key}`.
 5. Parse the response as OpenAI-compatible `{ data: [{ id: string, ... }] }`.
 6. Return a JSON object containing:

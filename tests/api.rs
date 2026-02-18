@@ -53,6 +53,13 @@ fn maybe_forced_upstream_error(body: &Value) -> Option<axum::response::Response>
     )
 }
 
+async fn maybe_forced_upstream_delay(body: &Value) {
+    let Some(delay_ms) = body.get("force_upstream_delay_ms").and_then(|v| v.as_u64()) else {
+        return;
+    };
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+}
+
 async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
     let captured_headers: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     async fn responses(
@@ -78,6 +85,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         if let Some(resp) = maybe_forced_upstream_error(&body) {
             return resp;
         }
+        maybe_forced_upstream_delay(&body).await;
         let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("mock");
         let text = collect_responses_text(body.get("input")) + &echo_suffix(&body);
         let input = body.get("input");
@@ -300,6 +308,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         if let Some(resp) = maybe_forced_upstream_error(&body) {
             return resp;
         }
+        maybe_forced_upstream_delay(&body).await;
         let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("mock");
         let messages = body
             .get("messages")
@@ -545,6 +554,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         if let Some(resp) = maybe_forced_upstream_error(&body) {
             return resp;
         }
+        maybe_forced_upstream_delay(&body).await;
         let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("mock");
         let messages = body
             .get("messages")
@@ -840,6 +850,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         if let Some(resp) = maybe_forced_upstream_error(&body) {
             return resp;
         }
+        maybe_forced_upstream_delay(&body).await;
         let (model, stream_mode) = if let Some(model) = rest.strip_suffix(":generateContent") {
             (model.to_string(), false)
         } else if let Some(model) = rest.strip_suffix(":streamGenerateContent") {
@@ -1090,6 +1101,10 @@ async fn create_test_provider(
             }],
             max_retries: -1,
             transforms: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
             enabled: true,
             priority: None,
         })
@@ -1251,6 +1266,19 @@ async fn json_post(ctx: &TestContext, path: &str, body: Value) -> (StatusCode, S
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
+async fn json_get(ctx: &TestContext, path: &str) -> (StatusCode, String) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::empty())
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
 #[tokio::test]
 async fn auth_required_for_forwarding_endpoints() {
     let ctx = setup().await;
@@ -1264,6 +1292,79 @@ async fn auth_required_for_forwarding_endpoints() {
         .unwrap();
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/models")
+        .body(Body::empty())
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn models_list_returns_union_sorted_and_unique() {
+    let ctx = setup().await;
+
+    create_test_provider(
+        &ctx.state,
+        "up-dup",
+        monoize::monoize_routing::MonoizeProviderType::Responses,
+        "gpt-5-mini",
+        "http://127.0.0.1:1",
+        "upstream-key",
+    )
+    .await;
+    create_test_provider(
+        &ctx.state,
+        "up-new",
+        monoize::monoize_routing::MonoizeProviderType::Responses,
+        "zeta-model",
+        "http://127.0.0.1:1",
+        "upstream-key",
+    )
+    .await;
+
+    let (status, body) = json_get(&ctx, "/v1/models").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["object"], "list");
+    let data = v["data"].as_array().expect("data should be an array");
+
+    let ids: Vec<String> = data
+        .iter()
+        .map(|item| {
+            assert_eq!(item["object"], "model");
+            assert_eq!(item["created"], 0);
+            assert_eq!(item["owned_by"], "monoize");
+            item["id"]
+                .as_str()
+                .expect("id should be string")
+                .to_string()
+        })
+        .collect();
+
+    assert_eq!(
+        ids,
+        vec![
+            "gemini-2.5-flash".to_string(),
+            "gpt-5-mini".to_string(),
+            "gpt-5-mini-chat".to_string(),
+            "gpt-5-mini-msg".to_string(),
+            "grok-4".to_string(),
+            "zeta-model".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn models_list_api_alias_works() {
+    let ctx = setup().await;
+    let (status, body) = json_get(&ctx, "/api/v1/models").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["object"], "list");
 }
 
 #[tokio::test]
@@ -1458,6 +1559,139 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
     assert_eq!(log.prompt_tokens, Some(12));
     assert_eq!(log.completion_tokens, Some(8));
     assert_eq!(log.charge_nano_usd.as_deref(), Some("20000"));
+}
+
+#[tokio::test]
+async fn request_logs_pending_transitions_to_success_and_charges_once() {
+    let ctx = setup().await;
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+        )
+        .await
+        .expect("set finite balance");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user before")
+        .expect("user exists");
+
+    let router = ctx.router.clone();
+    let auth_header = ctx.auth_header.clone();
+    let request_task = tokio::spawn(async move {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, auth_header)
+            .body(Body::from(
+                json!({
+                    "model":"gpt-5-mini-chat",
+                    "messages":[{"role":"user","content":"pending-transition"}],
+                    "stream": true,
+                    "emit_usage": true,
+                    "force_upstream_delay_ms": 400
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let _ = resp.into_body().collect().await.unwrap().to_bytes();
+    });
+
+    let mut saw_pending = false;
+    for _ in 0..20 {
+        let (logs, _) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(
+                &user.id,
+                100,
+                0,
+                Some("gpt-5-mini-chat"),
+                Some("pending"),
+                None,
+                None,
+            )
+            .await
+            .expect("list pending request logs");
+        if !logs.is_empty() {
+            saw_pending = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        saw_pending,
+        "pending request log should appear while request is in progress"
+    );
+
+    request_task.await.expect("request task");
+
+    let mut model_logs = Vec::new();
+    for _ in 0..30 {
+        let (logs, _) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(&user.id, 100, 0, None, None, None, None)
+            .await
+            .expect("list request logs");
+        model_logs = logs
+            .into_iter()
+            .filter(|log| log.model == "gpt-5-mini-chat")
+            .collect();
+        if model_logs.len() == 1 && model_logs[0].status == "success" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+
+    assert_eq!(
+        model_logs.len(),
+        1,
+        "same request should keep a single lifecycle row"
+    );
+    let log = &model_logs[0];
+    assert_eq!(log.status, "success");
+    assert_eq!(log.charge_nano_usd.as_deref(), Some("20000"));
+
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user after")
+        .expect("user exists");
+    let before_nano: i128 = user_before
+        .balance_nano_usd
+        .parse()
+        .expect("parse before balance");
+    let after_nano: i128 = user_after
+        .balance_nano_usd
+        .parse()
+        .expect("parse after balance");
+    assert_eq!(before_nano - after_nano, 20000);
 }
 
 #[tokio::test]
@@ -2304,6 +2538,10 @@ async fn responses_streaming_applies_response_transform_from_provider() {
             phase: monoize::transforms::Phase::Response,
             config: json!({}),
         }],
+        active_probe_enabled_override: None,
+        active_probe_interval_seconds_override: None,
+        active_probe_success_threshold_override: None,
+        active_probe_model_override: None,
         enabled: true,
         priority: Some(-1),
     };

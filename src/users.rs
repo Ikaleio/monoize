@@ -67,6 +67,9 @@ pub struct User {
     pub balance_nano_usd: String,
     /// Unlimited balance bypass flag.
     pub balance_unlimited: bool,
+    /// Optional email for Gravatar display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -202,7 +205,16 @@ pub struct UserStore {
     pool: Pool<Sqlite>,
 }
 
+const RESERVED_INTERNAL_USER_PREFIX: &str = "_monoize_";
+
 impl UserStore {
+    pub fn is_reserved_internal_username(username: &str) -> bool {
+        username
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with(RESERVED_INTERNAL_USER_PREFIX)
+    }
+
     pub async fn new(pool: Pool<Sqlite>) -> Result<Self, String> {
         sqlx::query(
             r#"CREATE TABLE IF NOT EXISTS users (
@@ -312,6 +324,7 @@ impl UserStore {
                 duration_ms INTEGER,
                 ttfb_ms INTEGER,
                 request_ip TEXT,
+                request_kind TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )"#,
@@ -330,6 +343,9 @@ impl UserStore {
             "ALTER TABLE request_logs ADD COLUMN error_code TEXT",
             "ALTER TABLE request_logs ADD COLUMN error_message TEXT",
             "ALTER TABLE request_logs ADD COLUMN error_http_status INTEGER",
+            "ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT",
+            "ALTER TABLE request_logs ADD COLUMN tried_providers_json TEXT",
+            "ALTER TABLE request_logs ADD COLUMN request_kind TEXT",
         ] {
             let _ = sqlx::query(col).execute(&pool).await;
         }
@@ -477,6 +493,20 @@ impl UserStore {
                 .ok();
         }
 
+        let has_email_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'email'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map(|c| c > 0)
+        .unwrap_or(false);
+        if !has_email_column {
+            sqlx::query("ALTER TABLE users ADD COLUMN email TEXT")
+                .execute(&pool)
+                .await
+                .ok();
+        }
+
         Ok(Self { pool })
     }
 
@@ -497,7 +527,9 @@ impl UserStore {
     }
 
     pub async fn user_count(&self) -> Result<i64, String> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM users")
+        let row = sqlx::query(
+            "SELECT COUNT(*) as count FROM users WHERE substr(lower(username), 1, 9) != '_monoize_'",
+        )
             .fetch_one(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -539,12 +571,13 @@ impl UserStore {
             enabled: true,
             balance_nano_usd: "0".to_string(),
             balance_unlimited: false,
+            email: None,
         })
     }
 
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, String> {
         let row = sqlx::query(
-            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited FROM users WHERE id = ?",
+            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -560,7 +593,7 @@ impl UserStore {
 
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, String> {
         let row = sqlx::query(
-            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited FROM users WHERE username = ?",
+            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE username = ?",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -576,7 +609,7 @@ impl UserStore {
 
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
         let rows = sqlx::query(
-            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited FROM users ORDER BY created_at DESC",
+            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await
@@ -594,6 +627,7 @@ impl UserStore {
         enabled: Option<bool>,
         balance_nano_usd: Option<&str>,
         balance_unlimited: Option<bool>,
+        email: Option<Option<&str>>,
     ) -> Result<(), String> {
         let mut updates = Vec::new();
         let mut bindings: Vec<String> = Vec::new();
@@ -622,6 +656,17 @@ impl UserStore {
         if let Some(unlimited) = balance_unlimited {
             updates.push("balance_unlimited = ?");
             bindings.push(if unlimited { "1" } else { "0" }.to_string());
+        }
+        if let Some(email_opt) = email {
+            match email_opt {
+                Some(e) if !e.trim().is_empty() => {
+                    updates.push("email = ?");
+                    bindings.push(e.trim().to_string());
+                }
+                _ => {
+                    updates.push("email = NULL");
+                }
+            }
         }
 
         if updates.is_empty() {
@@ -964,6 +1009,7 @@ impl UserStore {
                 .try_get("balance_nano_usd")
                 .unwrap_or_else(|_| "0".to_string()),
             balance_unlimited: row.try_get::<i32, _>("balance_unlimited").unwrap_or(0) == 1,
+            email: row.try_get::<Option<String>, _>("email").unwrap_or(None),
         })
     }
 
@@ -1394,7 +1440,14 @@ pub struct InsertRequestLog {
     pub duration_ms: Option<u64>,
     pub ttfb_ms: Option<u64>,
     pub request_ip: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub tried_providers_json: Option<Value>,
+    pub request_kind: Option<String>,
 }
+
+pub const REQUEST_LOG_STATUS_PENDING: &str = "pending";
+pub const REQUEST_LOG_STATUS_SUCCESS: &str = "success";
+pub const REQUEST_LOG_STATUS_ERROR: &str = "error";
 
 #[derive(Debug, Serialize)]
 pub struct RequestLogRow {
@@ -1422,10 +1475,14 @@ pub struct RequestLogRow {
     pub duration_ms: Option<i64>,
     pub ttfb_ms: Option<i64>,
     pub request_ip: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub tried_providers_json: Option<Value>,
+    pub request_kind: Option<String>,
     pub created_at: String,
     pub username: Option<String>,
     pub api_key_name: Option<String>,
     pub channel_name: Option<String>,
+    pub provider_name: Option<String>,
 }
 
 fn normalize_request_log_filter(value: Option<&str>) -> Option<String> {
@@ -1479,8 +1536,9 @@ fn append_request_log_filters(
         query.push_bind(api_key_id.to_string());
     }
     if let Some(username) = username {
-        query.push(" AND u.username = ");
+        query.push(" AND (u.username = ");
         query.push_bind(username.to_string());
+        query.push(" OR rl.request_kind = 'active_probe_connectivity')");
     }
     if let Some(search) = search {
         let search_like = format!("%{search}%");
@@ -1497,6 +1555,111 @@ fn append_request_log_filters(
 }
 
 impl UserStore {
+    pub async fn cleanup_pending_request_logs(&self) -> Result<u64, String> {
+        let result = sqlx::query(
+            "UPDATE request_logs SET status = 'error', error_code = 'server_shutdown', error_message = 'interrupted by server restart' WHERE status = 'pending'"
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn insert_request_log_pending(
+        &self,
+        request_id: &str,
+        user_id: &str,
+        api_key_id: Option<&str>,
+        model: &str,
+        is_stream: bool,
+        request_ip: Option<&str>,
+    ) -> Result<(), String> {
+        self.insert_request_log(InsertRequestLog {
+            request_id: Some(request_id.to_string()),
+            user_id: user_id.to_string(),
+            api_key_id: api_key_id.map(ToOwned::to_owned),
+            model: model.to_string(),
+            provider_id: None,
+            upstream_model: None,
+            channel_id: None,
+            is_stream,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            reasoning_tokens: None,
+            provider_multiplier: None,
+            charge_nano_usd: None,
+            status: REQUEST_LOG_STATUS_PENDING.to_string(),
+            usage_breakdown_json: None,
+            billing_breakdown_json: None,
+            error_code: None,
+            error_message: None,
+            error_http_status: None,
+            duration_ms: None,
+            ttfb_ms: None,
+            request_ip: request_ip.map(ToOwned::to_owned),
+            reasoning_effort: None,
+            tried_providers_json: None,
+            request_kind: None,
+        })
+        .await
+    }
+
+    pub async fn finalize_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
+        if let Some(request_id) = log
+            .request_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            let updated = sqlx::query(
+                r#"UPDATE request_logs
+                   SET api_key_id = ?, model = ?, provider_id = ?, upstream_model = ?, channel_id = ?,
+                       is_stream = ?, prompt_tokens = ?, completion_tokens = ?, cached_tokens = ?,
+                       reasoning_tokens = ?, provider_multiplier = ?, charge_nano_usd = ?, status = ?,
+                       usage_breakdown_json = ?, billing_breakdown_json = ?, error_code = ?,
+                       error_message = ?, error_http_status = ?, duration_ms = ?, ttfb_ms = ?,
+                       request_ip = ?, reasoning_effort = ?, tried_providers_json = ?, request_kind = ?
+                   WHERE user_id = ? AND request_id = ? AND status = 'pending' AND request_kind IS NULL"#,
+            )
+            .bind(&log.api_key_id)
+            .bind(&log.model)
+            .bind(&log.provider_id)
+            .bind(&log.upstream_model)
+            .bind(&log.channel_id)
+            .bind(if log.is_stream { 1 } else { 0 })
+            .bind(log.prompt_tokens.map(|v| v as i64))
+            .bind(log.completion_tokens.map(|v| v as i64))
+            .bind(log.cached_tokens.map(|v| v as i64))
+            .bind(log.reasoning_tokens.map(|v| v as i64))
+            .bind(log.provider_multiplier)
+            .bind(log.charge_nano_usd.map(|v| v.to_string()))
+            .bind(&log.status)
+            .bind(log.usage_breakdown_json.as_ref().map(Value::to_string))
+            .bind(log.billing_breakdown_json.as_ref().map(Value::to_string))
+            .bind(&log.error_code)
+            .bind(&log.error_message)
+            .bind(log.error_http_status.map(i64::from))
+            .bind(log.duration_ms.map(|v| v as i64))
+            .bind(log.ttfb_ms.map(|v| v as i64))
+            .bind(&log.request_ip)
+            .bind(&log.reasoning_effort)
+            .bind(log.tried_providers_json.as_ref().map(Value::to_string))
+            .bind(&log.request_kind)
+            .bind(&log.user_id)
+            .bind(request_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            if updated.rows_affected() > 0 {
+                return Ok(());
+            }
+        }
+
+        self.insert_request_log(log).await
+    }
+
     pub async fn insert_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -1506,8 +1669,8 @@ impl UserStore {
                 prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens,
                 provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
                 billing_breakdown_json, error_code, error_message, error_http_status,
-                duration_ms, ttfb_ms, request_ip, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&id)
         .bind(&log.request_id)
@@ -1533,6 +1696,9 @@ impl UserStore {
         .bind(log.duration_ms.map(|v| v as i64))
         .bind(log.ttfb_ms.map(|v| v as i64))
         .bind(&log.request_ip)
+        .bind(&log.reasoning_effort)
+        .bind(log.tried_providers_json.map(|v| v.to_string()))
+        .bind(&log.request_kind)
         .bind(&now)
         .execute(&self.pool)
         .await
@@ -1579,12 +1745,14 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.created_at,
-                      u.username, ak.name AS api_key_name, ch.name AS channel_name
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      u.username, ak.name AS api_key_name, ch.name AS channel_name,
+                      mp.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON rl.user_id = u.id
                LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
                LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
+               LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
                WHERE rl.user_id = "#,
         );
         rows_query.push_bind(user_id);
@@ -1644,10 +1812,17 @@ impl UserStore {
                 duration_ms: row.try_get("duration_ms").unwrap_or(None),
                 ttfb_ms: row.try_get("ttfb_ms").unwrap_or(None),
                 request_ip: row.try_get("request_ip").unwrap_or(None),
+                reasoning_effort: row.try_get("reasoning_effort").unwrap_or(None),
+                tried_providers_json: parse_optional_json_text(
+                    row.try_get::<Option<String>, _>("tried_providers_json")
+                        .unwrap_or(None),
+                ),
+                request_kind: row.try_get("request_kind").unwrap_or(None),
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 username: row.try_get("username").unwrap_or(None),
                 api_key_name: row.try_get("api_key_name").unwrap_or(None),
                 channel_name: row.try_get("channel_name").unwrap_or(None),
+                provider_name: row.try_get("provider_name").unwrap_or(None),
             })
             .collect();
 
@@ -1696,12 +1871,14 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.created_at,
-                      u.username, ak.name AS api_key_name, ch.name AS channel_name
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      u.username, ak.name AS api_key_name, ch.name AS channel_name,
+                      mp.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON rl.user_id = u.id
                LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
                LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
+               LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
                WHERE 1 = 1"#,
         );
         append_request_log_filters(
@@ -1760,10 +1937,17 @@ impl UserStore {
                 duration_ms: row.try_get("duration_ms").unwrap_or(None),
                 ttfb_ms: row.try_get("ttfb_ms").unwrap_or(None),
                 request_ip: row.try_get("request_ip").unwrap_or(None),
+                reasoning_effort: row.try_get("reasoning_effort").unwrap_or(None),
+                tried_providers_json: parse_optional_json_text(
+                    row.try_get::<Option<String>, _>("tried_providers_json")
+                        .unwrap_or(None),
+                ),
+                request_kind: row.try_get("request_kind").unwrap_or(None),
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 username: row.try_get("username").unwrap_or(None),
                 api_key_name: row.try_get("api_key_name").unwrap_or(None),
                 channel_name: row.try_get("channel_name").unwrap_or(None),
+                provider_name: row.try_get("provider_name").unwrap_or(None),
             })
             .collect();
 

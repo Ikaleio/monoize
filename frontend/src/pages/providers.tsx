@@ -19,7 +19,12 @@ import {
 	Radio,
 	Weight,
 	ChevronRight,
-	AlertTriangle
+	AlertTriangle,
+	Zap,
+	Activity,
+	Check,
+	Loader2,
+	Play
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -71,7 +76,8 @@ import type {
 	TransformRuleConfig,
 	TransformRegistryItem,
 	UpdateProviderInput,
-	ModelMetadataRecord
+	ModelMetadataRecord,
+	ChannelTestResult
 } from '@/lib/api'
 import {
 	useProviders,
@@ -140,6 +146,10 @@ type ProviderForm = {
 		| 'grok'
 	enabled: boolean
 	max_retries: number
+	active_probe_enabled_override: boolean | null
+	active_probe_interval_seconds_override: number | null
+	active_probe_success_threshold_override: number | null
+	active_probe_model_override: string | null
 	priority?: number
 	models: ModelRow[]
 	channels: ChannelRow[]
@@ -153,6 +163,10 @@ function emptyForm(): ProviderForm {
 		provider_type: 'chat_completion',
 		enabled: true,
 		max_retries: -1,
+		active_probe_enabled_override: null,
+		active_probe_interval_seconds_override: null,
+		active_probe_success_threshold_override: null,
+		active_probe_model_override: null,
 		priority: undefined,
 		models: [],
 		channels: [],
@@ -167,6 +181,13 @@ function fromProvider(provider: Provider): ProviderForm {
 		provider_type: provider.provider_type,
 		enabled: provider.enabled,
 		max_retries: provider.max_retries,
+		active_probe_enabled_override:
+			provider.active_probe_enabled_override ?? null,
+		active_probe_interval_seconds_override:
+			provider.active_probe_interval_seconds_override ?? null,
+		active_probe_success_threshold_override:
+			provider.active_probe_success_threshold_override ?? null,
+		active_probe_model_override: provider.active_probe_model_override ?? null,
 		priority: provider.priority,
 		models: Object.entries(provider.models).map(([model, entry]) => ({
 			model,
@@ -262,6 +283,7 @@ function ModelPickerDialog({
 	)
 	const [search, setSearch] = useState('')
 	const [tab, setTab] = useState<'new' | 'existing'>('new')
+	const initializedForOpenRef = useRef(false)
 
 	const existingSet = useMemo(() => new Set(existingModels), [existingModels])
 
@@ -315,12 +337,16 @@ function ModelPickerDialog({
 	}, [open, providerId, channelInfo, t])
 
 	useEffect(() => {
-		if (open) {
-			setChecked(new Set(existingModels))
-			setFetchedModels([])
-			setSearch('')
-			setTab('new')
+		if (!open) {
+			initializedForOpenRef.current = false
+			return
 		}
+		if (initializedForOpenRef.current) return
+		initializedForOpenRef.current = true
+		setChecked(new Set(existingModels))
+		setFetchedModels([])
+		setSearch('')
+		setTab('new')
 	}, [open, existingModels])
 
 	const toggleModel = (model: string) => {
@@ -382,7 +408,7 @@ function ModelPickerDialog({
 					<DialogDescription>{providerName}</DialogDescription>
 				</DialogHeader>
 
-				<div className='flex flex-col gap-4 min-h-0 flex-1'>
+				<div className='flex flex-col gap-4'>
 					<div className='relative'>
 						<Search className='absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground' />
 						<Input
@@ -393,7 +419,7 @@ function ModelPickerDialog({
 						/>
 					</div>
 
-					<div className='border rounded-lg min-h-0 flex-1 overflow-y-auto p-3'>
+					<div className='border rounded-lg h-[clamp(220px,45vh,420px)] overflow-y-auto p-3'>
 						{loading ?
 							<div className='text-sm text-muted-foreground py-8 text-center'>
 								{t('providers.fetchingModels')}
@@ -414,15 +440,15 @@ function ModelPickerDialog({
 												checked={checked.has(model)}
 												onCheckedChange={() => toggleModel(model)}
 											/>
-												<ModelBadge
-													model={model}
-													provider={provider}
-													highlightUnpriced={!pricedModelIdSet.has(model)}
-												/>
-											</label>
-										)
-									})}
-								</div>
+											<ModelBadge
+												model={model}
+												provider={provider}
+												highlightUnpriced={!pricedModelIdSet.has(model)}
+											/>
+										</label>
+									)
+								})}
+							</div>
 						}
 					</div>
 				</div>
@@ -607,6 +633,11 @@ function ProviderDialog({
 		if (!ch) return undefined
 		return { base_url: ch.base_url.trim(), api_key: ch.api_key.trim() }
 	}, [isEdit, form.channels])
+
+	const existingModelNames = useMemo(
+		() => form.models.map(m => m.model.trim()).filter(Boolean),
+		[form.models]
+	)
 
 	const handleModelsConfirm = (checkedModels: string[]) => {
 		const checkedSet = new Set(checkedModels)
@@ -854,6 +885,15 @@ function ProviderDialog({
 			channels,
 			max_retries: form.max_retries,
 			transforms: form.transforms,
+			active_probe_enabled_override: form.active_probe_enabled_override,
+			active_probe_interval_seconds_override:
+				form.active_probe_interval_seconds_override,
+			active_probe_success_threshold_override:
+				form.active_probe_success_threshold_override,
+			active_probe_model_override:
+				form.active_probe_model_override?.trim() ?
+					form.active_probe_model_override.trim()
+				: 	null,
 			enabled: form.enabled,
 			priority: form.priority
 		}
@@ -987,22 +1027,118 @@ function ProviderDialog({
 										<Input value={form.id || ''} disabled />
 									</div>
 								)}
-								<div className='space-y-2'>
-									<Label>{t('providers.maxRetries')}</Label>
-									<Input
-										type='number'
-										value={form.max_retries}
-										onChange={e =>
-											setForm(prev => ({
-												...prev,
-												max_retries: Number(e.target.value) || 0
-											}))
-										}
-									/>
+							<div className='space-y-2'>
+								<Label>{t('providers.maxRetries')}</Label>
+								<Input
+									type='number'
+									value={form.max_retries}
+									onChange={e =>
+										setForm(prev => ({
+											...prev,
+											max_retries: Number(e.target.value) || 0
+										}))
+									}
+								/>
+							</div>
+							<div className='md:col-span-2 rounded-md border p-3 space-y-3'>
+								<div className='text-sm font-medium'>
+									{t('providers.probeOverrideTitle')}
 								</div>
-								<div className='flex items-center gap-2 pt-7'>
-									<Switch
-										checked={form.enabled}
+								<div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+									<div className='space-y-2'>
+										<Label>{t('providers.probeEnabledOverride')}</Label>
+										<Select
+											value={
+												form.active_probe_enabled_override === null ?
+													'inherit'
+												: form.active_probe_enabled_override ?
+													'true'
+												: 	'false'
+											}
+											onValueChange={value =>
+												setForm(prev => ({
+													...prev,
+													active_probe_enabled_override:
+														value === 'inherit' ?
+															null
+														: value === 'true'
+												}))
+										}
+										>
+											<SelectTrigger>
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem value='inherit'>
+													{t('providers.inheritGlobal')}
+												</SelectItem>
+												<SelectItem value='true'>
+													{t('providers.enabled')}
+												</SelectItem>
+												<SelectItem value='false'>
+													{t('common.disabled')}
+												</SelectItem>
+											</SelectContent>
+										</Select>
+									</div>
+									<div className='space-y-2'>
+										<Label>{t('providers.probeModelOverride')}</Label>
+										<Input
+											value={form.active_probe_model_override ?? ''}
+											onChange={e =>
+												setForm(prev => ({
+													...prev,
+													active_probe_model_override:
+														e.target.value
+												}))
+											}
+											placeholder={t('providers.probeModelOverridePlaceholder')}
+										/>
+									</div>
+									<div className='space-y-2'>
+										<Label>{t('providers.probeIntervalOverride')}</Label>
+										<Input
+											type='number'
+											min='1'
+											value={form.active_probe_interval_seconds_override ?? ''}
+											onChange={e =>
+												setForm(prev => ({
+													...prev,
+													active_probe_interval_seconds_override:
+														e.target.value.trim() ?
+															Math.max(1, Number(e.target.value) || 1)
+														: 	null
+												}))
+											}
+											placeholder={t('providers.inheritGlobal')}
+										/>
+									</div>
+									<div className='space-y-2'>
+										<Label>{t('providers.probeSuccessThresholdOverride')}</Label>
+										<Input
+											type='number'
+											min='1'
+											value={form.active_probe_success_threshold_override ?? ''}
+											onChange={e =>
+												setForm(prev => ({
+													...prev,
+													active_probe_success_threshold_override:
+														e.target.value.trim() ?
+															Math.max(1, Number(e.target.value) || 1)
+														: 	null
+												}))
+											}
+											placeholder={t('providers.inheritGlobal')}
+										/>
+									</div>
+								</div>
+								<p className='text-xs text-muted-foreground'>
+									{t('providers.probeOverrideDescription')}
+								</p>
+							</div>
+							<div className='flex items-center gap-2 pt-7'>
+								<Switch
+									checked={form.enabled}
 										onCheckedChange={checked =>
 											setForm(prev => ({ ...prev, enabled: checked }))
 										}
@@ -1354,7 +1490,7 @@ function ProviderDialog({
 				providerId={isEdit ? current?.id : undefined}
 				channelInfo={fetchChannelInfo}
 				providerName={form.name || current?.name || ''}
-				existingModels={form.models.map(m => m.model.trim()).filter(Boolean)}
+				existingModels={existingModelNames}
 				modelMetadata={modelMetadata}
 				onConfirm={handleModelsConfirm}
 			/>
@@ -1575,6 +1711,210 @@ function ProviderDialog({
 	)
 }
 
+type ChannelTestState = Record<
+	string,
+	{ status: 'idle' | 'testing' | 'passed' | 'failed'; latency_ms?: number; error?: string }
+>
+
+function ChannelTestDialog({
+	open,
+	onOpenChange,
+	providerId,
+	channelId,
+	channelName,
+	providerName,
+	models
+}: {
+	open: boolean
+	onOpenChange: (open: boolean) => void
+	providerId: string
+	channelId: string
+	channelName: string
+	providerName: string
+	models: string[]
+}) {
+	const { t } = useTranslation()
+	const [testState, setTestState] = useState<ChannelTestState>({})
+	const [testingAll, setTestingAll] = useState(false)
+	const abortRef = useRef(false)
+
+	useEffect(() => {
+		if (open) {
+			setTestState({})
+			setTestingAll(false)
+			abortRef.current = false
+		} else {
+			abortRef.current = true
+		}
+	}, [open])
+
+	const runSingleTest = async (model: string) => {
+		setTestState(prev => ({
+			...prev,
+			[model]: { status: 'testing' }
+		}))
+		try {
+			const result: ChannelTestResult = await api.testChannel(providerId, channelId, model)
+			setTestState(prev => ({
+				...prev,
+				[model]: {
+					status: result.success ? 'passed' : 'failed',
+					latency_ms: result.latency_ms,
+					error: result.error ?? undefined
+				}
+			}))
+		} catch (err) {
+			setTestState(prev => ({
+				...prev,
+				[model]: {
+					status: 'failed',
+					error: err instanceof Error ? err.message : 'Unknown error'
+				}
+			}))
+		}
+	}
+
+	const runAllTests = async () => {
+		setTestingAll(true)
+		abortRef.current = false
+		for (const model of models) {
+			if (abortRef.current) break
+			await runSingleTest(model)
+		}
+		setTestingAll(false)
+	}
+
+	const testedCount = Object.values(testState).filter(
+		s => s.status === 'passed' || s.status === 'failed'
+	).length
+	const passedCount = Object.values(testState).filter(
+		s => s.status === 'passed'
+	).length
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className='max-h-[85vh] flex flex-col overflow-hidden max-w-2xl'>
+				<DialogHeader>
+					<DialogTitle className='flex items-center gap-2'>
+						<Activity className='h-5 w-5 text-muted-foreground' />
+						{t('providers.testChannelTitle')}
+					</DialogTitle>
+					<DialogDescription>
+						{t('providers.testChannelDesc', {
+							channel: channelName,
+							provider: providerName
+						})}
+					</DialogDescription>
+				</DialogHeader>
+
+				<div className='flex items-center justify-between'>
+					<div className='text-sm text-muted-foreground'>
+						{testedCount > 0 && (
+							<span>
+								{passedCount}/{testedCount} {t('providers.testPassed').toLowerCase()}
+							</span>
+						)}
+					</div>
+					<Button
+						size='sm'
+						variant='outline'
+						disabled={testingAll || models.length === 0}
+						onClick={runAllTests}
+					>
+						{testingAll ?
+							<>
+								<Loader2 className='h-4 w-4 mr-2 animate-spin' />
+								{t('providers.testAllRunning')}
+							</>
+						:	<>
+								<Play className='h-4 w-4 mr-2' />
+								{t('providers.testAll')} ({models.length})
+							</>
+						}
+					</Button>
+				</div>
+
+				<div className='border rounded-lg overflow-hidden'>
+					{models.length === 0 ?
+						<div className='text-sm text-muted-foreground py-8 text-center'>
+							{t('providers.validationAtLeastOneModel')}
+						</div>
+					:	<Virtuoso
+							style={{ height: Math.min(models.length * 44, 352) }}
+							data={models}
+							computeItemKey={(_idx, model) => model}
+							itemContent={(_idx, model) => {
+								const state = testState[model]
+								const status = state?.status ?? 'idle'
+								return (
+									<div className='flex h-11 items-center gap-3 px-3 border-b last:border-b-0 hover:bg-muted/50 transition-colors'>
+										<span className='text-sm font-mono truncate min-w-0 flex-1'>
+											{model}
+										</span>
+
+										<span className='flex items-center gap-2 shrink-0'>
+											{status === 'passed' && (
+												<Badge className='bg-emerald-600/15 text-emerald-700 hover:bg-emerald-600/15 dark:bg-emerald-500/15 dark:text-emerald-400 border-0 gap-1'>
+													<Check className='h-3 w-3' />
+													{t('providers.testLatency', { ms: state?.latency_ms ?? 0 })}
+												</Badge>
+											)}
+											{status === 'failed' && (
+												<TooltipProvider delayDuration={0}>
+													<Tooltip>
+														<TooltipTrigger asChild>
+															<Badge className='bg-red-500/15 text-red-700 hover:bg-red-500/15 dark:bg-red-500/15 dark:text-red-400 border-0 gap-1'>
+																<X className='h-3 w-3' />
+																{state?.latency_ms != null ?
+																	t('providers.testLatency', { ms: state.latency_ms })
+																:	t('providers.testFailed')
+																}
+															</Badge>
+														</TooltipTrigger>
+														{state?.error && (
+															<TooltipContent side='left' className='max-w-xs'>
+																{state.error}
+															</TooltipContent>
+														)}
+													</Tooltip>
+												</TooltipProvider>
+											)}
+											{status === 'testing' && (
+												<Badge variant='secondary' className='gap-1 border-0'>
+													<Loader2 className='h-3 w-3 animate-spin' />
+													{t('providers.testing')}
+												</Badge>
+											)}
+											{status === 'idle' && (
+												<span className='text-xs text-muted-foreground'>
+													{t('providers.testIdle')}
+												</span>
+											)}
+										</span>
+
+										<Button
+											variant='ghost'
+											size='sm'
+											className='h-7 px-2 shrink-0'
+											disabled={status === 'testing' || testingAll}
+											onClick={() => runSingleTest(model)}
+										>
+											{status === 'testing' ?
+												<Loader2 className='h-3.5 w-3.5 animate-spin' />
+											:	<Zap className='h-3.5 w-3.5' />
+											}
+										</Button>
+									</div>
+								)
+							}}
+						/>
+					}
+				</div>
+			</DialogContent>
+		</Dialog>
+	)
+}
+
 function ProviderCard({
 	provider,
 	index,
@@ -1600,6 +1940,12 @@ function ProviderCard({
 }) {
 	const { t } = useTranslation()
 	const [expanded, setExpanded] = useState(false)
+	const [testDialogOpen, setTestDialogOpen] = useState(false)
+	const [testDialogChannel, setTestDialogChannel] = useState<{
+		id: string
+		name: string
+	} | null>(null)
+	const [quickTestingChannelId, setQuickTestingChannelId] = useState<string | null>(null)
 	const modelEntries = useMemo(
 		() =>
 			Object.entries(provider.models).sort(([a], [b]) => a.localeCompare(b)),
@@ -1618,6 +1964,32 @@ function ProviderCard({
 	)
 
 	const unpricedCount = provider.unpriced_model_count ?? 0
+
+	const modelNames = useMemo(
+		() => Object.keys(provider.models).sort(),
+		[provider.models]
+	)
+
+	const handleQuickTest = async (channelId: string) => {
+		setQuickTestingChannelId(channelId)
+		try {
+			const result: ChannelTestResult = await api.testChannel(provider.id, channelId)
+			if (result.success) {
+				toast.success(
+					`${t('providers.testPassed')} — ${t('providers.testLatency', { ms: result.latency_ms })}`,
+					{ description: result.model }
+				)
+			} else {
+				toast.error(t('providers.testFailed'), {
+					description: result.error ?? result.model
+				})
+			}
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : t('common.error'))
+		} finally {
+			setQuickTestingChannelId(null)
+		}
+	}
 
 	return (
 		<motion.div
@@ -1855,6 +2227,33 @@ function ProviderCard({
 													{channel.base_url}
 												</span>
 												<span className='ml-auto flex items-center gap-3 shrink-0'>
+													<span className='inline-flex items-center rounded-md border overflow-hidden h-7'>
+														<button
+															type='button'
+															className='flex items-center gap-1.5 px-2.5 h-full text-xs font-medium hover:bg-muted/80 transition-colors disabled:opacity-50 disabled:pointer-events-none border-r cursor-pointer'
+															disabled={quickTestingChannelId === channel.id}
+															onClick={() => handleQuickTest(channel.id)}
+														>
+															{quickTestingChannelId === channel.id ?
+																<Loader2 className='h-3 w-3 animate-spin' />
+															:	<Zap className='h-3 w-3' />
+															}
+															{t('providers.quickTest')}
+														</button>
+														<button
+															type='button'
+															className='flex items-center justify-center w-7 h-full hover:bg-muted/80 transition-colors cursor-pointer'
+															onClick={() => {
+																setTestDialogChannel({
+																	id: channel.id,
+																	name: channel.name
+																})
+																setTestDialogOpen(true)
+															}}
+														>
+															<ChevronRight className='h-3.5 w-3.5 text-muted-foreground' />
+														</button>
+													</span>
 													<span className='text-xs text-muted-foreground'>
 														W:{channel.weight}
 													</span>
@@ -1884,6 +2283,21 @@ function ProviderCard({
 					)}
 				</AnimatePresence>
 			</Card>
+
+			{testDialogChannel && (
+				<ChannelTestDialog
+					open={testDialogOpen}
+					onOpenChange={open => {
+						setTestDialogOpen(open)
+						if (!open) setTestDialogChannel(null)
+					}}
+					providerId={provider.id}
+					channelId={testDialogChannel.id}
+					channelName={testDialogChannel.name}
+					providerName={provider.name}
+					models={modelNames}
+				/>
+			)}
 		</motion.div>
 	)
 }

@@ -13,6 +13,10 @@ pub struct SystemSettings {
     pub site_description: String,
     pub api_base_url: String,
     pub reasoning_suffix_map: HashMap<String, String>,
+    pub monoize_active_probe_enabled: bool,
+    pub monoize_active_probe_interval_seconds: u64,
+    pub monoize_active_probe_success_threshold: u32,
+    pub monoize_active_probe_model: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -30,11 +34,15 @@ impl Default for SystemSettings {
             registration_enabled: true,
             default_user_role: "user".to_string(),
             session_ttl_days: 7,
-            api_key_max_per_user: 10,
+            api_key_max_per_user: 1000,
             site_name: "Monoize Dashboard".to_string(),
             site_description: "Unified Responses Proxy".to_string(),
             api_base_url: String::new(),
             reasoning_suffix_map: default_reasoning_suffix_map(),
+            monoize_active_probe_enabled: true,
+            monoize_active_probe_interval_seconds: 30,
+            monoize_active_probe_success_threshold: 1,
+            monoize_active_probe_model: None,
             updated_at: Utc::now(),
         }
     }
@@ -88,6 +96,29 @@ impl SettingsStore {
         self.set_if_not_exists(
             "reasoning_suffix_map",
             &serde_json::to_string(&defaults.reasoning_suffix_map).unwrap(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_active_probe_enabled",
+            &defaults.monoize_active_probe_enabled.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_active_probe_interval_seconds",
+            &defaults.monoize_active_probe_interval_seconds.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_active_probe_success_threshold",
+            &defaults.monoize_active_probe_success_threshold.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_active_probe_model",
+            &defaults
+                .monoize_active_probe_model
+                .clone()
+                .unwrap_or_default(),
         )
         .await?;
         Ok(())
@@ -164,7 +195,7 @@ impl SettingsStore {
                     settings.session_ttl_days = value.parse().unwrap_or(7);
                 }
                 "api_key_max_per_user" => {
-                    settings.api_key_max_per_user = value.parse().unwrap_or(10);
+                    settings.api_key_max_per_user = value.parse().unwrap_or(1000);
                 }
                 "site_name" => {
                     settings.site_name = value;
@@ -179,6 +210,23 @@ impl SettingsStore {
                     if let Ok(map) = serde_json::from_str(&value) {
                         settings.reasoning_suffix_map = map;
                     }
+                }
+                "monoize_active_probe_enabled" => {
+                    settings.monoize_active_probe_enabled = value.parse().unwrap_or(true);
+                }
+                "monoize_active_probe_interval_seconds" => {
+                    settings.monoize_active_probe_interval_seconds = value.parse().unwrap_or(30);
+                }
+                "monoize_active_probe_success_threshold" => {
+                    settings.monoize_active_probe_success_threshold = value.parse().unwrap_or(1);
+                }
+                "monoize_active_probe_model" => {
+                    let trimmed = value.trim();
+                    settings.monoize_active_probe_model = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    };
                 }
                 _ => {}
             }
@@ -211,6 +259,30 @@ impl SettingsStore {
             "reasoning_suffix_map",
             &serde_json::to_string(&settings.reasoning_suffix_map)
                 .unwrap_or_else(|_| "{}".to_string()),
+        )
+        .await?;
+        self.set(
+            "monoize_active_probe_enabled",
+            &settings.monoize_active_probe_enabled.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_active_probe_interval_seconds",
+            &settings.monoize_active_probe_interval_seconds.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_active_probe_success_threshold",
+            &settings.monoize_active_probe_success_threshold.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_active_probe_model",
+            settings
+                .monoize_active_probe_model
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or(""),
         )
         .await?;
         Ok(())

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon } from "lucide-react";
+import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,14 +17,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { TableVirtuoso } from "react-virtuoso";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,6 +32,8 @@ import {
   deleteUserOptimistic,
 } from "@/lib/swr";
 import type { User } from "@/lib/api";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { getGravatarUrl } from "@/lib/utils";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 
 const roleIcons = {
@@ -65,6 +60,7 @@ export function UsersPage() {
     role: "user",
     balanceUsd: "0",
     balanceUnlimited: false,
+    email: "",
   });
   const [saving, setSaving] = useState(false);
 
@@ -86,6 +82,7 @@ export function UsersPage() {
         role: "user",
         balanceUsd: "0",
         balanceUnlimited: false,
+        email: "",
       });
     } catch {
       // Error handled by optimistic update
@@ -104,6 +101,7 @@ export function UsersPage() {
         role?: User["role"];
         balance_usd?: string;
         balance_unlimited?: boolean;
+        email?: string | null;
       } = {};
       if (formData.username.trim() && formData.username !== editUser.username) {
         updates.username = formData.username.trim();
@@ -120,6 +118,11 @@ export function UsersPage() {
       if (formData.balanceUnlimited !== editUser.balance_unlimited) {
         updates.balance_unlimited = formData.balanceUnlimited;
       }
+      const trimmedEmail = formData.email.trim();
+      const currentEmail = editUser.email ?? "";
+      if (trimmedEmail !== currentEmail) {
+        updates.email = trimmedEmail || null;
+      }
       await updateUserOptimistic(
         editUser.id,
         updates,
@@ -133,6 +136,7 @@ export function UsersPage() {
         role: "user",
         balanceUsd: "0",
         balanceUnlimited: false,
+        email: "",
       });
     } catch {
       // Error handled by optimistic update
@@ -175,6 +179,7 @@ export function UsersPage() {
       role: user.role,
       balanceUsd: user.balance_usd,
       balanceUnlimited: user.balance_unlimited,
+      email: user.email ?? "",
     });
   };
 
@@ -318,6 +323,21 @@ export function UsersPage() {
                 placeholder="••••••••"
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-email">{t("userSettings.email")}</Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="edit-email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="user@example.com"
+                  className="pl-9"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">{t("userSettings.emailDescription")}</p>
+            </div>
             {currentUser?.role === "super_admin" && editUser?.role !== "super_admin" && (
               <div className="space-y-2">
                 <Label>{t("users.role")}</Label>
@@ -382,91 +402,121 @@ export function UsersPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t("users.user")}</TableHead>
-                  <TableHead>{t("users.role")}</TableHead>
-                  <TableHead>{t("common.created")}</TableHead>
-                  <TableHead>{t("users.lastLogin")}</TableHead>
-                  <TableHead>Balance</TableHead>
-                  <TableHead>{t("common.status")}</TableHead>
-                  <TableHead className="w-[100px]">{t("common.actions")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((user, index) => {
-                  const RoleIcon = roleIcons[user.role];
-                  return (
-                    <motion.tr
-                      key={user.id}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.05, ...transitions.normal }}
-                      className="border-b transition-colors hover:bg-muted/50"
-                    >
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <motion.div
-                            whileHover={{ scale: 1.1 }}
-                            className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary"
-                          >
-                            {user.username[0].toUpperCase()}
-                          </motion.div>
-                          <span className="font-medium">{user.username}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={roleVariants[user.role]} className="gap-1">
-                          <RoleIcon className="h-3 w-3" />
+            <TableVirtuoso
+              style={{ height: "calc(100vh - 280px)", minHeight: 400 }}
+              data={users}
+              components={{
+                Table: (props) => (
+                  <table
+                    {...props}
+                    className="w-full caption-bottom text-sm"
+                    style={{ minWidth: "56rem" }}
+                  />
+                ),
+                TableHead: (props) => (
+                  <thead {...props} className="[&_tr]:border-b" />
+                ),
+                TableRow: (props) => (
+                  <tr
+                    {...props}
+                    className="border-b transition-colors hover:bg-muted/50"
+                  />
+                ),
+                TableBody: (props) => (
+                  <tbody {...props} className="[&_tr:last-child]:border-0" />
+                ),
+              }}
+              fixedHeaderContent={() => (
+                <tr className="border-b bg-background">
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    {t("users.user")}
+                  </th>
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[8.5rem] whitespace-nowrap">
+                    {t("users.role")}
+                  </th>
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    {t("common.created")}
+                  </th>
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    {t("users.lastLogin")}
+                  </th>
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    Balance
+                  </th>
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    {t("common.status")}
+                  </th>
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[100px]">
+                    {t("common.actions")}
+                  </th>
+                </tr>
+              )}
+              itemContent={(_index, user) => {
+                const RoleIcon = roleIcons[user.role];
+                return (
+                  <>
+                    <td className="p-4 align-middle">
+                      <div className="flex items-center gap-2">
+                        <Avatar className="h-8 w-8">
+                          {user.email && <AvatarImage src={getGravatarUrl(user.email, 64) ?? undefined} alt={user.username} />}
+                          <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
+                        </Avatar>
+                        <span className="font-medium">{user.username}</span>
+                      </div>
+                    </td>
+                    <td className="p-4 align-middle">
+                      <div className="max-h-8 overflow-x-auto overflow-y-hidden">
+                        <Badge
+                          variant={roleVariants[user.role]}
+                          className="inline-flex h-7 min-w-max flex-nowrap items-center gap-1 whitespace-nowrap"
+                        >
+                          <RoleIcon className="h-3 w-3 shrink-0" />
                           {t(`roles.${user.role}`)}
                         </Badge>
-                      </TableCell>
-                      <TableCell>{formatDate(user.created_at)}</TableCell>
-                      <TableCell>{user.last_login_at ? formatDate(user.last_login_at) : t("common.never")}</TableCell>
-                      <TableCell>
-                        {user.balance_unlimited ? "Unlimited" : `$${user.balance_usd}`}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={user.enabled}
-                            onCheckedChange={() => handleToggleEnabled(user)}
-                            disabled={!canEdit(user)}
-                          />
-                          <span className="text-sm text-muted-foreground">
-                            {user.enabled ? t("common.enabled") : t("common.disabled")}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          {canEdit(user) && (
-                            <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
-                              <Button variant="ghost" size="icon" onClick={() => openEdit(user)}>
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                            </motion.div>
-                          )}
-                          {canDelete(user) && (
-                            <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => handleDelete(user.id)}
-                                className="text-destructive hover:text-destructive"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </motion.div>
-                          )}
-                        </div>
-                      </TableCell>
-                    </motion.tr>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                      </div>
+                    </td>
+                    <td className="p-4 align-middle">{formatDate(user.created_at)}</td>
+                    <td className="p-4 align-middle">
+                      {user.last_login_at ? formatDate(user.last_login_at) : t("common.never")}
+                    </td>
+                    <td className="p-4 align-middle">
+                      {user.balance_unlimited ? "Unlimited" : `$${user.balance_usd}`}
+                    </td>
+                    <td className="p-4 align-middle">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={user.enabled}
+                          onCheckedChange={() => handleToggleEnabled(user)}
+                          disabled={!canEdit(user)}
+                        />
+                        <span className="text-sm text-muted-foreground">
+                          {user.enabled ? t("common.enabled") : t("common.disabled")}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-4 align-middle">
+                      <div className="flex items-center gap-1">
+                        {canEdit(user) && (
+                          <Button variant="ghost" size="icon" onClick={() => openEdit(user)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {canDelete(user) && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(user.id)}
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </>
+                );
+              }}
+            />
           </CardContent>
         </Card>
       </motion.div>

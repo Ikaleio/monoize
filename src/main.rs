@@ -18,6 +18,13 @@ async fn main() {
 
 async fn run() -> Result<(), AppError> {
     let state = monoize::app::load_state().await?;
+
+    match state.user_store.cleanup_pending_request_logs().await {
+        Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up stale pending request logs"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("failed to cleanup pending request logs: {e}"),
+    }
+
     let app = monoize::app::build_app(state.clone());
     let addr: std::net::SocketAddr =
         state
@@ -39,12 +46,56 @@ async fn run() -> Result<(), AppError> {
         )
     })?;
     tracing::info!("listening on {}", addr);
-    axum::serve(listener, app).await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "serve_failed",
-            err.to_string(),
-        )
-    })?;
+
+    let shutdown_state = state.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(shutdown_state))
+        .await
+        .map_err(|err| {
+            AppError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "serve_failed",
+                err.to_string(),
+            )
+        })?;
+
+    match state.user_store.cleanup_pending_request_logs().await {
+        Ok(n) if n > 0 => tracing::info!(count = n, "finalized pending request logs on shutdown"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("failed to cleanup pending request logs on shutdown: {e}"),
+    }
+
     Ok(())
+}
+
+async fn shutdown_signal(state: monoize::app::AppState) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl+c handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => { tracing::info!("received SIGINT, shutting down"); }
+        _ = terminate => { tracing::info!("received SIGTERM, shutting down"); }
+    }
+
+    match state.user_store.cleanup_pending_request_logs().await {
+        Ok(n) if n > 0 => {
+            tracing::info!(count = n, "finalized in-flight pending request logs");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("failed to cleanup pending request logs: {e}"),
+    }
 }

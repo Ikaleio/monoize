@@ -119,6 +119,8 @@ UI5. Default display MUST be a compact virtualized table (`TableVirtuoso`) with 
 | Source | Badge showing `models_dev` or `manual` |
 | Updated | Relative timestamp |
 
+UI5.1. In the Model column badge, GLM-series icon compatibility MUST follow `dashboard-ui-layout.spec.md` PL14.1.
+
 UI6. Each row MUST be clickable to open an edit dialog.
 
 UI7. Price display: `nano_per_token / 1000` = dollars per 1M tokens. Display up to 4 decimal places.
@@ -225,6 +227,8 @@ RE4. Suffixes are matched **longest-first** against the end of the model name.
 RE5. The setting is stored in `system_settings` table under key `reasoning_suffix_map` and exposed via the existing `GET/PUT /api/dashboard/settings` endpoints.
 
 RE6. The setting is editable in the dashboard Settings page.
+
+RE6a. The default provider-level suffix transform used for Anthropic/OpenRouter compatibility SHOULD map wildcard `*` to `-thinking` (not `-{effort}`), so suffix resolution keeps model IDs on supported aliases.
 
 ### 8.3 Model resolution algorithm
 

@@ -35,11 +35,13 @@ DH-4. Row C left panel MUST contain:
 - for `调用次数排行` tab, ranking key MUST use provider dimension (`providers[]`) rather than channel dimension.
 
 DH-5. Row C right panel MUST contain downstream API information:
-- data source: `api_base_url` field from `GET /api/dashboard/settings`;
+- data source: `api_base_url` field from `GET /api/dashboard/settings/public`;
 - if `api_base_url` is empty, show explicit empty state text directing user to system settings;
 - if `api_base_url` is non-empty, show:
   - the configured API base URL;
   - derived endpoint paths: `/v1/chat/completions`, `/v1/responses`, `/v1/models`.
+
+DH-5a. Row C right panel (API information) MUST be visible to all authenticated dashboard users (including non-admin `user` role). It MUST NOT depend on admin-only endpoints.
 
 ## Data Source Contract
 

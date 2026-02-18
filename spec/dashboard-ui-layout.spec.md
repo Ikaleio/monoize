@@ -110,9 +110,18 @@ PL13. Provider editor model section MUST include an explicit "Fetch Models" acti
 - Dialog MUST fetch upstream model list from `POST /api/dashboard/providers/{provider_id}/fetch-models`.
 - Dialog MUST split entries into `new` and `existing` tabs.
 - Dialog MUST allow selecting only `new` models for insertion.
+- While the dialog remains open, a successful fetched model list MUST remain visible and MUST NOT be cleared by unrelated parent rerenders.
+- Dialog model list container MUST have a bounded positive height with internal scrolling so fetched rows are visible immediately after load.
+- Dialog model list items MUST render as compact stacked badges (wrapping rows), not forced single-column rows.
 - Confirming selection MUST append selected models with default `{ redirect: "", multiplier: "1" }` while preserving existing rows.
 
 PL14. Provider model badges (overview and model-diff dialog) MUST display provider logo using model metadata (`models_dev_provider`) when available, with graceful fallback icon behavior when unavailable.
+
+PL14.1. Model-badge icon resolution MUST be deterministic for GLM series:
+
+- Normalize provider ID by lowercasing and removing whitespace, `_`, and `-`.
+- If lowercase `model` contains `glm`, the badge MUST render the GLM-series icon (this rule has higher priority than provider-based mapping).
+- If normalized provider is `glm` or `chatglm`, the badge MUST render the GLM-series icon.
 
 PL15. In provider editor model section, each model row MUST be rendered as a compact clickable model tag.
 
@@ -165,6 +174,17 @@ PL21. Unpriced models on the Providers page MUST be visually highlighted at mode
 PL22. In the provider unsaved-changes confirmation dialog ("Save Changes?"), the "Discard" action MUST use destructive red hover styling.
 
 ## 3. Playground Page
+
+ST1. `/dashboard/admin-settings` MUST include a "Health Monitoring" section for Monoize active probe settings.
+
+ST2. Health Monitoring section MUST expose at least these editable fields bound to `GET/PUT /api/dashboard/settings`:
+
+- `monoize_active_probe_enabled` (boolean switch)
+- `monoize_active_probe_interval_seconds` (integer >= 1)
+- `monoize_active_probe_success_threshold` (integer >= 1)
+- `monoize_active_probe_model` (optional string, empty means null)
+
+ST3. Settings UI MUST perform optimistic update and persist via existing settings save flow; persisted values MUST be reflected after reload.
 
 PG-L1. `/playground` page MUST be accessible from the main navigation sidebar (below Token Management).
 
@@ -235,3 +255,26 @@ DH10. In desktop layout, `/dashboard` MUST avoid page-level vertical overflow fo
 
 - row C cards MUST consume remaining page space and keep equal height;
 - overflowing content in row C panels MUST scroll within panel containers.
+
+## 6. Users Page
+
+UP1. In `/dashboard/users` list table, the role badge (`user.role`) MUST be rendered as a single-line badge. Badge text and icon MUST NOT wrap into multiple lines.
+
+UP2. The role badge container in `/dashboard/users` table MUST enforce a fixed maximum height equal to one badge row and MUST use horizontal overflow (`overflow-x: auto`, `overflow-y: hidden`) when space is insufficient on narrow viewports.
+
+UP3. The users table in `/dashboard/users` MUST allow horizontal scrolling on narrow viewports so role badges remain single-line instead of wrapping.
+
+UP4. The users table body in `/dashboard/users` MUST use virtualized rendering via `react-virtuoso` (`TableVirtuoso`) instead of rendering all rows as plain DOM rows.
+
+- Table header MUST be rendered via `fixedHeaderContent` (sticky header).
+- Table body rows MUST be rendered via `itemContent` callback.
+- Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
+
+## 7. Token Management Page (UI)
+
+AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized rendering via `react-virtuoso` (`TableVirtuoso`) instead of rendering all rows as plain DOM rows.
+
+- Table header MUST be rendered via `fixedHeaderContent` (sticky header).
+- Table body rows MUST be rendered via `itemContent` callback.
+- Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
+- Select-all checkbox MUST remain in the fixed header; per-row checkboxes MUST remain in `itemContent`.

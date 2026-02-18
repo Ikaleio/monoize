@@ -20,7 +20,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useState } from "react";
 import { motion } from "framer-motion";
+import { getGravatarUrl } from "@/lib/utils";
 
 const navTransition = {
   type: "spring",
@@ -181,6 +182,9 @@ function Sidebar({ onNavigate, layoutId = "nav-active", disableLayoutAnimation =
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="group w-full justify-start gap-3 px-3 py-2">
                 <Avatar className="h-7 w-7">
+                  {user?.email && (
+                    <AvatarImage src={getGravatarUrl(user.email, 56) ?? undefined} alt={user?.username} />
+                  )}
                   <AvatarFallback className="text-xs">
                     {user?.username?.[0]?.toUpperCase() || "U"}
                   </AvatarFallback>

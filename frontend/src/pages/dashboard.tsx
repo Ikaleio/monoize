@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { ChevronUp, ChevronDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ChartContainer,
@@ -11,13 +12,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
 import { type Provider, type RequestLog } from "@/lib/api";
-import { useProviders, useRequestLogs, useSettings, useStats } from "@/lib/swr";
+import { useProviders, usePublicSettings, useRequestLogs, useStats } from "@/lib/swr";
 import { cn } from "@/lib/utils";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { toast } from "sonner";
 
 type DashboardProvider = Pick<Provider, "id" | "name" | "provider_type" | "models" | "channels">;
-type AnalysisTabId = "spendDistribution" | "spendTrend" | "callDistribution" | "callRank";
+type AnalysisTabId = "spendDistribution" | "callDistribution" | "callRank";
 
 interface MetricRow {
   key: string;
@@ -38,13 +39,14 @@ interface ParsedLog {
   chargeUsd: number;
 }
 
-interface AnalysisRow {
+interface StackedBucketRow {
   label: string;
-  value: number;
+  [modelKey: string]: number | string;
 }
 
 interface AnalysisData {
-  rows: AnalysisRow[];
+  rows: StackedBucketRow[];
+  models: string[];
   total: number;
   valueType: "money" | "count";
   metricTitle: string;
@@ -52,7 +54,6 @@ interface AnalysisData {
 
 const ANALYSIS_TABS: Array<{ id: AnalysisTabId; i18nKey: string; fallback: string }> = [
   { id: "spendDistribution", i18nKey: "dashboard.analysisTabs.spendDistribution", fallback: "Spend Distribution" },
-  { id: "spendTrend", i18nKey: "dashboard.analysisTabs.spendTrend", fallback: "Spend Trend" },
   { id: "callDistribution", i18nKey: "dashboard.analysisTabs.callDistribution", fallback: "Call Distribution" },
   { id: "callRank", i18nKey: "dashboard.analysisTabs.callRank", fallback: "Call Ranking" },
 ];
@@ -88,16 +89,37 @@ function formatTimeBucketLabel(ms: number): string {
   return `${month}-${day} ${hour}:00`;
 }
 
-function truncateLabel(label: string, maxLength = 20): string {
-  if (label.length <= maxLength) return label;
-  return `${label.slice(0, maxLength - 1)}…`;
-}
+/**
+ * Deterministic color palette for model→color mapping.
+ * Uses hsl-based hues to maximise visual distinction; saturation/lightness
+ * are tuned for light backgrounds while remaining readable in dark mode.
+ */
+const MODEL_COLORS = [
+  "hsl(45, 93%, 65%)",
+  "hsl(330, 70%, 72%)",
+  "hsl(24, 85%, 60%)",
+  "hsl(160, 55%, 55%)",
+  "hsl(270, 60%, 68%)",
+  "hsl(200, 70%, 58%)",
+  "hsl(0, 70%, 62%)",
+  "hsl(95, 50%, 55%)",
+  "hsl(290, 50%, 60%)",
+  "hsl(180, 50%, 50%)",
+  "hsl(50, 80%, 55%)",
+  "hsl(210, 55%, 65%)",
+  "hsl(350, 65%, 58%)",
+  "hsl(130, 45%, 50%)",
+  "hsl(15, 75%, 55%)",
+  "hsl(240, 50%, 65%)",
+] as const;
 
-function topEntries(map: Map<string, number>, maxCount: number): AnalysisRow[] {
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, maxCount)
-    .map(([label, value]) => ({ label, value }));
+/** Stable hash → palette index so the same model always gets the same color. */
+function modelToColor(modelId: string): string {
+  let hash = 0;
+  for (let i = 0; i < modelId.length; i++) {
+    hash = ((hash << 5) - hash + modelId.charCodeAt(i)) | 0;
+  }
+  return MODEL_COLORS[((hash % MODEL_COLORS.length) + MODEL_COLORS.length) % MODEL_COLORS.length];
 }
 
 function OverviewCard({
@@ -137,6 +159,55 @@ function OverviewCard({
   );
 }
 
+const LEGEND_PAGE_SIZE = 4;
+
+function PaginatedChartLegend({
+  items,
+}: {
+  items: Array<{ key: string; label: string; color: string }>;
+}) {
+  const [page, setPage] = useState(0);
+  const totalPages = Math.ceil(items.length / LEGEND_PAGE_SIZE);
+  const visible = items.slice(page * LEGEND_PAGE_SIZE, (page + 1) * LEGEND_PAGE_SIZE);
+
+  return (
+    <div className="flex items-center justify-center gap-3 pt-3">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
+        {visible.map((item) => (
+          <div key={item.key} className="flex items-center gap-1.5">
+            <div
+              className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
+              style={{ backgroundColor: item.color }}
+            />
+            <span className="text-xs text-muted-foreground">{item.label}</span>
+          </div>
+        ))}
+      </div>
+      {totalPages > 1 && (
+        <div className="flex flex-col items-center gap-0.5 text-muted-foreground">
+          <button
+            disabled={page === 0}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            className="disabled:opacity-30"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
+          <span className="text-[10px] tabular-nums leading-none">
+            {page + 1}/{totalPages}
+          </span>
+          <button
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            className="disabled:opacity-30"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardSkeleton() {
   return (
     <div className="space-y-5">
@@ -169,9 +240,7 @@ export function DashboardPage() {
     revalidateOnMount: isAdmin,
   });
   const { data: requestLogsResponse, isLoading: logsLoading } = useRequestLogs(400, 0);
-  const { data: settings, isLoading: settingsLoading } = useSettings(
-    isAdmin ? undefined : { revalidateOnMount: false }
-  );
+  const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
 
   const providers = useMemo<DashboardProvider[]>(
     () =>
@@ -263,7 +332,7 @@ export function DashboardPage() {
     return { todayRequests, totalSpend, todaySpend, successRate, avgLatency, tokenSum };
   }, [rawLogs, todayStart]);
 
-  const loading = statsLoading || logsLoading || (isAdmin && (providersLoading || settingsLoading));
+  const loading = statsLoading || logsLoading || publicSettingsLoading || (isAdmin && providersLoading);
 
   const tt = useCallback(
     (key: string, fallback: string, options?: Record<string, unknown>): string => {
@@ -350,96 +419,63 @@ export function DashboardPage() {
   );
 
   const analysisData = useMemo<AnalysisData>(() => {
-    const base = {
-      rows: [] as AnalysisRow[],
+    const base: AnalysisData = {
+      rows: [],
+      models: [],
       total: 0,
-      valueType: (activeTab === "spendDistribution" || activeTab === "spendTrend" ? "money" : "count") as "money" | "count",
+      valueType: (activeTab === "spendDistribution" ? "money" : "count"),
       metricTitle:
-        activeTab === "spendTrend"
-          ? tt("dashboard.spend", "Spend")
-          : activeTab === "callRank"
-            ? tt("dashboard.calls", "Calls")
-            : tt("dashboard.value", "Value"),
+        activeTab === "callRank"
+          ? tt("dashboard.calls", "Calls")
+          : tt("dashboard.value", "Value"),
     };
 
-    if (parsedLogs.length === 0) {
-      return base;
-    }
+    if (parsedLogs.length === 0) return base;
 
-    if (activeTab === "spendTrend") {
-      const bucketCount = 8;
-      const maxTs = Math.max(...parsedLogs.map((log) => log.ts));
-      const endMs = Math.max(Date.now(), maxTs);
-      const rangeMs = 24 * 60 * 60 * 1000;
-      const startMs = endMs - rangeMs;
-      const bucketWidth = rangeMs / bucketCount;
+    const bucketCount = 8;
+    const maxTs = Math.max(...parsedLogs.map((l) => l.ts));
+    const endMs = Math.max(Date.now(), maxTs);
+    const rangeMs = 24 * 60 * 60 * 1000;
+    const startMs = endMs - rangeMs;
+    const bucketWidth = rangeMs / bucketCount;
 
-      const buckets = Array.from({ length: bucketCount }, (_, index) => ({
-        label: formatTimeBucketLabel(startMs + index * bucketWidth),
-        value: 0,
-      }));
+    const getValue = (log: ParsedLog): number => {
+      if (activeTab === "spendDistribution") return log.chargeUsd;
+      return 1;
+    };
 
-      for (const log of parsedLogs) {
-        if (log.ts < startMs || log.ts > endMs) continue;
-        const index = Math.min(bucketCount - 1, Math.max(0, Math.floor((log.ts - startMs) / bucketWidth)));
-        buckets[index].value += log.chargeUsd;
-      }
+    const getGroupKey = (log: ParsedLog): string => {
+      if (activeTab === "callRank") return log.providerLabel;
+      return log.modelId;
+    };
 
-      const rows = buckets.map((bucket) => ({
-        label: bucket.label,
-        value: Number(bucket.value.toFixed(4)),
-      }));
+    const modelTotals = new Map<string, number>();
+    const bucketData: Array<Map<string, number>> = Array.from({ length: bucketCount }, () => new Map());
 
-      const total = rows.reduce((sum, row) => sum + row.value, 0);
-      return {
-        ...base,
-        rows,
-        total,
-      };
-    }
-
-    if (activeTab === "callRank") {
-      const byProvider = new Map<string, number>();
-      for (const log of parsedLogs) {
-        byProvider.set(log.providerLabel, (byProvider.get(log.providerLabel) ?? 0) + 1);
-      }
-      const rows = topEntries(byProvider, 8);
-      const total = rows.reduce((sum, row) => sum + row.value, 0);
-      return {
-        ...base,
-        rows,
-        total,
-      };
-    }
-
-    if (activeTab === "spendDistribution") {
-      const byModelSpend = new Map<string, number>();
-      for (const log of parsedLogs) {
-        byModelSpend.set(log.modelId, (byModelSpend.get(log.modelId) ?? 0) + log.chargeUsd);
-      }
-      const rows = topEntries(byModelSpend, 8).map((row) => ({
-        ...row,
-        value: Number(row.value.toFixed(4)),
-      }));
-      const total = rows.reduce((sum, row) => sum + row.value, 0);
-      return {
-        ...base,
-        rows,
-        total,
-      };
-    }
-
-    const byModelCalls = new Map<string, number>();
     for (const log of parsedLogs) {
-      byModelCalls.set(log.modelId, (byModelCalls.get(log.modelId) ?? 0) + 1);
+      if (log.ts < startMs || log.ts > endMs) continue;
+      const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor((log.ts - startMs) / bucketWidth)));
+      const key = getGroupKey(log);
+      const val = getValue(log);
+      bucketData[idx].set(key, (bucketData[idx].get(key) ?? 0) + val);
+      modelTotals.set(key, (modelTotals.get(key) ?? 0) + val);
     }
-    const rows = topEntries(byModelCalls, 8);
-    const total = rows.reduce((sum, row) => sum + row.value, 0);
-    return {
-      ...base,
-      rows,
-      total,
-    };
+
+    const models = [...modelTotals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k]) => k);
+
+    const rows: StackedBucketRow[] = bucketData.map((bucket, i) => {
+      const row: StackedBucketRow = { label: formatTimeBucketLabel(startMs + i * bucketWidth) };
+      for (const model of models) {
+        const raw = bucket.get(model) ?? 0;
+        row[model] = base.valueType === "money" ? Number(raw.toFixed(4)) : raw;
+      }
+      return row;
+    });
+
+    const total = [...modelTotals.values()].reduce((s, v) => s + v, 0);
+    return { ...base, rows, models, total };
   }, [activeTab, parsedLogs, tt]);
 
   const analysisTotalDisplay =
@@ -450,23 +486,25 @@ export function DashboardPage() {
   const activeTabMeta = ANALYSIS_TABS.find((tab) => tab.id === activeTab) ?? ANALYSIS_TABS[0];
   const analysisHeading = tt(activeTabMeta.i18nKey, activeTabMeta.fallback);
 
-  const analysisChartData = useMemo(
-    () =>
-      analysisData.rows.map((row) => ({
-        label: truncateLabel(row.label, 18),
-        value: row.value,
-      })),
-    [analysisData.rows]
-  );
+  const analysisChartConfig = useMemo<ChartConfig>(() => {
+    const cfg: ChartConfig = {};
+    for (const model of analysisData.models) {
+      cfg[model] = {
+        label: model,
+        color: modelToColor(model),
+      };
+    }
+    return cfg;
+  }, [analysisData.models]);
 
-  const analysisChartConfig = useMemo<ChartConfig>(
-    () => ({
-      value: {
-        label: analysisData.metricTitle,
-        color: analysisData.valueType === "money" ? "#3b82f6" : "#22c55e",
-      },
-    }),
-    [analysisData.metricTitle, analysisData.valueType]
+  const legendItems = useMemo(
+    () =>
+      analysisData.models.map((model) => ({
+        key: model,
+        label: model,
+        color: modelToColor(model),
+      })),
+    [analysisData.models]
   );
 
   const formatAnalysisValue = (value: number): string =>
@@ -553,35 +591,55 @@ export function DashboardPage() {
               </div>
 
               {analysisData.rows.length > 0 ? (
-                <div className="flex-1 min-h-0 rounded-lg border bg-muted/20 p-2 sm:p-3">
-                  <ChartContainer config={analysisChartConfig} className="h-full min-h-[170px] w-full !aspect-auto">
-                    <BarChart data={analysisChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                      <CartesianGrid vertical={false} />
-                      <XAxis
-                        dataKey="label"
-                        tickLine={false}
-                        axisLine={false}
-                        tickMargin={8}
-                        minTickGap={16}
-                      />
-                      <YAxis tickLine={false} axisLine={false} width={48} />
-                      <ChartTooltip
-                        content={
-                          <ChartTooltipContent
-                            formatter={(value) => formatAnalysisValue(Number(value))}
-                            labelFormatter={(label) => String(label)}
+                <div className="flex-1 min-h-0 flex flex-col rounded-lg border bg-muted/20 p-2 sm:p-3">
+                  <div className="flex-1 min-h-0">
+                    <ChartContainer config={analysisChartConfig} className="h-full min-h-[170px] w-full !aspect-auto">
+                      <BarChart data={analysisData.rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid vertical={false} />
+                        <XAxis
+                          dataKey="label"
+                          tickLine={false}
+                          axisLine={false}
+                          tickMargin={8}
+                          minTickGap={16}
+                        />
+                        <YAxis tickLine={false} axisLine={false} width={48} />
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              labelFormatter={(label) => String(label)}
+                              formatter={(value, name) => (
+                                <>
+                                  <div
+                                    className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
+                                    style={{ backgroundColor: modelToColor(String(name)) }}
+                                  />
+                                  <div className="flex flex-1 items-center justify-between gap-2 leading-none">
+                                    <span className="text-muted-foreground">{String(name)}</span>
+                                    <span className="font-mono font-medium tabular-nums text-foreground">
+                                      {formatAnalysisValue(Number(value))}
+                                    </span>
+                                  </div>
+                                </>
+                              )}
+                            />
+                          }
+                        />
+                        {analysisData.models.map((model) => (
+                          <Bar
+                            key={model}
+                            dataKey={model}
+                            stackId="a"
+                            fill={modelToColor(model)}
+                            radius={0}
+                            isAnimationActive
+                            animationDuration={450}
                           />
-                        }
-                      />
-                      <Bar
-                        dataKey="value"
-                        fill={analysisData.valueType === "money" ? "#3b82f6" : "#22c55e"}
-                        radius={[4, 4, 0, 0]}
-                        isAnimationActive
-                        animationDuration={450}
-                      />
-                    </BarChart>
-                  </ChartContainer>
+                        ))}
+                      </BarChart>
+                    </ChartContainer>
+                  </div>
+                  <PaginatedChartLegend items={legendItems} />
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 rounded-lg border bg-muted/20 p-6 sm:p-8">
@@ -610,7 +668,7 @@ export function DashboardPage() {
               <CardTitle className="text-xl">{tt("dashboard.apiInformation", "API Information")}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-1 min-h-0 flex-col pt-4">
-              {!settings?.api_base_url ? (
+              {!publicSettings?.api_base_url ? (
                 <div className="flex flex-1 flex-col items-center justify-center text-center">
                   <p className="mt-4 text-xl font-semibold">{tt("dashboard.noApiInfo", "No API Information")}</p>
                   <p className="mt-2 max-w-xs text-sm leading-6 text-muted-foreground">
@@ -626,12 +684,12 @@ export function DashboardPage() {
                     transition={transitions.normal}
                     className="w-full rounded-lg border bg-muted/30 p-2.5 text-left transition-colors hover:bg-muted/50 active:bg-muted/70"
                     onClick={() => {
-                      navigator.clipboard.writeText(settings.api_base_url);
+                      navigator.clipboard.writeText(publicSettings.api_base_url);
                       toast.success(tt("common.copied", "Copied"));
                     }}
                   >
                     <p className="text-xs text-muted-foreground">{tt("dashboard.apiBaseUrl", "API Base URL")}</p>
-                    <p className="mt-0.5 truncate font-mono text-xs font-semibold">{settings.api_base_url}</p>
+                    <p className="mt-0.5 truncate font-mono text-xs font-semibold">{publicSettings.api_base_url}</p>
                   </motion.button>
 
                   {[
@@ -639,7 +697,7 @@ export function DashboardPage() {
                     { label: "Responses", path: "/v1/responses" },
                     { label: "Models", path: "/v1/models" },
                   ].map((endpoint, index) => {
-                    const fullUrl = `${settings.api_base_url.replace(/\/+$/, "")}${endpoint.path}`;
+                    const fullUrl = `${publicSettings.api_base_url.replace(/\/+$/, "")}${endpoint.path}`;
                     return (
                       <motion.button
                         key={endpoint.path}

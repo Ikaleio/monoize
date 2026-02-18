@@ -10,6 +10,7 @@ export interface User {
   balance_nano_usd: string;
   balance_usd: string;
   balance_unlimited: boolean;
+  email?: string | null;
 }
 
 export interface AuthResponse {
@@ -90,7 +91,18 @@ export interface SystemSettings {
   site_description: string;
   api_base_url: string;
   reasoning_suffix_map: Record<string, string>;
+  monoize_active_probe_enabled: boolean;
+  monoize_active_probe_interval_seconds: number;
+  monoize_active_probe_success_threshold: number;
+  monoize_active_probe_model?: string | null;
   updated_at: string;
+}
+
+export interface PublicSystemSettings {
+  registration_enabled: boolean;
+  site_name: string;
+  site_description: string;
+  api_base_url: string;
 }
 
 export interface DashboardStats {
@@ -150,6 +162,10 @@ export interface Provider {
   channels: MonoizeChannel[];
   max_retries: number;
   transforms: TransformRuleConfig[];
+  active_probe_enabled_override?: boolean | null;
+  active_probe_interval_seconds_override?: number | null;
+  active_probe_success_threshold_override?: number | null;
+  active_probe_model_override?: string | null;
   enabled: boolean;
   priority: number;
   created_at: string;
@@ -173,6 +189,10 @@ export interface CreateProviderInput {
   channels: CreateMonoizeChannelInput[];
   max_retries?: number;
   transforms?: TransformRuleConfig[];
+  active_probe_enabled_override?: boolean | null;
+  active_probe_interval_seconds_override?: number | null;
+  active_probe_success_threshold_override?: number | null;
+  active_probe_model_override?: string | null;
   enabled?: boolean;
   priority?: number;
 }
@@ -184,6 +204,10 @@ export interface UpdateProviderInput {
   channels?: CreateMonoizeChannelInput[];
   max_retries?: number;
   transforms?: TransformRuleConfig[];
+  active_probe_enabled_override?: boolean | null;
+  active_probe_interval_seconds_override?: number | null;
+  active_probe_success_threshold_override?: number | null;
+  active_probe_model_override?: string | null;
   enabled?: boolean;
   priority?: number;
 }
@@ -246,12 +270,16 @@ export interface RequestLog {
   error_code?: string;
   error_message?: string;
   error_http_status?: number;
+  tried_providers_json?: Array<{ provider_id: string; channel_id: string; error: string }>;
   duration_ms?: number;
   ttfb_ms?: number;
   request_ip?: string;
+  reasoning_effort?: string;
+  request_kind?: string;
   created_at: string;
   username?: string;
   api_key_name?: string;
+  provider_name?: string;
 }
 
 export interface RequestLogsFilter {
@@ -267,6 +295,13 @@ export interface RequestLogsResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface ChannelTestResult {
+  success: boolean;
+  latency_ms: number;
+  model: string;
+  error: string | null;
 }
 
 class ApiClient {
@@ -370,9 +405,17 @@ class ApiClient {
       balance_nano_usd?: string;
       balance_usd?: string;
       balance_unlimited?: boolean;
+      email?: string | null;
     }
   ): Promise<User> {
     return this.request(`/users/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async updateMe(updates: { email?: string | null }): Promise<User> {
+    return this.request("/auth/me", {
       method: "PUT",
       body: JSON.stringify(updates),
     });
@@ -430,11 +473,7 @@ class ApiClient {
     });
   }
 
-  async getPublicSettings(): Promise<{
-    registration_enabled: boolean;
-    site_name: string;
-    site_description: string;
-  }> {
+  async getPublicSettings(): Promise<PublicSystemSettings> {
     return this.request("/settings/public");
   }
 
@@ -544,6 +583,13 @@ class ApiClient {
     if (filters?.username) params.set("username", filters.username);
     if (filters?.search) params.set("search", filters.search);
     return this.request(`/request-logs?${params.toString()}`);
+  }
+
+  async testChannel(providerId: string, channelId: string, model?: string): Promise<ChannelTestResult> {
+    return this.request(`/providers/${providerId}/channels/${channelId}/test`, {
+      method: "POST",
+      body: model ? JSON.stringify({ model }) : JSON.stringify({}),
+    });
   }
 }
 

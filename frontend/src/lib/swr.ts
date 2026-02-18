@@ -7,6 +7,7 @@ import type {
   DashboardStats,
   ConfigOverview,
   SystemSettings,
+  PublicSystemSettings,
   Provider,
   CreateProviderInput,
   UpdateProviderInput,
@@ -106,7 +107,7 @@ export function useSettings(config?: SWRConfiguration) {
 
 // Public settings hook (no auth required)
 export function usePublicSettings(config?: SWRConfiguration) {
-  return useSWR<{ registration_enabled: boolean; site_name: string }>(
+  return useSWR<PublicSystemSettings>(
     SWR_KEYS.PUBLIC_SETTINGS,
     fetchers.publicSettings,
     { ...defaultConfig, ...config }
@@ -150,6 +151,28 @@ export function useRequestLogs(limit = 50, offset = 0, filters?: RequestLogsFilt
 }
 
 // Mutation helpers with optimistic updates
+
+export async function updateMeOptimistic(
+  updates: { email?: string | null },
+  currentUser: User | undefined,
+  onError?: (error: Error) => void
+) {
+  if (currentUser) {
+    mutate(SWR_KEYS.ME, { ...currentUser, ...updates }, false);
+  }
+
+  try {
+    const updated = await api.updateMe(updates);
+    mutate(SWR_KEYS.ME, updated, false);
+    return updated;
+  } catch (error) {
+    mutate(SWR_KEYS.ME);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
 
 export async function updateSettingsOptimistic(
   newSettings: SystemSettings,

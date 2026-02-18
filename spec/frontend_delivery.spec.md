@@ -22,9 +22,12 @@ FD-R3. Unknown UI paths MUST return embedded `index.html` (SPA fallback).
 
 FD-R4. Non-GET unknown API paths MUST return `404`.
 
+FD-R5. Dashboard SPA routes under `/dashboard/*` (for example `/dashboard/providers`, `/dashboard/users`, `/dashboard/tokens`, `/dashboard/models`) MUST resolve to embedded `index.html` on direct browser navigation and hard refresh.
+
+FD-R6. Dashboard API handlers MUST be exposed only under `/api/dashboard/*` and MUST NOT intercept direct browser `GET` requests for `/dashboard/*` SPA paths.
+
 ## 4. Frontend API Base
 
 FD-A1. Frontend MUST use `/api` as backend base path in development and production.
 
 FD-A2. Vite dev server MUST proxy `/api/*` to backend in development.
-
