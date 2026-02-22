@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, RefreshCw, Search } from 'lucide-react'
+import { CalendarIcon, ChevronDown, Eye, EyeOff, RefreshCw, Search } from 'lucide-react'
 import { TableVirtuoso } from 'react-virtuoso'
+import { format, startOfDay, startOfMonth, subDays, subHours, subMonths } from 'date-fns'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
 	Select,
 	SelectContent,
@@ -25,8 +28,235 @@ import { ModelBadge } from '@/components/ModelBadge'
 import { cn } from '@/lib/utils'
 import type { RequestLog, RequestLogsFilter } from '@/lib/api'
 import { PageWrapper, motion, transitions } from '@/components/ui/motion'
+import { AnimatePresence } from 'framer-motion'
 
 const REQUEST_LOGS_PAGE_SIZE = 100
+
+type TimeRangePreset = '1h' | '24h' | '7d' | '30d' | 'today' | 'yesterday' | 'this_month' | 'last_month'
+
+function applyPreset(preset: TimeRangePreset): { from: Date; to?: Date } {
+	const now = new Date()
+	switch (preset) {
+		case '1h':
+			return { from: subHours(now, 1) }
+		case '24h':
+			return { from: subHours(now, 24) }
+		case '7d':
+			return { from: subDays(now, 7) }
+		case '30d':
+			return { from: subDays(now, 30) }
+		case 'today':
+			return { from: startOfDay(now) }
+		case 'yesterday': {
+			const yesterday = subDays(now, 1)
+			return { from: startOfDay(yesterday), to: startOfDay(now) }
+		}
+		case 'this_month':
+			return { from: startOfMonth(now) }
+		case 'last_month': {
+			const lastMonth = subMonths(now, 1)
+			return { from: startOfMonth(lastMonth), to: startOfMonth(now) }
+		}
+	}
+}
+
+/** Parse datetime string: accepts `yyyy-MM-dd` or `yyyy-MM-dd HH:mm:ss`. */
+function parseDatetimeInput(input: string, endOfDay = false): Date | undefined {
+	const s = input.trim()
+	if (!s) return undefined
+	const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(s)
+	const dateTime = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(s)
+	if (!dateOnly && !dateTime) return undefined
+	if (dateOnly) {
+		const [y, m, d] = s.split('-').map(Number)
+		if (endOfDay) return new Date(y, m - 1, d, 23, 59, 59, 999)
+		return new Date(y, m - 1, d, 0, 0, 0, 0)
+	}
+	const [datePart, timePart] = s.split(/\s+/)
+	const [y, m, d] = datePart.split('-').map(Number)
+	const [h, mi, sec] = timePart.split(':').map(Number)
+	const result = new Date(y, m - 1, d, h, mi, sec, 0)
+	return isNaN(result.getTime()) ? undefined : result
+}
+
+/** Check if a range matches a fixed-time preset (tolerance: 1s). */
+function detectFixedPreset(from: Date | undefined, to: Date | undefined): TimeRangePreset | null {
+	if (!from) return null
+	const close = (a: Date, b: Date) => Math.abs(a.getTime() - b.getTime()) < 1000
+	const now = new Date()
+	// today: from=startOfDay(now), no to
+	if (!to && close(from, startOfDay(now))) return 'today'
+	// this_month: from=startOfMonth(now), no to
+	if (!to && close(from, startOfMonth(now))) return 'this_month'
+	// yesterday: from=startOfDay(yesterday), to=startOfDay(now)
+	if (to && close(from, startOfDay(subDays(now, 1))) && close(to, startOfDay(now))) return 'yesterday'
+	// last_month: from=startOfMonth(lastMonth), to=startOfMonth(now)
+	if (to && close(from, startOfMonth(subMonths(now, 1))) && close(to, startOfMonth(now))) return 'last_month'
+	return null
+}
+
+function DateRangePicker({
+	from,
+	to,
+	onChange,
+	t
+}: {
+	from: Date | undefined
+	to: Date | undefined
+	onChange: (from: Date | undefined, to: Date | undefined) => void
+	t: (key: string) => string
+}) {
+	const [open, setOpen] = useState(false)
+	const [activePreset, setActivePreset] = useState<TimeRangePreset | null>(null)
+	const [fromInput, setFromInput] = useState('')
+	const [toInput, setToInput] = useState('')
+	useEffect(() => {
+		setFromInput(from ? format(from, 'yyyy-MM-dd HH:mm:ss') : '')
+		setToInput(to ? format(to, 'yyyy-MM-dd HH:mm:ss') : '')
+	}, [from, to])
+
+	const handlePreset = (preset: TimeRangePreset) => {
+		const range = applyPreset(preset)
+		setActivePreset(preset)
+		onChange(range.from, range.to)
+		setOpen(false)
+	}
+
+	const handleCalendarSelect = (range: { from?: Date; to?: Date } | undefined) => {
+		if (range?.from) {
+			const adjustedTo = range.to ? new Date(range.to.getFullYear(), range.to.getMonth(), range.to.getDate(), 23, 59, 59, 999) : undefined
+			const detected = detectFixedPreset(range.from, adjustedTo)
+			setActivePreset(detected)
+			onChange(range.from, adjustedTo)
+		} else {
+			setActivePreset(null)
+			onChange(undefined, undefined)
+		}
+	}
+
+	const handleClear = () => {
+		setActivePreset(null)
+		onChange(undefined, undefined)
+		setOpen(false)
+	}
+
+	const commitDateInputs = () => {
+		const validFrom = parseDatetimeInput(fromInput)
+		const validTo = parseDatetimeInput(toInput, true)
+		const detected = detectFixedPreset(validFrom, validTo)
+		setActivePreset(detected)
+		onChange(validFrom, validTo)
+	}
+
+	const label = useMemo(() => {
+		if (activePreset) {
+			const presetKeys: Record<TimeRangePreset, string> = {
+				'1h': 'requestLogs.timeRange1h',
+				'24h': 'requestLogs.timeRange24h',
+				'7d': 'requestLogs.timeRange7d',
+				'30d': 'requestLogs.timeRange30d',
+				today: 'requestLogs.timeRangeToday',
+				yesterday: 'requestLogs.timeRangeYesterday',
+				this_month: 'requestLogs.timeRangeThisMonth',
+				last_month: 'requestLogs.timeRangeLastMonth'
+			}
+			return t(presetKeys[activePreset])
+		}
+		if (!from) return t('requestLogs.timeRangeAll')
+		if (!to) return `${format(from, 'MM/dd HH:mm')} –`
+		return `${format(from, 'MM/dd')} – ${format(to, 'MM/dd')}`
+	}, [from, to, activePreset, t])
+
+	const presets: Array<{ key: TimeRangePreset; label: string }> = [
+		{ key: '1h', label: t('requestLogs.timeRange1h') },
+		{ key: '24h', label: t('requestLogs.timeRange24h') },
+		{ key: '7d', label: t('requestLogs.timeRange7d') },
+		{ key: '30d', label: t('requestLogs.timeRange30d') },
+		{ key: 'today', label: t('requestLogs.timeRangeToday') },
+		{ key: 'yesterday', label: t('requestLogs.timeRangeYesterday') },
+		{ key: 'this_month', label: t('requestLogs.timeRangeThisMonth') },
+		{ key: 'last_month', label: t('requestLogs.timeRangeLastMonth') }
+	]
+
+	const isAllTime = !from && !to
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button
+					variant='outline'
+					className={cn(
+						'h-9 justify-start text-left font-normal gap-2 min-w-[140px]',
+						isAllTime && 'text-muted-foreground'
+					)}
+				>
+					<CalendarIcon className='h-4 w-4 shrink-0' />
+					<span className='truncate text-xs'>{label}</span>
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent className='w-auto p-0' align='start' side='bottom'>
+				<div>
+					<div className='[contain:inline-size] overflow-x-auto border-b [scrollbar-gutter:stable]'>
+						<div className='flex gap-1 p-2 w-max min-w-full'>
+							<Button
+								variant='ghost'
+								size='sm'
+								className={cn(
+									'shrink-0 text-xs h-7 px-2',
+									isAllTime && 'bg-primary text-primary-foreground'
+								)}
+								onClick={handleClear}
+							>
+								{t('requestLogs.timeRangeAll')}
+							</Button>
+							{presets.map(p => (
+								<Button
+									key={p.key}
+									variant='ghost'
+									size='sm'
+									className={cn(
+										'shrink-0 text-xs h-7 px-2',
+										activePreset === p.key && 'bg-primary text-primary-foreground'
+									)}
+									onClick={() => handlePreset(p.key)}
+								>
+									{p.label}
+								</Button>
+							))}
+						</div>
+					</div>
+					<div className='p-2 space-y-2'>
+						<div className='flex flex-col gap-1.5 px-1'>
+							<Input
+								className='h-7 text-xs font-mono w-full'
+								placeholder={t('requestLogs.timeRangeFrom')}
+								value={fromInput}
+								onChange={e => setFromInput(e.target.value)}
+								onBlur={commitDateInputs}
+								onKeyDown={e => { if (e.key === 'Enter') commitDateInputs() }}
+							/>
+							<Input
+								className='h-7 text-xs font-mono w-full'
+								placeholder={t('requestLogs.timeRangeTo')}
+								value={toInput}
+								onChange={e => setToInput(e.target.value)}
+								onBlur={commitDateInputs}
+								onKeyDown={e => { if (e.key === 'Enter') commitDateInputs() }}
+							/>
+						</div>
+						<Calendar
+							mode='range'
+							selected={from ? { from, to } : undefined}
+							onSelect={handleCalendarSelect}
+							numberOfMonths={1}
+							disabled={{ after: new Date() }}
+						/>
+					</div>
+				</div>
+			</PopoverContent>
+		</Popover>
+	)
+}
 
 type JsonObject = Record<string, unknown>
 
@@ -74,6 +304,22 @@ export function RequestLogsPage() {
 	const [requestOffset, setRequestOffset] = useState(0)
 	const [loadedLogs, setLoadedLogs] = useState<RequestLog[]>([])
 	const [totalCount, setTotalCount] = useState(0)
+	const [totalCharge, setTotalCharge] = useState<string>('0')
+	const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined)
+	const [timeTo, setTimeTo] = useState<Date | undefined>(undefined)
+	const [filtersExpanded, setFiltersExpanded] = useState(true)
+	const tooltipOpenCountRef = useRef(0)
+	const pendingPageDataRef = useRef<import('@/lib/api').RequestLogsResponse | null>(null)
+	const pendingNewestDataRef = useRef<import('@/lib/api').RequestLogsResponse | null>(null)
+	const [flushSignal, setFlushSignal] = useState(0)
+
+	const onTooltipOpenChange = useCallback((open: boolean) => {
+		tooltipOpenCountRef.current += open ? 1 : -1
+		if (tooltipOpenCountRef.current <= 0) {
+			tooltipOpenCountRef.current = 0
+			setFlushSignal(c => c + 1)
+		}
+	}, [])
 
 	const { data: apiKeys } = useApiKeys()
 
@@ -84,8 +330,10 @@ export function RequestLogsPage() {
 		if (filters.api_key_id) f.api_key_id = filters.api_key_id
 		if (isAdmin && filters.username) f.username = filters.username
 		if (searchInput.trim()) f.search = searchInput.trim()
+		if (timeFrom) f.time_from = timeFrom.toISOString()
+		if (timeTo) f.time_to = timeTo.toISOString()
 		return f
-	}, [filters, searchInput, isAdmin])
+	}, [filters, searchInput, isAdmin, timeFrom, timeTo])
 
 	const filterKey = useMemo(
 		() => JSON.stringify(activeFilters),
@@ -96,6 +344,7 @@ export function RequestLogsPage() {
 		setRequestOffset(0)
 		setLoadedLogs([])
 		setTotalCount(0)
+		setTotalCharge('0')
 	}, [filterKey])
 
 	const {
@@ -109,14 +358,21 @@ export function RequestLogsPage() {
 		0,
 		activeFilters,
 		{
-			refreshInterval: 2000
+			refreshInterval: 2000,
+			isPaused: () => tooltipOpenCountRef.current > 0
 		}
 	)
 
 	useEffect(() => {
 		if (!pageData) return
 
+		if (tooltipOpenCountRef.current > 0) {
+			pendingPageDataRef.current = pageData
+			return
+		}
+
 		setTotalCount(pageData.total)
+		setTotalCharge(pageData.total_charge_nano_usd)
 		setLoadedLogs(prev => {
 			if (requestOffset === 0) {
 				return pageData.data
@@ -127,12 +383,19 @@ export function RequestLogsPage() {
 			if (appended.length === 0) return prev
 			return [...prev, ...appended]
 		})
+		pendingPageDataRef.current = null
 	}, [pageData, requestOffset])
 
 	useEffect(() => {
 		if (!newestPageData) return
 
+		if (tooltipOpenCountRef.current > 0) {
+			pendingNewestDataRef.current = newestPageData
+			return
+		}
+
 		setTotalCount(newestPageData.total)
+		setTotalCharge(newestPageData.total_charge_nano_usd)
 		setLoadedLogs(prev => {
 			if (prev.length === 0 || requestOffset === 0) {
 				return newestPageData.data
@@ -143,7 +406,47 @@ export function RequestLogsPage() {
 			const merged = [...newestPageData.data, ...tail]
 			return merged.slice(0, newestPageData.total)
 		})
+		pendingNewestDataRef.current = null
 	}, [newestPageData, requestOffset])
+
+	// Flush buffered data when all tooltips close
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (tooltipOpenCountRef.current > 0) return
+
+		const bufferedPage = pendingPageDataRef.current
+		const bufferedNewest = pendingNewestDataRef.current
+
+		if (bufferedNewest) {
+			pendingNewestDataRef.current = null
+			setTotalCount(bufferedNewest.total)
+			setTotalCharge(bufferedNewest.total_charge_nano_usd)
+			setLoadedLogs(prev => {
+				if (prev.length === 0 || requestOffset === 0) {
+					return bufferedNewest.data
+				}
+				const newestIds = new Set(bufferedNewest.data.map(log => log.id))
+				const tail = prev.filter(log => !newestIds.has(log.id))
+				const merged = [...bufferedNewest.data, ...tail]
+				return merged.slice(0, bufferedNewest.total)
+			})
+		}
+
+		if (bufferedPage) {
+			pendingPageDataRef.current = null
+			setTotalCount(bufferedPage.total)
+			setTotalCharge(bufferedPage.total_charge_nano_usd)
+			setLoadedLogs(prev => {
+				if (requestOffset === 0) {
+					return bufferedPage.data
+				}
+				const existingIds = new Set(prev.map(log => log.id))
+				const appended = bufferedPage.data.filter(log => !existingIds.has(log.id))
+				if (appended.length === 0) return prev
+				return [...prev, ...appended]
+			})
+		}
+	}, [flushSignal, requestOffset])
 
 	const isInitialLoading = isLoading && loadedLogs.length === 0
 	const hasMore = loadedLogs.length < totalCount
@@ -224,6 +527,11 @@ export function RequestLogsPage() {
 		}))
 	}
 
+	const handleTimeRangeChange = (from: Date | undefined, to: Date | undefined) => {
+		setTimeFrom(from)
+		setTimeTo(to)
+	}
+
 	const showingSummary = pageData || loadedLogs.length > 0
 
 	return (
@@ -249,7 +557,7 @@ export function RequestLogsPage() {
 				initial={{ opacity: 0, y: 10 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ delay: 0.05, ...transitions.normal }}
-				className='rounded-lg border bg-card p-3 space-y-2'
+				className='rounded-lg border bg-card px-3 py-1.5 space-y-1.5'
 			>
 				<div className='flex items-center gap-2'>
 					<div className='relative flex-1 min-w-[200px] max-w-sm'>
@@ -261,7 +569,28 @@ export function RequestLogsPage() {
 							onChange={e => setSearchInput(e.target.value)}
 						/>
 					</div>
-					<div className='ml-auto text-xs text-muted-foreground'>
+					<Button
+						type='button'
+						variant='ghost'
+						size='sm'
+						className='h-9 px-2 text-muted-foreground'
+						onClick={() => setFiltersExpanded(prev => !prev)}
+						aria-label={t('requestLogs.toggleFilters')}
+					>
+						<motion.span
+							animate={{ rotate: filtersExpanded ? 180 : 0 }}
+							transition={transitions.fast}
+							className='inline-flex'
+						>
+							<ChevronDown className='h-4 w-4' />
+						</motion.span>
+					</Button>
+					<div className='ml-auto flex items-center gap-3 text-xs text-muted-foreground'>
+						{showingSummary && (
+							<span className='font-medium text-foreground'>
+								{t('requestLogs.totalCost')}: {formatCostFullPrecision(totalCharge)}
+							</span>
+						)}
 						{showingSummary ?
 							t('requestLogs.showing', {
 								from: totalCount === 0 ? 0 : 1,
@@ -271,98 +600,117 @@ export function RequestLogsPage() {
 						:	<Skeleton className='h-4 w-24 inline-block' />}
 					</div>
 				</div>
-				<div className='flex flex-wrap items-center gap-2'>
-					{isAdmin && (
-						<Input
-							className='w-[140px] h-9'
-							placeholder={t('requestLogs.filterUsername')}
-							value={usernameInput}
-							onChange={e => setUsernameInput(e.target.value)}
-							onBlur={handleUsernameCommit}
-							onKeyDown={e => {
-								if (e.key === 'Enter') handleUsernameCommit()
-							}}
-						/>
+				<AnimatePresence initial={false}>
+					{filtersExpanded && (
+						<motion.div
+							key='filters'
+							initial={{ height: 0, opacity: 0 }}
+							animate={{ height: 'auto', opacity: 1 }}
+							exit={{ height: 0, opacity: 0 }}
+							transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+							className='overflow-hidden'
+						>
+							<div className='flex flex-wrap items-center gap-2 pt-0.5'>
+								{isAdmin && (
+									<Input
+										className='w-[140px] h-9'
+										placeholder={t('requestLogs.filterUsername')}
+										value={usernameInput}
+										onChange={e => setUsernameInput(e.target.value)}
+										onBlur={handleUsernameCommit}
+										onKeyDown={e => {
+											if (e.key === 'Enter') handleUsernameCommit()
+										}}
+									/>
+								)}
+								<Input
+									className='w-[200px] h-9'
+									placeholder={t('requestLogs.filterModelPlaceholder')}
+									value={modelInput}
+									onChange={e => setModelInput(e.target.value)}
+									onBlur={handleModelCommit}
+									onKeyDown={e => {
+										if (e.key === 'Enter') handleModelCommit()
+									}}
+								/>
+								<Select
+									value={filters.api_key_id || 'all'}
+									onValueChange={handleTokenChange}
+								>
+									<SelectTrigger className='w-[140px] h-9'>
+										<SelectValue placeholder={t('requestLogs.filterToken')} />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value='all'>{t('requestLogs.allTokens')}</SelectItem>
+										{apiKeys?.map(key => (
+											<SelectItem key={key.id} value={key.id}>
+												{key.name}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+								<Select
+									value={filters.status || 'all'}
+									onValueChange={handleStatusChange}
+								>
+									<SelectTrigger className='w-[120px] h-9'>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value='all'>
+											{t('requestLogs.allStatuses')}
+										</SelectItem>
+										<SelectItem value='pending'>
+											{t('requestLogs.pending')}
+										</SelectItem>
+										<SelectItem value='success'>
+											{t('requestLogs.success')}
+										</SelectItem>
+										<SelectItem value='error'>{t('requestLogs.error')}</SelectItem>
+									</SelectContent>
+								</Select>
+								<DateRangePicker
+									from={timeFrom}
+									to={timeTo}
+									onChange={handleTimeRangeChange}
+									t={t}
+								/>
+								<div className='ml-auto flex items-center gap-1'>
+									<Button
+										type='button'
+										variant='outline'
+										size='icon'
+										className='h-9 w-9'
+										onClick={() => mutate()}
+										disabled={isValidating}
+										title={t('requestLogs.refresh')}
+										aria-label={t('requestLogs.refresh')}
+									>
+										<RefreshCw
+											className={cn('h-4 w-4', isValidating && 'animate-spin')}
+										/>
+									</Button>
+									<Button
+										type='button'
+										variant='outline'
+										size='icon'
+										className='h-9 w-9'
+										onClick={() => setShowIp(prev => !prev)}
+										title={showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')}
+										aria-label={
+											showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')
+										}
+										aria-pressed={showIp}
+									>
+										{showIp ?
+											<Eye className='h-4 w-4' />
+										:	<EyeOff className='h-4 w-4' />}
+									</Button>
+								</div>
+							</div>
+						</motion.div>
 					)}
-					<Input
-						className='w-[200px] h-9'
-						placeholder={t('requestLogs.filterModelPlaceholder')}
-						value={modelInput}
-						onChange={e => setModelInput(e.target.value)}
-						onBlur={handleModelCommit}
-						onKeyDown={e => {
-							if (e.key === 'Enter') handleModelCommit()
-						}}
-					/>
-					<Select
-						value={filters.api_key_id || 'all'}
-						onValueChange={handleTokenChange}
-					>
-						<SelectTrigger className='w-[140px] h-9'>
-							<SelectValue placeholder={t('requestLogs.filterToken')} />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value='all'>{t('requestLogs.allTokens')}</SelectItem>
-							{apiKeys?.map(key => (
-								<SelectItem key={key.id} value={key.id}>
-									{key.name}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-					<Select
-						value={filters.status || 'all'}
-						onValueChange={handleStatusChange}
-					>
-						<SelectTrigger className='w-[120px] h-9'>
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value='all'>
-								{t('requestLogs.allStatuses')}
-							</SelectItem>
-							<SelectItem value='pending'>
-								{t('requestLogs.pending')}
-							</SelectItem>
-							<SelectItem value='success'>
-								{t('requestLogs.success')}
-							</SelectItem>
-							<SelectItem value='error'>{t('requestLogs.error')}</SelectItem>
-						</SelectContent>
-					</Select>
-					<div className='ml-auto flex items-center gap-1'>
-						<Button
-							type='button'
-							variant='outline'
-							size='icon'
-							className='h-9 w-9'
-							onClick={() => mutate()}
-							disabled={isValidating}
-							title={t('requestLogs.refresh')}
-							aria-label={t('requestLogs.refresh')}
-						>
-							<RefreshCw
-								className={cn('h-4 w-4', isValidating && 'animate-spin')}
-							/>
-						</Button>
-						<Button
-							type='button'
-							variant='outline'
-							size='icon'
-							className='h-9 w-9'
-							onClick={() => setShowIp(prev => !prev)}
-							title={showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')}
-							aria-label={
-								showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')
-							}
-							aria-pressed={showIp}
-						>
-							{showIp ?
-								<Eye className='h-4 w-4' />
-							:	<EyeOff className='h-4 w-4' />}
-						</Button>
-					</div>
-				</div>
+				</AnimatePresence>
 			</motion.div>
 
 			<motion.div
@@ -448,18 +796,19 @@ export function RequestLogsPage() {
 								</th>
 							</tr>
 						)}
-						itemContent={(_index, log) => (
-							<LogRowCells
-								log={log}
-								isAdmin={isAdmin}
-								showIp={showIp}
-								formatCost={formatCost}
-								formatCostFullPrecision={formatCostFullPrecision}
-								formatDuration={formatDuration}
-								formatTime={formatTime}
-								t={t}
-							/>
-						)}
+					itemContent={(_index, log) => (
+						<LogRowCells
+							log={log}
+							isAdmin={isAdmin}
+							showIp={showIp}
+							formatCost={formatCost}
+							formatCostFullPrecision={formatCostFullPrecision}
+							formatDuration={formatDuration}
+							formatTime={formatTime}
+							t={t}
+							onTooltipOpenChange={onTooltipOpenChange}
+						/>
+					)}
 					/>
 				}
 			</motion.div>
@@ -475,7 +824,8 @@ function LogRowCells({
 	formatCostFullPrecision,
 	formatDuration,
 	formatTime,
-	t
+	t,
+	onTooltipOpenChange
 }: {
 	log: RequestLog
 	isAdmin: boolean
@@ -485,6 +835,7 @@ function LogRowCells({
 	formatDuration: (v: number | null | undefined) => string | null
 	formatTime: (v: string) => string
 	t: (key: string) => string
+	onTooltipOpenChange: (open: boolean) => void
 }) {
 	const isConnectivityTest =
 		log.request_kind === 'active_probe_connectivity' && !log.api_key_name
@@ -536,35 +887,38 @@ function LogRowCells({
 	const inputAudio = readTokenCount(usageInput, 'audio_tokens')
 	const inputImage = readTokenCount(usageInput, 'image_tokens')
 
+	const hasInputBreakdown = !!(inputCached || inputCacheCreation || inputText || inputAudio || inputImage)
+
 	inputDetailRows.push([
 		t('requestLogs.totalTokens'),
 		formatTokenCount(inputTotal)
 	])
-	inputDetailRows.push([
-		t('requestLogs.uncachedTokens'),
-		formatTokenCount(inputUncached)
-	])
-	if (inputText != null)
+	if (hasInputBreakdown)
+		inputDetailRows.push([
+			t('requestLogs.uncachedTokens'),
+			formatTokenCount(inputUncached)
+		])
+	if (inputText)
 		inputDetailRows.push([
 			t('requestLogs.textTokens'),
 			formatTokenCount(inputText)
 		])
-	if (inputCached != null)
+	if (inputCached)
 		inputDetailRows.push([
 			t('requestLogs.cachedTokens'),
 			formatTokenCount(inputCached)
 		])
-	if (inputCacheCreation != null)
+	if (inputCacheCreation)
 		inputDetailRows.push([
 			t('requestLogs.cacheCreationTokens'),
 			formatTokenCount(inputCacheCreation)
 		])
-	if (inputAudio != null)
+	if (inputAudio)
 		inputDetailRows.push([
 			t('requestLogs.audioTokens'),
 			formatTokenCount(inputAudio)
 		])
-	if (inputImage != null)
+	if (inputImage)
 		inputDetailRows.push([
 			t('requestLogs.imageTokens'),
 			formatTokenCount(inputImage)
@@ -583,30 +937,33 @@ function LogRowCells({
 	const outputAudio = readTokenCount(usageOutput, 'audio_tokens')
 	const outputImage = readTokenCount(usageOutput, 'image_tokens')
 
+	const hasOutputBreakdown = !!(outputReasoning || outputText || outputAudio || outputImage)
+
 	outputDetailRows.push([
 		t('requestLogs.totalTokens'),
 		formatTokenCount(outputTotal)
 	])
-	outputDetailRows.push([
-		t('requestLogs.nonReasoningTokens'),
-		formatTokenCount(outputNonReasoning)
-	])
-	if (outputText != null)
+	if (hasOutputBreakdown)
+		outputDetailRows.push([
+			t('requestLogs.nonReasoningTokens'),
+			formatTokenCount(outputNonReasoning)
+		])
+	if (outputText)
 		outputDetailRows.push([
 			t('requestLogs.textTokens'),
 			formatTokenCount(outputText)
 		])
-	if (outputReasoning != null)
+	if (outputReasoning)
 		outputDetailRows.push([
 			t('requestLogs.reasoningTokens'),
 			formatTokenCount(outputReasoning)
 		])
-	if (outputAudio != null)
+	if (outputAudio)
 		outputDetailRows.push([
 			t('requestLogs.audioTokens'),
 			formatTokenCount(outputAudio)
 		])
-	if (outputImage != null)
+	if (outputImage)
 		outputDetailRows.push([
 			t('requestLogs.imageTokens'),
 			formatTokenCount(outputImage)
@@ -652,7 +1009,7 @@ function LogRowCells({
 			<td className='px-2 py-1 whitespace-nowrap align-middle'>
 				{log.request_id ?
 					<TooltipProvider delayDuration={200}>
-						<Tooltip>
+						<Tooltip onOpenChange={onTooltipOpenChange}>
 							<TooltipTrigger asChild>
 								<span className='inline-flex items-center gap-1 font-mono text-muted-foreground cursor-default'>
 									<span>{log.request_id.substring(0, 8)}</span>
@@ -721,7 +1078,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 align-middle whitespace-nowrap'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip>
+					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>
 								<ModelBadge
@@ -774,7 +1131,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip>
+					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
 								{isConnectivityTest ?
@@ -805,7 +1162,7 @@ function LogRowCells({
 				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
 					{providerDisplay ?
 						<TooltipProvider delayDuration={200}>
-							<Tooltip>
+							<Tooltip onOpenChange={onTooltipOpenChange}>
 								<TooltipTrigger asChild>
 									<span className='inline-flex h-4 items-center cursor-default max-w-[80px] truncate'>
 										{providerDisplay}
@@ -813,9 +1170,9 @@ function LogRowCells({
 								</TooltipTrigger>
 								<TooltipContent>
 									<div className='text-xs space-y-0.5'>
-										{channelDisplay && <div>Channel: {channelDisplay}</div>}
-										{log.upstream_model && log.upstream_model !== log.model && (
-											<div>Upstream: {log.upstream_model}</div>
+{channelDisplay && <div>{t('requestLogs.channel')}: {channelDisplay}</div>}
+									{log.upstream_model && log.upstream_model !== log.model && (
+										<div>{t('requestLogs.upstreamModel')}: {log.upstream_model}</div>
 										)}
 									</div>
 								</TooltipContent>
@@ -832,7 +1189,7 @@ function LogRowCells({
 				<div className='flex items-center gap-px'>
 					{duration && (
 						<TooltipProvider delayDuration={200}>
-							<Tooltip>
+							<Tooltip onOpenChange={onTooltipOpenChange}>
 								<TooltipTrigger asChild>
 									<Badge
 										variant='secondary'
@@ -850,20 +1207,21 @@ function LogRowCells({
 											<span>{t('requestLogs.duration')}</span>
 											<span className='font-mono'>{duration}</span>
 										</div>
-										{log.duration_ms != null &&
-											log.duration_ms > 0 &&
-											(log.completion_tokens ?? 0) > 0 && (
-												<div className='flex items-center justify-between gap-3'>
-													<span>{t('requestLogs.avgTps')}</span>
-													<span className='font-mono'>
-														{(
-															(log.completion_tokens ?? 0) /
-															(log.duration_ms / 1000)
-														).toFixed(2)}{' '}
-														t/s
-													</span>
-												</div>
-											)}
+									{log.duration_ms != null &&
+										log.ttfb_ms != null &&
+										log.duration_ms > log.ttfb_ms &&
+										(log.completion_tokens ?? 0) > 0 && (
+											<div className='flex items-center justify-between gap-3'>
+												<span>{t('requestLogs.avgTps')}</span>
+												<span className='font-mono'>
+													{(
+														(log.completion_tokens ?? 0) /
+														((log.duration_ms - log.ttfb_ms) / 1000)
+													).toFixed(2)}{' '}
+													t/s
+												</span>
+											</div>
+										)}
 									</div>
 								</TooltipContent>
 							</Tooltip>
@@ -896,7 +1254,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip>
+					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>{log.prompt_tokens ?? 0}</span>
 						</TooltipTrigger>
@@ -919,7 +1277,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip>
+					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>
 								{log.completion_tokens ?? 0}
@@ -944,7 +1302,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono align-middle'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip>
+					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span
 								className='inline-flex items-center whitespace-nowrap align-bottom cursor-default'
@@ -957,7 +1315,7 @@ function LogRowCells({
 							<div className='text-xs space-y-0.5 min-w-[300px]'>
 								{inputUncachedCostDetail && (
 									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.input')} (uncached)</span>
+										<span>{t('requestLogs.input')}{inputCachedCostDetail ? ` (${t('requestLogs.uncachedTokens')})` : ''}</span>
 										<span className='font-mono'>{inputUncachedCostDetail}</span>
 									</div>
 								)}
@@ -972,8 +1330,7 @@ function LogRowCells({
 								{outputTextCostDetail && (
 									<div className='flex items-center justify-between gap-3'>
 										<span>
-											{t('requestLogs.output')} (
-											{t('requestLogs.nonReasoningTokens')})
+											{t('requestLogs.output')}{outputReasoningCostDetail ? ` (${t('requestLogs.nonReasoningTokens')})` : ''}
 										</span>
 										<span className='font-mono'>{outputTextCostDetail}</span>
 									</div>
@@ -1014,7 +1371,7 @@ function LogRowCells({
 								)}
 								<div className='border-t border-muted pt-2 mt-2'>
 									<div className='flex items-center justify-between gap-3'>
-										<span className='text-xs text-muted-foreground'>Total</span>
+										<span className='text-xs text-muted-foreground'>{t('requestLogs.totalCost')}</span>
 										<span className='font-mono text-xs'>
 											{formatCostFullPrecision(log.charge_nano_usd)}
 										</span>
