@@ -14,7 +14,8 @@ const TooltipProvider = TooltipPrimitive.Provider
 
 type TouchTooltipCtx = {
   open: boolean
-  setOpen: React.Dispatch<React.SetStateAction<boolean>>
+  toggle: () => void
+  close: () => void
   instanceId: string
 } | null
 
@@ -36,20 +37,37 @@ const Tooltip = (props: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.R
   const isTouch = useIsTouchDevice()
   const [open, setOpen] = React.useState(false)
   const instanceId = React.useId()
+  const onOpenChangeRef = React.useRef(props.onOpenChange)
+  onOpenChangeRef.current = props.onOpenChange
+
+  const setOpenAndNotify = React.useCallback((next: boolean) => {
+    setOpen(next)
+    onOpenChangeRef.current?.(next)
+  }, [])
+
+  const toggle = React.useCallback(() => {
+    setOpen(prev => {
+      const next = !prev
+      onOpenChangeRef.current?.(next)
+      return next
+    })
+  }, [])
+
+  const close = React.useCallback(() => {
+    setOpen(false)
+    onOpenChangeRef.current?.(false)
+  }, [])
 
   if (!isTouch) {
     return <TooltipPrimitive.Root {...props} />
   }
 
   return (
-    <TouchTooltipContext.Provider value={{ open, setOpen, instanceId }}>
+    <TouchTooltipContext.Provider value={{ open, toggle, close, instanceId }}>
       <TooltipPrimitive.Root
         {...props}
         open={props.open ?? open}
-        onOpenChange={(v) => {
-          setOpen(v)
-          props.onOpenChange?.(v)
-        }}
+        onOpenChange={setOpenAndNotify}
         delayDuration={0}
       />
     </TouchTooltipContext.Provider>
@@ -77,10 +95,8 @@ const TooltipTrigger = React.forwardRef<
       onFocus={suppress}
       onBlur={suppress}
       onClick={(e) => {
-        // Tag the native event so the document-level close handler can
-        // distinguish "tapped own trigger" from "tapped outside".
         ;(e.nativeEvent as any).__tooltipId = ctx.instanceId
-        ctx.setOpen(prev => !prev)
+        ctx.toggle()
         props.onClick?.(e)
       }}
     />
@@ -104,7 +120,7 @@ const TooltipContent = React.forwardRef<
     const handler = (e: MouseEvent) => {
       if ((e as any).__tooltipId === ctx.instanceId) return
       if (contentRef.current?.contains(e.target as Node)) return
-      ctx.setOpen(false)
+      ctx.close()
     }
     document.addEventListener("click", handler)
     return () => document.removeEventListener("click", handler)
