@@ -145,11 +145,20 @@ fn encode_messages(messages: &[Message]) -> Vec<Value> {
         let mut content_parts = Vec::new();
         for part in &msg.parts {
             match part {
-                Part::Text { content, .. } => {
-                    content_parts.push(json!({ "type": "text", "text": content }));
+                Part::Text {
+                    content,
+                    extra_body,
+                } => {
+                    let mut block = json!({ "type": "text", "text": content });
+                    if let Some(obj) = block.as_object_mut() {
+                        merge_extra(obj, extra_body);
+                    }
+                    content_parts.push(block);
                 }
-                Part::Image { source, .. } => {
-                    let image = match source {
+                Part::Image {
+                    source, extra_body, ..
+                } => {
+                    let mut image = match source {
                         ImageSource::Url { url, detail } => {
                             json!({ "type": "image_url", "image_url": { "url": url, "detail": detail } })
                         }
@@ -158,9 +167,14 @@ fn encode_messages(messages: &[Message]) -> Vec<Value> {
                             "image_url": { "url": format!("data:{};base64,{}", media_type, data) }
                         }),
                     };
+                    if let Some(obj) = image.as_object_mut() {
+                        merge_extra(obj, extra_body);
+                    }
                     content_parts.push(image);
                 }
-                Part::File { source, .. } => {
+                Part::File {
+                    source, extra_body, ..
+                } => {
                     let text = match source {
                         FileSource::Url { url } => format!("[file:{}]", url),
                         FileSource::Base64 {
@@ -175,7 +189,11 @@ fn encode_messages(messages: &[Message]) -> Vec<Value> {
                             )
                         }
                     };
-                    content_parts.push(json!({ "type": "text", "text": text }));
+                    let mut block = json!({ "type": "text", "text": text });
+                    if let Some(obj) = block.as_object_mut() {
+                        merge_extra(obj, extra_body);
+                    }
+                    content_parts.push(block);
                 }
                 Part::Reasoning { .. } | Part::ReasoningEncrypted { .. } => {}
                 Part::ToolCall { .. } => {}
@@ -192,9 +210,14 @@ fn encode_messages(messages: &[Message]) -> Vec<Value> {
         }
 
         if !content_parts.is_empty() {
-            if content_parts.len() == 1
+            let can_collapse_single_text = content_parts.len() == 1
                 && content_parts[0].get("type").and_then(|v| v.as_str()) == Some("text")
-            {
+                && content_parts[0]
+                    .as_object()
+                    .map(|obj| obj.keys().all(|k| k == "type" || k == "text"))
+                    .unwrap_or(false);
+
+            if can_collapse_single_text {
                 if let Some(text) = content_parts[0].get("text").and_then(|v| v.as_str()) {
                     m.insert("content".to_string(), Value::String(text.to_string()));
                 }
@@ -331,5 +354,81 @@ fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
         FinishReason::ToolCalls => "tool_calls",
         FinishReason::ContentFilter => "content_filter",
         FinishReason::Other => "stop",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn empty_map() -> HashMap<String, Value> {
+        HashMap::new()
+    }
+
+    fn base_request(messages: Vec<Message>) -> UrpRequest {
+        UrpRequest {
+            model: "logical-model".to_string(),
+            messages,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        }
+    }
+
+    #[test]
+    fn keeps_array_content_when_single_text_block_has_extra_fields() {
+        let mut part_extra = HashMap::new();
+        part_extra.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
+
+        let req = base_request(vec![Message {
+            role: Role::User,
+            parts: vec![Part::Text {
+                content: "hello".to_string(),
+                extra_body: part_extra,
+            }],
+            extra_body: empty_map(),
+        }]);
+
+        let encoded = encode_request(&req, "claude-haiku-4.5");
+        let msg = encoded["messages"][0].as_object().expect("message object");
+        let content = msg.get("content").expect("content present");
+        let block = content
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_object())
+            .expect("content should remain block array");
+
+        assert_eq!(block.get("type"), Some(&Value::String("text".to_string())));
+        assert_eq!(block.get("text"), Some(&Value::String("hello".to_string())));
+        assert_eq!(
+            block.get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+    }
+
+    #[test]
+    fn still_collapses_single_plain_text_block_to_string() {
+        let req = base_request(vec![Message {
+            role: Role::User,
+            parts: vec![Part::Text {
+                content: "hello".to_string(),
+                extra_body: empty_map(),
+            }],
+            extra_body: empty_map(),
+        }]);
+
+        let encoded = encode_request(&req, "claude-haiku-4.5");
+        assert_eq!(
+            encoded["messages"][0]["content"],
+            Value::String("hello".to_string())
+        );
     }
 }

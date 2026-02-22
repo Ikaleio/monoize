@@ -368,9 +368,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
 
 fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
     if let Some(effort) = obj
-        .get("reasoning")
-        .and_then(|v| v.as_object())
-        .and_then(|v| v.get("effort"))
+        .get("reasoning_effort")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
     {
@@ -380,7 +378,9 @@ fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
         });
     }
     if let Some(effort) = obj
-        .get("reasoning_effort")
+        .get("reasoning")
+        .and_then(|v| v.as_object())
+        .and_then(|v| v.get("effort"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
     {

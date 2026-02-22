@@ -167,28 +167,57 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .collect::<Vec<_>>()
     });
 
-    let reasoning = obj
-        .get("thinking")
-        .and_then(|v| v.as_object())
-        .map(|thinking| {
-            let budget = thinking
-                .get("budget_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let effort = if budget == 0 {
-                None
-            } else if budget <= 512 {
-                Some("low".to_string())
-            } else if budget >= 2048 {
-                Some("high".to_string())
-            } else {
-                Some("medium".to_string())
-            };
-            ReasoningConfig {
-                effort,
-                extra_body: split_extra(thinking, &["type", "budget_tokens"]),
+    let reasoning = {
+        let thinking = obj.get("thinking").and_then(|v| v.as_object());
+        let thinking_type = thinking
+            .and_then(|t| t.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        match thinking_type {
+            "adaptive" => {
+                let effort = obj
+                    .get("output_config")
+                    .and_then(|v| v.get("effort"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let mut extra = thinking
+                    .map(|t| split_extra(t, &["type"]))
+                    .unwrap_or_default();
+                if let Some(oc_extra) = obj.get("output_config").and_then(|v| v.as_object()) {
+                    for (k, v) in split_extra(oc_extra, &["effort"]) {
+                        extra.insert(format!("output_config.{k}"), v);
+                    }
+                }
+                Some(ReasoningConfig {
+                    effort,
+                    extra_body: extra,
+                })
             }
-        });
+            "enabled" => {
+                let budget = thinking
+                    .and_then(|t| t.get("budget_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let effort = if budget == 0 {
+                    None
+                } else if budget <= 512 {
+                    Some("low".to_string())
+                } else if budget >= 2048 {
+                    Some("high".to_string())
+                } else {
+                    Some("medium".to_string())
+                };
+                Some(ReasoningConfig {
+                    effort,
+                    extra_body: thinking
+                        .map(|t| split_extra(t, &["type", "budget_tokens"]))
+                        .unwrap_or_default(),
+                })
+            }
+            _ => None,
+        }
+    };
 
     Ok(UrpRequest {
         model,
@@ -220,6 +249,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "top_p",
                 "max_tokens",
                 "thinking",
+                "output_config",
                 "tools",
                 "tool_choice",
                 "metadata",
