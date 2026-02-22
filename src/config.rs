@@ -1,19 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UnknownFieldPolicy {
-    Reject,
-    Ignore,
-    Preserve,
-}
-
-impl Default for UnknownFieldPolicy {
-    fn default() -> Self {
-        UnknownFieldPolicy::Preserve
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {

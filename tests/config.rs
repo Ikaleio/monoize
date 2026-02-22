@@ -4,7 +4,6 @@ fn test_runtime(database_dsn: String) -> monoize::app::RuntimeConfig {
     monoize::app::RuntimeConfig {
         listen: "127.0.0.1:0".to_string(),
         metrics_path: "/metrics".to_string(),
-        unknown_fields: monoize::config::UnknownFieldPolicy::Preserve,
         database_dsn,
     }
 }

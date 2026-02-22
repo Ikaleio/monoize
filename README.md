@@ -30,7 +30,7 @@ Most AI proxy solutions are Node/Python wrappers that glue APIs together. Monoiz
 - **Waterfall routing** — Ordered provider evaluation with weighted channel selection, automatic fail-forward, and configurable retry policies
 - **Health checks** — Passive failure tracking with cooldown + active probing to recover unhealthy channels
 - **Unknown field preservation** — Forward provider-specific parameters (e.g. `logprobs`, `top_k`) without explicit support
-- **Reasoning normalization** — Translate reasoning effort hints (`low`/`medium`/`high`) across OpenAI, Anthropic, and native formats
+- **Reasoning normalization** — Translate reasoning effort hints (`none`/`minimum`/`low`/`medium`/`high`/`xhigh`) across OpenAI, Anthropic, and native formats
 
 ### Transform System
 
@@ -114,7 +114,6 @@ Monoize is configured via environment variables — no config files.
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | Database connection string |
 | `DATABASE_URL` | *(fallback for above)* | Alternative DSN variable |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus metrics endpoint |
-| `MONOIZE_UNKNOWN_FIELDS` | `preserve` | Unknown field policy: `preserve`, `ignore`, or `reject` |
 
 ## API Endpoints
 
