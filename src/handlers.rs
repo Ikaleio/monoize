@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::config::{
-    ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType, UnknownFieldPolicy,
+    ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType,
 };
 use crate::error::{AppError, AppResult};
 use crate::model_registry_store::ModelPricing;
@@ -26,7 +26,7 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
-    let _auth = auth_tenant(&headers, &state).await?;
+    let auth = auth_tenant(&headers, &state).await?;
     let providers =
         state.monoize_store.list_providers().await.map_err(|e| {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e)
@@ -38,6 +38,11 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
         .collect();
     model_ids.sort();
     model_ids.dedup();
+
+    if auth.model_limits_enabled && !auth.model_limits.is_empty() {
+        let allowed: HashSet<&str> = auth.model_limits.iter().map(|s| s.as_str()).collect();
+        model_ids.retain(|id| allowed.contains(id.as_str()));
+    }
 
     let data: Vec<Value> = model_ids
         .into_iter()
@@ -61,8 +66,12 @@ pub async fn create_response(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    let (known, extra) = split_body(&state, body, &URP_KNOWN_RESPONSE_FIELDS)?;
-    let req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
+    let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
+    let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
+    // S2/S3: stateful fields must not be forwarded upstream
+    req.extra_body.remove("previous_response_id");
+    req.extra_body.remove("store");
+    req.extra_body.remove("conversation");
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
@@ -117,7 +126,7 @@ pub async fn create_chat_completions(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    let (known, extra) = split_body(&state, body, &URP_KNOWN_CHAT_FIELDS)?;
+    let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
@@ -159,7 +168,7 @@ pub async fn create_messages(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    let (known, extra) = split_body(&state, body, &URP_KNOWN_MESSAGES_FIELDS)?;
+    let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
@@ -279,14 +288,15 @@ pub async fn create_embeddings(
             &attempt.api_key,
             "/v1/embeddings",
             &upstream_body,
-            state.monoize_runtime.request_timeout_ms,
+            attempt.request_timeout_ms,
             &[],
         )
         .await;
 
         match result {
             Ok(mut value) => {
-                mark_channel_success(&state, &attempt.channel_id).await;
+                update_pending_channel_info(&state, &auth, &attempt, request_id.as_deref()).await;
+                mark_channel_success(&state, &attempt).await;
                 let usage = parse_usage_from_embeddings_object(&value);
                 let charge = match usage.as_ref() {
                     Some(usage_row) => {
@@ -323,6 +333,7 @@ pub async fn create_embeddings(
             Err(err) => {
                 let non_retryable = is_non_retryable_client_error(&err);
                 let retryable = is_retryable_error(&err);
+                let retryable_failure_class = classify_retryable_failure(&err);
                 let app_err = upstream_error_to_app(err);
                 if non_retryable {
                     spawn_request_log_error(
@@ -346,7 +357,7 @@ pub async fn create_embeddings(
                         channel_id: attempt.channel_id.clone(),
                         error: app_err.message.clone(),
                     });
-                    mark_channel_retryable_failure(&state, &attempt.channel_id).await;
+                    mark_channel_retryable_failure(&state, &attempt, retryable_failure_class).await;
                     last_failed_attempt = Some(attempt.clone());
                     continue;
                 }
@@ -460,6 +471,13 @@ struct MonoizeAttempt {
     upstream_model: String,
     model_multiplier: f64,
     provider_transforms: Vec<TransformRuleConfig>,
+    passive_failure_threshold: u32,
+    passive_cooldown_seconds: u64,
+    passive_window_seconds: u64,
+    passive_min_samples: u32,
+    passive_failure_rate_threshold: f64,
+    passive_rate_limit_cooldown_seconds: u64,
+    request_timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -476,10 +494,19 @@ enum DownstreamProtocol {
     AnthropicMessages,
 }
 
+#[derive(Clone)]
+struct StreamPendingUsageLogContext {
+    user_store: crate::users::UserStore,
+    user_id: String,
+    request_id: String,
+    last_total_tokens: u64,
+}
+
 #[derive(Default)]
 struct StreamRuntimeMetrics {
     ttfb_ms: Option<u64>,
     usage: Option<urp::Usage>,
+    pending_usage_log: Option<StreamPendingUsageLogContext>,
 }
 
 async fn mark_stream_ttfb_if_needed(
@@ -519,9 +546,107 @@ async fn record_stream_usage_if_present(
         }
         None => true,
     };
+    let mut pending_update: Option<(crate::users::UserStore, String, String, urp::Usage)> = None;
     if replace {
-        guard.usage = Some(usage);
+        guard.usage = Some(usage.clone());
+        if let Some(ctx) = guard.pending_usage_log.as_mut() {
+            if new_total > ctx.last_total_tokens {
+                ctx.last_total_tokens = new_total;
+                pending_update = Some((
+                    ctx.user_store.clone(),
+                    ctx.user_id.clone(),
+                    ctx.request_id.clone(),
+                    usage,
+                ));
+            }
+        }
     }
+    drop(guard);
+
+    if let Some((user_store, user_id, request_id, usage)) = pending_update {
+        let usage_breakdown = build_usage_breakdown(&usage);
+        tokio::spawn(async move {
+            if let Err(e) = user_store
+                .update_pending_request_log_usage(
+                    &user_id,
+                    &request_id,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.cached_tokens,
+                    usage.reasoning_tokens,
+                    Some(usage_breakdown),
+                )
+                .await
+            {
+                tracing::warn!("failed to update pending request log usage: {e}");
+            }
+        });
+    }
+}
+
+async fn latest_stream_usage_snapshot(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+) -> Option<urp::Usage> {
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return None;
+    };
+    let guard = runtime_metrics.lock().await;
+    guard.usage.clone()
+}
+
+fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
+    let mut obj = json!({
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "total_tokens": usage.prompt_tokens.saturating_add(usage.completion_tokens),
+        "completion_tokens_details": {
+            "reasoning_tokens": usage.reasoning_tokens.unwrap_or(0)
+        },
+        "prompt_tokens_details": {
+            "cached_tokens": usage.cached_tokens.unwrap_or(0)
+        }
+    });
+    // Overwrite with full upstream detail objects (e.g. cache_write_tokens)
+    if let Some(map) = obj.as_object_mut() {
+        for (k, v) in &usage.extra_body {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    obj
+}
+
+fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
+    let mut obj = json!({
+        "input_tokens": usage.prompt_tokens,
+        "output_tokens": usage.completion_tokens,
+        "total_tokens": usage.prompt_tokens.saturating_add(usage.completion_tokens),
+        "output_tokens_details": {
+            "reasoning_tokens": usage.reasoning_tokens.unwrap_or(0)
+        },
+        "input_tokens_details": {
+            "cached_tokens": usage.cached_tokens.unwrap_or(0)
+        }
+    });
+    if let Some(map) = obj.as_object_mut() {
+        for (k, v) in &usage.extra_body {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    obj
+}
+
+fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
+    let mut obj = json!({
+        "input_tokens": usage.prompt_tokens,
+        "output_tokens": usage.completion_tokens,
+        "cache_read_input_tokens": usage.cached_tokens.unwrap_or(0)
+    });
+    if let Some(map) = obj.as_object_mut() {
+        for (k, v) in &usage.extra_body {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    obj
 }
 
 fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
@@ -770,6 +895,16 @@ fn read_max_multiplier_from_extra(req: &urp::UrpRequest) -> Option<f64> {
         .filter(|n| *n > 0.0)
 }
 
+fn inject_monoize_context(auth: &crate::auth::AuthResult, req: &mut urp::UrpRequest) {
+    if let Some(username) = &auth.username {
+        req.extra_body.insert("__monoize_username".to_string(), json!(username.clone()));
+    }
+}
+
+fn strip_monoize_context(req: &mut urp::UrpRequest) {
+    req.extra_body.remove("__monoize_username");
+}
+
 fn apply_transform_rules_request(
     state: &AppState,
     req: &mut urp::UrpRequest,
@@ -933,6 +1068,24 @@ fn model_glob_match(pattern: &str, model: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn ensure_stream_usage_requested(req: &mut urp::UrpRequest, provider_type: ProviderType) {
+    if req.stream != Some(true) || provider_type != ProviderType::ChatCompletion {
+        return;
+    }
+    match req.extra_body.get_mut("stream_options") {
+        Some(Value::Object(stream_options)) => {
+            stream_options
+                .entry("include_usage".to_string())
+                .or_insert(Value::Bool(true));
+        }
+        Some(_) => {}
+        None => {
+            req.extra_body
+                .insert("stream_options".to_string(), json!({"include_usage": true}));
+        }
+    }
+}
+
 async fn execute_nonstream_typed(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -942,7 +1095,9 @@ async fn execute_nonstream_typed(
     request_ip: Option<String>,
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = std::time::Instant::now();
+    inject_monoize_context(auth, &mut req);
     apply_transform_rules_request(state, &mut req, &auth.transforms)?;
+    strip_monoize_context(&mut req);
     resolve_model_suffix(state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(state, &routing_stub).await?;
@@ -975,13 +1130,14 @@ async fn execute_nonstream_typed(
             &attempt.api_key,
             &path,
             &upstream_body,
-            state.monoize_runtime.request_timeout_ms,
+            attempt.request_timeout_ms,
             provider_extra_headers(attempt.provider_type),
         )
         .await;
         match call {
             Ok(value) => {
-                mark_channel_success(state, &attempt.channel_id).await;
+                update_pending_channel_info(state, auth, &attempt, request_id.as_deref()).await;
+                mark_channel_success(state, &attempt).await;
                 let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
                 apply_transform_rules_response(
                     state,
@@ -1014,6 +1170,7 @@ async fn execute_nonstream_typed(
             Err(err) => {
                 let non_retryable = is_non_retryable_client_error(&err);
                 let retryable = is_retryable_error(&err);
+                let retryable_failure_class = classify_retryable_failure(&err);
                 let app_err = upstream_error_to_app(err);
                 if non_retryable {
                     spawn_request_log_error(
@@ -1037,7 +1194,7 @@ async fn execute_nonstream_typed(
                         channel_id: attempt.channel_id.clone(),
                         error: app_err.message.clone(),
                     });
-                    mark_channel_retryable_failure(state, &attempt.channel_id).await;
+                    mark_channel_retryable_failure(state, &attempt, retryable_failure_class).await;
                     last_failed_attempt = Some(attempt.clone());
                     continue;
                 }
@@ -1556,6 +1713,35 @@ async fn insert_pending_request_log(
     }
 }
 
+async fn update_pending_channel_info(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    attempt: &MonoizeAttempt,
+    request_id: Option<&str>,
+) {
+    let Some(user_id) = auth.user_id.as_deref() else {
+        return;
+    };
+    let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
+        return;
+    };
+
+    if let Err(e) = state
+        .user_store
+        .update_pending_request_log_channel(
+            user_id,
+            request_id,
+            &attempt.provider_id,
+            &attempt.channel_id,
+            &attempt.upstream_model,
+            attempt.model_multiplier,
+        )
+        .await
+    {
+        tracing::warn!("failed to update pending request log channel info: {e}");
+    }
+}
+
 fn spawn_request_log(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -1803,11 +1989,9 @@ async fn ensure_balance_before_forward(
 }
 
 fn split_body(
-    state: &AppState,
     value: Value,
     known_keys: &[&str],
 ) -> AppResult<(Value, Map<String, Value>)> {
-    let policy = state.runtime.unknown_fields;
     let known: HashSet<&str> = known_keys.iter().copied().collect();
     let obj = value.as_object().ok_or_else(|| {
         AppError::new(
@@ -1824,20 +2008,6 @@ fn split_body(
             known_obj.insert(k.clone(), v.clone());
         } else {
             extra.insert(k.clone(), v.clone());
-        }
-    }
-
-    if !extra.is_empty() {
-        match policy {
-            UnknownFieldPolicy::Reject => {
-                return Err(AppError::new(
-                    StatusCode::BAD_REQUEST,
-                    "unknown_field",
-                    "unknown fields present",
-                ));
-            }
-            UnknownFieldPolicy::Ignore => extra.clear(),
-            UnknownFieldPolicy::Preserve => {}
         }
     }
 
@@ -1897,7 +2067,9 @@ async fn forward_stream_typed(
     let started_at = std::time::Instant::now();
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
+    inject_monoize_context(&auth, &mut req);
     apply_transform_rules_request(&state, &mut req, &auth.transforms)?;
+    strip_monoize_context(&mut req);
     resolve_model_suffix(&state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(&state, &routing_stub).await?;
@@ -1916,6 +2088,7 @@ async fn forward_stream_typed(
         let logical_model = req.model.clone();
         req_attempt.model = attempt.upstream_model.clone();
         apply_transform_rules_request(&state, &mut req_attempt, &attempt.provider_transforms)?;
+        ensure_stream_usage_requested(&mut req_attempt, attempt.provider_type);
         let need_response_transform_stream =
             has_enabled_response_rules(&attempt.provider_transforms, &logical_model)
                 || has_enabled_response_rules(&auth.transforms, &logical_model);
@@ -1932,13 +2105,15 @@ async fn forward_stream_typed(
                 &attempt.api_key,
                 &path,
                 &upstream_body,
-                state.monoize_runtime.request_timeout_ms,
+                attempt.request_timeout_ms,
                 provider_extra_headers(attempt.provider_type),
             )
             .await;
             match call {
                 Ok(value) => {
-                    mark_channel_success(&state, &attempt.channel_id).await;
+                    update_pending_channel_info(&state, &auth, &attempt, request_id.as_deref())
+                        .await;
+                    mark_channel_success(&state, &attempt).await;
                     let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
                     apply_transform_rules_response(
                         &state,
@@ -1993,6 +2168,7 @@ async fn forward_stream_typed(
                 Err(err) => {
                     let non_retryable = is_non_retryable_client_error(&err);
                     let retryable = is_retryable_error(&err);
+                    let retryable_failure_class = classify_retryable_failure(&err);
                     let app_err = upstream_error_to_app(err);
                     if non_retryable {
                         spawn_request_log_error(
@@ -2016,7 +2192,8 @@ async fn forward_stream_typed(
                             channel_id: attempt.channel_id.clone(),
                             error: app_err.message.clone(),
                         });
-                        mark_channel_retryable_failure(&state, &attempt.channel_id).await;
+                        mark_channel_retryable_failure(&state, &attempt, retryable_failure_class)
+                            .await;
                         last_failed_attempt = Some(attempt.clone());
                         continue;
                     }
@@ -2047,17 +2224,34 @@ async fn forward_stream_typed(
             &attempt.api_key,
             &path,
             &upstream_body,
-            state.monoize_runtime.request_timeout_ms,
+            attempt.request_timeout_ms,
             provider_extra_headers(attempt.provider_type),
         )
         .await;
         match call {
             Ok(upstream_resp) => {
-                mark_channel_success(&state, &attempt.channel_id).await;
+                update_pending_channel_info(&state, &auth, &attempt, request_id.as_deref()).await;
+                mark_channel_success(&state, &attempt).await;
                 let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
                 let provider_type = attempt.provider_type;
                 let (tx, rx) = mpsc::channel::<Event>(64);
-                let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
+                let pending_usage_log = auth.user_id.as_ref().and_then(|user_id| {
+                    request_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(|request_id| StreamPendingUsageLogContext {
+                            user_store: state.user_store.clone(),
+                            user_id: user_id.clone(),
+                            request_id: request_id.to_string(),
+                            last_total_tokens: 0,
+                        })
+                });
+                let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
+                    ttfb_ms: None,
+                    usage: None,
+                    pending_usage_log,
+                }));
                 let metrics_for_stream = runtime_metrics.clone();
                 let state_for_log = state.clone();
                 let auth_for_log = auth.clone();
@@ -2194,7 +2388,7 @@ async fn forward_stream_typed(
                         {
                             Ok(v) => v,
                             Err(err) => {
-                                tracing::warn!(
+                                tracing::error!(
                                     "failed to charge passthrough stream request: {}",
                                     err.message
                                 );
@@ -2234,14 +2428,18 @@ async fn forward_stream_typed(
                         });
                         match downstream {
                             DownstreamProtocol::Responses => {
-                                let _ = tx_err.send(
-                                    Event::default().event("error").data(error_json.to_string())
-                                ).await;
+                                let _ = tx_err
+                                    .send(
+                                        Event::default()
+                                            .event("error")
+                                            .data(error_json.to_string()),
+                                    )
+                                    .await;
                             }
                             DownstreamProtocol::ChatCompletions => {
-                                let _ = tx_err.send(
-                                    Event::default().data(error_json.to_string())
-                                ).await;
+                                let _ = tx_err
+                                    .send(Event::default().data(error_json.to_string()))
+                                    .await;
                             }
                             DownstreamProtocol::AnthropicMessages => {
                                 let _ = tx_err.send(
@@ -2259,6 +2457,7 @@ async fn forward_stream_typed(
             Err(err) => {
                 let non_retryable = is_non_retryable_client_error(&err);
                 let retryable = is_retryable_error(&err);
+                let retryable_failure_class = classify_retryable_failure(&err);
                 let app_err = upstream_error_to_app(err);
                 if non_retryable {
                     spawn_request_log_error(
@@ -2282,7 +2481,7 @@ async fn forward_stream_typed(
                         channel_id: attempt.channel_id.clone(),
                         error: app_err.message.clone(),
                     });
-                    mark_channel_retryable_failure(&state, &attempt.channel_id).await;
+                    mark_channel_retryable_failure(&state, &attempt, retryable_failure_class).await;
                     last_failed_attempt = Some(attempt.clone());
                     continue;
                 }
@@ -2621,13 +2820,16 @@ async fn emit_synthetic_chat_stream(
     } else {
         finish_reason_to_chat(resp.finish_reason.unwrap_or(urp::FinishReason::Stop))
     };
-    let done = json!({
+    let mut done = json!({
         "id": id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": logical_model,
         "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
     });
+    if let Some(usage) = resp.usage.as_ref() {
+        done["usage"] = usage_to_chat_usage_json(usage);
+    }
     tx.send(Event::default().data(done.to_string()))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
@@ -3174,7 +3376,36 @@ async fn collect_provider_attempts(
     };
     let upstream_model = resolve_upstream_model(&urp.model, model_entry);
 
+    let runtime = state.monoize_runtime.read().await;
     for channel in ordered.into_iter().take(max_attempts) {
+        let passive_failure_threshold = channel
+            .passive_failure_threshold_override
+            .unwrap_or(runtime.passive_failure_threshold)
+            .max(1);
+        let passive_cooldown_seconds = channel
+            .passive_cooldown_seconds_override
+            .unwrap_or(runtime.passive_cooldown_seconds)
+            .max(1);
+        let passive_window_seconds = channel
+            .passive_window_seconds_override
+            .unwrap_or(runtime.passive_window_seconds)
+            .max(1);
+        let passive_min_samples = channel
+            .passive_min_samples_override
+            .unwrap_or(runtime.passive_min_samples)
+            .max(1);
+        let passive_failure_rate_threshold = channel
+            .passive_failure_rate_threshold_override
+            .unwrap_or(runtime.passive_failure_rate_threshold)
+            .clamp(0.01, 1.0);
+        let passive_rate_limit_cooldown_seconds = channel
+            .passive_rate_limit_cooldown_seconds_override
+            .unwrap_or(runtime.passive_rate_limit_cooldown_seconds)
+            .max(1);
+        let request_timeout_ms = provider
+            .request_timeout_ms_override
+            .unwrap_or(runtime.request_timeout_ms)
+            .max(1);
         out.push(MonoizeAttempt {
             provider_id: provider.id.clone(),
             provider_type: provider.provider_type.to_config_type(),
@@ -3184,6 +3415,13 @@ async fn collect_provider_attempts(
             upstream_model: upstream_model.clone(),
             model_multiplier: model_entry.multiplier,
             provider_transforms: provider.transforms.clone(),
+            passive_failure_threshold,
+            passive_cooldown_seconds,
+            passive_window_seconds,
+            passive_min_samples,
+            passive_failure_rate_threshold,
+            passive_rate_limit_cooldown_seconds,
+            request_timeout_ms,
         });
     }
 }
@@ -3320,11 +3558,39 @@ fn is_retryable_error(err: &UpstreamCallError) -> bool {
     )
 }
 
-async fn mark_channel_success(state: &AppState, channel_id: &str) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryableFailureClass {
+    RateLimited,
+    Transient,
+}
+
+fn classify_retryable_failure(err: &UpstreamCallError) -> RetryableFailureClass {
+    if matches!(err.status, Some(StatusCode::TOO_MANY_REQUESTS)) {
+        return RetryableFailureClass::RateLimited;
+    }
+    RetryableFailureClass::Transient
+}
+
+fn prune_passive_samples(
+    samples: &mut std::collections::VecDeque<crate::monoize_routing::PassiveHealthSample>,
+    now_ts: i64,
+    window_seconds: u64,
+) {
+    let cutoff = now_ts.saturating_sub(window_seconds as i64);
+    while let Some(front) = samples.front() {
+        if front.at_ts < cutoff {
+            let _ = samples.pop_front();
+        } else {
+            break;
+        }
+    }
+}
+
+async fn mark_channel_success(state: &AppState, attempt: &MonoizeAttempt) {
     let now = now_ts();
     let mut health = state.channel_health.lock().await;
     let entry = health
-        .entry(channel_id.to_string())
+        .entry(attempt.channel_id.to_string())
         .or_insert_with(crate::monoize_routing::ChannelHealthState::new);
     let was_unhealthy = !entry.healthy;
     entry.healthy = true;
@@ -3333,28 +3599,76 @@ async fn mark_channel_success(state: &AppState, channel_id: &str) {
     entry.last_success_at = Some(now);
     entry.probe_success_count = 0;
     entry.last_probe_at = None;
+    entry
+        .passive_samples
+        .push_back(crate::monoize_routing::PassiveHealthSample {
+            at_ts: now,
+            failed: false,
+        });
+    prune_passive_samples(
+        &mut entry.passive_samples,
+        now,
+        attempt.passive_window_seconds,
+    );
     if was_unhealthy {
-        tracing::info!(channel_id = %channel_id, "channel recovered to healthy after success");
+        tracing::info!(channel_id = %attempt.channel_id, "channel recovered to healthy after success");
     }
 }
 
-async fn mark_channel_retryable_failure(state: &AppState, channel_id: &str) {
+async fn mark_channel_retryable_failure(
+    state: &AppState,
+    attempt: &MonoizeAttempt,
+    failure_class: RetryableFailureClass,
+) {
     let now = now_ts();
     let mut health = state.channel_health.lock().await;
     let entry = health
-        .entry(channel_id.to_string())
+        .entry(attempt.channel_id.to_string())
         .or_insert_with(crate::monoize_routing::ChannelHealthState::new);
-    entry.failure_count = entry.failure_count.saturating_add(1);
-    if entry.failure_count >= state.monoize_runtime.passive_failure_threshold {
+    if failure_class == RetryableFailureClass::Transient {
+        entry.failure_count = entry.failure_count.saturating_add(1);
+    }
+    entry
+        .passive_samples
+        .push_back(crate::monoize_routing::PassiveHealthSample {
+            at_ts: now,
+            failed: true,
+        });
+    prune_passive_samples(
+        &mut entry.passive_samples,
+        now,
+        attempt.passive_window_seconds,
+    );
+
+    let sample_count = entry.passive_samples.len() as u32;
+    let failure_samples = entry.passive_samples.iter().filter(|s| s.failed).count() as u32;
+    let failure_rate = if sample_count == 0 {
+        0.0
+    } else {
+        failure_samples as f64 / sample_count as f64
+    };
+    let reached_consecutive = entry.failure_count >= attempt.passive_failure_threshold;
+    let reached_failure_rate = sample_count >= attempt.passive_min_samples
+        && failure_rate >= attempt.passive_failure_rate_threshold;
+
+    if reached_consecutive || reached_failure_rate {
         entry.healthy = false;
-        entry.cooldown_until = Some(now + state.monoize_runtime.passive_cooldown_seconds as i64);
+        let cooldown_seconds = if failure_class == RetryableFailureClass::RateLimited {
+            attempt.passive_rate_limit_cooldown_seconds
+        } else {
+            attempt.passive_cooldown_seconds
+        };
+        entry.cooldown_until = Some(now + cooldown_seconds as i64);
         entry.probe_success_count = 0;
         entry.last_probe_at = None;
         tracing::info!(
-            channel_id = %channel_id,
+            channel_id = %attempt.channel_id,
+            failure_class = ?failure_class,
             failure_count = entry.failure_count,
-            cooldown_seconds = state.monoize_runtime.passive_cooldown_seconds,
-            "channel marked unhealthy after consecutive failures"
+            sample_count,
+            failure_rate,
+            cooldown_seconds,
+            "channel marked unhealthy after passive breaker threshold"
         );
     }
 }
@@ -3378,7 +3692,7 @@ fn error_to_sse_stream(
     let mut events: Vec<Event> = Vec::new();
     match downstream {
         DownstreamProtocol::Responses => {
-            let mut seq: u64 = 0;
+            let mut seq: u64 = 1;
             let payload = json!({ "sequence_number": seq, "data": error_json });
             seq += 1;
             events.push(Event::default().event("error").data(payload.to_string()));
@@ -3389,9 +3703,10 @@ fn error_to_sse_stream(
         }
         DownstreamProtocol::AnthropicMessages => {
             events.push(
-                Event::default()
-                    .event("error")
-                    .data(json!({"type": "error", "error": {"type": err.code, "message": err.message}}).to_string()),
+                Event::default().event("error").data(
+                    json!({"type": "error", "error": {"type": err.code, "message": err.message}})
+                        .to_string(),
+                ),
             );
         }
     }
@@ -3530,6 +3845,9 @@ async fn stream_responses_sse_as_responses(
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -3717,7 +4035,7 @@ async fn stream_responses_sse_as_responses(
         "content": [{ "type": "output_text", "text": output_text }]
     });
     output_items.push(output_item.clone());
-    let final_response = json!({
+    let mut final_response = json!({
         "id": response_id,
         "object": "response",
         "created": created,
@@ -3725,6 +4043,9 @@ async fn stream_responses_sse_as_responses(
         "status": "completed",
         "output": output_items
     });
+    if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
+        final_response["usage"] = usage_to_responses_usage_json(&usage);
+    }
     let _ = tx
         .send(wrap_responses_event(
             &mut seq,
@@ -3823,6 +4144,9 @@ async fn stream_chat_sse_as_responses(
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -3991,7 +4315,7 @@ async fn stream_chat_sse_as_responses(
         "content": [{ "type": "output_text", "text": output_text }]
     });
     output_items.push(output_item.clone());
-    let final_response = json!({
+    let mut final_response = json!({
         "id": response_id,
         "object": "response",
         "created": created,
@@ -3999,6 +4323,9 @@ async fn stream_chat_sse_as_responses(
         "status": "completed",
         "output": output_items
     });
+    if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
+        final_response["usage"] = usage_to_responses_usage_json(&usage);
+    }
     let _ = tx
         .send(wrap_responses_event(
             &mut seq,
@@ -4073,6 +4400,9 @@ async fn stream_messages_sse_as_responses(
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -4230,7 +4560,7 @@ async fn stream_messages_sse_as_responses(
         "content": [{ "type": "output_text", "text": output_text }]
     });
     output_items.push(output_item.clone());
-    let final_response = json!({
+    let mut final_response = json!({
         "id": response_id,
         "object": "response",
         "created": created,
@@ -4238,6 +4568,9 @@ async fn stream_messages_sse_as_responses(
         "status": "completed",
         "output": output_items
     });
+    if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
+        final_response["usage"] = usage_to_responses_usage_json(&usage);
+    }
     let _ = tx
         .send(wrap_responses_event(
             &mut seq,
@@ -4304,6 +4637,9 @@ async fn stream_gemini_sse_as_responses(
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -4450,7 +4786,7 @@ async fn stream_gemini_sse_as_responses(
         "content": [{ "type": "output_text", "text": output_text }]
     });
     output_items.push(output_item.clone());
-    let final_response = json!({
+    let mut final_response = json!({
         "id": response_id,
         "object": "response",
         "created": created,
@@ -4458,6 +4794,9 @@ async fn stream_gemini_sse_as_responses(
         "status": "completed",
         "output": output_items
     });
+    if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
+        final_response["usage"] = usage_to_responses_usage_json(&usage);
+    }
     let _ = tx
         .send(wrap_responses_event(
             &mut seq,
@@ -4496,6 +4835,9 @@ async fn stream_gemini_sse_as_chat(
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -4598,13 +4940,16 @@ async fn stream_gemini_sse_as_chat(
     }
 
     let finish_reason = if saw_tool_call { "tool_calls" } else { "stop" };
-    let done = json!({
+    let mut done = json!({
         "id": id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": urp.model,
         "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
     });
+    if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
+        done["usage"] = usage_to_chat_usage_json(&usage);
+    }
     let _ = tx.send(Event::default().data(done.to_string())).await;
     let _ = tx.send(Event::default().data("[DONE]")).await;
     Ok(())
@@ -4647,6 +4992,9 @@ async fn stream_gemini_sse_as_messages(
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -4754,16 +5102,17 @@ async fn stream_gemini_sse_as_messages(
         let stop = json!({ "type": "content_block_stop", "index": idx });
         let _ = tx.send(Event::default().data(stop.to_string())).await;
     }
+    let message_usage = latest_stream_usage_snapshot(&runtime_metrics)
+        .await
+        .map(|usage| usage_to_messages_usage_json(&usage))
+        .unwrap_or_else(|| json!({ "input_tokens": 0, "output_tokens": 0 }));
     let message_delta = json!({
         "type": "message_delta",
         "delta": {
             "stop_reason": if saw_tool_use { "tool_use" } else { "end_turn" },
             "stop_sequence": Value::Null
         },
-        "usage": {
-            "input_tokens": 0,
-            "output_tokens": 0
-        }
+        "usage": message_usage
     });
     let _ = tx
         .send(Event::default().data(message_delta.to_string()))
@@ -4786,13 +5135,19 @@ async fn stream_any_sse_as_chat(
     let mut out_text = String::new();
     let mut saw_tool_call = false;
     let mut saw_responses_text_delta = false;
+    let mut saw_responses_tool_delta = false;
+    let mut saw_responses_reasoning_delta = false;
     let mut call_order: Vec<String> = Vec::new();
     let mut call_names: HashMap<String, String> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
+    let mut saw_upstream_terminal_finish = false;
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -4828,6 +5183,10 @@ async fn stream_any_sse_as_chat(
                         .and_then(|v| v.as_object_mut())
                     {
                         normalize_chat_reasoning_delta_object(delta);
+                        // Upstream may send explicit nulls (role: null, content: null, etc.)
+                        // that violate the OpenAI streaming schema. Strip them — null semantically
+                        // means "no update" and is equivalent to the field being absent.
+                        delta.retain(|_, v| !v.is_null());
                     }
                 }
 
@@ -4840,6 +5199,44 @@ async fn stream_any_sse_as_chat(
                     .and_then(|v| v.as_str())
                 {
                     out_text.push_str(t);
+                }
+                let choice_snapshot = chunk
+                    .get("choices")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .cloned();
+                if let Some(choice) = choice_snapshot {
+                    let has_tool_delta = choice
+                        .get("delta")
+                        .and_then(|d| d.get("tool_calls"))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| !arr.is_empty())
+                        .unwrap_or(false);
+                    if has_tool_delta {
+                        saw_tool_call = true;
+                    }
+
+                    if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                        if !reason.is_empty() {
+                            saw_upstream_terminal_finish = true;
+                            if reason == "tool_calls" {
+                                saw_tool_call = true;
+                            }
+                            if reason == "stop" && saw_tool_call {
+                                if let Some(choice_obj) = chunk
+                                    .get_mut("choices")
+                                    .and_then(|v| v.as_array_mut())
+                                    .and_then(|arr| arr.first_mut())
+                                    .and_then(|v| v.as_object_mut())
+                                {
+                                    choice_obj.insert(
+                                        "finish_reason".to_string(),
+                                        Value::String("tool_calls".to_string()),
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
 
                 let _ = tx.send(Event::default().data(chunk.to_string())).await;
@@ -4878,6 +5275,7 @@ async fn stream_any_sse_as_chat(
                             .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
                             .unwrap_or("");
                         if !t.is_empty() {
+                            saw_responses_reasoning_delta = true;
                             let chunk = json!({
                                 "id": id,
                                 "object": "chat.completion.chunk",
@@ -4891,6 +5289,7 @@ async fn stream_any_sse_as_chat(
                     "response.reasoning_signature.delta" => {
                         let t = data_val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
                         if !t.is_empty() {
+                            saw_responses_reasoning_delta = true;
                             let chunk = json!({
                                 "id": id,
                                 "object": "chat.completion.chunk",
@@ -4915,6 +5314,7 @@ async fn stream_any_sse_as_chat(
                                 .unwrap_or("")
                                 .to_string();
                             if !call_id.is_empty() {
+                                saw_responses_tool_delta = true;
                                 if !call_order.contains(&call_id) {
                                     call_order.push(call_id.clone());
                                 }
@@ -4966,6 +5366,7 @@ async fn stream_any_sse_as_chat(
                         if call_id.is_empty() {
                             continue;
                         }
+                        saw_responses_tool_delta = true;
                         if !call_order.contains(&call_id) {
                             call_order.push(call_id.clone());
                         }
@@ -5012,6 +5413,7 @@ async fn stream_any_sse_as_chat(
                             if call_id.is_empty() {
                                 continue;
                             }
+                            saw_responses_tool_delta = true;
                             let name = item
                                 .get("name")
                                 .and_then(|v| v.as_str())
@@ -5072,6 +5474,7 @@ async fn stream_any_sse_as_chat(
                             let (reasoning_text, reasoning_sig) =
                                 extract_reasoning_text_and_signature(item);
                             if !reasoning_text.is_empty() {
+                                saw_responses_reasoning_delta = true;
                                 let chunk = json!({
                                     "id": id,
                                     "object": "chat.completion.chunk",
@@ -5082,6 +5485,7 @@ async fn stream_any_sse_as_chat(
                                 let _ = tx.send(Event::default().data(chunk.to_string())).await;
                             }
                             if !reasoning_sig.is_empty() {
+                                saw_responses_reasoning_delta = true;
                                 let chunk = json!({
                                     "id": id,
                                     "object": "chat.completion.chunk",
@@ -5090,6 +5494,118 @@ async fn stream_any_sse_as_chat(
                                     "choices": [{ "index": 0, "delta": chat_reasoning_delta_from_signature(&reasoning_sig), "finish_reason": Value::Null }]
                                 });
                                 let _ = tx.send(Event::default().data(chunk.to_string())).await;
+                            }
+                        }
+                    }
+                    "response.completed" => {
+                        let completed = data_val.get("response").unwrap_or(&data_val);
+                        let Some(output) = completed.get("output").and_then(|v| v.as_array())
+                        else {
+                            continue;
+                        };
+                        for item in output {
+                            match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                                "function_call" => {
+                                    if saw_responses_tool_delta {
+                                        continue;
+                                    }
+                                    let call_id = item
+                                        .get("call_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    if call_id.is_empty() {
+                                        continue;
+                                    }
+                                    let name = item
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let args = item
+                                        .get("arguments")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    if !call_order.contains(&call_id) {
+                                        call_order.push(call_id.clone());
+                                    }
+                                    if !name.is_empty() {
+                                        call_names.insert(call_id.clone(), name.clone());
+                                    }
+                                    let idx =
+                                        call_order.iter().position(|x| x == &call_id).unwrap_or(0);
+                                    saw_tool_call = true;
+                                    let chunk = json!({
+                                        "id": id,
+                                        "object": "chat.completion.chunk",
+                                        "created": created,
+                                        "model": urp.model,
+                                        "choices": [{
+                                            "index": 0,
+                                            "delta": {
+                                                "tool_calls": [{
+                                                    "index": idx,
+                                                    "id": call_id,
+                                                    "type": "function",
+                                                    "function": { "name": name, "arguments": args }
+                                                }]
+                                            },
+                                            "finish_reason": Value::Null
+                                        }]
+                                    });
+                                    let _ = tx.send(Event::default().data(chunk.to_string())).await;
+                                }
+                                "message" => {
+                                    if saw_responses_text_delta {
+                                        continue;
+                                    }
+                                    let text = extract_responses_message_text(item);
+                                    if !text.is_empty() {
+                                        saw_responses_text_delta = true;
+                                        out_text.push_str(&text);
+                                        let chunk = json!({
+                                            "id": id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": urp.model,
+                                            "choices": [{ "index": 0, "delta": { "content": text }, "finish_reason": Value::Null }]
+                                        });
+                                        let _ =
+                                            tx.send(Event::default().data(chunk.to_string())).await;
+                                    }
+                                }
+                                "reasoning" => {
+                                    if saw_responses_reasoning_delta {
+                                        continue;
+                                    }
+                                    let (reasoning_text, reasoning_sig) =
+                                        extract_reasoning_text_and_signature(item);
+                                    if !reasoning_text.is_empty() {
+                                        saw_responses_reasoning_delta = true;
+                                        let chunk = json!({
+                                            "id": id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": urp.model,
+                                            "choices": [{ "index": 0, "delta": chat_reasoning_delta_from_text(&reasoning_text), "finish_reason": Value::Null }]
+                                        });
+                                        let _ =
+                                            tx.send(Event::default().data(chunk.to_string())).await;
+                                    }
+                                    if !reasoning_sig.is_empty() {
+                                        saw_responses_reasoning_delta = true;
+                                        let chunk = json!({
+                                            "id": id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": urp.model,
+                                            "choices": [{ "index": 0, "delta": chat_reasoning_delta_from_signature(&reasoning_sig), "finish_reason": Value::Null }]
+                                        });
+                                        let _ =
+                                            tx.send(Event::default().data(chunk.to_string())).await;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -5384,6 +5900,7 @@ async fn stream_any_sse_as_chat(
                                 .unwrap_or("")
                                 .to_string();
                             if !call_id.is_empty() {
+                                saw_responses_tool_delta = true;
                                 if !call_order.contains(&call_id) {
                                     call_order.push(call_id.clone());
                                 }
@@ -5435,6 +5952,7 @@ async fn stream_any_sse_as_chat(
                         if call_id.is_empty() {
                             continue;
                         }
+                        saw_responses_tool_delta = true;
                         if !call_order.contains(&call_id) {
                             call_order.push(call_id.clone());
                         }
@@ -5474,6 +5992,7 @@ async fn stream_any_sse_as_chat(
                             .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
                             .unwrap_or("");
                         if !t.is_empty() {
+                            saw_responses_reasoning_delta = true;
                             let chunk = json!({
                                 "id": id,
                                 "object": "chat.completion.chunk",
@@ -5487,6 +6006,7 @@ async fn stream_any_sse_as_chat(
                     "response.reasoning_signature.delta" => {
                         let t = data_val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
                         if !t.is_empty() {
+                            saw_responses_reasoning_delta = true;
                             let chunk = json!({
                                 "id": id,
                                 "object": "chat.completion.chunk",
@@ -5497,6 +6017,118 @@ async fn stream_any_sse_as_chat(
                             let _ = tx.send(Event::default().data(chunk.to_string())).await;
                         }
                     }
+                    "response.completed" => {
+                        let completed = data_val.get("response").unwrap_or(&data_val);
+                        let Some(output) = completed.get("output").and_then(|v| v.as_array())
+                        else {
+                            continue;
+                        };
+                        for item in output {
+                            match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                                "function_call" => {
+                                    if saw_responses_tool_delta {
+                                        continue;
+                                    }
+                                    let call_id = item
+                                        .get("call_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    if call_id.is_empty() {
+                                        continue;
+                                    }
+                                    let name = item
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let args = item
+                                        .get("arguments")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    if !call_order.contains(&call_id) {
+                                        call_order.push(call_id.clone());
+                                    }
+                                    if !name.is_empty() {
+                                        call_names.insert(call_id.clone(), name.clone());
+                                    }
+                                    let idx =
+                                        call_order.iter().position(|x| x == &call_id).unwrap_or(0);
+                                    saw_tool_call = true;
+                                    let chunk = json!({
+                                        "id": id,
+                                        "object": "chat.completion.chunk",
+                                        "created": created,
+                                        "model": urp.model,
+                                        "choices": [{
+                                            "index": 0,
+                                            "delta": {
+                                                "tool_calls": [{
+                                                    "index": idx,
+                                                    "id": call_id,
+                                                    "type": "function",
+                                                    "function": { "name": name, "arguments": args }
+                                                }]
+                                            },
+                                            "finish_reason": Value::Null
+                                        }]
+                                    });
+                                    let _ = tx.send(Event::default().data(chunk.to_string())).await;
+                                }
+                                "message" => {
+                                    if saw_responses_text_delta {
+                                        continue;
+                                    }
+                                    let text = extract_responses_message_text(item);
+                                    if !text.is_empty() {
+                                        saw_responses_text_delta = true;
+                                        out_text.push_str(&text);
+                                        let chunk = json!({
+                                            "id": id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": urp.model,
+                                            "choices": [{ "index": 0, "delta": { "content": text }, "finish_reason": Value::Null }]
+                                        });
+                                        let _ =
+                                            tx.send(Event::default().data(chunk.to_string())).await;
+                                    }
+                                }
+                                "reasoning" => {
+                                    if saw_responses_reasoning_delta {
+                                        continue;
+                                    }
+                                    let (reasoning_text, reasoning_sig) =
+                                        extract_reasoning_text_and_signature(item);
+                                    if !reasoning_text.is_empty() {
+                                        saw_responses_reasoning_delta = true;
+                                        let chunk = json!({
+                                            "id": id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": urp.model,
+                                            "choices": [{ "index": 0, "delta": chat_reasoning_delta_from_text(&reasoning_text), "finish_reason": Value::Null }]
+                                        });
+                                        let _ =
+                                            tx.send(Event::default().data(chunk.to_string())).await;
+                                    }
+                                    if !reasoning_sig.is_empty() {
+                                        saw_responses_reasoning_delta = true;
+                                        let chunk = json!({
+                                            "id": id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": urp.model,
+                                            "choices": [{ "index": 0, "delta": chat_reasoning_delta_from_signature(&reasoning_sig), "finish_reason": Value::Null }]
+                                        });
+                                        let _ =
+                                            tx.send(Event::default().data(chunk.to_string())).await;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -5504,15 +6136,22 @@ async fn stream_any_sse_as_chat(
         }
     }
 
-    let finish_reason = if saw_tool_call { "tool_calls" } else { "stop" };
-    let done = json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": urp.model,
-        "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
-    });
-    let _ = tx.send(Event::default().data(done.to_string())).await;
+    let needs_synthetic_terminal =
+        provider_type != ProviderType::ChatCompletion || !saw_upstream_terminal_finish;
+    if needs_synthetic_terminal {
+        let finish_reason = if saw_tool_call { "tool_calls" } else { "stop" };
+        let mut done = json!({
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": urp.model,
+            "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
+        });
+        if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
+            done["usage"] = usage_to_chat_usage_json(&usage);
+        }
+        let _ = tx.send(Event::default().data(done.to_string())).await;
+    }
     let _ = tx.send(Event::default().data("[DONE]")).await;
     Ok(())
 }
@@ -5531,6 +6170,9 @@ async fn stream_any_sse_as_messages(
         let mut stream = upstream_resp.bytes_stream().eventsource();
         while let Some(ev) = stream.next().await {
             let Ok(ev) = ev else { continue };
+            if tx.is_closed() {
+                break;
+            }
             mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
             if ev.data.trim() == "[DONE]" {
                 break;
@@ -5568,6 +6210,8 @@ async fn stream_any_sse_as_messages(
     let mut text_index: Option<u32> = None;
     let mut thinking_index: Option<u32> = None;
     let mut saw_responses_text_delta = false;
+    let mut saw_responses_tool_delta = false;
+    let mut saw_responses_reasoning_delta = false;
     let mut tool_indices: HashMap<String, u32> = HashMap::new();
     let mut tool_names: HashMap<String, String> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
@@ -5576,6 +6220,9 @@ async fn stream_any_sse_as_messages(
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
         let Ok(ev) = ev else { continue };
+        if tx.is_closed() {
+            break;
+        }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
             break;
@@ -5723,6 +6370,7 @@ async fn stream_any_sse_as_messages(
                             .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
                             .unwrap_or("");
                         if !t.is_empty() {
+                            saw_responses_reasoning_delta = true;
                             let idx = ensure_anthropic_thinking_block(
                                 &tx,
                                 &mut thinking_index,
@@ -5737,6 +6385,7 @@ async fn stream_any_sse_as_messages(
                     "response.reasoning_signature.delta" => {
                         let t = data_val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
                         if !t.is_empty() {
+                            saw_responses_reasoning_delta = true;
                             let idx = ensure_anthropic_thinking_block(
                                 &tx,
                                 &mut thinking_index,
@@ -5755,6 +6404,7 @@ async fn stream_any_sse_as_messages(
                                 item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                             let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
                             if !call_id.is_empty() {
+                                saw_responses_tool_delta = true;
                                 if let Some(output_index) =
                                     data_val.get("output_index").and_then(|v| v.as_u64())
                                 {
@@ -5790,6 +6440,7 @@ async fn stream_any_sse_as_messages(
                         let name = data_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
                         let delta = data_val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
                         if !call_id.is_empty() {
+                            saw_responses_tool_delta = true;
                             let idx = ensure_anthropic_tool_block(
                                 &tx,
                                 &mut tool_indices,
@@ -5818,6 +6469,7 @@ async fn stream_any_sse_as_messages(
                             let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
                             let args = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
                             if !call_id.is_empty() {
+                                saw_responses_tool_delta = true;
                                 if let Some(output_index) =
                                     data_val.get("output_index").and_then(|v| v.as_u64())
                                 {
@@ -5866,6 +6518,7 @@ async fn stream_any_sse_as_messages(
                             let (reasoning_text, reasoning_sig) =
                                 extract_reasoning_text_and_signature(item);
                             if !reasoning_text.is_empty() {
+                                saw_responses_reasoning_delta = true;
                                 let idx = ensure_anthropic_thinking_block(
                                     &tx,
                                     &mut thinking_index,
@@ -5881,6 +6534,7 @@ async fn stream_any_sse_as_messages(
                                 let _ = tx.send(Event::default().data(d.to_string())).await;
                             }
                             if !reasoning_sig.is_empty() {
+                                saw_responses_reasoning_delta = true;
                                 let idx = ensure_anthropic_thinking_block(
                                     &tx,
                                     &mut thinking_index,
@@ -5897,6 +6551,113 @@ async fn stream_any_sse_as_messages(
                             }
                         }
                     }
+                    "response.completed" => {
+                        let completed = data_val.get("response").unwrap_or(&data_val);
+                        let Some(output) = completed.get("output").and_then(|v| v.as_array())
+                        else {
+                            continue;
+                        };
+                        for item in output {
+                            match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                                "function_call" => {
+                                    if saw_responses_tool_delta {
+                                        continue;
+                                    }
+                                    let call_id =
+                                        item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                                    if call_id.is_empty() {
+                                        continue;
+                                    }
+                                    let name =
+                                        item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                    let args = item
+                                        .get("arguments")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    let idx = ensure_anthropic_tool_block(
+                                        &tx,
+                                        &mut tool_indices,
+                                        &mut tool_names,
+                                        &mut next_index,
+                                        &mut started,
+                                        call_id,
+                                        name,
+                                    )
+                                    .await?;
+                                    if !args.is_empty() {
+                                        let d = json!({
+                                            "type": "content_block_delta",
+                                            "index": idx,
+                                            "delta": { "type": "input_json_delta", "partial_json": args }
+                                        });
+                                        let _ = tx.send(Event::default().data(d.to_string())).await;
+                                    }
+                                }
+                                "message" => {
+                                    if saw_responses_text_delta {
+                                        continue;
+                                    }
+                                    let text = extract_responses_message_text(item);
+                                    if !text.is_empty() {
+                                        saw_responses_text_delta = true;
+                                        let idx = ensure_anthropic_text_block(
+                                            &tx,
+                                            &mut text_index,
+                                            &mut next_index,
+                                            &mut started,
+                                        )
+                                        .await?;
+                                        let d = json!({
+                                            "type": "content_block_delta",
+                                            "index": idx,
+                                            "delta": { "type": "text_delta", "text": text }
+                                        });
+                                        let _ = tx.send(Event::default().data(d.to_string())).await;
+                                    }
+                                }
+                                "reasoning" => {
+                                    if saw_responses_reasoning_delta {
+                                        continue;
+                                    }
+                                    let (reasoning_text, reasoning_sig) =
+                                        extract_reasoning_text_and_signature(item);
+                                    if !reasoning_text.is_empty() {
+                                        saw_responses_reasoning_delta = true;
+                                        let idx = ensure_anthropic_thinking_block(
+                                            &tx,
+                                            &mut thinking_index,
+                                            &mut next_index,
+                                            &mut started,
+                                        )
+                                        .await?;
+                                        let d = json!({
+                                            "type": "content_block_delta",
+                                            "index": idx,
+                                            "delta": { "type": "thinking_delta", "thinking": reasoning_text }
+                                        });
+                                        let _ = tx.send(Event::default().data(d.to_string())).await;
+                                    }
+                                    if !reasoning_sig.is_empty() {
+                                        saw_responses_reasoning_delta = true;
+                                        let idx = ensure_anthropic_thinking_block(
+                                            &tx,
+                                            &mut thinking_index,
+                                            &mut next_index,
+                                            &mut started,
+                                        )
+                                        .await?;
+                                        let d = json!({
+                                            "type": "content_block_delta",
+                                            "index": idx,
+                                            "delta": { "type": "signature_delta", "signature": reasoning_sig }
+                                        });
+                                        let _ = tx.send(Event::default().data(d.to_string())).await;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -5909,16 +6670,17 @@ async fn stream_any_sse_as_messages(
         let stop = json!({ "type": "content_block_stop", "index": idx });
         let _ = tx.send(Event::default().data(stop.to_string())).await;
     }
+    let message_usage = latest_stream_usage_snapshot(&runtime_metrics)
+        .await
+        .map(|usage| usage_to_messages_usage_json(&usage))
+        .unwrap_or_else(|| json!({ "input_tokens": 0, "output_tokens": 0 }));
     let message_delta = json!({
         "type": "message_delta",
         "delta": {
             "stop_reason": if tool_indices.is_empty() { "end_turn" } else { "tool_use" },
             "stop_sequence": Value::Null
         },
-        "usage": {
-            "input_tokens": 0,
-            "output_tokens": 0
-        }
+        "usage": message_usage
     });
     let _ = tx
         .send(Event::default().data(message_delta.to_string()))
