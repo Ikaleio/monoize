@@ -103,6 +103,10 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             .and_then(|v| v.get("effort"))
             .and_then(|v| v.as_str())
             .is_some();
+        let emit_usage = body
+            .get("emit_usage")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let mut tool_outputs: Vec<String> = Vec::new();
         if let Some(arr) = input.and_then(|v| v.as_array()) {
@@ -121,6 +125,39 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
             // If tools are present and no tool outputs were provided yet, stream a tool call.
             if tools_present && tool_outputs.is_empty() {
+                if body.get("stream_mode").and_then(|v| v.as_str()) == Some("completed_only_tool") {
+                    let calls = if parallel {
+                        vec![
+                            json!({ "type": "function_call", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }),
+                            json!({ "type": "function_call", "call_id": "call_2", "name": "tool_b", "arguments": "{\"b\":2}" }),
+                        ]
+                    } else {
+                        vec![
+                            json!({ "type": "function_call", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }),
+                        ]
+                    };
+                    let stream = futures_util::stream::iter(vec![
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.completed").data(
+                                json!({
+                                    "type": "response.completed",
+                                    "response": {
+                                        "id": "resp_mock",
+                                        "object": "response",
+                                        "created": 0,
+                                        "model": model,
+                                        "status": "completed",
+                                        "output": calls
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                    ]);
+                    return Sse::new(stream).into_response();
+                }
+
                 let mut events: Vec<Result<Event, Infallible>> = Vec::new();
                 events.push(Ok(Event::default()
                     .event("response.reasoning_text.delta")
@@ -216,6 +253,31 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     .event("response.output_text.delta")
                     .data(json!({ "delta": text }).to_string()),
             ));
+            if emit_usage {
+                events.push(Ok::<_, Infallible>(
+                    Event::default().event("response.completed").data(
+                        json!({
+                            "type": "response.completed",
+                            "response": {
+                                "id": "resp_mock",
+                                "object": "response",
+                                "created": 0,
+                                "model": model,
+                                "status": "completed",
+                                "output": [],
+                                "usage": {
+                                    "input_tokens": 12,
+                                    "output_tokens": 8,
+                                    "total_tokens": 20,
+                                    "input_tokens_details": { "cached_tokens": 0 },
+                                    "output_tokens_details": { "reasoning_tokens": 0 }
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ),
+                ));
+            }
             events.push(Ok::<_, Infallible>(Event::default().data("[DONE]")));
             return Sse::new(futures_util::stream::iter(events)).into_response();
         }
@@ -332,7 +394,12 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         let emit_usage = body
             .get("emit_usage")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || body
+                .get("stream_options")
+                .and_then(|v| v.get("include_usage"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
         let finish_reason = body
             .get("force_finish_reason")
             .and_then(|v| v.as_str())
@@ -1098,6 +1165,12 @@ async fn create_test_provider(
                 api_key: Some(api_key.to_string()),
                 weight: 1,
                 enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
             }],
             max_retries: -1,
             transforms: Vec::new(),
@@ -1105,6 +1178,7 @@ async fn create_test_provider(
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
+            request_timeout_ms_override: None,
             enabled: true,
             priority: None,
         })
@@ -1135,21 +1209,15 @@ async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&s
     }
 }
 
-async fn setup_with_unknown_fields(unknown_fields: &str) -> TestContext {
+async fn setup_with_unknown_fields() -> TestContext {
     let (upstream_addr, captured_headers) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("monoize.db");
-    let unknown_fields_policy = match unknown_fields {
-        "reject" => monoize::config::UnknownFieldPolicy::Reject,
-        "ignore" => monoize::config::UnknownFieldPolicy::Ignore,
-        _ => monoize::config::UnknownFieldPolicy::Preserve,
-    };
     let state = monoize::app::load_state_with_runtime(monoize::app::RuntimeConfig {
         listen: "127.0.0.1:0".to_string(),
         metrics_path: "/metrics".to_string(),
-        unknown_fields: unknown_fields_policy,
         database_dsn: format!("sqlite://{}", db_path.display()),
     })
     .await
@@ -1170,6 +1238,7 @@ async fn setup_with_unknown_fields(unknown_fields: &str) -> TestContext {
             None,
             Some("1000000000"),
             Some(true),
+            None,
         )
         .await
         .expect("update user balance");
@@ -1249,7 +1318,7 @@ async fn setup_with_unknown_fields(unknown_fields: &str) -> TestContext {
 }
 
 async fn setup() -> TestContext {
-    setup_with_unknown_fields("preserve").await
+    setup_with_unknown_fields().await
 }
 
 async fn json_post(ctx: &TestContext, path: &str, body: Value) -> (StatusCode, String) {
@@ -1439,18 +1508,6 @@ async fn messages_adapter_nonstream() {
 }
 
 #[tokio::test]
-async fn unknown_fields_rejects_when_configured() {
-    let ctx = setup_with_unknown_fields("reject").await;
-    let (status, _body) = json_post(
-        &ctx,
-        "/v1/responses",
-        json!({"model":"gpt-5-mini","input":"hi","unknown":"x"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
 async fn responses_streaming_emits_sse_events() {
     let ctx = setup().await;
     let req = Request::builder()
@@ -1534,10 +1591,10 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
 
     let mut matched = None;
     for _ in 0..20 {
-        let (logs, _) = ctx
+        let (logs, _, _) = ctx
             .state
             .user_store
-            .list_request_logs_by_user(&user.id, 100, 0, None, None, None, None)
+            .list_request_logs_by_user(&user.id, 100, 0, None, None, None, None, None, None)
             .await
             .expect("list request logs");
         matched = logs.into_iter().find(|log| {
@@ -1562,6 +1619,71 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
 }
 
 #[tokio::test]
+async fn chat_streaming_requests_upstream_include_usage_by_default() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream-log-include-usage"}],
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let _ = resp.into_body().collect().await.unwrap().to_bytes();
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    let mut matched = None;
+    for _ in 0..20 {
+        let (logs, _, _) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(
+                &user.id,
+                100,
+                0,
+                Some("gpt-5-mini-chat"),
+                Some("success"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("list request logs");
+        matched = logs.into_iter().find(|log| {
+            log.model == "gpt-5-mini-chat"
+                && log.is_stream
+                && log.prompt_tokens == Some(12)
+                && log.completion_tokens == Some(8)
+                && log.charge_nano_usd.as_deref() == Some("20000")
+        });
+        if matched.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let log = matched.expect("stream log should include usage without explicit emit_usage");
+    assert!(log.ttfb_ms.is_some());
+}
+
+#[tokio::test]
 async fn request_logs_pending_transitions_to_success_and_charges_once() {
     let ctx = setup().await;
 
@@ -1583,6 +1705,7 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
             None,
             Some("1000000000"),
             Some(false),
+            None,
         )
         .await
         .expect("set finite balance");
@@ -1622,7 +1745,7 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
 
     let mut saw_pending = false;
     for _ in 0..20 {
-        let (logs, _) = ctx
+        let (logs, _, _) = ctx
             .state
             .user_store
             .list_request_logs_by_user(
@@ -1630,7 +1753,9 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
                 100,
                 0,
                 Some("gpt-5-mini-chat"),
-                Some("pending"),
+                Some("success"),
+                None,
+                None,
                 None,
                 None,
             )
@@ -1651,10 +1776,10 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
 
     let mut model_logs = Vec::new();
     for _ in 0..30 {
-        let (logs, _) = ctx
+        let (logs, _, _) = ctx
             .state
             .user_store
-            .list_request_logs_by_user(&user.id, 100, 0, None, None, None, None)
+            .list_request_logs_by_user(&user.id, 100, 0, None, None, None, None, None, None)
             .await
             .expect("list request logs");
         model_logs = logs
@@ -1695,6 +1820,68 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
 }
 
 #[tokio::test]
+async fn request_logs_pending_usage_can_be_updated_incrementally() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+    let request_id = "pending-usage-update-test";
+
+    ctx.state
+        .user_store
+        .insert_request_log_pending(request_id, &user.id, None, "gpt-5-mini-chat", true, None)
+        .await
+        .expect("insert pending request log");
+
+    ctx.state
+        .user_store
+        .update_pending_request_log_usage(
+            &user.id,
+            request_id,
+            12,
+            8,
+            Some(0),
+            Some(0),
+            Some(json!({
+                "input": { "total_tokens": 12 },
+                "output": { "total_tokens": 8 }
+            })),
+        )
+        .await
+        .expect("update pending usage");
+
+    let (logs, _, _) = ctx
+        .state
+        .user_store
+        .list_request_logs_by_user(
+            &user.id,
+            100,
+            0,
+            Some("gpt-5-mini-chat"),
+            Some("pending"),
+            None,
+            Some(request_id),
+            None,
+            None,
+        )
+        .await
+        .expect("list pending logs");
+
+    let log = logs
+        .into_iter()
+        .find(|row| row.request_id.as_deref() == Some(request_id))
+        .expect("pending row should exist");
+    assert_eq!(log.status, "pending");
+    assert_eq!(log.prompt_tokens, Some(12));
+    assert_eq!(log.completion_tokens, Some(8));
+    assert!(log.usage_breakdown_json.is_some());
+}
+
+#[tokio::test]
 async fn chat_upstream_error_is_logged_and_not_billed() {
     let ctx = setup().await;
 
@@ -1729,7 +1916,7 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
 
     let mut matched = None;
     for _ in 0..20 {
-        let (logs, _) = ctx
+        let (logs, _, _) = ctx
             .state
             .user_store
             .list_request_logs_by_user(
@@ -1738,6 +1925,8 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
                 0,
                 Some("gpt-5-mini-chat"),
                 Some("error"),
+                None,
+                None,
                 None,
                 None,
             )
@@ -1770,6 +1959,92 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
         .expect("query user after")
         .expect("user exists");
     assert_eq!(user_before.balance_nano_usd, user_after.balance_nano_usd);
+}
+
+#[tokio::test]
+async fn channel_passive_override_threshold_takes_precedence_over_global_defaults() {
+    let ctx = setup().await;
+
+    let providers = ctx
+        .state
+        .monoize_store
+        .list_providers()
+        .await
+        .expect("list providers");
+    let base_url = providers
+        .iter()
+        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .expect("at least one existing channel base url");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "override-threshold-model".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    let created = ctx
+        .state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "override-threshold-provider".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
+            models,
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("override-threshold-ch".to_string()),
+                name: "override-threshold-ch".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: Some(1),
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-10),
+        })
+        .await
+        .expect("create provider with channel override");
+    let channel_id = created.channels[0].id.clone();
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model":"override-threshold-model",
+            "messages":[{"role":"user","content":"trigger retryable failure"}],
+            "force_upstream_error_status": 500,
+            "force_upstream_error_code": "forced_500"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+
+    let health = ctx.state.channel_health.lock().await;
+    let state = health
+        .get(&channel_id)
+        .cloned()
+        .expect("channel health state exists");
+    assert!(
+        !state.healthy,
+        "channel should become unhealthy after one transient failure when override threshold=1"
+    );
+    assert_eq!(
+        state.failure_count, 1,
+        "consecutive failure count should be tracked per channel"
+    );
 }
 
 #[tokio::test]
@@ -1806,7 +2081,7 @@ async fn chat_streaming_length_finish_is_still_billed() {
 
     let mut matched = None;
     for _ in 0..20 {
-        let (logs, _) = ctx
+        let (logs, _, _) = ctx
             .state
             .user_store
             .list_request_logs_by_user(
@@ -1815,6 +2090,8 @@ async fn chat_streaming_length_finish_is_still_billed() {
                 0,
                 Some("gpt-5-mini-chat"),
                 Some("success"),
+                None,
+                None,
                 None,
                 None,
             )
@@ -2276,6 +2553,145 @@ async fn chat_streaming_maps_tool_calls_and_reasoning_from_responses_upstream() 
 }
 
 #[tokio::test]
+async fn chat_streaming_maps_tool_calls_from_responses_completed_fallback() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true,
+                "stream_mode": "completed_only_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(text.contains("\"tool_calls\""));
+    assert!(text.contains("\"finish_reason\":\"tool_calls\""));
+    assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn chat_streaming_keeps_chat_upstream_terminal_tool_calls_reason() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut finish_reasons: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if let Some(reason) = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|v| v.as_str())
+        {
+            if !reason.is_empty() {
+                finish_reasons.push(reason.to_string());
+            }
+        }
+    }
+
+    assert_eq!(
+        finish_reasons,
+        vec!["tool_calls".to_string()],
+        "chat upstream terminal finish reasons should be preserved without synthetic stop: {text}"
+    );
+    assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn chat_streaming_normalizes_chat_upstream_stop_to_tool_calls_when_tools_emitted() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true,
+                "force_finish_reason": "stop"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut finish_reasons: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if let Some(reason) = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|v| v.as_str())
+        {
+            if !reason.is_empty() {
+                finish_reasons.push(reason.to_string());
+            }
+        }
+    }
+
+    assert_eq!(
+        finish_reasons,
+        vec!["tool_calls".to_string()],
+        "finish_reason should normalize to tool_calls when tool deltas were emitted: {text}"
+    );
+    assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
 async fn chat_streaming_maps_text_from_responses_output_item_done() {
     let ctx = setup().await;
     let req = Request::builder()
@@ -2299,6 +2715,57 @@ async fn chat_streaming_maps_text_from_responses_output_item_done() {
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(text.contains("\"content\""));
     assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn chat_streaming_from_responses_includes_terminal_usage() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream usage"}],
+                "stream": true,
+                "emit_usage": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut terminal_with_usage: Option<Value> = None;
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let is_terminal = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|v| v.as_str())
+            .is_some();
+        if is_terminal && v.get("usage").is_some() {
+            terminal_with_usage = Some(v);
+        }
+    }
+
+    let terminal = terminal_with_usage.expect("terminal chat chunk should include usage");
+    assert_eq!(terminal["usage"]["prompt_tokens"].as_u64(), Some(12));
+    assert_eq!(terminal["usage"]["completion_tokens"].as_u64(), Some(8));
 }
 
 #[tokio::test]
@@ -2389,6 +2856,28 @@ async fn messages_streaming_emits_message_delta_before_stop_for_responses_upstre
         delta_pos < stop_pos,
         "message_delta must appear before message_stop: {text}"
     );
+}
+
+#[tokio::test]
+async fn messages_streaming_from_responses_includes_message_delta_usage() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model":"gpt-5-mini",
+            "messages":[{"role":"user","content":[{"type":"text","text":"stream usage"}]}],
+            "stream": true,
+            "emit_usage": true
+        }),
+    )
+    .await;
+
+    let msg_delta = events
+        .iter()
+        .find(|e| e["type"].as_str() == Some("message_delta"))
+        .expect("message_delta");
+    assert_eq!(msg_delta["usage"]["input_tokens"].as_u64(), Some(12));
+    assert_eq!(msg_delta["usage"]["output_tokens"].as_u64(), Some(8));
 }
 
 #[tokio::test]
@@ -2529,6 +3018,12 @@ async fn responses_streaming_applies_response_transform_from_provider() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
+            passive_failure_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_min_samples_override: None,
+            passive_failure_rate_threshold_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
         }],
         max_retries: -1,
         transforms: vec![monoize::transforms::TransformRuleConfig {
@@ -2542,6 +3037,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         active_probe_interval_seconds_override: None,
         active_probe_success_threshold_override: None,
         active_probe_model_override: None,
+        request_timeout_ms_override: None,
         enabled: true,
         priority: Some(-1),
     };
@@ -3102,6 +3598,50 @@ async fn messages_stream_tool_use_from_responses_upstream() {
 }
 
 #[tokio::test]
+async fn messages_stream_tool_use_from_responses_completed_fallback() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "tool stream" }] }],
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }],
+            "stream": true,
+            "stream_mode": "completed_only_tool"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "resp→msg completed fallback");
+
+    let tool_start = events.iter().find(|e| {
+        e["type"].as_str() == Some("content_block_start")
+            && e["content_block"]["type"].as_str() == Some("tool_use")
+    });
+    assert!(
+        tool_start.is_some(),
+        "expected tool_use content_block_start from completed fallback"
+    );
+    let has_input_json = events
+        .iter()
+        .any(|e| e.get("delta").and_then(|d| d["type"].as_str()) == Some("input_json_delta"));
+    assert!(
+        has_input_json,
+        "expected input_json_delta from completed fallback"
+    );
+    let msg_delta = events
+        .iter()
+        .find(|e| e["type"].as_str() == Some("message_delta"))
+        .expect("message_delta");
+    assert_eq!(
+        msg_delta["delta"]["stop_reason"].as_str(),
+        Some("tool_use"),
+        "stop_reason must be tool_use"
+    );
+}
+
+#[tokio::test]
 async fn messages_stream_parallel_tool_use_from_chat_upstream() {
     let ctx = setup().await;
     let events = collect_messages_stream_events(
@@ -3201,4 +3741,119 @@ async fn messages_tool_choice_tool_normalizes_for_chat_upstream() {
             .iter()
             .any(|b| b.get("type").and_then(|x| x.as_str()) == Some("tool_use"))
     );
+}
+
+#[tokio::test]
+async fn models_list_respects_api_key_model_limits() {
+    let ctx = setup().await;
+
+    let (status, body) = json_get(&ctx, "/v1/models").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let all_ids: Vec<String> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(all_ids.len() > 2, "should have multiple models");
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let (_, restricted_token) = ctx
+        .state
+        .user_store
+        .create_api_key_extended(
+            &user.id,
+            monoize::users::CreateApiKeyInput {
+                name: "restricted-key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: true,
+                model_limits: vec!["gpt-5-mini".to_string(), "grok-4".to_string()],
+                ip_whitelist: Vec::new(),
+                group: "default".to_string(),
+                max_multiplier: None,
+                transforms: Vec::new(),
+            },
+        )
+        .await
+        .expect("create restricted api key");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/models")
+        .header(AUTHORIZATION, format!("Bearer {restricted_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    let restricted_ids: Vec<String> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+
+    assert_eq!(restricted_ids, vec!["gpt-5-mini", "grok-4"]);
+}
+
+#[tokio::test]
+async fn models_list_model_limits_disabled_shows_all() {
+    let ctx = setup().await;
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let (_, token) = ctx
+        .state
+        .user_store
+        .create_api_key_extended(
+            &user.id,
+            monoize::users::CreateApiKeyInput {
+                name: "disabled-limits-key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: false,
+                model_limits: vec!["gpt-5-mini".to_string()],
+                ip_whitelist: Vec::new(),
+                group: "default".to_string(),
+                max_multiplier: None,
+                transforms: Vec::new(),
+            },
+        )
+        .await
+        .expect("create api key with disabled limits");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/models")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    let ids: Vec<String> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+
+    assert!(ids.len() > 1, "should return all models when limits disabled");
 }
