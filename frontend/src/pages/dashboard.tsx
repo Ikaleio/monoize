@@ -11,13 +11,12 @@ import {
 } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
-import { type Provider, type RequestLog } from "@/lib/api";
-import { useProviders, usePublicSettings, useRequestLogs, useStats } from "@/lib/swr";
+import { type DashboardAnalyticsBucket } from "@/lib/api";
+import { useDashboardAnalytics, useProviders, usePublicSettings, useRequestLogs, useStats } from "@/lib/swr";
 import { cn } from "@/lib/utils";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { toast } from "sonner";
 
-type DashboardProvider = Pick<Provider, "id" | "name" | "provider_type" | "models" | "channels">;
 type AnalysisTabId = "spendDistribution" | "callDistribution" | "callRank";
 
 interface MetricRow {
@@ -30,13 +29,6 @@ interface OverviewCardData {
   key: string;
   title: string;
   metrics: MetricRow[];
-}
-
-interface ParsedLog {
-  ts: number;
-  providerLabel: string;
-  modelId: string;
-  chargeUsd: number;
 }
 
 interface StackedBucketRow {
@@ -68,25 +60,11 @@ function formatMoney(value: string | number | undefined): string {
   return `$${parsed.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function parseTimestamp(value: string | undefined): number | null {
-  if (!value) return null;
-  const ts = Date.parse(value);
-  return Number.isFinite(ts) ? ts : null;
-}
-
-function nanoUsdToUsd(nanoUsd: string | undefined): number {
-  if (!nanoUsd) return 0;
+function nanoUsdToUsd(nanoUsd: number | string | undefined): number {
+  if (nanoUsd == null) return 0;
   const parsed = Number(nanoUsd);
   if (!Number.isFinite(parsed)) return 0;
   return parsed / 1e9;
-}
-
-function formatTimeBucketLabel(ms: number): string {
-  const d = new Date(ms);
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const hour = String(d.getHours()).padStart(2, "0");
-  return `${month}-${day} ${hour}:00`;
 }
 
 /**
@@ -235,91 +213,28 @@ export function DashboardPage() {
 
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
   const { data: stats, isLoading: statsLoading } = useStats();
-  const { data: providerRows, isLoading: providersLoading } = useProviders({
+  const { isLoading: providersLoading } = useProviders({
     isPaused: () => !isAdmin,
     revalidateOnMount: isAdmin,
   });
   const { data: requestLogsResponse, isLoading: logsLoading } = useRequestLogs(400, 0);
+  const { data: analytics, isLoading: analyticsLoading } = useDashboardAnalytics();
   const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
-
-  const providers = useMemo<DashboardProvider[]>(
-    () =>
-      (providerRows ?? []).map((provider) => ({
-        id: provider.id,
-        name: provider.name,
-        provider_type: provider.provider_type,
-        models: provider.models,
-        channels: provider.channels,
-      })),
-    [providerRows]
-  );
-
-  const providerNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const provider of providers) {
-      const id = provider.id?.trim();
-      const name = provider.name?.trim();
-      if (!id || !name) continue;
-      if (!map.has(id)) {
-        map.set(id, name);
-      }
-    }
-    return map;
-  }, [providers]);
 
   const rawLogs = requestLogsResponse?.data ?? [];
   const totalRequests = requestLogsResponse?.total ?? 0;
 
-  const parsedLogs = useMemo<ParsedLog[]>(() => {
-    return rawLogs
-      .map((log: RequestLog) => {
-        const ts = parseTimestamp(log.created_at);
-        if (ts == null) return null;
-        const providerId = log.provider_id?.trim() || "unknown";
-        const providerName = providerNameById.get(providerId);
-        return {
-          ts,
-          providerLabel: providerName || providerId,
-          modelId: log.model?.trim() || "unknown",
-          chargeUsd: nanoUsdToUsd(log.charge_nano_usd),
-        };
-      })
-      .filter((row): row is ParsedLog => row !== null);
-  }, [providerNameById, rawLogs]);
-
-  const todayStart = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  }, []);
-
-  const logDerivedStats = useMemo(() => {
-    let todayRequests = 0;
-    let totalSpend = 0;
-    let todaySpend = 0;
+  const perfStats = useMemo(() => {
     let successCount = 0;
     let durationSum = 0;
     let durationCount = 0;
-    let tokenSum = 0;
 
     for (const log of rawLogs) {
-      const ts = parseTimestamp(log.created_at);
-      const charge = nanoUsdToUsd(log.charge_nano_usd);
-      totalSpend += charge;
-
-      if (ts != null && ts >= todayStart) {
-        todayRequests++;
-        todaySpend += charge;
-      }
-
       if (log.status === "success") successCount++;
-
       if (log.duration_ms != null && log.duration_ms > 0) {
         durationSum += log.duration_ms;
         durationCount++;
       }
-
-      tokenSum += (log.prompt_tokens ?? 0) + (log.completion_tokens ?? 0);
     }
 
     const successRate = rawLogs.length > 0
@@ -329,10 +244,14 @@ export function DashboardPage() {
       ? Math.round(durationSum / durationCount)
       : 0;
 
-    return { todayRequests, totalSpend, todaySpend, successRate, avgLatency, tokenSum };
-  }, [rawLogs, todayStart]);
+    return { successRate, avgLatency };
+  }, [rawLogs]);
 
-  const loading = statsLoading || logsLoading || publicSettingsLoading || (isAdmin && providersLoading);
+  const loading = statsLoading
+    || logsLoading
+    || analyticsLoading
+    || publicSettingsLoading
+    || (isAdmin && providersLoading);
 
   const tt = useCallback(
     (key: string, fallback: string, options?: Record<string, unknown>): string => {
@@ -367,12 +286,12 @@ export function DashboardPage() {
           {
             key: "totalRequests",
             label: tt("dashboard.cards.totalRequests", "Total Requests"),
-            value: formatNumber(totalRequests),
+            value: formatNumber(analytics?.total_calls ?? totalRequests),
           },
           {
             key: "todayRequests",
             label: tt("dashboard.cards.todayRequests", "Today's Requests"),
-            value: formatNumber(logDerivedStats.todayRequests),
+            value: formatNumber(analytics?.today_calls ?? 0),
           },
         ],
       },
@@ -383,12 +302,12 @@ export function DashboardPage() {
           {
             key: "totalSpend",
             label: tt("dashboard.cards.totalSpend", "Total Spend"),
-            value: formatMoney(logDerivedStats.totalSpend),
+            value: formatMoney(nanoUsdToUsd(analytics?.total_cost_nano_usd)),
           },
           {
             key: "todaySpend",
             label: tt("dashboard.cards.todaySpend", "Today's Spend"),
-            value: formatMoney(logDerivedStats.todaySpend),
+            value: formatMoney(nanoUsdToUsd(analytics?.today_cost_nano_usd)),
           },
         ],
       },
@@ -399,18 +318,19 @@ export function DashboardPage() {
           {
             key: "avgLatency",
             label: tt("dashboard.cards.avgLatency", "Average Latency"),
-            value: `${formatNumber(logDerivedStats.avgLatency)} ms`,
+            value: `${formatNumber(perfStats.avgLatency)} ms`,
           },
           {
             key: "successRate",
             label: tt("dashboard.cards.successRate", "Success Rate"),
-            value: `${logDerivedStats.successRate}%`,
+            value: `${perfStats.successRate}%`,
           },
         ],
       },
     ],
     [
-      logDerivedStats,
+      analytics,
+      perfStats,
       totalRequests,
       stats?.my_api_keys_count,
       user?.balance_usd,
@@ -430,53 +350,41 @@ export function DashboardPage() {
           : tt("dashboard.value", "Value"),
     };
 
-    if (parsedLogs.length === 0) return base;
+    if (!analytics?.buckets?.length) return base;
 
-    const bucketCount = 8;
-    const maxTs = Math.max(...parsedLogs.map((l) => l.ts));
-    const endMs = Math.max(Date.now(), maxTs);
-    const rangeMs = 24 * 60 * 60 * 1000;
-    const startMs = endMs - rangeMs;
-    const bucketWidth = rangeMs / bucketCount;
-
-    const getValue = (log: ParsedLog): number => {
-      if (activeTab === "spendDistribution") return log.chargeUsd;
-      return 1;
-    };
-
-    const getGroupKey = (log: ParsedLog): string => {
-      if (activeTab === "callRank") return log.providerLabel;
-      return log.modelId;
+    const getBucketMap = (bucket: DashboardAnalyticsBucket): Record<string, number> => {
+      if (activeTab === "spendDistribution") return bucket.cost_by_model;
+      if (activeTab === "callDistribution") return bucket.calls_by_model;
+      return bucket.calls_by_provider;
     };
 
     const modelTotals = new Map<string, number>();
-    const bucketData: Array<Map<string, number>> = Array.from({ length: bucketCount }, () => new Map());
-
-    for (const log of parsedLogs) {
-      if (log.ts < startMs || log.ts > endMs) continue;
-      const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor((log.ts - startMs) / bucketWidth)));
-      const key = getGroupKey(log);
-      const val = getValue(log);
-      bucketData[idx].set(key, (bucketData[idx].get(key) ?? 0) + val);
-      modelTotals.set(key, (modelTotals.get(key) ?? 0) + val);
+    for (const bucket of analytics.buckets) {
+      const map = getBucketMap(bucket);
+      for (const [key, val] of Object.entries(map)) {
+        modelTotals.set(key, (modelTotals.get(key) ?? 0) + val);
+      }
     }
 
     const models = [...modelTotals.entries()]
+      .filter(([, v]) => v > 0)
       .sort((a, b) => b[1] - a[1])
       .map(([k]) => k);
 
-    const rows: StackedBucketRow[] = bucketData.map((bucket, i) => {
-      const row: StackedBucketRow = { label: formatTimeBucketLabel(startMs + i * bucketWidth) };
+    const rows: StackedBucketRow[] = analytics.buckets.map((bucket) => {
+      const row: StackedBucketRow = { label: bucket.label };
+      const map = getBucketMap(bucket);
       for (const model of models) {
-        const raw = bucket.get(model) ?? 0;
-        row[model] = base.valueType === "money" ? Number(raw.toFixed(4)) : raw;
+        const raw = map[model] ?? 0;
+        row[model] = base.valueType === "money" ? Number((raw / 1e9).toFixed(4)) : raw;
       }
       return row;
     });
 
     const total = [...modelTotals.values()].reduce((s, v) => s + v, 0);
-    return { ...base, rows, models, total };
-  }, [activeTab, parsedLogs, tt]);
+    const displayTotal = base.valueType === "money" ? total / 1e9 : total;
+    return { ...base, rows, models, total: displayTotal };
+  }, [activeTab, analytics, tt]);
 
   const analysisTotalDisplay =
     analysisData.valueType === "money"
