@@ -152,7 +152,7 @@ const DialogContent = React.forwardRef<
                   y: 4,
                   transition: { duration: 0.16, ease: easings.easeInOutQuart },
                 }}
-                className="grid gap-4"
+                className="grid gap-4 min-h-0 overflow-hidden"
               >
                 {children}
               </motion.div>
