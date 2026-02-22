@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Pool, QueryBuilder, Row, Sqlite};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -203,6 +205,10 @@ pub struct UpdateApiKeyInput {
 #[derive(Clone)]
 pub struct UserStore {
     pool: Pool<Sqlite>,
+    /// Serializes balance-mutating transactions to prevent SQLite lock-escalation
+    /// deadlocks (DEFERRED → SHARED → EXCLUSIVE promotion fails when another
+    /// connection already holds a SHARED lock on the same WAL page).
+    billing_mutex: Arc<Mutex<()>>,
 }
 
 const RESERVED_INTERNAL_USER_PREFIX: &str = "_monoize_";
@@ -507,7 +513,10 @@ impl UserStore {
                 .ok();
         }
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            billing_mutex: Arc::new(Mutex::new(())),
+        })
     }
 
     pub fn hash_password(password: &str) -> Result<String, String> {
@@ -1250,6 +1259,47 @@ impl UserStore {
         if amount_nano_usd <= 0 {
             return Ok(());
         }
+
+        // Mutex serializes billing transactions against each other, but
+        // SQLITE_BUSY can still occur from concurrent non-billing writes
+        // (e.g. request_log inserts) sharing the same pool.  Retry on
+        // transient database-locked errors so charges are never silently
+        // dropped.
+        const MAX_ATTEMPTS: u32 = 5;
+        let mut last_err = None;
+        for attempt in 1..=MAX_ATTEMPTS {
+            let _guard = self.billing_mutex.lock().await;
+            match self
+                .charge_user_balance_nano_inner(user_id, amount_nano_usd, meta)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(err) => match err.kind {
+                    BillingErrorKind::Internal => {
+                        tracing::warn!(
+                            "charge_user_balance_nano transient error (attempt {attempt}/{MAX_ATTEMPTS}): {}",
+                            err.message
+                        );
+                        last_err = Some(err);
+                        drop(_guard);
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            100 * u64::from(attempt),
+                        ))
+                        .await;
+                    }
+                    _ => return Err(err),
+                },
+            }
+        }
+        Err(last_err.unwrap())
+    }
+
+    async fn charge_user_balance_nano_inner(
+        &self,
+        user_id: &str,
+        amount_nano_usd: i128,
+        meta: &Value,
+    ) -> Result<(), BillingError> {
         let mut tx = self
             .pool
             .begin()
@@ -1326,6 +1376,7 @@ impl UserStore {
             return Ok(());
         }
 
+        let _guard = self.billing_mutex.lock().await;
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         let row = sqlx::query("SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = ?")
             .bind(user_id)
@@ -1503,6 +1554,8 @@ fn append_request_log_filters(
     api_key_id: Option<&str>,
     username: Option<&str>,
     search: Option<&str>,
+    time_from: Option<&str>,
+    time_to: Option<&str>,
 ) {
     if let Some(model) = model {
         let models: Vec<&str> = model
@@ -1552,6 +1605,36 @@ fn append_request_log_filters(
         query.push_bind(search_like);
         query.push(")");
     }
+    if let Some(time_from) = time_from {
+        query.push(" AND rl.created_at >= ");
+        query.push_bind(time_from.to_string());
+    }
+    if let Some(time_to) = time_to {
+        query.push(" AND rl.created_at < ");
+        query.push_bind(time_to.to_string());
+    }
+}
+
+pub struct AnalyticsModelBucketRow {
+    pub bucket_idx: i64,
+    pub model: String,
+    pub cost_nano: i64,
+    pub call_count: i64,
+}
+
+pub struct AnalyticsProviderBucketRow {
+    pub bucket_idx: i64,
+    pub provider_label: String,
+    pub call_count: i64,
+}
+
+pub struct DashboardAnalyticsRaw {
+    pub model_buckets: Vec<AnalyticsModelBucketRow>,
+    pub provider_buckets: Vec<AnalyticsProviderBucketRow>,
+    pub total_cost_nano_usd: i64,
+    pub total_calls: i64,
+    pub today_cost_nano_usd: i64,
+    pub today_calls: i64,
 }
 
 impl UserStore {
@@ -1603,6 +1686,61 @@ impl UserStore {
             request_kind: None,
         })
         .await
+    }
+
+    pub async fn update_pending_request_log_channel(
+        &self,
+        user_id: &str,
+        request_id: &str,
+        provider_id: &str,
+        channel_id: &str,
+        upstream_model: &str,
+        provider_multiplier: f64,
+    ) -> Result<(), String> {
+        sqlx::query(
+            r#"UPDATE request_logs
+               SET provider_id = ?, channel_id = ?, upstream_model = ?, provider_multiplier = ?
+               WHERE user_id = ? AND request_id = ? AND status = 'pending' AND request_kind IS NULL"#,
+        )
+        .bind(provider_id)
+        .bind(channel_id)
+        .bind(upstream_model)
+        .bind(provider_multiplier)
+        .bind(user_id)
+        .bind(request_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn update_pending_request_log_usage(
+        &self,
+        user_id: &str,
+        request_id: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
+        usage_breakdown_json: Option<Value>,
+    ) -> Result<(), String> {
+        sqlx::query(
+            r#"UPDATE request_logs
+               SET prompt_tokens = ?, completion_tokens = ?, cached_tokens = ?, reasoning_tokens = ?,
+                   usage_breakdown_json = ?
+               WHERE user_id = ? AND request_id = ? AND status = 'pending' AND request_kind IS NULL"#,
+        )
+        .bind(prompt_tokens as i64)
+        .bind(completion_tokens as i64)
+        .bind(cached_tokens.map(|v| v as i64))
+        .bind(reasoning_tokens.map(|v| v as i64))
+        .bind(usage_breakdown_json.map(|v| v.to_string()))
+        .bind(user_id)
+        .bind(request_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub async fn finalize_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
@@ -1715,7 +1853,9 @@ impl UserStore {
         status: Option<&str>,
         api_key_id: Option<&str>,
         search: Option<&str>,
-    ) -> Result<(Vec<RequestLogRow>, i64), String> {
+        time_from: Option<&str>,
+        time_to: Option<&str>,
+    ) -> Result<(Vec<RequestLogRow>, i64, String), String> {
         let model = normalize_request_log_filter(model);
         let status = normalize_request_log_filter(status);
         let api_key_id = normalize_request_log_filter(api_key_id);
@@ -1731,12 +1871,35 @@ impl UserStore {
             api_key_id.as_deref(),
             None,
             search.as_deref(),
+            time_from,
+            time_to,
         );
         let total: i64 = count_query
             .build_query_scalar()
             .fetch_one(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
+
+        let mut sum_query = QueryBuilder::<Sqlite>::new(
+            "SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) FROM request_logs rl WHERE rl.user_id = ",
+        );
+        sum_query.push_bind(user_id);
+        append_request_log_filters(
+            &mut sum_query,
+            model.as_deref(),
+            status.as_deref(),
+            api_key_id.as_deref(),
+            None,
+            search.as_deref(),
+            time_from,
+            time_to,
+        );
+        let total_charge: i64 = sum_query
+            .build_query_scalar()
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        let total_charge_nano_usd = total_charge.to_string();
 
         let mut rows_query = QueryBuilder::<Sqlite>::new(
             r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
@@ -1763,6 +1926,8 @@ impl UserStore {
             api_key_id.as_deref(),
             None,
             search.as_deref(),
+            time_from,
+            time_to,
         );
         rows_query.push(" ORDER BY rl.created_at DESC LIMIT ");
         rows_query.push_bind(limit);
@@ -1826,7 +1991,7 @@ impl UserStore {
             })
             .collect();
 
-        Ok((logs, total))
+        Ok((logs, total, total_charge_nano_usd))
     }
 
     pub async fn list_all_request_logs(
@@ -1838,7 +2003,9 @@ impl UserStore {
         api_key_id: Option<&str>,
         username: Option<&str>,
         search: Option<&str>,
-    ) -> Result<(Vec<RequestLogRow>, i64), String> {
+        time_from: Option<&str>,
+        time_to: Option<&str>,
+    ) -> Result<(Vec<RequestLogRow>, i64, String), String> {
         let model = normalize_request_log_filter(model);
         let status = normalize_request_log_filter(status);
         let api_key_id = normalize_request_log_filter(api_key_id);
@@ -1857,12 +2024,36 @@ impl UserStore {
             api_key_id.as_deref(),
             username.as_deref(),
             search.as_deref(),
+            time_from,
+            time_to,
         );
         let total: i64 = count_query
             .build_query_scalar()
             .fetch_one(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
+
+        let mut sum_query = QueryBuilder::<Sqlite>::new(
+            r#"SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) FROM request_logs rl
+               LEFT JOIN users u ON rl.user_id = u.id
+               WHERE 1 = 1"#,
+        );
+        append_request_log_filters(
+            &mut sum_query,
+            model.as_deref(),
+            status.as_deref(),
+            api_key_id.as_deref(),
+            username.as_deref(),
+            search.as_deref(),
+            time_from,
+            time_to,
+        );
+        let total_charge: i64 = sum_query
+            .build_query_scalar()
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        let total_charge_nano_usd = total_charge.to_string();
 
         let mut rows_query = QueryBuilder::<Sqlite>::new(
             r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
@@ -1888,6 +2079,8 @@ impl UserStore {
             api_key_id.as_deref(),
             username.as_deref(),
             search.as_deref(),
+            time_from,
+            time_to,
         );
         rows_query.push(" ORDER BY rl.created_at DESC LIMIT ");
         rows_query.push_bind(limit);
@@ -1951,7 +2144,161 @@ impl UserStore {
             })
             .collect();
 
-        Ok((logs, total))
+        Ok((logs, total, total_charge_nano_usd))
+    }
+
+    pub async fn get_dashboard_analytics(
+        &self,
+        user_id: Option<&str>,
+        time_from: &str,
+        time_to: &str,
+        today_start: &str,
+        bucket_count: i64,
+        bucket_width_days: f64,
+    ) -> Result<DashboardAnalyticsRaw, String> {
+        // 1. Model bucketed aggregation (cost + calls)
+        let mut model_q = QueryBuilder::<Sqlite>::new(
+            r#"SELECT
+                 CAST((julianday(rl.created_at) - julianday("#,
+        );
+        model_q.push_bind(time_from.to_string());
+        model_q.push(")) / ");
+        model_q.push_bind(bucket_width_days);
+        model_q.push(
+            r#" AS INTEGER) AS bucket_idx,
+                 rl.model,
+                 COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS cost_nano,
+                 COUNT(*) AS call_count
+               FROM request_logs rl
+               WHERE rl.created_at >= "#,
+        );
+        model_q.push_bind(time_from.to_string());
+        model_q.push(" AND rl.created_at < ");
+        model_q.push_bind(time_to.to_string());
+        if let Some(uid) = user_id {
+            model_q.push(" AND rl.user_id = ");
+            model_q.push_bind(uid.to_string());
+        }
+        model_q.push(" GROUP BY bucket_idx, rl.model");
+
+        let model_rows = model_q
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let model_buckets: Vec<AnalyticsModelBucketRow> = model_rows
+            .into_iter()
+            .map(|row| {
+                let idx: i64 = row.try_get("bucket_idx").unwrap_or(0);
+                AnalyticsModelBucketRow {
+                    bucket_idx: idx.clamp(0, bucket_count - 1),
+                    model: row.try_get("model").unwrap_or_default(),
+                    cost_nano: row.try_get("cost_nano").unwrap_or(0),
+                    call_count: row.try_get("call_count").unwrap_or(0),
+                }
+            })
+            .collect();
+
+        // 2. Provider bucketed aggregation (calls only)
+        let mut prov_q = QueryBuilder::<Sqlite>::new(
+            r#"SELECT
+                 CAST((julianday(rl.created_at) - julianday("#,
+        );
+        prov_q.push_bind(time_from.to_string());
+        prov_q.push(")) / ");
+        prov_q.push_bind(bucket_width_days);
+        prov_q.push(
+            r#" AS INTEGER) AS bucket_idx,
+                 COALESCE(mp.name, rl.provider_id, 'unknown') AS provider_label,
+                 COUNT(*) AS call_count
+               FROM request_logs rl
+               LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
+               WHERE rl.created_at >= "#,
+        );
+        prov_q.push_bind(time_from.to_string());
+        prov_q.push(" AND rl.created_at < ");
+        prov_q.push_bind(time_to.to_string());
+        if let Some(uid) = user_id {
+            prov_q.push(" AND rl.user_id = ");
+            prov_q.push_bind(uid.to_string());
+        }
+        prov_q.push(" GROUP BY bucket_idx, provider_label");
+
+        let prov_rows = prov_q
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let provider_buckets: Vec<AnalyticsProviderBucketRow> = prov_rows
+            .into_iter()
+            .map(|row| {
+                let idx: i64 = row.try_get("bucket_idx").unwrap_or(0);
+                AnalyticsProviderBucketRow {
+                    bucket_idx: idx.clamp(0, bucket_count - 1),
+                    provider_label: row.try_get("provider_label").unwrap_or_default(),
+                    call_count: row.try_get("call_count").unwrap_or(0),
+                }
+            })
+            .collect();
+
+        // 3. Total stats for the range
+        let mut total_q = QueryBuilder::<Sqlite>::new(
+            r#"SELECT
+                 COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS total_cost,
+                 COUNT(*) AS total_calls
+               FROM request_logs rl
+               WHERE rl.created_at >= "#,
+        );
+        total_q.push_bind(time_from.to_string());
+        total_q.push(" AND rl.created_at < ");
+        total_q.push_bind(time_to.to_string());
+        if let Some(uid) = user_id {
+            total_q.push(" AND rl.user_id = ");
+            total_q.push_bind(uid.to_string());
+        }
+
+        let total_row = total_q
+            .build()
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let total_cost_nano_usd: i64 = total_row.try_get("total_cost").unwrap_or(0);
+        let total_calls: i64 = total_row.try_get("total_calls").unwrap_or(0);
+
+        // 4. Today stats
+        let mut today_q = QueryBuilder::<Sqlite>::new(
+            r#"SELECT
+                 COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS today_cost,
+                 COUNT(*) AS today_calls
+               FROM request_logs rl
+               WHERE rl.created_at >= "#,
+        );
+        today_q.push_bind(today_start.to_string());
+        if let Some(uid) = user_id {
+            today_q.push(" AND rl.user_id = ");
+            today_q.push_bind(uid.to_string());
+        }
+
+        let today_row = today_q
+            .build()
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let today_cost_nano_usd: i64 = today_row.try_get("today_cost").unwrap_or(0);
+        let today_calls: i64 = today_row.try_get("today_calls").unwrap_or(0);
+
+        Ok(DashboardAnalyticsRaw {
+            model_buckets,
+            provider_buckets,
+            total_cost_nano_usd,
+            total_calls,
+            today_cost_nano_usd,
+            today_calls,
+        })
     }
 }
 
