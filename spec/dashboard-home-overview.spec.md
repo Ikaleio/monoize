@@ -49,6 +49,49 @@ DH-6. Provider-derived metrics shown on dashboard home MUST use `GET /api/dashbo
 
 DH-7. The page MUST NOT throw runtime exceptions when optional config fields are missing from `GET /api/dashboard/settings`.
 
+DH-8. Row C analysis charts MUST be driven by the server-side analytics endpoint `GET /api/dashboard/analytics`.
+
+### Analytics Endpoint Contract
+
+- **Endpoint:** `GET /api/dashboard/analytics`
+- **Authorization:** Any authenticated dashboard user.
+- **Query parameters:**
+  - `buckets: integer` (default 8, clamped to [1, 48])
+  - `range_hours: integer` (default 24, clamped to [1, 720])
+- **Behavior:**
+  - The server computes `time_from = NOW() - range_hours` and `time_to = NOW()`.
+  - For admin users: aggregates across ALL users' request logs.
+  - For non-admin users: aggregates only the requesting user's logs.
+  - Bucket boundaries: `bucket_width = range_hours / buckets`. Each bucket `i` covers `[time_from + i * bucket_width, time_from + (i+1) * bucket_width)`.
+  - Per bucket, the server groups by `model` and by `provider_id`, computing:
+    - `cost_nano_usd: SUM(charge_nano_usd)` — total cost per model per bucket.
+    - `call_count: COUNT(*)` — total calls per model (or provider) per bucket.
+  - Only models/providers with nonzero totals across all buckets are included.
+- **Response:**
+
+```json
+{
+  "buckets": [
+    {
+      "label": "MM-DD HH:00",
+      "cost_by_model": { "model-a": 12345, "model-b": 678 },
+      "calls_by_model": { "model-a": 5, "model-b": 2 },
+      "calls_by_provider": { "provider-x": 4, "provider-y": 3 }
+    }
+  ],
+  "time_from": "ISO 8601 string",
+  "time_to": "ISO 8601 string",
+  "total_cost_nano_usd": 13023,
+  "total_calls": 7,
+  "today_cost_nano_usd": 8000,
+  "today_calls": 4
+}
+```
+
+- `cost_by_model` values are integers in nano-USD.
+- `calls_by_provider` keys use the human-readable provider name (from `monoize_providers.name`) when available, falling back to `provider_id`.
+- Models/providers with zero total cost or zero total calls across ALL buckets MUST be omitted from the response entirely.
+
 ## Motion Contract
 
 DH-9. The page MUST use `framer-motion` for:

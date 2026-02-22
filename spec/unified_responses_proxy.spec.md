@@ -6,7 +6,7 @@
 - **Target implementation language:** Rust (stable).
 - **Primary purpose:** Provide a single forwarding proxy that normalizes API differences between downstream request formats and heterogeneous upstream provider APIs.
 - **Internal protocol:** Monoize defines an internal JSON protocol named **Universal Responses Protocol (URP-Proto)**.
-  - **URP-Proto v0** request and response schemas are identical to the OpenAI **Responses API** create request/response schemas used by this server.
+  - **URP-Proto v0** request and response schemas are derived from the OpenAI **Responses API** create request/response schemas used by this server.
 - **Scope of proxy features:**
   - Monoize MUST NOT execute tools locally.
   - Monoize MUST NOT persist response objects for later retrieval.
@@ -79,17 +79,9 @@ PP3. The preset `xai_grok` MUST use xAI base URL:
 
 ## 3. Unknown fields policy
 
-F1. For URP-based downstream endpoints (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`), Monoize MUST apply a runtime unknown-field policy with values:
+F1. For URP-based downstream endpoints (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`), Monoize MUST preserve unknown request keys under an internal `extra` map and forward them to the upstream request (§7.7).
 
-- `reject`: return `400` if unknown request keys are present.
-- `ignore`: silently drop unknown request keys.
-- `preserve` (default): preserve unknown request keys under an internal `extra` map and forward them to the upstream request (§7.7).
-
-F2. For the URP-based downstream endpoints in F1, if a downstream request contains a **known** key whose value cannot be parsed as the expected type (e.g. a boolean field is a string), Monoize MUST treat that key-value pair as an unknown field for the purposes of §3:
-
-- under `reject`: return `400` with code `unknown_field`;
-- under `ignore`: drop the key-value pair;
-- under `preserve`: move the key-value pair into `extra`.
+F2. Known fields are identified by key name only. No type-checking reclassification is performed. If a known key's value has an unexpected type, the decoder handles it on a best-effort basis (e.g. ignoring unparseable values and leaving them in `extra`).
 
 ## 4. Runtime Parameters
 
@@ -104,12 +96,6 @@ C2. Monoize MUST resolve database DSN by precedence:
 C3. Monoize MUST resolve listen address from `MONOIZE_LISTEN`, default `0.0.0.0:8080`.
 
 C4. Monoize MUST resolve metrics endpoint path from `MONOIZE_METRICS_PATH`, default `/metrics`.
-
-C5. Monoize MUST resolve unknown-field policy from `MONOIZE_UNKNOWN_FIELDS`:
-
-- `reject`: return `400` if unknown request keys are present.
-- `ignore`: drop unknown request keys.
-- `preserve` (default): preserve unknown request keys under internal `extra`.
 
 ## 5. Forwarding pipeline (normative)
 
@@ -202,13 +188,14 @@ RSN3. `signature` MUST contain an opaque provider-supplied string that can be us
 
 ### 7.1.3 Reasoning-control normalization
 
-RC1. Monoize MUST normalize reasoning effort to one of `low`, `medium`, or `high`.
+RC1. Monoize MUST normalize reasoning effort to one of `none`, `minimum`, `low`, `medium`, `high`, or `xhigh`. The value `max` MUST be accepted as an alias for `xhigh` at decode time. When the selected upstream provider type is `messages`, `xhigh` MUST be mapped back to `max` for encoding.
 
 RC2. Monoize MUST accept reasoning effort hints from any of the following downstream fields:
 
 - Chat Completions style: top-level `reasoning_effort`.
 - Responses style: top-level `reasoning.effort`.
-- Messages style: top-level `thinking` object with `type="enabled"` (budget-based mapping is defined in RC4).
+- Messages style (legacy): top-level `thinking` object with `type="enabled"` (budget-based mapping is defined in RC4).
+- Messages style (adaptive): top-level `thinking` object with `type="adaptive"` combined with `output_config.effort` (see RC4).
 
 RC3. If multiple sources in RC2 are present, Monoize MUST use this precedence:
 
@@ -220,10 +207,12 @@ RC4. When the selected upstream provider type is:
 
 - `chat_completion`: Monoize MUST send normalized effort as `reasoning_effort`.
 - `responses`: Monoize MUST send normalized effort as `reasoning: { "effort": <level> }`.
-- `messages`: Monoize MUST send normalized effort as `thinking: { "type": "enabled", "budget_tokens": N }`, where:
-  - `low -> N=512`
-  - `medium -> N=1024`
-  - `high -> N=2048`
+- `messages`: Monoize MUST select the encoding based on the upstream model:
+  - For models that support adaptive thinking (Claude Opus 4.6+, Sonnet 4.6+, and any future Claude model with major version ≥ 5): Monoize MUST send `thinking: { "type": "adaptive" }` combined with `output_config: { "effort": <level> }`.
+  - For all other Anthropic models: Monoize MUST send `thinking: { "type": "enabled", "budget_tokens": N }`, where:
+    - `low -> N=1024`
+    - `medium -> N=4096`
+    - `high -> N=16384`
 
 RC5. If Monoize generated provider-native reasoning-control fields under RC4, Monoize MUST NOT forward conflicting source fields from `extra` to the same upstream request.
 
@@ -234,6 +223,18 @@ XF1. For any downstream endpoint in §2.2, Monoize MUST preserve unknown fields 
 XF2. When constructing an upstream request body from a URP request, Monoize MUST insert every key-value pair from `extra` as a top-level JSON key in the upstream request body, **unless** that key is already present in the upstream request body due to adapter logic.
 
 XF3. Adapter-generated keys MUST take precedence over keys from `extra` (i.e. `extra` MUST NOT overwrite adapter-generated keys).
+
+XF4. Content-block-level unknown fields:
+
+- When decoding a downstream request, Monoize MUST preserve unknown fields on individual content blocks (e.g. `cache_control` on a text block) into the corresponding URP part's `extra_body`.
+- When encoding an upstream request, Monoize MUST merge each URP part's `extra_body` into the generated content-block JSON object, subject to the same precedence rule as XF3 (adapter-generated keys take precedence).
+- This applies to all content-block types: `text`, `image`, `document`/`file`, `thinking`, `tool_use`, and `tool_result` blocks.
+ This applies to system blocks, regular message content blocks, tool-result inner content blocks, and response content blocks.
+
+XF5. Usage-level unknown fields:
+
+ When parsing upstream usage objects, Monoize MUST capture unknown fields (e.g. `cache_creation_input_tokens`, `cache_write_tokens`, `prompt_tokens_details` sub-fields) into the URP `Usage.extra_body`.
+ When encoding downstream usage objects for any downstream endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`), Monoize MUST merge `Usage.extra_body` into the generated usage JSON, overwriting adapter-generated keys when present (the upstream's full detail objects take precedence over synthesized defaults).
 
 ### 7.2 Provider adapter: `type=responses`
 
@@ -252,6 +253,15 @@ PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Respons
 - argument deltas identify the call via `output_index` (not necessarily `call_id`) for `response.function_call_arguments.delta`.
 
 PR6. If upstream Responses streaming does not emit `response.output_text.delta` but emits assistant message text inside `response.output_item.added` and/or `response.output_item.done`, Monoize MUST reconstruct semantically equivalent downstream text streaming from those message items.
+
+PR6a. For streaming translation from upstream `type=responses` (or `type=grok`, which uses Responses event shape) to downstream `POST /v1/chat/completions` or `POST /v1/messages`, Monoize MUST support completion-only fallback:
+
+- If upstream sends `response.completed` with `output[]` items and Monoize has not emitted a given output class from earlier granular events, Monoize MUST synthesize the missing downstream stream items from `response.completed.output[]`.
+- Output classes are:
+  - assistant text (`type="message"` output text parts),
+  - function/tool calls (`type="function_call"`),
+  - reasoning (`type="reasoning"`).
+- This fallback MUST only fill classes that were missing in the live stream; it MUST NOT duplicate classes already emitted from earlier upstream stream events.
 
 PR7. For URP-Proto `type="function_call_output"` items with non-string `output`, Monoize MUST preserve multimodal output parts when forwarding to Responses upstream:
 
@@ -282,6 +292,12 @@ PC2.1. Input coercion for chat adapter:
 - If URP `input` is an object with message-like fields (`role`, `content`) but without explicit `type`, Monoize MUST treat it as one message item.
 - If URP `input` is an array containing message-like objects without `type`, Monoize MUST treat each such object as a message item.
 
+PC2.2. Content-block extra preservation for chat adapter:
+
+- When encoding URP message parts to upstream chat `messages[].content[]` blocks, Monoize MUST merge each part's `extra_body` into the generated block object (same precedence rule as XF3).
+- Monoize MAY collapse a single text block to scalar string `content` only when that block has no extra fields beyond adapter-generated keys.
+- If a single text block contains any extra field (for example `cache_control`), Monoize MUST keep array/block form and MUST preserve that extra field in the encoded block.
+
 PC3. Tool descriptor normalization:
 
 - For `type=chat_completion` upstreams, Monoize MUST ensure upstream `tools[]` contains only `type=function` tool descriptors.
@@ -304,6 +320,13 @@ PC7. Tool-calling (stream):
   - the downstream Responses stream (if applicable) includes `response.function_call_arguments.delta` events; and
   - the downstream Messages/Chat-Completions stream (if applicable) includes tool-call deltas in their native formats.
 
+PC7a. For downstream `POST /v1/chat/completions` translated from upstream `type=chat_completion` streaming:
+
+- If upstream already emitted at least one terminal chunk with non-null `choices[0].finish_reason`, Monoize MUST NOT append an additional synthetic terminal chat chunk with a different `finish_reason`.
+- Monoize MUST preserve upstream terminal finish semantics (for example `tool_calls`) so downstream clients can continue ReACT/tool loops correctly.
+
+PC7b. If an upstream `type=chat_completion` stream emits any tool-call deltas (`choices[0].delta.tool_calls[]`) in a turn, but emits terminal `choices[0].finish_reason = "stop"`, Monoize MUST normalize downstream terminal finish reason to `tool_calls` for `POST /v1/chat/completions`.
+
 PC8. Reasoning (non-stream and stream):
 
 - Monoize MUST parse upstream Chat Completions reasoning from `choices[0].message.reasoning_details[]` and `choices[0].message.reasoning`.
@@ -314,6 +337,8 @@ PC8. Reasoning (non-stream and stream):
 - For streaming, Monoize MUST apply the same mapping to `choices[0].delta.reasoning_details[]` deltas in arrival order.
 - Monoize MUST store parsed reasoning in URP-Proto as a `type="reasoning"` output item (§7.1.2).
 - Backward compatibility: if `reasoning` / `reasoning_details` are absent, Monoize MUST still accept legacy `reasoning_content` / `reasoning_opaque` from upstream chat outputs.
+
+PC9. For upstream `type=chat_completion` requests with `stream=true`, Monoize MUST request in-stream usage by setting `stream_options.include_usage = true` when the request does not already include `stream_options.include_usage`.
 
 ### 7.4 Provider adapter: `type=messages`
 
@@ -473,6 +498,8 @@ DC5. Reasoning:
 
 DC6. If the selected upstream provider type is `chat_completion` and the upstream response contains additional non-standard fields inside `choices[0].delta` or `choices[0].message` (other than fields explicitly mapped by DC4–DC5), Monoize MUST preserve those fields in the downstream response (streaming or non-streaming) for `POST /v1/chat/completions`.
 
+DC7. For downstream `POST /v1/chat/completions` streaming responses synthesized from non-chat upstream event formats, Monoize MUST include a `usage` object in the terminal chat chunk when cumulative stream usage counters are available.
+
 ### 7.8 Downstream adapter: `POST /v1/messages`
 
 DM1. Monoize MUST parse the downstream request as a Messages create request and convert it into URP-Proto.
@@ -496,6 +523,8 @@ DM5. Reasoning:
 - If URP-Proto `output` contains a `type="reasoning"` item, Monoize MUST render it as a Messages `thinking` content block with:
   - `thinking = text`
   - `signature = signature`
+
+DM6. For downstream `POST /v1/messages` streaming responses synthesized or translated from non-messages upstream event formats, Monoize MUST set `message_delta.usage` from cumulative stream usage counters when available.
 
 ### 7.9 Downstream endpoint: `POST /v1/embeddings`
 
@@ -553,6 +582,8 @@ DMO5. If a logical model key appears in 2 or more providers, `data` MUST include
 
 DMO6. `data` MUST be sorted by `id` in ascending lexicographic order.
 
+DMO7. If the authenticated API key has `model_limits_enabled = true` and `model_limits` is non-empty, Monoize MUST filter `data` to include only models whose `id` is present in the `model_limits` list. If `model_limits_enabled` is false or `model_limits` is empty, no filtering is applied.
+
 ## 8. Streaming requirements (Responses downstream)
 
 When the downstream endpoint is `POST /v1/responses` with `stream=true`, Monoize MUST respond using SSE and MUST emit:
@@ -572,6 +603,8 @@ STR1. Each SSE event `data` MUST be a JSON object containing:
 ```
 
 STR2. `sequence_number` MUST be monotonically increasing starting from 1 within a single response stream.
+
+STR3. For downstream `POST /v1/responses` streams synthesized from non-responses upstream event formats, Monoize MUST include a `usage` object in the terminal `response.completed` payload when cumulative stream usage counters are available.
 
 ## 9. Stream error termination
 

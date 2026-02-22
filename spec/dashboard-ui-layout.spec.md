@@ -173,6 +173,15 @@ PL21. Unpriced models on the Providers page MUST be visually highlighted at mode
 
 PL22. In the provider unsaved-changes confirmation dialog ("Save Changes?"), the "Discard" action MUST use destructive red hover styling.
 
+PL23. Provider channel edit dialog MUST expose channel-level passive breaker override fields with empty value meaning "inherit global setting":
+
+- `passive_failure_threshold_override`
+- `passive_cooldown_seconds_override`
+- `passive_window_seconds_override`
+- `passive_min_samples_override`
+- `passive_failure_rate_threshold_override`
+- `passive_rate_limit_cooldown_seconds_override`
+
 ## 3. Playground Page
 
 ST1. `/dashboard/admin-settings` MUST include a "Health Monitoring" section for Monoize active probe settings.
@@ -183,6 +192,12 @@ ST2. Health Monitoring section MUST expose at least these editable fields bound 
 - `monoize_active_probe_interval_seconds` (integer >= 1)
 - `monoize_active_probe_success_threshold` (integer >= 1)
 - `monoize_active_probe_model` (optional string, empty means null)
+- `monoize_passive_failure_threshold` (integer >= 1)
+- `monoize_passive_cooldown_seconds` (integer >= 1)
+- `monoize_passive_window_seconds` (integer >= 1)
+- `monoize_passive_min_samples` (integer >= 1)
+- `monoize_passive_failure_rate_threshold` (number in `[0.01, 1.0]`)
+- `monoize_passive_rate_limit_cooldown_seconds` (integer >= 1)
 
 ST3. Settings UI MUST perform optimistic update and persist via existing settings save flow; persisted values MUST be reflected after reload.
 
@@ -224,6 +239,12 @@ DH3. The left analysis panel in row C MUST contain:
 - chart heading MUST be rendered as an `h2` element and MUST update with active tab label.
 - chart heading and total summary text MUST share one horizontal row.
 - in `调用次数排行` tab, category key MUST be provider-level key (provider name or provider id), not channel-level key.
+
+DH3a. Dashboard home analysis queries MUST cover the complete latest 24-hour window:
+
+- frontend MUST send `time_from` and `time_to` to `GET /api/dashboard/request-logs`, where `time_to` is current client time and `time_from = time_to - 24h`;
+- frontend MUST page through backend results until `loaded_row_count >= total` for that time window before considering analysis input complete;
+- chart buckets MUST be generated from that same `[time_from, time_to)` window, so historical buckets in the 24-hour range are preserved even when recent traffic is dense.
 
 DH4. The right panel in row C MUST be an API information panel:
 

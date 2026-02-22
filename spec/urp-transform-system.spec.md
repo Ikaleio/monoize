@@ -95,6 +95,21 @@ TF-7. Built-ins that MUST exist:
 - `set_field`
 - `remove_field`
 - `force_stream`
+- `append_empty_user_message`
+- `auto_cache_user_id`
+- `auto_cache_system`
+- `auto_cache_tool_use`
+
+### 4.2 `append_empty_user_message`
+
+AEUM-1. Phase: `request` only.
+
+AEUM-2. Config: empty object (no configuration required).
+
+AEUM-3. On apply:
+1. Inspect the last element of `req.messages`.
+2. If the last message has `role == assistant`, append a new `Message { role: user, parts: [] }` to `req.messages`.
+3. If the last message is not `assistant`, or `messages` is empty, no-op.
 
 ### 4.1 `reasoning_effort_to_model_suffix`
 
@@ -191,6 +206,18 @@ ROUT-8. Full exhaustion MUST return `502`.
 HEALTH-1. Passive health check defaults:
 - failure threshold = `3`
 - cooldown seconds = `60`
+- window seconds = `30`
+- minimum samples = `20`
+- failure-rate threshold = `0.6`
+- 429 cooldown seconds = `15`
+
+HEALTH-1a. Passive breaker effective parameters MUST be channel-scoped: channel override first, global fallback.
+
+HEALTH-1b. Channel becomes unhealthy when either condition is met:
+- consecutive transient retryable failures (`5xx`/timeout/network) reach failure threshold; or
+- windowed failure rate reaches threshold with sample count meeting minimum.
+
+HEALTH-1c. If unhealthy is triggered by retryable `429`, the 429 cooldown seconds MUST be used.
 
 HEALTH-2. Active probe defaults:
 - enabled = `true`

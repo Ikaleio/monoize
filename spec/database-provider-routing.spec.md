@@ -85,9 +85,17 @@ R-H-1. Passive threshold and cooldown defaults:
 
 - `failure_threshold = 3`
 - `cooldown_seconds = 60`
+- `window_seconds = 30`
+- `min_samples = 20`
+- `failure_rate_threshold = 0.6`
+- `rate_limit_cooldown_seconds = 15`
 
-R-H-2. When retryable consecutive failure count reaches threshold, channel MUST be marked unhealthy.
+R-H-2. Effective passive breaker parameters MUST be resolved per channel: channel override first, global setting fallback.
 
-R-H-3. Unhealthy channels MUST be skipped during cooldown.
+R-H-3. Channel MUST be marked unhealthy when either consecutive transient failures reach `failure_threshold`, or windowed failure rate reaches `failure_rate_threshold` with at least `min_samples`.
 
-R-H-4. If active probing is enabled, channels whose cooldown elapsed MUST be probed periodically and recover after success threshold is reached.
+R-H-4. If unhealthy is triggered by retryable `429`, cooldown MUST use `rate_limit_cooldown_seconds`; otherwise use `cooldown_seconds`.
+
+R-H-5. Unhealthy channels MUST be skipped during cooldown.
+
+R-H-6. If active probing is enabled, channels whose cooldown elapsed MUST be probed periodically and recover after success threshold is reached.

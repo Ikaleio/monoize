@@ -56,7 +56,7 @@ RL1a. Before the first upstream attempt is sent, the lifecycle row MUST be prese
 
 RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal status:
 
-- `"success"` when the downstream client received a normal API response payload (including truncated/cutoff completion cases such as `finish_reason = "length"`),
+- `"success"` when the downstream client received a normal API response payload (including truncated/cutoff completion cases such as `finish_reason = "length"`, and including cases where the downstream client disconnected mid-stream after partial delivery),
 - `"error"` only when the request ends with an API error response.
 
 RL1c. Terminal logging MUST update the existing pending row for the same request identity (request ID + user scope). If no pending row exists (legacy/backward-compatible path), the terminal row MAY be inserted directly.
@@ -68,6 +68,10 @@ RL1e. When all provider attempts are exhausted (including the case where zero at
 RL1f. On server startup, all request-log rows with `status = "pending"` MUST be transitioned to `status = "error"` with `error_code = "server_shutdown"` and `error_message = "interrupted by server restart"`. This cleanup MUST execute before the HTTP listener begins accepting connections.
 
 RL1g. On receipt of SIGINT or SIGTERM, the server MUST initiate graceful shutdown: stop accepting new connections, allow in-flight requests to drain, then transition any remaining `"pending"` rows to `"error"` with the same fields as RL1f before process exit.
+
+RL1h. For pass-through streaming requests, if the downstream client disconnects (the response channel closes) before the upstream stream completes, the stream adapter MUST stop consuming upstream events at the next iteration boundary. The request MUST finalize as `status = "success"` with whatever usage was accumulated up to the point of disconnection, and billing MUST execute normally on that accumulated usage.
+
+RL1i. When a provider attempt is selected (upstream call succeeds or streaming begins), the pending row MUST be updated with `provider_id`, `channel_id`, `upstream_model`, and `provider_multiplier` immediately, before response processing or streaming starts. This update MUST NOT trigger billing and MUST NOT change the row's `status`.
 
 RL2. Requests authenticated only by static config keys MUST NOT generate request logs.
 
@@ -82,6 +86,10 @@ RL5. For streaming requests where response transforms require buffering (synthet
 RL6. For pass-through streaming requests, `ttfb_ms` MUST record the time from `started_at` to the point where the first chunk is received from upstream.
 
 RL6a. For pass-through streaming requests where usage cannot be extracted from streamed events, token usage fields MAY be omitted (set to null).
+
+RL6b. For pass-through streaming requests where usage is extracted while the lifecycle row is still `status = "pending"`, Monoize MUST incrementally update the pending row usage fields (`prompt_tokens`, `completion_tokens`, `cached_tokens`, `reasoning_tokens`, `usage_breakdown_json`) using the latest cumulative usage snapshot.
+
+RL6c. RL6b incremental pending updates MUST NOT execute billing deduction and MUST NOT replace terminal finalization (`pending -> success/error`).
 
 RL7. The `duration_ms` field MUST measure wall-clock time from the start of request processing (after auth) to the point where the upstream response is received.
 
@@ -134,18 +142,23 @@ RL19. For active probe logs, `api_key_id` MUST be null and UI token column label
   - `api_key_id: string?` (filter by specific API key ID)
   - `username: string?` (filter by username, exact match via JOIN on `users.username`; only effective when the caller has admin role — non-admin callers ignore this parameter)
 - `search: string?` (full-text search across model, upstream_model, request_id, request_ip)
+  - `time_from: string?` (ISO 8601 / RFC 3339 timestamp; inclusive lower bound on `created_at`)
+  - `time_to: string?` (ISO 8601 / RFC 3339 timestamp; exclusive upper bound on `created_at`)
 - **Response:**
 
 ```json
 {
   "data": EnrichedRequestLogRow[],
   "total": integer,
+  "total_charge_nano_usd": string,
   "limit": integer,
   "offset": integer
 }
 ```
 
 Where `EnrichedRequestLogRow` = `RequestLogRow` + `username` + `api_key_name` + `channel_name` + `provider_name`.
+
+RL-API6. `total_charge_nano_usd` MUST equal the SUM of `charge_nano_usd` across all rows matching the active filters (not just the current page). Rows with null `charge_nano_usd` MUST be treated as 0. The value MUST be a string representation of a non-negative integer (nano-dollar).
 
 RL-API1. When the authenticated user has role `super_admin` or `admin`, the endpoint MUST return logs for ALL users. Otherwise, it MUST return only logs belonging to the current authenticated user.
 
@@ -197,6 +210,9 @@ FL7. The top of the page MUST include a search bar and filter controls:
   - **Status filter**: dropdown with options `All`, `Pending`, `Success`, `Error`.
   - **Token filter**: dropdown listing all of the user's API keys by name; selecting one filters by `api_key_id`.
   - **Username filter** (admin only): text input defaulting to the current user's username; applied on Enter or blur. Non-admin users do not see this control.
+  - **Time range filter**: dropdown with preset options `All Time`, `Last 1 Hour`, `Last 24 Hours`, `Last 7 Days`, `Last 30 Days`, `Today`, `Yesterday`, `This Month`, `Last Month`. Selecting a preset computes `time_from` / `time_to` as ISO 8601 strings in the browser's local timezone and sends them as query parameters to the API.
+
+FL7a. The filter-control area MUST display the total charge sum for the current filter conditions. The value MUST be formatted as regular USD currency with 6 fractional digits (e.g. `$1.234567`). The label MUST use the i18n key `requestLogs.totalCost`. The element MUST be displayed in the summary area (top-right) alongside the existing "Showing X-Y of Z" text.
 
 FL8. Column order (left to right): `created_at`, `request_id` (with adjacent status indicator), `model` (ModelBadge), `api_key_name`, `[username]` (admin), `[channel]` (admin, with tooltip showing provider context), `duration/ttfb/stream` (merged badges), `prompt_tokens` (input), `completion_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
 
@@ -276,3 +292,25 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 - `error`: red lamp.
 
 FL37. The logs page MUST auto-refresh the newest page periodically so that `pending` rows can transition to terminal status without manual refresh.
+
+FL38. While any tooltip-detail overlay in the request-logs table is open (request-id, model, token, channel, duration, input/output, cost):
+
+- The periodic auto-refresh poll defined in FL37 MUST be paused (`isPaused` returns `true`).
+- Any data updates that arrive from in-flight requests (started before the tooltip opened) or from SWR revalidation triggers (e.g. `revalidateOnFocus` when the browser tab regains focus) MUST be buffered and MUST NOT cause the table row list to re-render.
+- When all tooltip overlays close, buffered data MUST be flushed and applied to the visible table immediately, and periodic polling MUST resume at the normal interval.
+- This guarantee MUST hold on both fine-pointer (desktop hover) and coarse-pointer (mobile tap) devices.
+
+FL39. The time-range filter popover MUST contain three vertical sections in this order: preset row, manual datetime inputs, single-month calendar.
+
+FL40. The preset row MUST be horizontally scrollable when content overflows and MUST reserve scrollbar gutter space to avoid layout jump while scrolling.
+
+FL41. The popover content width MUST equal the rendered calendar width for the currently displayed month. The datetime input rows MUST NOT expand popover width beyond calendar width.
+
+FL42. The manual datetime inputs MUST be stacked in two rows (`from` then `to`) and accept second-precision format `yyyy-MM-dd HH:mm:ss`.
+
+FL43. Time-range selection MUST be bidirectionally synchronized:
+
+- selecting a preset MUST update manual inputs and calendar selection,
+- selecting calendar range or committing manual inputs MUST activate the matching fixed preset (`today`, `yesterday`, `this_month`, `last_month`) when and only when the selected range matches that preset, otherwise no preset is active.
+
+FL44. Active preset buttons (including `All Time`) MUST use a high-contrast foreground/background pair so text remains legible in both light and dark themes.

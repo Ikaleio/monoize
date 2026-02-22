@@ -99,6 +99,10 @@ CFG-5. Passive breaker effective parameters MUST be resolved per channel with pr
 1. channel override field (if present)
 2. global passive breaker setting
 
+CFG-6. Each provider MAY define a timeout override field:
+
+- `request_timeout_ms_override: integer? (>= 1)` — When set, overrides the global `request_timeout_ms` for all upstream calls made through this provider. Resolution order: provider override → global `request_timeout_ms` setting → 30000ms default.
+
 ## 3. Request Routing Parameters
 
 The router MUST read:

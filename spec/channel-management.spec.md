@@ -116,6 +116,7 @@ All endpoints require an authenticated dashboard admin session.
 - Body (optional):
   - `model?: string` — If provided, test with this specific model. If omitted, use the provider's configured active probe model override, falling back to global probe model, falling back to the provider's first model key.
 - Semantics: Sends a minimal completion request (`max_tokens: 16`, `messages: [{"role":"user","content":"hi"}]`) to the channel using the provider's `provider_type` to determine the wire format. Measures wall-clock time from request start to response completion.
+  - **Health side-effect**: If `success` is `true`, the channel's health state MUST be reset to healthy. Specifically: `healthy := true`, `failure_count := 0`, `cooldown_until := None`, `last_success_at := now`, `probe_success_count := 0`, `last_probe_at := None`. This allows manual testing to recover an unhealthy channel without waiting for the active probe cycle.
 - Response: `200`
   ```json
   {

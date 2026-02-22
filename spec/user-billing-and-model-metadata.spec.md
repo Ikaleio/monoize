@@ -151,6 +151,18 @@ L4. If deduction fails because resulting balance would be negative, server MUST 
 
 and MUST NOT write deduction.
 
+## 6a. Billing concurrency control
+
+LC1. All balance-mutating operations (request charges and admin adjustments) MUST be serialized through a single application-level mutex (`billing_mutex: Arc<tokio::sync::Mutex<()>>`) held on the `UserStore` instance.
+
+LC2. The mutex MUST be acquired before beginning the SQLite transaction and released after the transaction commits or rolls back (via RAII guard).
+
+LC3. Rationale: SQLite DEFERRED transactions promote locks from SHARED to EXCLUSIVE on first write. When two concurrent connections each hold a SHARED lock and both attempt promotion, one fails with `SQLITE_BUSY` ("database is locked"). The mutex prevents this lock-escalation deadlock by ensuring at most one balance transaction is in-flight at any time.
+
+LC4. The mutex scope MUST cover exactly the balance read-modify-write transaction. It MUST NOT be held during non-balance database operations (e.g., logging, settings reads).
+
+LC5. Balance transactions MUST use a retry loop with exponential backoff in addition to the mutex. Rationale: the mutex serializes billing-vs-billing transactions, but `SQLITE_BUSY` can still occur from contention with non-billing writes (e.g., `request_logs` INSERT/UPDATE in background tasks) that share the same connection pool. The retry policy MUST satisfy: (a) maximum 5 attempts, (b) backoff of 100ms × attempt number between retries, (c) the mutex guard MUST be dropped before sleeping to avoid holding it during backoff, (d) only transient errors (`BillingErrorKind::Internal`, which includes `SQLITE_BUSY`) are retried — non-transient errors (`InsufficientBalance`, `NotFound`, etc.) MUST be returned immediately.
+
 ## 7. Model metadata store
 
 M1. Server MUST persist model metadata in table `model_metadata_records`.
