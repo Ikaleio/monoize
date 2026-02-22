@@ -6,6 +6,7 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub mod append_empty_user_message;
 pub mod force_stream;
 pub mod inject_system_prompt;
 pub mod merge_consecutive_roles;
@@ -18,6 +19,9 @@ pub mod set_field;
 pub mod strip_reasoning;
 pub mod system_to_developer_role;
 pub mod think_xml_to_reasoning;
+pub mod auto_cache_system;
+pub mod auto_cache_tool_use;
+pub mod auto_cache_user_id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
