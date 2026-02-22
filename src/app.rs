@@ -1,5 +1,4 @@
 use crate::auth::AuthState;
-use crate::config::UnknownFieldPolicy;
 use crate::error::{AppError, AppResult};
 use crate::model_registry::ModelRegistry;
 use crate::model_registry_store::ModelRegistryStore;
@@ -34,7 +33,7 @@ pub struct AppState {
     pub settings_store: SettingsStore,
     pub provider_store: ProviderStore,
     pub monoize_store: MonoizeRoutingStore,
-    pub monoize_runtime: MonoizeRuntimeConfig,
+    pub monoize_runtime: Arc<tokio::sync::RwLock<MonoizeRuntimeConfig>>,
     pub channel_health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
     pub model_registry_store: ModelRegistryStore,
     pub transform_registry: Arc<TransformRegistry>,
@@ -51,7 +50,6 @@ static METRICS_INIT: Once = Once::new();
 pub struct RuntimeConfig {
     pub listen: String,
     pub metrics_path: String,
-    pub unknown_fields: UnknownFieldPolicy,
     pub database_dsn: String,
 }
 
@@ -65,15 +63,10 @@ impl RuntimeConfig {
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "/metrics".to_string());
-        let unknown_fields = std::env::var("MONOIZE_UNKNOWN_FIELDS")
-            .ok()
-            .and_then(|v| parse_unknown_fields_policy(&v))
-            .unwrap_or(UnknownFieldPolicy::Preserve);
         let database_dsn = resolve_database_dsn();
         Self {
             listen,
             metrics_path,
-            unknown_fields,
             database_dsn,
         }
     }
@@ -107,7 +100,20 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
 
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(&runtime.database_dsn)
+        .connect_with(
+            runtime
+                .database_dsn
+                .parse::<sqlx::sqlite::SqliteConnectOptions>()
+                .map_err(|err| {
+                    AppError::new(
+                        axum::http::StatusCode::BAD_REQUEST,
+                        "database_dsn_parse_failed",
+                        err.to_string(),
+                    )
+                })?
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .busy_timeout(std::time::Duration::from_secs(5)),
+        )
         .await
         .map_err(|err| {
             AppError::new(
@@ -179,6 +185,19 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     })?;
 
     let mut monoize_runtime = MonoizeRuntimeConfig::default();
+    monoize_runtime.passive_failure_threshold =
+        settings_snapshot.monoize_passive_failure_threshold.max(1);
+    monoize_runtime.passive_cooldown_seconds =
+        settings_snapshot.monoize_passive_cooldown_seconds.max(1);
+    monoize_runtime.passive_window_seconds =
+        settings_snapshot.monoize_passive_window_seconds.max(1);
+    monoize_runtime.passive_min_samples = settings_snapshot.monoize_passive_min_samples.max(1);
+    monoize_runtime.passive_failure_rate_threshold = settings_snapshot
+        .monoize_passive_failure_rate_threshold
+        .clamp(0.01, 1.0);
+    monoize_runtime.passive_rate_limit_cooldown_seconds = settings_snapshot
+        .monoize_passive_rate_limit_cooldown_seconds
+        .max(1);
     monoize_runtime.active_enabled = settings_snapshot.monoize_active_probe_enabled;
     monoize_runtime.active_interval_seconds = settings_snapshot
         .monoize_active_probe_interval_seconds
@@ -187,12 +206,14 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         .monoize_active_probe_success_threshold
         .max(1);
     monoize_runtime.active_probe_model = settings_snapshot.monoize_active_probe_model.clone();
+    monoize_runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
     let channel_health = Arc::new(Mutex::new(HashMap::new()));
     let transform_registry = Arc::new(crate::transforms::registry());
     let _ = ensure_active_probe_system_user(&user_store).await;
 
     let probe_store = monoize_store.clone();
     let probe_http = http.clone();
+    let monoize_runtime = Arc::new(tokio::sync::RwLock::new(monoize_runtime));
     let probe_runtime = monoize_runtime.clone();
     let probe_health = channel_health.clone();
     let probe_user_store = user_store.clone();
@@ -205,20 +226,21 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 Err(_) => continue,
             };
             let now = chrono::Utc::now().timestamp();
+            let rt_snap = probe_runtime.read().await.clone();
             for provider in providers {
                 let active_enabled = provider
                     .active_probe_enabled_override
-                    .unwrap_or(probe_runtime.active_enabled);
+                    .unwrap_or(rt_snap.active_enabled);
                 if !active_enabled {
                     continue;
                 }
                 let probe_interval_seconds = provider
                     .active_probe_interval_seconds_override
-                    .unwrap_or(probe_runtime.active_interval_seconds)
+                    .unwrap_or(rt_snap.active_interval_seconds)
                     .max(1);
                 let probe_success_threshold = provider
                     .active_probe_success_threshold_override
-                    .unwrap_or(probe_runtime.active_success_threshold)
+                    .unwrap_or(rt_snap.active_success_threshold)
                     .max(1);
 
                 for channel in provider.channels {
@@ -250,7 +272,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     let configured_model = provider
                         .active_probe_model_override
                         .clone()
-                        .or(probe_runtime.active_probe_model.clone());
+                        .or(rt_snap.active_probe_model.clone());
                     let first_model = provider.models.keys().next().cloned();
                     let probe_model = configured_model.clone().or(first_model.clone());
                     let Some(ref model_name) = probe_model else {
@@ -262,7 +284,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     let (ok, usage_snapshot) = probe_channel_completion(
                         &probe_http,
                         &channel,
-                        probe_runtime.request_timeout_ms,
+                        rt_snap.request_timeout_ms,
                         model_name,
                         provider.provider_type,
                     )
@@ -312,8 +334,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     } else {
                         state.healthy = false;
                         state.probe_success_count = 0;
-                        state.cooldown_until =
-                            Some(now + probe_runtime.passive_cooldown_seconds as i64);
+                        state.cooldown_until = Some(now + rt_snap.passive_cooldown_seconds as i64);
                     }
                 }
             }
@@ -364,15 +385,6 @@ fn init_metrics() -> AppResult<PrometheusHandle> {
             "metrics recorder not available",
         )
     })
-}
-
-fn parse_unknown_fields_policy(value: &str) -> Option<UnknownFieldPolicy> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "reject" => Some(UnknownFieldPolicy::Reject),
-        "ignore" => Some(UnknownFieldPolicy::Ignore),
-        "preserve" => Some(UnknownFieldPolicy::Preserve),
-        _ => None,
-    }
 }
 
 async fn ensure_active_probe_system_user(user_store: &UserStore) -> Option<String> {
@@ -745,7 +757,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
             post(crate::dashboard_handlers::logout),
         )
         .route("/dashboard/auth/me", get(crate::dashboard_handlers::get_me))
-        .route("/dashboard/auth/me", put(crate::dashboard_handlers::update_me))
+        .route(
+            "/dashboard/auth/me",
+            put(crate::dashboard_handlers::update_me),
+        )
         .route(
             "/dashboard/users",
             get(crate::dashboard_handlers::list_users),
@@ -888,5 +903,9 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/request-logs",
             get(crate::dashboard_handlers::list_my_request_logs),
+        )
+        .route(
+            "/dashboard/analytics",
+            get(crate::dashboard_handlers::get_dashboard_analytics),
         )
 }

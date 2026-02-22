@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
+use std::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -122,7 +123,12 @@ impl SqliteStateStore {
         ensure_sqlite_file(dsn)?;
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(dsn)
+            .connect_with(
+                dsn.parse::<sqlx::sqlite::SqliteConnectOptions>()
+                    .map_err(|e| e.to_string())?
+                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .busy_timeout(Duration::from_secs(5)),
+            )
             .await
             .map_err(|err| err.to_string())?;
         sqlx::query(
@@ -279,7 +285,12 @@ impl SqliteFileStore {
         ensure_sqlite_file(dsn)?;
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(dsn)
+            .connect_with(
+                dsn.parse::<sqlx::sqlite::SqliteConnectOptions>()
+                    .map_err(|e| e.to_string())?
+                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .busy_timeout(Duration::from_secs(5)),
+            )
             .await
             .map_err(|err| err.to_string())?;
         sqlx::query(
