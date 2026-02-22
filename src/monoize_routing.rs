@@ -102,6 +102,7 @@ pub struct MonoizeProvider {
     pub active_probe_interval_seconds_override: Option<u64>,
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
+    pub request_timeout_ms_override: Option<u64>,
     pub enabled: bool,
     pub priority: i32,
     pub created_at: DateTime<Utc>,
@@ -147,6 +148,7 @@ pub struct CreateMonoizeProviderInput {
     pub active_probe_interval_seconds_override: Option<u64>,
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
+    pub request_timeout_ms_override: Option<u64>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub priority: Option<i32>,
@@ -164,6 +166,7 @@ pub struct UpdateMonoizeProviderInput {
     pub active_probe_interval_seconds_override: Option<Option<u64>>,
     pub active_probe_success_threshold_override: Option<Option<u32>>,
     pub active_probe_model_override: Option<Option<String>>,
+    pub request_timeout_ms_override: Option<Option<u64>>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
 }
@@ -530,6 +533,38 @@ impl MonoizeRoutingStore {
             .map_err(|e| e.to_string())?;
         }
 
+        let has_channel_request_timeout_ms_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_channels') WHERE name = 'request_timeout_ms_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_channel_request_timeout_ms_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_channels ADD COLUMN request_timeout_ms_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
+        let has_provider_request_timeout_ms_override_column: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM pragma_table_info('monoize_providers') WHERE name = 'request_timeout_ms_override'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?
+            > 0;
+        if !has_provider_request_timeout_ms_override_column {
+            sqlx::query(
+                "ALTER TABLE monoize_providers ADD COLUMN request_timeout_ms_override INTEGER",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
         Ok(Self { pool })
     }
 
@@ -545,6 +580,7 @@ impl MonoizeRoutingStore {
             r#"SELECT id, name, provider_type, max_retries, transforms,
                       active_probe_enabled_override, active_probe_interval_seconds_override,
                       active_probe_success_threshold_override, active_probe_model_override,
+                      request_timeout_ms_override,
                       enabled, priority, created_at, updated_at
                FROM monoize_providers
                ORDER BY priority ASC, created_at ASC"#,
@@ -565,6 +601,7 @@ impl MonoizeRoutingStore {
             r#"SELECT id, name, provider_type, max_retries, transforms,
                       active_probe_enabled_override, active_probe_interval_seconds_override,
                       active_probe_success_threshold_override, active_probe_model_override,
+                      request_timeout_ms_override,
                       enabled, priority, created_at, updated_at
                FROM monoize_providers
                WHERE id = ?"#,
@@ -596,6 +633,11 @@ impl MonoizeRoutingStore {
                 return Err("active_probe_success_threshold_override must be >= 1".to_string());
             }
         }
+        if let Some(v) = input.request_timeout_ms_override {
+            if v == 0 {
+                return Err("request_timeout_ms_override must be >= 1".to_string());
+            }
+        }
 
         let id = generate_short_id();
         let now = Utc::now();
@@ -617,8 +659,9 @@ impl MonoizeRoutingStore {
                     id, name, provider_type, max_retries, transforms,
                     active_probe_enabled_override, active_probe_interval_seconds_override,
                     active_probe_success_threshold_override, active_probe_model_override,
+                    request_timeout_ms_override,
                     enabled, priority, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&id)
         .bind(&input.name)
@@ -637,6 +680,7 @@ impl MonoizeRoutingStore {
                 .map(|v| v as i64),
         )
         .bind(input.active_probe_model_override.as_deref())
+        .bind(input.request_timeout_ms_override.map(|v| v as i64))
         .bind(input.enabled)
         .bind(priority)
         .bind(now.to_rfc3339())
@@ -679,6 +723,11 @@ impl MonoizeRoutingStore {
                 return Err("active_probe_success_threshold_override must be >= 1".to_string());
             }
         }
+        if let Some(Some(v)) = input.request_timeout_ms_override {
+            if v == 0 {
+                return Err("request_timeout_ms_override must be >= 1".to_string());
+            }
+        }
 
         let name = input.name.unwrap_or(existing.name.clone());
         let provider_type = input.provider_type.unwrap_or(existing.provider_type);
@@ -696,6 +745,9 @@ impl MonoizeRoutingStore {
         let active_probe_model_override = input
             .active_probe_model_override
             .unwrap_or(existing.active_probe_model_override.clone());
+        let request_timeout_ms_override = input
+            .request_timeout_ms_override
+            .unwrap_or(existing.request_timeout_ms_override);
         let enabled = input.enabled.unwrap_or(existing.enabled);
         let priority = input.priority.unwrap_or(existing.priority);
 
@@ -708,6 +760,7 @@ impl MonoizeRoutingStore {
                    active_probe_interval_seconds_override = ?,
                    active_probe_success_threshold_override = ?,
                    active_probe_model_override = ?,
+                   request_timeout_ms_override = ?,
                    enabled = ?, priority = ?, updated_at = ?
                WHERE id = ?"#,
         )
@@ -719,6 +772,7 @@ impl MonoizeRoutingStore {
         .bind(active_probe_interval_seconds_override.map(|v| v as i64))
         .bind(active_probe_success_threshold_override.map(|v| v as i64))
         .bind(active_probe_model_override.as_deref())
+        .bind(request_timeout_ms_override.map(|v| v as i64))
         .bind(enabled)
         .bind(priority)
         .bind(now.to_rfc3339())
@@ -1072,6 +1126,10 @@ impl MonoizeRoutingStore {
         let active_probe_model_override: Option<String> = row
             .try_get("active_probe_model_override")
             .map_err(|e| format!("provider {id} invalid active_probe_model_override: {e}"))?;
+        let request_timeout_ms_override: Option<u64> = row
+            .try_get::<Option<i64>, _>("request_timeout_ms_override")
+            .map_err(|e| format!("provider {id} invalid request_timeout_ms_override: {e}"))?
+            .map(|v| v as u64);
 
         Ok(MonoizeProvider {
             id: id.clone(),
@@ -1085,6 +1143,7 @@ impl MonoizeRoutingStore {
             active_probe_interval_seconds_override,
             active_probe_success_threshold_override,
             active_probe_model_override,
+            request_timeout_ms_override,
             enabled: row.try_get("enabled").map_err(|e| e.to_string())?,
             priority: row.try_get("priority").map_err(|e| e.to_string())?,
             created_at: DateTime::parse_from_rfc3339(

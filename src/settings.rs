@@ -17,6 +17,13 @@ pub struct SystemSettings {
     pub monoize_active_probe_interval_seconds: u64,
     pub monoize_active_probe_success_threshold: u32,
     pub monoize_active_probe_model: Option<String>,
+    pub monoize_passive_failure_threshold: u32,
+    pub monoize_passive_cooldown_seconds: u64,
+    pub monoize_passive_window_seconds: u64,
+    pub monoize_passive_min_samples: u32,
+    pub monoize_passive_failure_rate_threshold: f64,
+    pub monoize_passive_rate_limit_cooldown_seconds: u64,
+    pub monoize_request_timeout_ms: u64,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -43,6 +50,13 @@ impl Default for SystemSettings {
             monoize_active_probe_interval_seconds: 30,
             monoize_active_probe_success_threshold: 1,
             monoize_active_probe_model: None,
+            monoize_passive_failure_threshold: 3,
+            monoize_passive_cooldown_seconds: 60,
+            monoize_passive_window_seconds: 30,
+            monoize_passive_min_samples: 20,
+            monoize_passive_failure_rate_threshold: 0.6,
+            monoize_passive_rate_limit_cooldown_seconds: 15,
+            monoize_request_timeout_ms: 30000,
             updated_at: Utc::now(),
         }
     }
@@ -119,6 +133,43 @@ impl SettingsStore {
                 .monoize_active_probe_model
                 .clone()
                 .unwrap_or_default(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_passive_failure_threshold",
+            &defaults.monoize_passive_failure_threshold.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_passive_cooldown_seconds",
+            &defaults.monoize_passive_cooldown_seconds.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_passive_window_seconds",
+            &defaults.monoize_passive_window_seconds.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_passive_min_samples",
+            &defaults.monoize_passive_min_samples.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_passive_failure_rate_threshold",
+            &defaults.monoize_passive_failure_rate_threshold.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_passive_rate_limit_cooldown_seconds",
+            &defaults
+                .monoize_passive_rate_limit_cooldown_seconds
+                .to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_request_timeout_ms",
+            &defaults.monoize_request_timeout_ms.to_string(),
         )
         .await?;
         Ok(())
@@ -228,6 +279,28 @@ impl SettingsStore {
                         Some(trimmed.to_string())
                     };
                 }
+                "monoize_passive_failure_threshold" => {
+                    settings.monoize_passive_failure_threshold = value.parse().unwrap_or(3);
+                }
+                "monoize_passive_cooldown_seconds" => {
+                    settings.monoize_passive_cooldown_seconds = value.parse().unwrap_or(60);
+                }
+                "monoize_passive_window_seconds" => {
+                    settings.monoize_passive_window_seconds = value.parse().unwrap_or(30);
+                }
+                "monoize_passive_min_samples" => {
+                    settings.monoize_passive_min_samples = value.parse().unwrap_or(20);
+                }
+                "monoize_passive_failure_rate_threshold" => {
+                    settings.monoize_passive_failure_rate_threshold = value.parse().unwrap_or(0.6);
+                }
+                "monoize_passive_rate_limit_cooldown_seconds" => {
+                    settings.monoize_passive_rate_limit_cooldown_seconds =
+                        value.parse().unwrap_or(15);
+                }
+                "monoize_request_timeout_ms" => {
+                    settings.monoize_request_timeout_ms = value.parse().unwrap_or(30000);
+                }
                 _ => {}
             }
         }
@@ -283,6 +356,43 @@ impl SettingsStore {
                 .as_ref()
                 .map(|s| s.as_str())
                 .unwrap_or(""),
+        )
+        .await?;
+        self.set(
+            "monoize_passive_failure_threshold",
+            &settings.monoize_passive_failure_threshold.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_passive_cooldown_seconds",
+            &settings.monoize_passive_cooldown_seconds.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_passive_window_seconds",
+            &settings.monoize_passive_window_seconds.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_passive_min_samples",
+            &settings.monoize_passive_min_samples.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_passive_failure_rate_threshold",
+            &settings.monoize_passive_failure_rate_threshold.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_passive_rate_limit_cooldown_seconds",
+            &settings
+                .monoize_passive_rate_limit_cooldown_seconds
+                .to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_request_timeout_ms",
+            &settings.monoize_request_timeout_ms.to_string(),
         )
         .await?;
         Ok(())
