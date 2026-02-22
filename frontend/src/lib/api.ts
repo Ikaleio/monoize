@@ -95,6 +95,13 @@ export interface SystemSettings {
   monoize_active_probe_interval_seconds: number;
   monoize_active_probe_success_threshold: number;
   monoize_active_probe_model?: string | null;
+  monoize_passive_failure_threshold: number;
+  monoize_passive_cooldown_seconds: number;
+  monoize_passive_window_seconds: number;
+  monoize_passive_min_samples: number;
+  monoize_passive_failure_rate_threshold: number;
+  monoize_passive_rate_limit_cooldown_seconds: number;
+  monoize_request_timeout_ms: number;
   updated_at: string;
 }
 
@@ -148,6 +155,12 @@ export interface MonoizeChannel {
   base_url: string;
   weight: number;
   enabled: boolean;
+  passive_failure_threshold_override?: number | null;
+  passive_cooldown_seconds_override?: number | null;
+  passive_window_seconds_override?: number | null;
+  passive_min_samples_override?: number | null;
+  passive_failure_rate_threshold_override?: number | null;
+  passive_rate_limit_cooldown_seconds_override?: number | null;
   _healthy?: boolean;
   _failure_count?: number;
   _last_success_at?: string;
@@ -166,6 +179,7 @@ export interface Provider {
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  request_timeout_ms_override?: number | null;
   enabled: boolean;
   priority: number;
   created_at: string;
@@ -180,6 +194,12 @@ export interface CreateMonoizeChannelInput {
   api_key?: string;
   weight?: number;
   enabled?: boolean;
+  passive_failure_threshold_override?: number | null;
+  passive_cooldown_seconds_override?: number | null;
+  passive_window_seconds_override?: number | null;
+  passive_min_samples_override?: number | null;
+  passive_failure_rate_threshold_override?: number | null;
+  passive_rate_limit_cooldown_seconds_override?: number | null;
 }
 
 export interface CreateProviderInput {
@@ -193,6 +213,7 @@ export interface CreateProviderInput {
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  request_timeout_ms_override?: number | null;
   enabled?: boolean;
   priority?: number;
 }
@@ -208,6 +229,7 @@ export interface UpdateProviderInput {
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  request_timeout_ms_override?: number | null;
   enabled?: boolean;
   priority?: number;
 }
@@ -282,12 +304,31 @@ export interface RequestLog {
   provider_name?: string;
 }
 
+export interface DashboardAnalyticsBucket {
+  label: string;
+  cost_by_model: Record<string, number>;
+  calls_by_model: Record<string, number>;
+  calls_by_provider: Record<string, number>;
+}
+
+export interface DashboardAnalytics {
+  buckets: DashboardAnalyticsBucket[];
+  time_from: string;
+  time_to: string;
+  total_cost_nano_usd: number;
+  total_calls: number;
+  today_cost_nano_usd: number;
+  today_calls: number;
+}
+
 export interface RequestLogsFilter {
   model?: string;
   status?: string;
   api_key_id?: string;
   username?: string;
   search?: string;
+  time_from?: string;
+  time_to?: string;
 }
 
 export interface RequestLogsResponse {
@@ -295,6 +336,7 @@ export interface RequestLogsResponse {
   total: number;
   limit: number;
   offset: number;
+  total_charge_nano_usd: string;
 }
 
 export interface ChannelTestResult {
@@ -582,7 +624,16 @@ class ApiClient {
     if (filters?.api_key_id) params.set("api_key_id", filters.api_key_id);
     if (filters?.username) params.set("username", filters.username);
     if (filters?.search) params.set("search", filters.search);
+    if (filters?.time_from) params.set("time_from", filters.time_from);
+    if (filters?.time_to) params.set("time_to", filters.time_to);
     return this.request(`/request-logs?${params.toString()}`);
+  }
+
+  async getDashboardAnalytics(buckets = 8, rangeHours = 24): Promise<DashboardAnalytics> {
+    const params = new URLSearchParams();
+    params.set("buckets", String(buckets));
+    params.set("range_hours", String(rangeHours));
+    return this.request(`/analytics?${params.toString()}`);
   }
 
   async testChannel(providerId: string, channelId: string, model?: string): Promise<ChannelTestResult> {

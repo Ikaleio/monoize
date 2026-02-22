@@ -5,6 +5,7 @@ import type {
   User,
   ApiKey,
   DashboardStats,
+  DashboardAnalytics,
   ConfigOverview,
   SystemSettings,
   PublicSystemSettings,
@@ -47,6 +48,7 @@ export const SWR_KEYS = {
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
   MODEL_METADATA: "/dashboard/model-metadata",
   REQUEST_LOGS: "/dashboard/request-logs",
+  ANALYTICS: "/dashboard/analytics",
 } as const;
 
 // Default SWR config
@@ -146,6 +148,14 @@ export function useRequestLogs(limit = 50, offset = 0, filters?: RequestLogsFilt
   return useSWR<RequestLogsResponse>(
     `${SWR_KEYS.REQUEST_LOGS}?limit=${limit}&offset=${offset}&f=${filterKey}`,
     () => api.listRequestLogs(limit, offset, filters),
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useDashboardAnalytics(buckets = 8, rangeHours = 24, config?: SWRConfiguration) {
+  return useSWR<DashboardAnalytics>(
+    `${SWR_KEYS.ANALYTICS}?buckets=${buckets}&range_hours=${rangeHours}`,
+    () => api.getDashboardAnalytics(buckets, rangeHours),
     { ...defaultConfig, ...config }
   );
 }
