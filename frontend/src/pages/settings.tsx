@@ -428,6 +428,138 @@ export function SettingsPage() {
                   {t("settings.activeProbeModelDescription")}
                 </p>
               </div>
+              <Separator />
+              <div className="space-y-2">
+                <Label htmlFor="passive_failure_threshold">{t("settings.passiveFailureThreshold")}</Label>
+                <Input
+                  id="passive_failure_threshold"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_passive_failure_threshold}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_passive_failure_threshold: Math.max(1, parseInt(e.target.value) || 3),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveFailureThresholdDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="passive_cooldown_seconds">{t("settings.passiveCooldownSeconds")}</Label>
+                <Input
+                  id="passive_cooldown_seconds"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_passive_cooldown_seconds}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_passive_cooldown_seconds: Math.max(1, parseInt(e.target.value) || 60),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveCooldownSecondsDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="passive_window_seconds">{t("settings.passiveWindowSeconds")}</Label>
+                <Input
+                  id="passive_window_seconds"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_passive_window_seconds}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_passive_window_seconds: Math.max(1, parseInt(e.target.value) || 30),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveWindowSecondsDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="passive_min_samples">{t("settings.passiveMinSamples")}</Label>
+                <Input
+                  id="passive_min_samples"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_passive_min_samples}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_passive_min_samples: Math.max(1, parseInt(e.target.value) || 20),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveMinSamplesDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="passive_failure_rate_threshold">{t("settings.passiveFailureRateThreshold")}</Label>
+                <Input
+                  id="passive_failure_rate_threshold"
+                  type="number"
+                  min="0.01"
+                  max="1"
+                  step="0.01"
+                  value={currentSettings.monoize_passive_failure_rate_threshold}
+                  onChange={(e) => {
+                    const next = parseFloat(e.target.value);
+                    handleChange({
+                      monoize_passive_failure_rate_threshold: Number.isFinite(next)
+                        ? Math.min(1, Math.max(0.01, next))
+                        : 0.6,
+                    });
+                  }}
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveFailureRateThresholdDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="passive_rate_limit_cooldown_seconds">{t("settings.passiveRateLimitCooldownSeconds")}</Label>
+                <Input
+                  id="passive_rate_limit_cooldown_seconds"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_passive_rate_limit_cooldown_seconds}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_passive_rate_limit_cooldown_seconds: Math.max(1, parseInt(e.target.value) || 15),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveRateLimitCooldownSecondsDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="request_timeout_ms">{t("settings.requestTimeoutMs")}</Label>
+                <Input
+                  id="request_timeout_ms"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_request_timeout_ms}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_request_timeout_ms: Math.max(1, parseInt(e.target.value) || 30000),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.requestTimeoutMsDescription")}
+                </p>
+              </div>
             </CardContent>
           </Card>
         </StaggerItem>

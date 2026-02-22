@@ -133,6 +133,12 @@ type ChannelRow = {
 	api_key: string
 	weight: string
 	enabled: boolean
+	passive_failure_threshold_override: string
+	passive_cooldown_seconds_override: string
+	passive_window_seconds_override: string
+	passive_min_samples_override: string
+	passive_failure_rate_threshold_override: string
+	passive_rate_limit_cooldown_seconds_override: string
 }
 
 type ProviderForm = {
@@ -150,6 +156,7 @@ type ProviderForm = {
 	active_probe_interval_seconds_override: number | null
 	active_probe_success_threshold_override: number | null
 	active_probe_model_override: string | null
+	request_timeout_ms_override: string
 	priority?: number
 	models: ModelRow[]
 	channels: ChannelRow[]
@@ -167,6 +174,7 @@ function emptyForm(): ProviderForm {
 		active_probe_interval_seconds_override: null,
 		active_probe_success_threshold_override: null,
 		active_probe_model_override: null,
+		request_timeout_ms_override: '',
 		priority: undefined,
 		models: [],
 		channels: [],
@@ -188,6 +196,10 @@ function fromProvider(provider: Provider): ProviderForm {
 		active_probe_success_threshold_override:
 			provider.active_probe_success_threshold_override ?? null,
 		active_probe_model_override: provider.active_probe_model_override ?? null,
+		request_timeout_ms_override:
+			provider.request_timeout_ms_override != null ?
+				String(provider.request_timeout_ms_override)
+			:	'',
 		priority: provider.priority,
 		models: Object.entries(provider.models).map(([model, entry]) => ({
 			model,
@@ -200,7 +212,31 @@ function fromProvider(provider: Provider): ProviderForm {
 			base_url: channel.base_url,
 			api_key: '',
 			weight: String(channel.weight),
-			enabled: channel.enabled
+			enabled: channel.enabled,
+			passive_failure_threshold_override:
+				channel.passive_failure_threshold_override != null ?
+					String(channel.passive_failure_threshold_override)
+				:	'',
+			passive_cooldown_seconds_override:
+				channel.passive_cooldown_seconds_override != null ?
+					String(channel.passive_cooldown_seconds_override)
+				:	'',
+			passive_window_seconds_override:
+				channel.passive_window_seconds_override != null ?
+					String(channel.passive_window_seconds_override)
+				:	'',
+			passive_min_samples_override:
+				channel.passive_min_samples_override != null ?
+					String(channel.passive_min_samples_override)
+				:	'',
+			passive_failure_rate_threshold_override:
+				channel.passive_failure_rate_threshold_override != null ?
+					String(channel.passive_failure_rate_threshold_override)
+				:	'',
+			passive_rate_limit_cooldown_seconds_override:
+				channel.passive_rate_limit_cooldown_seconds_override != null ?
+					String(channel.passive_rate_limit_cooldown_seconds_override)
+				:	''
 		})),
 		transforms: provider.transforms ?? []
 	}
@@ -836,7 +872,31 @@ function ProviderDialog({
 			base_url: row.base_url.trim(),
 			api_key: row.api_key.trim() || undefined,
 			weight: Number(row.weight),
-			enabled: row.enabled
+			enabled: row.enabled,
+			passive_failure_threshold_override:
+				row.passive_failure_threshold_override.trim() ?
+					Number(row.passive_failure_threshold_override)
+				:	null,
+			passive_cooldown_seconds_override:
+				row.passive_cooldown_seconds_override.trim() ?
+					Number(row.passive_cooldown_seconds_override)
+				:	null,
+			passive_window_seconds_override:
+				row.passive_window_seconds_override.trim() ?
+					Number(row.passive_window_seconds_override)
+				:	null,
+			passive_min_samples_override:
+				row.passive_min_samples_override.trim() ?
+					Number(row.passive_min_samples_override)
+				:	null,
+			passive_failure_rate_threshold_override:
+				row.passive_failure_rate_threshold_override.trim() ?
+					Number(row.passive_failure_rate_threshold_override)
+				:	null,
+			passive_rate_limit_cooldown_seconds_override:
+				row.passive_rate_limit_cooldown_seconds_override.trim() ?
+					Number(row.passive_rate_limit_cooldown_seconds_override)
+				:	null
 		}))
 
 		for (const channel of channels) {
@@ -854,6 +914,55 @@ function ProviderDialog({
 			}
 			if (!Number.isFinite(channel.weight) || channel.weight < 0) {
 				toast.error(t('providers.validationChannelWeight'))
+				return null
+			}
+			if (
+				channel.passive_failure_threshold_override !== null &&
+				(!Number.isFinite(channel.passive_failure_threshold_override) ||
+					channel.passive_failure_threshold_override < 1)
+			) {
+				toast.error(t('providers.validationChannelPassiveThreshold'))
+				return null
+			}
+			if (
+				channel.passive_cooldown_seconds_override !== null &&
+				(!Number.isFinite(channel.passive_cooldown_seconds_override) ||
+					channel.passive_cooldown_seconds_override < 1)
+			) {
+				toast.error(t('providers.validationChannelPassiveCooldown'))
+				return null
+			}
+			if (
+				channel.passive_window_seconds_override !== null &&
+				(!Number.isFinite(channel.passive_window_seconds_override) ||
+					channel.passive_window_seconds_override < 1)
+			) {
+				toast.error(t('providers.validationChannelPassiveWindow'))
+				return null
+			}
+			if (
+				channel.passive_min_samples_override !== null &&
+				(!Number.isFinite(channel.passive_min_samples_override) ||
+					channel.passive_min_samples_override < 1)
+			) {
+				toast.error(t('providers.validationChannelPassiveSamples'))
+				return null
+			}
+			if (
+				channel.passive_failure_rate_threshold_override !== null &&
+				(!Number.isFinite(channel.passive_failure_rate_threshold_override) ||
+					channel.passive_failure_rate_threshold_override < 0.01 ||
+					channel.passive_failure_rate_threshold_override > 1)
+			) {
+				toast.error(t('providers.validationChannelPassiveRate'))
+				return null
+			}
+			if (
+				channel.passive_rate_limit_cooldown_seconds_override !== null &&
+				(!Number.isFinite(channel.passive_rate_limit_cooldown_seconds_override) ||
+					channel.passive_rate_limit_cooldown_seconds_override < 1)
+			) {
+				toast.error(t('providers.validationChannelRateLimitCooldown'))
 				return null
 			}
 		}
@@ -878,6 +987,19 @@ function ProviderDialog({
 			return null
 		}
 
+		const requestTimeoutMsOverride =
+			form.request_timeout_ms_override.trim() ?
+				Number(form.request_timeout_ms_override)
+			:	null
+		if (
+			requestTimeoutMsOverride !== null &&
+			(!Number.isFinite(requestTimeoutMsOverride) ||
+				requestTimeoutMsOverride < 1)
+		) {
+			toast.error(t('providers.validationProviderRequestTimeout'))
+			return null
+		}
+
 		return {
 			name: form.name.trim(),
 			provider_type: form.provider_type,
@@ -894,6 +1016,7 @@ function ProviderDialog({
 				form.active_probe_model_override?.trim() ?
 					form.active_probe_model_override.trim()
 				: 	null,
+			request_timeout_ms_override: requestTimeoutMsOverride,
 			enabled: form.enabled,
 			priority: form.priority
 		}
@@ -1136,6 +1259,24 @@ function ProviderDialog({
 									{t('providers.probeOverrideDescription')}
 								</p>
 							</div>
+							<div className='space-y-2'>
+								<Label>{t('providers.requestTimeoutMsOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={t('providers.inheritGlobal')}
+									value={form.request_timeout_ms_override}
+									onChange={e =>
+										setForm(prev => ({
+											...prev,
+											request_timeout_ms_override: e.target.value
+										}))
+									}
+								/>
+								<p className='text-xs text-muted-foreground'>
+									{t('providers.requestTimeoutMsOverrideDescription')}
+								</p>
+							</div>
 							<div className='flex items-center gap-2 pt-7'>
 								<Switch
 									checked={form.enabled}
@@ -1271,8 +1412,14 @@ function ProviderDialog({
 															base_url: '',
 															api_key: '',
 															weight: '1',
-															enabled: true
-														}
+															enabled: true,
+															passive_failure_threshold_override: '',
+															passive_cooldown_seconds_override: '',
+															passive_window_seconds_override: '',
+															passive_min_samples_override: '',
+													passive_failure_rate_threshold_override: '',
+													passive_rate_limit_cooldown_seconds_override: ''
+													}
 													]
 												}
 											})
@@ -1610,7 +1757,7 @@ function ProviderDialog({
 					}
 				}}
 			>
-				<DialogContent className='max-w-lg'>
+				<DialogContent className='max-w-lg max-h-[85vh] flex flex-col overflow-hidden'>
 					<DialogHeader>
 						<DialogTitle>{t('providers.channelsSection')}</DialogTitle>
 						<DialogDescription>
@@ -1619,7 +1766,7 @@ function ProviderDialog({
 					</DialogHeader>
 
 					{selectedChannel && editingChannelIndex !== null && (
-						<div className='space-y-3'>
+						<div className='space-y-3 overflow-y-auto flex-1 min-h-0 pr-1'>
 							<div className='space-y-2'>
 								<Label>{t('common.name')}</Label>
 								<Input
@@ -1670,6 +1817,100 @@ function ProviderDialog({
 									onChange={e =>
 										updateChannel(editingChannelIndex, {
 											weight: e.target.value
+										})
+									}
+								/>
+							</div>
+
+							<Separator />
+
+							<div className='space-y-2'>
+								<Label>{t('providers.passiveFailureThresholdOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={t('providers.inheritGlobal')}
+									value={selectedChannel.passive_failure_threshold_override}
+									onChange={e =>
+										updateChannel(editingChannelIndex, {
+											passive_failure_threshold_override: e.target.value
+										})
+									}
+								/>
+							</div>
+
+							<div className='space-y-2'>
+								<Label>{t('providers.passiveCooldownSecondsOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={t('providers.inheritGlobal')}
+									value={selectedChannel.passive_cooldown_seconds_override}
+									onChange={e =>
+										updateChannel(editingChannelIndex, {
+											passive_cooldown_seconds_override: e.target.value
+										})
+									}
+								/>
+							</div>
+
+							<div className='space-y-2'>
+								<Label>{t('providers.passiveWindowSecondsOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={t('providers.inheritGlobal')}
+									value={selectedChannel.passive_window_seconds_override}
+									onChange={e =>
+										updateChannel(editingChannelIndex, {
+											passive_window_seconds_override: e.target.value
+										})
+									}
+								/>
+							</div>
+
+							<div className='space-y-2'>
+								<Label>{t('providers.passiveMinSamplesOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={t('providers.inheritGlobal')}
+									value={selectedChannel.passive_min_samples_override}
+									onChange={e =>
+										updateChannel(editingChannelIndex, {
+											passive_min_samples_override: e.target.value
+										})
+									}
+								/>
+							</div>
+
+							<div className='space-y-2'>
+								<Label>{t('providers.passiveFailureRateThresholdOverride')}</Label>
+								<Input
+									type='number'
+									min='0.01'
+									max='1'
+									step='0.01'
+									placeholder={t('providers.inheritGlobal')}
+									value={selectedChannel.passive_failure_rate_threshold_override}
+									onChange={e =>
+										updateChannel(editingChannelIndex, {
+											passive_failure_rate_threshold_override: e.target.value
+										})
+									}
+								/>
+							</div>
+
+							<div className='space-y-2'>
+								<Label>{t('providers.passiveRateLimitCooldownSecondsOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={t('providers.inheritGlobal')}
+									value={selectedChannel.passive_rate_limit_cooldown_seconds_override}
+									onChange={e =>
+										updateChannel(editingChannelIndex, {
+											passive_rate_limit_cooldown_seconds_override: e.target.value
 										})
 									}
 								/>
