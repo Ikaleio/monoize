@@ -1656,7 +1656,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         // Sum query
-        let mut sum_sql = "SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) as total_charge FROM request_logs rl WHERE rl.user_id = $1".to_string();
+        let mut sum_sql = "SELECT CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) as total_charge FROM request_logs rl WHERE rl.user_id = $1".to_string();
         let mut sum_values: Vec<SeaValue> = vec![user_id.into()];
         let mut sum_idx = 2usize;
         append_request_log_filters(
@@ -1777,7 +1777,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         // Sum query
-        let mut sum_sql = r#"SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) as total_charge FROM request_logs rl
+        let mut sum_sql = r#"SELECT CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) as total_charge FROM request_logs rl
                LEFT JOIN users u ON rl.user_id = u.id
                WHERE 1 = 1"#.to_string();
         let mut sum_values: Vec<SeaValue> = Vec::new();
@@ -1875,7 +1875,7 @@ impl UserStore {
             r#"SELECT
                  {bucket_expr} AS bucket_idx,
                  rl.model,
-                 COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS cost_nano,
+                 CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) AS cost_nano,
                  COUNT(*) AS call_count
                FROM request_logs rl
                WHERE rl.created_at >= $3 AND rl.created_at < $4"#
@@ -1959,7 +1959,7 @@ impl UserStore {
 
         // 3. Total stats for the range
         let mut total_sql = r#"SELECT
-                 COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS total_cost,
+                 CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) AS total_cost,
                  COUNT(*) AS total_calls
                FROM request_logs rl
                WHERE rl.created_at >= $1 AND rl.created_at < $2"#.to_string();
@@ -1987,7 +1987,7 @@ impl UserStore {
 
         // 4. Today stats
         let mut today_sql = r#"SELECT
-                 COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS today_cost,
+                 CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) AS today_cost,
                  COUNT(*) AS today_calls
                FROM request_logs rl
                WHERE rl.created_at >= $1"#.to_string();
