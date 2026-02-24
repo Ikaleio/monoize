@@ -1,6 +1,11 @@
+use crate::db::DbPool;
+use crate::entity::system_settings;
 use chrono::{DateTime, Utc};
+use sea_orm::{
+    EntityTrait, Set,
+    sea_query::OnConflict,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Row, Sqlite};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,23 +69,12 @@ impl Default for SystemSettings {
 
 #[derive(Clone)]
 pub struct SettingsStore {
-    pool: Pool<Sqlite>,
+    db: DbPool,
 }
 
 impl SettingsStore {
-    pub async fn new(pool: Pool<Sqlite>) -> Result<Self, String> {
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS system_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        let store = Self { pool };
+    pub async fn new(db: DbPool) -> Result<Self, String> {
+        let store = Self { db };
         store.ensure_defaults().await?;
         Ok(store)
     }
@@ -177,46 +171,64 @@ impl SettingsStore {
 
     async fn set_if_not_exists(&self, key: &str, value: &str) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT OR IGNORE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)",
+        // INSERT ... ON CONFLICT DO NOTHING — works cross-DB via sea-query
+        let insert = system_settings::Entity::insert(system_settings::ActiveModel {
+            key: Set(key.to_string()),
+            value: Set(value.to_string()),
+            updated_at: Set(now),
+        })
+        .on_conflict(
+            OnConflict::column(system_settings::Column::Key)
+                .do_nothing()
+                .to_owned(),
         )
-        .bind(key)
-        .bind(value)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        .do_nothing();
+
+        insert
+            .exec(self.db.write())
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let row = sqlx::query("SELECT value FROM system_settings WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
+        let row = system_settings::Entity::find_by_id(key.to_string())
+            .one(self.db.read())
             .await
             .map_err(|e| e.to_string())?;
 
-        Ok(row.map(|r| r.try_get("value").unwrap_or_default()))
+        Ok(row.map(|r| r.value))
     }
 
     pub async fn set(&self, key: &str, value: &str) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        )
-        .bind(key)
-        .bind(value)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+
+        let model = system_settings::ActiveModel {
+            key: Set(key.to_string()),
+            value: Set(value.to_string()),
+            updated_at: Set(now),
+        };
+
+        let insert = system_settings::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(system_settings::Column::Key)
+                    .update_columns([
+                        system_settings::Column::Value,
+                        system_settings::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            );
+
+        insert
+            .exec(self.db.write())
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn get_all(&self) -> Result<SystemSettings, String> {
-        let rows = sqlx::query("SELECT key, value, updated_at FROM system_settings")
-            .fetch_all(&self.pool)
+        let rows = system_settings::Entity::find()
+            .all(self.db.read())
             .await
             .map_err(|e| e.to_string())?;
 
@@ -224,55 +236,54 @@ impl SettingsStore {
         let mut latest_update = settings.updated_at;
 
         for row in rows {
-            let key: String = row.try_get("key").map_err(|e| e.to_string())?;
-            let value: String = row.try_get("value").map_err(|e| e.to_string())?;
-            let updated_at_str: String = row.try_get("updated_at").map_err(|e| e.to_string())?;
-
-            if let Ok(updated_at) = DateTime::parse_from_rfc3339(&updated_at_str) {
+            if let Ok(updated_at) = DateTime::parse_from_rfc3339(&row.updated_at) {
                 let updated_at = updated_at.with_timezone(&Utc);
                 if updated_at > latest_update {
                     latest_update = updated_at;
                 }
             }
 
-            match key.as_str() {
+            match row.key.as_str() {
                 "registration_enabled" => {
-                    settings.registration_enabled = value.parse().unwrap_or(true);
+                    settings.registration_enabled = row.value.parse().unwrap_or(true);
                 }
                 "default_user_role" => {
-                    settings.default_user_role = value;
+                    settings.default_user_role = row.value;
                 }
                 "session_ttl_days" => {
-                    settings.session_ttl_days = value.parse().unwrap_or(7);
+                    settings.session_ttl_days = row.value.parse().unwrap_or(7);
                 }
                 "api_key_max_per_user" => {
-                    settings.api_key_max_per_user = value.parse().unwrap_or(1000);
+                    settings.api_key_max_per_user = row.value.parse().unwrap_or(1000);
                 }
                 "site_name" => {
-                    settings.site_name = value;
+                    settings.site_name = row.value;
                 }
                 "site_description" => {
-                    settings.site_description = value;
+                    settings.site_description = row.value;
                 }
                 "api_base_url" => {
-                    settings.api_base_url = value;
+                    settings.api_base_url = row.value;
                 }
                 "reasoning_suffix_map" => {
-                    if let Ok(map) = serde_json::from_str(&value) {
+                    if let Ok(map) = serde_json::from_str(&row.value) {
                         settings.reasoning_suffix_map = map;
                     }
                 }
                 "monoize_active_probe_enabled" => {
-                    settings.monoize_active_probe_enabled = value.parse().unwrap_or(true);
+                    settings.monoize_active_probe_enabled =
+                        row.value.parse().unwrap_or(true);
                 }
                 "monoize_active_probe_interval_seconds" => {
-                    settings.monoize_active_probe_interval_seconds = value.parse().unwrap_or(30);
+                    settings.monoize_active_probe_interval_seconds =
+                        row.value.parse().unwrap_or(30);
                 }
                 "monoize_active_probe_success_threshold" => {
-                    settings.monoize_active_probe_success_threshold = value.parse().unwrap_or(1);
+                    settings.monoize_active_probe_success_threshold =
+                        row.value.parse().unwrap_or(1);
                 }
                 "monoize_active_probe_model" => {
-                    let trimmed = value.trim();
+                    let trimmed = row.value.trim();
                     settings.monoize_active_probe_model = if trimmed.is_empty() {
                         None
                     } else {
@@ -280,26 +291,32 @@ impl SettingsStore {
                     };
                 }
                 "monoize_passive_failure_threshold" => {
-                    settings.monoize_passive_failure_threshold = value.parse().unwrap_or(3);
+                    settings.monoize_passive_failure_threshold =
+                        row.value.parse().unwrap_or(3);
                 }
                 "monoize_passive_cooldown_seconds" => {
-                    settings.monoize_passive_cooldown_seconds = value.parse().unwrap_or(60);
+                    settings.monoize_passive_cooldown_seconds =
+                        row.value.parse().unwrap_or(60);
                 }
                 "monoize_passive_window_seconds" => {
-                    settings.monoize_passive_window_seconds = value.parse().unwrap_or(30);
+                    settings.monoize_passive_window_seconds =
+                        row.value.parse().unwrap_or(30);
                 }
                 "monoize_passive_min_samples" => {
-                    settings.monoize_passive_min_samples = value.parse().unwrap_or(20);
+                    settings.monoize_passive_min_samples =
+                        row.value.parse().unwrap_or(20);
                 }
                 "monoize_passive_failure_rate_threshold" => {
-                    settings.monoize_passive_failure_rate_threshold = value.parse().unwrap_or(0.6);
+                    settings.monoize_passive_failure_rate_threshold =
+                        row.value.parse().unwrap_or(0.6);
                 }
                 "monoize_passive_rate_limit_cooldown_seconds" => {
                     settings.monoize_passive_rate_limit_cooldown_seconds =
-                        value.parse().unwrap_or(15);
+                        row.value.parse().unwrap_or(15);
                 }
                 "monoize_request_timeout_ms" => {
-                    settings.monoize_request_timeout_ms = value.parse().unwrap_or(30000);
+                    settings.monoize_request_timeout_ms =
+                        row.value.parse().unwrap_or(30000);
                 }
                 _ => {}
             }

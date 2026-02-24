@@ -91,6 +91,7 @@ interface EditFormData {
   inputCostPerM: string;
   outputCostPerM: string;
   cacheReadCostPerM: string;
+  cacheWriteCostPerM: string;
   reasoningCostPerM: string;
   maxInputTokens: string;
   maxOutputTokens: string;
@@ -104,6 +105,7 @@ const emptyForm: EditFormData = {
   inputCostPerM: "",
   outputCostPerM: "",
   cacheReadCostPerM: "",
+  cacheWriteCostPerM: "",
   reasoningCostPerM: "",
   maxInputTokens: "",
   maxOutputTokens: "",
@@ -118,6 +120,7 @@ function recordToForm(r: ModelMetadataRecord): EditFormData {
     inputCostPerM: nanoToPerMillionInput(r.input_cost_per_token_nano),
     outputCostPerM: nanoToPerMillionInput(r.output_cost_per_token_nano),
     cacheReadCostPerM: nanoToPerMillionInput(r.cache_read_input_cost_per_token_nano),
+    cacheWriteCostPerM: nanoToPerMillionInput(r.cache_creation_input_cost_per_token_nano),
     reasoningCostPerM: nanoToPerMillionInput(r.output_cost_per_reasoning_token_nano),
     maxInputTokens: r.max_input_tokens?.toString() ?? "",
     maxOutputTokens: r.max_output_tokens?.toString() ?? "",
@@ -132,6 +135,7 @@ function formToInput(form: EditFormData): UpsertModelMetadataInput {
     input_cost_per_token_nano: perMillionToNano(form.inputCostPerM),
     output_cost_per_token_nano: perMillionToNano(form.outputCostPerM),
     cache_read_input_cost_per_token_nano: perMillionToNano(form.cacheReadCostPerM),
+    cache_creation_input_cost_per_token_nano: perMillionToNano(form.cacheWriteCostPerM),
     output_cost_per_reasoning_token_nano: perMillionToNano(form.reasoningCostPerM),
     max_input_tokens: form.maxInputTokens ? Number(form.maxInputTokens) : null,
     max_output_tokens: form.maxOutputTokens ? Number(form.maxOutputTokens) : null,
@@ -144,6 +148,7 @@ interface ProviderVariant {
   inputCostPerM: string;
   outputCostPerM: string;
   cacheReadCostPerM: string;
+  cacheWriteCostPerM: string;
   reasoningCostPerM: string;
   maxInputTokens: string;
   maxOutputTokens: string;
@@ -171,6 +176,7 @@ function extractProviderVariants(rawJson: Record<string, unknown>): ProviderVari
       inputCostPerM: costStr(cost?.input),
       outputCostPerM: costStr(cost?.output),
       cacheReadCostPerM: costStr(cost?.cache_read),
+      cacheWriteCostPerM: costStr(cost?.cache_write),
       reasoningCostPerM: costStr(cost?.reasoning),
       maxInputTokens: toStr(limit?.input),
       maxOutputTokens: toStr(limit?.output),
@@ -187,6 +193,7 @@ function applyVariantToForm(form: EditFormData, variant: ProviderVariant): EditF
     inputCostPerM: variant.inputCostPerM,
     outputCostPerM: variant.outputCostPerM,
     cacheReadCostPerM: variant.cacheReadCostPerM,
+    cacheWriteCostPerM: variant.cacheWriteCostPerM,
     reasoningCostPerM: variant.reasoningCostPerM,
     maxInputTokens: variant.maxInputTokens,
     maxOutputTokens: variant.maxOutputTokens,
@@ -390,6 +397,16 @@ export function ModelMetadataPage() {
                   step="any"
                   value={form.cacheReadCostPerM}
                   onChange={(e) => setForm({ ...form, cacheReadCostPerM: e.target.value })}
+                  placeholder="0"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">{t("modelMetadata.cacheWriteCost")}</Label>
+                <Input
+                  type="number"
+                  step="any"
+                  value={form.cacheWriteCostPerM}
+                  onChange={(e) => setForm({ ...form, cacheWriteCostPerM: e.target.value })}
                   placeholder="0"
                 />
               </div>

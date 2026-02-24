@@ -8,7 +8,14 @@ use serde_json::{json, Value};
 use std::any::Any;
 
 #[derive(Debug, Deserialize)]
-struct Config {}
+struct Config {
+    #[serde(default = "default_content")]
+    content: String,
+}
+
+fn default_content() -> String {
+    " ".to_string()
+}
 
 impl TransformConfig for Config {
     fn as_any(&self) -> &dyn Any {
@@ -30,7 +37,9 @@ impl Transform for AppendEmptyUserMessageTransform {
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": {},
+            "properties": {
+                "content": { "type": "string", "description": "Text content for the padding user message. Defaults to a single space." }
+            },
             "additionalProperties": false
         })
     }
@@ -49,13 +58,17 @@ impl Transform for AppendEmptyUserMessageTransform {
         &self,
         data: UrpData<'_>,
         _phase: Phase,
-        _config: &dyn TransformConfig,
+        config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
+        let cfg = config
+            .as_any()
+            .downcast_ref::<Config>()
+            .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         if let UrpData::Request(req) = data {
             if let Some(last) = req.messages.last() {
                 if last.role == Role::Assistant {
-                    req.messages.push(Message::new(Role::User));
+                    req.messages.push(Message::text(Role::User, cfg.content.clone()));
                 }
             }
         }

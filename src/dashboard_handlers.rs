@@ -1839,6 +1839,7 @@ pub async fn test_channel(
         state.monoize_runtime.read().await.request_timeout_ms,
         &model_name,
         provider.provider_type,
+        &provider.api_type_overrides,
     )
     .await;
     let latency_ms = started_at.elapsed().as_millis() as u64;

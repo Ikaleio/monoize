@@ -20,10 +20,14 @@ A request log row has:
 - `upstream_model: string?`
 - `channel_id: string?` (the channel that ultimately served the request)
 - `is_stream: boolean`
-- `prompt_tokens: integer?`
-- `completion_tokens: integer?`
+- `input_tokens: integer?`
+- `output_tokens: integer?`
 - `cached_tokens: integer?`
 - `reasoning_tokens: integer?`
+- `cache_creation_tokens: integer?`
+- `tool_prompt_tokens: integer?`
+- `accepted_prediction_tokens: integer?`
+- `rejected_prediction_tokens: integer?`
 - `provider_multiplier: float?`
 - `charge_nano_usd: string?` (nano-dollar integer string)
 - `status: string` (`"pending"`, `"success"`, or `"error"`)
@@ -87,7 +91,7 @@ RL6. For pass-through streaming requests, `ttfb_ms` MUST record the time from `s
 
 RL6a. For pass-through streaming requests where usage cannot be extracted from streamed events, token usage fields MAY be omitted (set to null).
 
-RL6b. For pass-through streaming requests where usage is extracted while the lifecycle row is still `status = "pending"`, Monoize MUST incrementally update the pending row usage fields (`prompt_tokens`, `completion_tokens`, `cached_tokens`, `reasoning_tokens`, `usage_breakdown_json`) using the latest cumulative usage snapshot.
+RL6b. For pass-through streaming requests where usage is extracted while the lifecycle row is still `status = "pending"`, Monoize MUST incrementally update the pending row usage fields (`input_tokens`, `output_tokens`, `cache_read_tokens`, `reasoning_tokens`, `cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`, `usage_breakdown_json`) using the latest cumulative usage snapshot.
 
 RL6c. RL6b incremental pending updates MUST NOT execute billing deduction and MUST NOT replace terminal finalization (`pending -> success/error`).
 
@@ -175,7 +179,7 @@ RL-API5. For admin users applying `username` filter, rows with `request_kind = "
 The API returns the same enriched schema for all users. The frontend controls column visibility:
 
 - **Admin-only columns:** `username`, `channel` (display text uses `provider_name` when available, otherwise falls back to `provider_id`; tooltip shows channel name and upstream model context)
-- **All users see:** `created_at`, `request_id`, `model` (with ModelBadge), `api_key_name`, `duration_ms`/`ttfb_ms`/`is_stream` (merged badge group), `prompt_tokens`, `completion_tokens`, `charge_nano_usd`, `status`, `request_ip`, and error tooltip details (`error_code`, `error_message`, `error_http_status`) when `status = "error"`.
+- **All users see:** `created_at`, `request_id`, `model` (with ModelBadge), `api_key_name`, `duration_ms`/`ttfb_ms`/`is_stream` (merged badge group), `input_tokens`, `output_tokens`, `charge_nano_usd`, `status`, `request_ip`, and error tooltip details (`error_code`, `error_message`, `error_http_status`) when `status = "error"`.
 
 ## 4. Storage
 
@@ -186,6 +190,8 @@ RL-S2. The table MUST have a composite index on `(user_id, created_at DESC)` for
 RL-S3. The `user_id` foreign key MUST cascade on delete.
 
 RL-S4. New columns (`request_id`, `channel_id`, `ttfb_ms`, `request_ip`, `usage_breakdown_json`, `billing_breakdown_json`, `error_code`, `error_message`, `error_http_status`, `tried_providers_json`) MUST be added via `ALTER TABLE ADD COLUMN` statements in the migration logic. All new columns are nullable to preserve backward compatibility with existing rows.
+
+RL-S6. The migration from `prompt_tokens`/`completion_tokens` to `input_tokens`/`output_tokens` MUST be performed via `ALTER TABLE RENAME COLUMN` when the database supports it, otherwise via column addition + data copy. New usage detail columns (`cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`) MUST be added via `ALTER TABLE ADD COLUMN` with nullable defaults.
 
 RL-S5. `request_kind` MUST be added as a nullable `TEXT` column via migration logic, with null as backward-compatible default for existing rows.
 
@@ -200,6 +206,12 @@ FL2. The `created_at` field MUST be displayed as a localized timestamp in format
 FL3. The model column MUST use the `ModelBadge` component (same as Provider page).
 
 FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a single cell with adjacent rounded badges: `[总用时] [首字时间] [流]` (where 首字时间 and 流 badges are only shown when applicable).
+FL4a. Hovering the `duration_ms` badge MUST show a tooltip containing the total duration, and an "Average TPS" (tokens per second) metric when `duration_ms > 0` and `output_tokens > 0`. The TPS denominator MUST be computed as follows:
+
+- If `ttfb_ms` is present and `duration_ms > ttfb_ms`: denominator = `duration_ms - ttfb_ms` (generation window only).
+- Otherwise (ttfb_ms is null, or ttfb_ms >= duration_ms, i.e. no visible streaming output such as pure reasoning then tool_call): denominator = `duration_ms` (total request time).
+
+TPS = `output_tokens / (denominator / 1000)`, displayed with two decimal places and unit `t/s`.
 
 FL5. The `api_key_name` column header MUST be "Token" (referring to the API key name, not the literal token value).
 
@@ -214,7 +226,7 @@ FL7. The top of the page MUST include a search bar and filter controls:
 
 FL7a. The filter-control area MUST display the total charge sum for the current filter conditions. The value MUST be formatted as regular USD currency with 6 fractional digits (e.g. `$1.234567`). The label MUST use the i18n key `requestLogs.totalCost`. The element MUST be displayed in the summary area (top-right) alongside the existing "Showing X-Y of Z" text.
 
-FL8. Column order (left to right): `created_at`, `request_id` (with adjacent status indicator), `model` (ModelBadge), `api_key_name`, `[username]` (admin), `[channel]` (admin, with tooltip showing provider context), `duration/ttfb/stream` (merged badges), `prompt_tokens` (input), `completion_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
+FL8. Column order (left to right): `created_at`, `request_id` (with adjacent status indicator), `model` (ModelBadge), `api_key_name`, `[username]` (admin), `[channel]` (admin, with tooltip showing provider context), `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
 
 FL9. For the admin channel column display value:
 
@@ -243,7 +255,7 @@ FL15. The table MUST use compact column spacing:
 - Header and body cells MUST use reduced horizontal/vertical padding suitable for dense log browsing.
 - Columns MUST use content-oriented widths (instead of evenly stretched wide columns) to avoid large unused horizontal gaps between adjacent fields.
 
-FL16. Token-count columns (`prompt_tokens` / `completion_tokens`) MUST keep compact widths suitable for short integer values (commonly up to 7 digits), and should avoid consuming excess horizontal space from adjacent columns.
+FL16. Token-count columns (`input_tokens` / `output_tokens`) MUST keep compact widths suitable for short integer values (commonly up to 7 digits), and should avoid consuming excess horizontal space from adjacent columns.
 
 FL17. The `duration/ttfb/stream` merged column MUST use compact badge spacing and width so that token-count columns remain visually closer to it (reduced horizontal gap).
 
@@ -267,7 +279,7 @@ FL25a. The Cost column MUST NOT truncate visible cell text. The table layout MUS
 
 FL26. Hovering the `charge_nano_usd` (Cost) cell MUST show billing breakdown details sourced from `billing_breakdown_json`, including per-class expression `unit_price × token_count` and subtotal, plus multiplier/base/final charge.
 
-FL27. Hovering the `prompt_tokens` (Input) and `completion_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
+FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 
 FL28. For rows with `status = "error"`, hovering the request-id/status indicator MUST show error details from `error_code`, `error_message`, and `error_http_status` when present.
 

@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
+use sea_orm::{ConnectionTrait, QueryResult, Value};
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Row, Sqlite};
+
+use crate::db::DbPool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -271,132 +273,31 @@ pub struct UpdateProviderInput {
 
 #[derive(Clone)]
 pub struct ProviderStore {
-    pool: Pool<Sqlite>,
+    db: DbPool,
 }
 
 impl ProviderStore {
-    pub async fn new(pool: Pool<Sqlite>) -> Result<Self, String> {
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS providers (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL DEFAULT '',
-                provider_type TEXT NOT NULL CHECK (provider_type IN ('responses', 'chat_completion', 'messages', 'gemini', 'grok', 'group')),
-                base_url TEXT,
-                auth_type TEXT CHECK (auth_type IN ('bearer', 'header', 'query') OR auth_type IS NULL),
-                auth_value TEXT,
-                auth_header_name TEXT,
-                auth_query_name TEXT,
-                capabilities_json TEXT,
-                strategy_json TEXT,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                priority INTEGER NOT NULL DEFAULT 0,
-                weight INTEGER NOT NULL DEFAULT 1,
-                tag TEXT,
-                groups_json TEXT NOT NULL DEFAULT '[]',
-                balance REAL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS model_mappings (
-                id TEXT PRIMARY KEY,
-                provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-                logical_model TEXT NOT NULL,
-                upstream_model TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE (provider_id, logical_model)
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_model_mappings_logical ON model_mappings(logical_model)")
-            .execute(&pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_model_mappings_provider ON model_mappings(provider_id)",
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS group_members (
-                id TEXT PRIMARY KEY,
-                group_provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-                member_provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE RESTRICT,
-                weight INTEGER NOT NULL DEFAULT 1 CHECK (weight >= 1),
-                priority INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                UNIQUE (group_provider_id, member_provider_id)
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_provider_id)")
-            .execute(&pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        // Migrate existing providers table to add new columns if they don't exist
-        let has_name_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('providers') WHERE name = 'name'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-
-        if !has_name_column {
-            sqlx::query("ALTER TABLE providers ADD COLUMN name TEXT NOT NULL DEFAULT ''")
-                .execute(&pool)
-                .await
-                .ok();
-            sqlx::query("ALTER TABLE providers ADD COLUMN weight INTEGER NOT NULL DEFAULT 1")
-                .execute(&pool)
-                .await
-                .ok();
-            sqlx::query("ALTER TABLE providers ADD COLUMN tag TEXT")
-                .execute(&pool)
-                .await
-                .ok();
-            sqlx::query("ALTER TABLE providers ADD COLUMN groups_json TEXT NOT NULL DEFAULT '[]'")
-                .execute(&pool)
-                .await
-                .ok();
-            sqlx::query("ALTER TABLE providers ADD COLUMN balance REAL")
-                .execute(&pool)
-                .await
-                .ok();
-        }
-
-        Ok(Self { pool })
+    pub async fn new(db: DbPool) -> Result<Self, String> {
+        Ok(Self { db })
     }
 
     pub async fn list_providers(&self) -> Result<Vec<Provider>, String> {
-        let rows = sqlx::query(
-            r#"SELECT id, name, provider_type, base_url, auth_type, auth_value, auth_header_name,
-                      auth_query_name, capabilities_json, strategy_json, enabled, priority,
-                      weight, tag, groups_json, balance, created_at, updated_at
-               FROM providers ORDER BY priority DESC, created_at ASC"#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                r#"SELECT id, name, provider_type, base_url, auth_type, auth_value, auth_header_name,
+                          auth_query_name, capabilities_json, strategy_json, enabled, priority,
+                          weight, tag, groups_json, balance, created_at, updated_at
+                   FROM providers ORDER BY priority DESC, created_at ASC"#,
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         let mut providers = Vec::new();
-        for row in rows {
-            let provider = self.row_to_provider(&row)?;
+        for row in &rows {
+            let provider = self.row_to_provider(row)?;
             providers.push(provider);
         }
 
@@ -411,16 +312,18 @@ impl ProviderStore {
     }
 
     pub async fn get_provider(&self, id: &str) -> Result<Option<Provider>, String> {
-        let row = sqlx::query(
-            r#"SELECT id, name, provider_type, base_url, auth_type, auth_value, auth_header_name,
-                      auth_query_name, capabilities_json, strategy_json, enabled, priority,
-                      weight, tag, groups_json, balance, created_at, updated_at
-               FROM providers WHERE id = ?"#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                r#"SELECT id, name, provider_type, base_url, auth_type, auth_value, auth_header_name,
+                          auth_query_name, capabilities_json, strategy_json, enabled, priority,
+                          weight, tag, groups_json, balance, created_at, updated_at
+                   FROM providers WHERE id = $1"#,
+                vec![id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
             let mut provider = self.row_to_provider(&row)?;
@@ -469,33 +372,36 @@ impl ProviderStore {
         let auth_header_name = input.auth.as_ref().and_then(|a| a.header_name.as_deref());
         let auth_query_name = input.auth.as_ref().and_then(|a| a.query_name.as_deref());
 
-        sqlx::query(
-            r#"INSERT INTO providers (id, name, provider_type, base_url, auth_type, auth_value,
-                                      auth_header_name, auth_query_name, capabilities_json,
-                                      strategy_json, enabled, priority, weight, tag, groups_json,
-                                      created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&id)
-        .bind(&input.name)
-        .bind(input.provider_type.as_str())
-        .bind(&input.base_url)
-        .bind(auth_type)
-        .bind(auth_value)
-        .bind(auth_header_name)
-        .bind(auth_query_name)
-        .bind(&capabilities_json)
-        .bind(&strategy_json)
-        .bind(input.enabled)
-        .bind(input.priority)
-        .bind(input.weight)
-        .bind(&input.tag)
-        .bind(&groups_json)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db
+            .write()
+            .execute(self.db.stmt(
+                r#"INSERT INTO providers (id, name, provider_type, base_url, auth_type, auth_value,
+                                          auth_header_name, auth_query_name, capabilities_json,
+                                          strategy_json, enabled, priority, weight, tag, groups_json,
+                                          created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"#,
+                vec![
+                    id.clone().into(),
+                    input.name.clone().into(),
+                    input.provider_type.as_str().into(),
+                    input.base_url.clone().into(),
+                    auth_type.map(|s| s.to_string()).into(),
+                    auth_value.map(|s| s.to_string()).into(),
+                    auth_header_name.map(|s| s.to_string()).into(),
+                    auth_query_name.map(|s| s.to_string()).into(),
+                    capabilities_json.into(),
+                    strategy_json.into(),
+                    Value::Int(Some(if input.enabled { 1 } else { 0 })),
+                    Value::Int(Some(input.priority)),
+                    Value::Int(Some(input.weight)),
+                    input.tag.clone().into(),
+                    groups_json.into(),
+                    now.to_rfc3339().into(),
+                    now.to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         for mapping in &input.model_map {
             self.create_model_mapping(&id, mapping).await?;
@@ -521,79 +427,106 @@ impl ProviderStore {
             .ok_or_else(|| "provider not found".to_string())?;
         let now = Utc::now();
 
-        let mut updates = Vec::new();
-        let mut bindings: Vec<String> = Vec::new();
+        let mut set_clauses = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
+        let mut idx = 1usize;
 
         if let Some(name) = &input.name {
-            updates.push("name = ?");
-            bindings.push(name.clone());
+            set_clauses.push(format!("name = ${idx}"));
+            values.push(name.clone().into());
+            idx += 1;
         }
 
         if let Some(base_url) = &input.base_url {
-            updates.push("base_url = ?");
-            bindings.push(base_url.clone());
+            set_clauses.push(format!("base_url = ${idx}"));
+            values.push(base_url.clone().into());
+            idx += 1;
         }
 
         if let Some(auth) = &input.auth {
-            updates.push("auth_type = ?");
-            bindings.push(auth.auth_type.as_str().to_string());
-            updates.push("auth_value = ?");
-            bindings.push(auth.value.clone());
-            updates.push("auth_header_name = ?");
-            bindings.push(auth.header_name.clone().unwrap_or_default());
-            updates.push("auth_query_name = ?");
-            bindings.push(auth.query_name.clone().unwrap_or_default());
+            set_clauses.push(format!("auth_type = ${idx}"));
+            values.push(auth.auth_type.as_str().into());
+            idx += 1;
+            set_clauses.push(format!("auth_value = ${idx}"));
+            values.push(auth.value.clone().into());
+            idx += 1;
+            set_clauses.push(format!("auth_header_name = ${idx}"));
+            values.push(auth.header_name.clone().unwrap_or_default().into());
+            idx += 1;
+            set_clauses.push(format!("auth_query_name = ${idx}"));
+            values.push(auth.query_name.clone().unwrap_or_default().into());
+            idx += 1;
         }
 
         if let Some(strategy) = &input.strategy {
-            updates.push("strategy_json = ?");
-            bindings.push(serde_json::to_string(strategy).map_err(|e| e.to_string())?);
+            set_clauses.push(format!("strategy_json = ${idx}"));
+            values.push(
+                serde_json::to_string(strategy)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
+            idx += 1;
         }
 
         if let Some(enabled) = input.enabled {
-            updates.push("enabled = ?");
-            bindings.push(if enabled { "1" } else { "0" }.to_string());
+            set_clauses.push(format!("enabled = ${idx}"));
+            values.push(Value::Int(Some(if enabled { 1 } else { 0 })));
+            idx += 1;
         }
 
         if let Some(priority) = input.priority {
-            updates.push("priority = ?");
-            bindings.push(priority.to_string());
+            set_clauses.push(format!("priority = ${idx}"));
+            values.push(Value::Int(Some(priority)));
+            idx += 1;
         }
 
         if let Some(weight) = input.weight {
-            updates.push("weight = ?");
-            bindings.push(weight.to_string());
+            set_clauses.push(format!("weight = ${idx}"));
+            values.push(Value::Int(Some(weight)));
+            idx += 1;
         }
 
         if let Some(tag) = &input.tag {
-            updates.push("tag = ?");
-            bindings.push(tag.clone());
+            set_clauses.push(format!("tag = ${idx}"));
+            values.push(tag.clone().into());
+            idx += 1;
         }
 
         if let Some(groups) = &input.groups {
-            updates.push("groups_json = ?");
-            bindings.push(serde_json::to_string(groups).map_err(|e| e.to_string())?);
+            set_clauses.push(format!("groups_json = ${idx}"));
+            values.push(
+                serde_json::to_string(groups)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
+            idx += 1;
         }
 
-        if !updates.is_empty() {
-            updates.push("updated_at = ?");
-            bindings.push(now.to_rfc3339());
-            bindings.push(id.to_string());
+        if !set_clauses.is_empty() {
+            set_clauses.push(format!("updated_at = ${idx}"));
+            values.push(now.to_rfc3339().into());
+            idx += 1;
 
-            let query = format!("UPDATE providers SET {} WHERE id = ?", updates.join(", "));
+            let sql = format!(
+                "UPDATE providers SET {} WHERE id = ${idx}",
+                set_clauses.join(", ")
+            );
+            values.push(id.into());
 
-            let mut q = sqlx::query(&query);
-            for b in &bindings {
-                q = q.bind(b);
-            }
-
-            q.execute(&self.pool).await.map_err(|e| e.to_string())?;
+            self.db
+                .write()
+                .execute(self.db.stmt(&sql, values))
+                .await
+                .map_err(|e| e.to_string())?;
         }
 
         if let Some(model_map) = &input.model_map {
-            sqlx::query("DELETE FROM model_mappings WHERE provider_id = ?")
-                .bind(id)
-                .execute(&self.pool)
+            self.db
+                .write()
+                .execute(self.db.stmt(
+                    "DELETE FROM model_mappings WHERE provider_id = $1",
+                    vec![id.into()],
+                ))
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -604,9 +537,12 @@ impl ProviderStore {
 
         if let Some(members) = &input.members {
             if existing.provider_type == ProviderType::Group {
-                sqlx::query("DELETE FROM group_members WHERE group_provider_id = ?")
-                    .bind(id)
-                    .execute(&self.pool)
+                self.db
+                    .write()
+                    .execute(self.db.stmt(
+                        "DELETE FROM group_members WHERE group_provider_id = $1",
+                        vec![id.into()],
+                    ))
                     .await
                     .map_err(|e| e.to_string())?;
 
@@ -622,20 +558,29 @@ impl ProviderStore {
     }
 
     pub async fn delete_provider(&self, id: &str) -> Result<(), String> {
-        let member_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM group_members WHERE member_provider_id = ?")
-                .bind(id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                "SELECT COUNT(*) as cnt FROM group_members WHERE member_provider_id = $1",
+                vec![id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "count query returned no rows".to_string())?;
+
+        let member_count: i64 = row.try_get("", "cnt").map_err(|e| e.to_string())?;
 
         if member_count > 0 {
             return Err("provider_in_use: provider is a member of one or more groups".to_string());
         }
 
-        sqlx::query("DELETE FROM providers WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
+        self.db
+            .write()
+            .execute(self.db.stmt(
+                "DELETE FROM providers WHERE id = $1",
+                vec![id.into()],
+            ))
             .await
             .map_err(|e| e.to_string())?;
 
@@ -646,26 +591,35 @@ impl ProviderStore {
         &self,
         provider_id: &str,
     ) -> Result<Vec<ModelMapping>, String> {
-        let rows = sqlx::query(
-            "SELECT id, provider_id, logical_model, upstream_model, created_at FROM model_mappings WHERE provider_id = ?"
-        )
-        .bind(provider_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT id, provider_id, logical_model, upstream_model, created_at FROM model_mappings WHERE provider_id = $1",
+                vec![provider_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         let mut mappings = Vec::new();
-        for row in rows {
-            let created_at_str: String = row.try_get("created_at").map_err(|e| e.to_string())?;
+        for row in &rows {
+            let created_at_str: String =
+                row.try_get("", "created_at").map_err(|e| e.to_string())?;
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                 .map_err(|e| e.to_string())?
                 .with_timezone(&Utc);
 
             mappings.push(ModelMapping {
-                id: row.try_get("id").map_err(|e| e.to_string())?,
-                provider_id: row.try_get("provider_id").map_err(|e| e.to_string())?,
-                logical_model: row.try_get("logical_model").map_err(|e| e.to_string())?,
-                upstream_model: row.try_get("upstream_model").map_err(|e| e.to_string())?,
+                id: row.try_get("", "id").map_err(|e| e.to_string())?,
+                provider_id: row
+                    .try_get("", "provider_id")
+                    .map_err(|e| e.to_string())?,
+                logical_model: row
+                    .try_get("", "logical_model")
+                    .map_err(|e| e.to_string())?,
+                upstream_model: row
+                    .try_get("", "upstream_model")
+                    .map_err(|e| e.to_string())?,
                 created_at,
             });
         }
@@ -674,31 +628,34 @@ impl ProviderStore {
     }
 
     pub async fn list_group_members(&self, group_id: &str) -> Result<Vec<GroupMember>, String> {
-        let rows = sqlx::query(
-            "SELECT id, group_provider_id, member_provider_id, weight, priority, created_at FROM group_members WHERE group_provider_id = ? ORDER BY priority DESC"
-        )
-        .bind(group_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt(
+                "SELECT id, group_provider_id, member_provider_id, weight, priority, created_at FROM group_members WHERE group_provider_id = $1 ORDER BY priority DESC",
+                vec![group_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         let mut members = Vec::new();
-        for row in rows {
-            let created_at_str: String = row.try_get("created_at").map_err(|e| e.to_string())?;
+        for row in &rows {
+            let created_at_str: String =
+                row.try_get("", "created_at").map_err(|e| e.to_string())?;
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                 .map_err(|e| e.to_string())?
                 .with_timezone(&Utc);
 
             members.push(GroupMember {
-                id: row.try_get("id").map_err(|e| e.to_string())?,
+                id: row.try_get("", "id").map_err(|e| e.to_string())?,
                 group_provider_id: row
-                    .try_get("group_provider_id")
+                    .try_get("", "group_provider_id")
                     .map_err(|e| e.to_string())?,
                 member_provider_id: row
-                    .try_get("member_provider_id")
+                    .try_get("", "member_provider_id")
                     .map_err(|e| e.to_string())?,
-                weight: row.try_get::<i32, _>("weight").map_err(|e| e.to_string())? as u32,
-                priority: row.try_get("priority").map_err(|e| e.to_string())?,
+                weight: row.try_get::<i32>("", "weight").map_err(|e| e.to_string())? as u32,
+                priority: row.try_get("", "priority").map_err(|e| e.to_string())?,
                 created_at,
             });
         }
@@ -714,17 +671,20 @@ impl ProviderStore {
         let id = format!("mm_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let now = Utc::now();
 
-        sqlx::query(
-            "INSERT INTO model_mappings (id, provider_id, logical_model, upstream_model, created_at) VALUES (?, ?, ?, ?, ?)"
-        )
-        .bind(&id)
-        .bind(provider_id)
-        .bind(&input.logical_model)
-        .bind(&input.upstream_model)
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db
+            .write()
+            .execute(self.db.stmt(
+                "INSERT INTO model_mappings (id, provider_id, logical_model, upstream_model, created_at) VALUES ($1, $2, $3, $4, $5)",
+                vec![
+                    id.into(),
+                    provider_id.into(),
+                    input.logical_model.as_str().into(),
+                    input.upstream_model.as_str().into(),
+                    now.to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         Ok(())
     }
@@ -746,33 +706,41 @@ impl ProviderStore {
         let id = format!("gm_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let now = Utc::now();
 
-        sqlx::query(
-            "INSERT INTO group_members (id, group_provider_id, member_provider_id, weight, priority, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&id)
-        .bind(group_id)
-        .bind(&input.provider_id)
-        .bind(input.weight as i32)
-        .bind(0i32)
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db
+            .write()
+            .execute(self.db.stmt(
+                "INSERT INTO group_members (id, group_provider_id, member_provider_id, weight, priority, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+                vec![
+                    id.into(),
+                    group_id.into(),
+                    input.provider_id.as_str().into(),
+                    Value::Int(Some(input.weight as i32)),
+                    Value::Int(Some(0)),
+                    now.to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         Ok(())
     }
 
-    fn row_to_provider(&self, row: &sqlx::sqlite::SqliteRow) -> Result<Provider, String> {
-        let provider_type_str: String = row.try_get("provider_type").map_err(|e| e.to_string())?;
+    fn row_to_provider(&self, row: &QueryResult) -> Result<Provider, String> {
+        let provider_type_str: String =
+            row.try_get("", "provider_type").map_err(|e| e.to_string())?;
         let provider_type = ProviderType::from_str(&provider_type_str)
             .ok_or_else(|| format!("invalid provider type: {}", provider_type_str))?;
 
-        let auth_type_str: Option<String> = row.try_get("auth_type").map_err(|e| e.to_string())?;
-        let auth_value: Option<String> = row.try_get("auth_value").map_err(|e| e.to_string())?;
-        let auth_header_name: Option<String> =
-            row.try_get("auth_header_name").map_err(|e| e.to_string())?;
-        let auth_query_name: Option<String> =
-            row.try_get("auth_query_name").map_err(|e| e.to_string())?;
+        let auth_type_str: Option<String> =
+            row.try_get("", "auth_type").map_err(|e| e.to_string())?;
+        let auth_value: Option<String> =
+            row.try_get("", "auth_value").map_err(|e| e.to_string())?;
+        let auth_header_name: Option<String> = row
+            .try_get("", "auth_header_name")
+            .map_err(|e| e.to_string())?;
+        let auth_query_name: Option<String> = row
+            .try_get("", "auth_query_name")
+            .map_err(|e| e.to_string())?;
 
         let auth = if let (Some(auth_type_str), Some(value)) = (auth_type_str, auth_value) {
             let auth_type = AuthType::from_str(&auth_type_str)
@@ -787,48 +755,47 @@ impl ProviderStore {
             None
         };
 
-        let strategy_json: Option<String> =
-            row.try_get("strategy_json").map_err(|e| e.to_string())?;
+        let strategy_json: Option<String> = row
+            .try_get("", "strategy_json")
+            .map_err(|e| e.to_string())?;
         let strategy: Option<GroupStrategy> = strategy_json
             .map(|s| serde_json::from_str(&s))
             .transpose()
             .map_err(|e| e.to_string())?;
 
-        let created_at_str: String = row.try_get("created_at").map_err(|e| e.to_string())?;
+        let created_at_str: String =
+            row.try_get("", "created_at").map_err(|e| e.to_string())?;
         let created_at = DateTime::parse_from_rfc3339(&created_at_str)
             .map_err(|e| e.to_string())?
             .with_timezone(&Utc);
 
-        let updated_at_str: String = row.try_get("updated_at").map_err(|e| e.to_string())?;
+        let updated_at_str: String =
+            row.try_get("", "updated_at").map_err(|e| e.to_string())?;
         let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
             .map_err(|e| e.to_string())?
             .with_timezone(&Utc);
 
-        let name: String = row.try_get("name").unwrap_or_else(|_| String::new());
-        let weight: i32 = row.try_get("weight").unwrap_or(1);
-        let tag: Option<String> = row.try_get("tag").unwrap_or(None);
         let groups_json: String = row
-            .try_get("groups_json")
-            .unwrap_or_else(|_| "[]".to_string());
+            .try_get("", "groups_json")
+            .map_err(|e| e.to_string())?;
         let groups: Vec<String> = serde_json::from_str(&groups_json).unwrap_or_default();
-        let balance: Option<f64> = row.try_get("balance").unwrap_or(None);
 
         Ok(Provider {
-            id: row.try_get("id").map_err(|e| e.to_string())?,
-            name,
+            id: row.try_get("", "id").map_err(|e| e.to_string())?,
+            name: row.try_get("", "name").map_err(|e| e.to_string())?,
             provider_type,
-            base_url: row.try_get("base_url").map_err(|e| e.to_string())?,
+            base_url: row.try_get("", "base_url").map_err(|e| e.to_string())?,
             auth,
             strategy,
             enabled: row
-                .try_get::<i32, _>("enabled")
+                .try_get::<i32>("", "enabled")
                 .map_err(|e| e.to_string())?
                 == 1,
-            priority: row.try_get("priority").map_err(|e| e.to_string())?,
-            weight,
-            tag,
+            priority: row.try_get("", "priority").map_err(|e| e.to_string())?,
+            weight: row.try_get("", "weight").map_err(|e| e.to_string())?,
+            tag: row.try_get("", "tag").map_err(|e| e.to_string())?,
             groups,
-            balance,
+            balance: row.try_get("", "balance").map_err(|e| e.to_string())?,
             created_at,
             updated_at,
             model_map: Vec::new(),
@@ -840,7 +807,6 @@ impl ProviderStore {
         provider.auth.as_ref().map(|a| a.value.clone())
     }
 
-    /// Find all enabled providers that have a model mapping for the given logical model.
     pub async fn find_providers_for_model(
         &self,
         logical_model: &str,
@@ -853,7 +819,6 @@ impl ProviderStore {
                 continue;
             }
 
-            // For concrete providers, check if they have a model mapping for this model
             if provider.provider_type != ProviderType::Group {
                 if provider
                     .model_map
@@ -868,7 +833,6 @@ impl ProviderStore {
         Ok(result)
     }
 
-    /// Find all enabled group providers that contain members serving the given logical model.
     pub async fn find_groups_for_model(
         &self,
         logical_model: &str,
@@ -876,7 +840,6 @@ impl ProviderStore {
         let all_providers = self.list_providers().await?;
         let mut result = Vec::new();
 
-        // Build a set of provider IDs that serve this model
         let serving_providers: std::collections::HashSet<String> = all_providers
             .iter()
             .filter(|p| p.enabled && p.provider_type != ProviderType::Group)
@@ -884,7 +847,6 @@ impl ProviderStore {
             .map(|p| p.id.clone())
             .collect();
 
-        // Find groups that have at least one member serving this model
         for provider in all_providers {
             if !provider.enabled || provider.provider_type != ProviderType::Group {
                 continue;

@@ -13,8 +13,8 @@ use axum::Router;
 use axum::routing::{get, post, put};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde_json::{Value, json};
+use crate::db::DbPool;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Once, OnceLock};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -76,6 +76,7 @@ pub async fn load_state() -> AppResult<AppState> {
     load_state_with_runtime(RuntimeConfig::from_env()).await
 }
 
+
 pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppState> {
     let auth = AuthState::new();
 
@@ -90,70 +91,54 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             )
         })?;
 
-    ensure_sqlite_file(&runtime.database_dsn).map_err(|err| {
+    let db = DbPool::connect(&runtime.database_dsn).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "database_init_failed",
-            err,
+            err.to_string(),
         )
     })?;
 
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(
-            runtime
-                .database_dsn
-                .parse::<sqlx::sqlite::SqliteConnectOptions>()
-                .map_err(|err| {
-                    AppError::new(
-                        axum::http::StatusCode::BAD_REQUEST,
-                        "database_dsn_parse_failed",
-                        err.to_string(),
-                    )
-                })?
-                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                .busy_timeout(std::time::Duration::from_secs(5)),
-        )
-        .await
-        .map_err(|err| {
+    {
+        use sea_orm_migration::MigratorTrait;
+        crate::migration::Migrator::up(db.write(), None).await.map_err(|err| {
             AppError::new(
                 axum::http::StatusCode::BAD_REQUEST,
-                "database_init_failed",
+                "database_migration_failed",
                 err.to_string(),
             )
         })?;
+    }
 
-    let user_store = UserStore::new(pool.clone()).await.map_err(|err| {
+    let user_store = UserStore::new(db.clone()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "user_store_init_failed",
             err,
         )
     })?;
-    let settings_store = SettingsStore::new(pool.clone()).await.map_err(|err| {
+    let settings_store = SettingsStore::new(db.clone()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "settings_store_init_failed",
             err,
         )
     })?;
-    let provider_store = ProviderStore::new(pool.clone()).await.map_err(|err| {
+    let provider_store = ProviderStore::new(db.clone()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "provider_store_init_failed",
             err,
         )
     })?;
-    let monoize_store = MonoizeRoutingStore::new(pool.clone())
-        .await
-        .map_err(|err| {
-            AppError::new(
-                axum::http::StatusCode::BAD_REQUEST,
-                "monoize_store_init_failed",
-                err,
-            )
-        })?;
-    let model_registry_store = ModelRegistryStore::new(pool).await.map_err(|err| {
+    let monoize_store = MonoizeRoutingStore::new(db.clone()).await.map_err(|err| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "monoize_store_init_failed",
+            err,
+        )
+    })?;
+    let model_registry_store = ModelRegistryStore::new(db).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "model_registry_store_init_failed",
@@ -287,6 +272,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                         rt_snap.request_timeout_ms,
                         model_name,
                         provider.provider_type,
+                        &provider.api_type_overrides,
                     )
                     .await;
                     spawn_active_probe_request_log(
@@ -625,10 +611,14 @@ fn spawn_active_probe_request_log(
             upstream_model: Some(model),
             channel_id: Some(channel_id),
             is_stream: false,
-            prompt_tokens: usage_tokens.map(|(prompt_tokens, _)| prompt_tokens),
-            completion_tokens: usage_tokens.map(|(_, completion_tokens)| completion_tokens),
-            cached_tokens: usage_tokens.map(|_| 0),
+            input_tokens: usage_tokens.map(|(prompt_tokens, _)| prompt_tokens),
+            output_tokens: usage_tokens.map(|(_, completion_tokens)| completion_tokens),
+            cache_read_tokens: usage_tokens.map(|_| 0),
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
             reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
             provider_multiplier: Some(provider_multiplier),
             charge_nano_usd,
             status: if status_ok {
@@ -675,31 +665,6 @@ fn resolve_database_dsn() -> String {
         .unwrap_or_else(|| "sqlite://./data/monoize.db".to_string())
 }
 
-fn ensure_sqlite_file(dsn: &str) -> Result<(), String> {
-    let dsn = dsn.trim();
-    if !dsn.starts_with("sqlite://") {
-        return Ok(());
-    }
-    if dsn.contains(":memory:") || dsn.contains("mode=memory") {
-        return Ok(());
-    }
-    let path_part = dsn.trim_start_matches("sqlite://");
-    let path_part = path_part.split('?').next().unwrap_or("");
-    if path_part.is_empty() {
-        return Ok(());
-    }
-    let path = PathBuf::from(path_part);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("sqlite_dir_create_failed: {err}"))?;
-        }
-    }
-    if !path.exists() {
-        std::fs::File::create(&path).map_err(|err| format!("sqlite_file_create_failed: {err}"))?;
-    }
-    Ok(())
-}
 
 pub fn build_app(state: AppState) -> Router {
     let metrics_path = state.runtime.metrics_path.clone();

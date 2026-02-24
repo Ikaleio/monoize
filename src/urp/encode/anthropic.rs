@@ -196,18 +196,26 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         "stop_reason": finish_reason_to_stop_reason(resp.finish_reason),
     });
 
-    let (input_tokens, output_tokens, cache_read) = match &resp.usage {
+    let (input_tokens, output_tokens, cache_read, cache_creation) = match &resp.usage {
         Some(u) => (
-            u.prompt_tokens,
-            u.completion_tokens,
-            u.cached_tokens.unwrap_or(0),
+            u.input_tokens,
+            u.output_tokens,
+            u.input_details
+                .as_ref()
+                .map(|d| d.cache_read_tokens)
+                .unwrap_or(0),
+            u.input_details
+                .as_ref()
+                .map(|d| d.cache_creation_tokens)
+                .unwrap_or(0),
         ),
-        None => (0, 0, 0),
+        None => (0, 0, 0, 0),
     };
     body["usage"] = json!({
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "cache_read_input_tokens": cache_read
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation
     });
     if let Some(obj) = body.as_object_mut() {
         merge_extra(obj, &resp.extra_body);

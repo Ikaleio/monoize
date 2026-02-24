@@ -77,7 +77,9 @@ import type {
 	TransformRegistryItem,
 	UpdateProviderInput,
 	ModelMetadataRecord,
-	ChannelTestResult
+	ChannelTestResult,
+	ProviderType,
+	ApiTypeOverride
 } from '@/lib/api'
 import {
 	useProviders,
@@ -161,6 +163,7 @@ type ProviderForm = {
 	models: ModelRow[]
 	channels: ChannelRow[]
 	transforms: TransformRuleConfig[]
+	api_type_overrides: ApiTypeOverride[]
 }
 
 function emptyForm(): ProviderForm {
@@ -178,7 +181,8 @@ function emptyForm(): ProviderForm {
 		priority: undefined,
 		models: [],
 		channels: [],
-		transforms: []
+		transforms: [],
+		api_type_overrides: []
 	}
 }
 
@@ -238,7 +242,8 @@ function fromProvider(provider: Provider): ProviderForm {
 					String(channel.passive_rate_limit_cooldown_seconds_override)
 				:	''
 		})),
-		transforms: provider.transforms ?? []
+		transforms: provider.transforms ?? [],
+		api_type_overrides: provider.api_type_overrides ?? []
 	}
 }
 
@@ -1000,9 +1005,21 @@ function ProviderDialog({
 			return null
 		}
 
+		const apiTypeOverrides = form.api_type_overrides.map(override => ({
+			pattern: override.pattern.trim(),
+			api_type: override.api_type
+		}))
+		for (const override of apiTypeOverrides) {
+			if (!override.pattern) {
+				toast.error(t('providers.validationApiTypeOverridePattern'))
+				return null
+			}
+		}
+
 		return {
 			name: form.name.trim(),
 			provider_type: form.provider_type,
+			api_type_overrides: apiTypeOverrides,
 			models,
 			channels,
 			max_retries: form.max_retries,
@@ -1286,6 +1303,115 @@ function ProviderDialog({
 									/>
 									<Label>{t('providers.enabled')}</Label>
 								</div>
+							</div>
+
+
+							{/* API Type Overrides */}
+							<div className='md:col-span-2 rounded-lg border p-4 space-y-3'>
+								<div className='flex items-center justify-between'>
+									<div>
+										<h3 className='text-sm font-semibold'>{t('providers.apiTypeOverrides')}</h3>
+										<p className='text-xs text-muted-foreground mt-0.5'>
+											{t('providers.apiTypeOverridesDesc')}
+										</p>
+									</div>
+									<Button
+										type='button'
+										variant='outline'
+										size='sm'
+										onClick={() =>
+											setForm(prev => ({
+												...prev,
+												api_type_overrides: [
+													...prev.api_type_overrides,
+													{ pattern: '', api_type: 'chat_completion' }
+												]
+											}))
+										}
+									>
+										<Plus className='h-4 w-4 mr-1' />
+										{t('providers.addOverride')}
+									</Button>
+								</div>
+								{form.api_type_overrides.length > 0 && (
+									<div className='space-y-2'>
+										{form.api_type_overrides.map((override, idx) => (
+											<div key={idx} className='flex items-center gap-2'>
+												<Input
+													className='flex-1 font-mono text-sm'
+													placeholder='claude-*'
+													value={override.pattern}
+													onChange={e => {
+														const updated = [...form.api_type_overrides]
+														updated[idx] = { ...updated[idx], pattern: e.target.value }
+														setForm(prev => ({ ...prev, api_type_overrides: updated }))
+													}}
+												/>
+												<Select
+													value={override.api_type}
+													onValueChange={(val: string) => {
+														const updated = [...form.api_type_overrides]
+														updated[idx] = { ...updated[idx], api_type: val as ProviderType }
+														setForm(prev => ({ ...prev, api_type_overrides: updated }))
+													}}
+												>
+													<SelectTrigger className='w-[200px]'>
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
+														{(Object.keys(PROVIDER_TYPE_CONFIG) as ProviderType[]).map(pt => (
+															<SelectItem key={pt} value={pt}>
+																{PROVIDER_TYPE_CONFIG[pt].label}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
+												<Button
+													type='button'
+													variant='ghost'
+													size='icon'
+													className='h-8 w-8'
+													disabled={idx === 0}
+													onClick={() => {
+														const updated = [...form.api_type_overrides]
+														;[updated[idx - 1], updated[idx]] = [updated[idx], updated[idx - 1]]
+														setForm(prev => ({ ...prev, api_type_overrides: updated }))
+													}}
+												>
+													<ArrowUp className='h-4 w-4' />
+												</Button>
+												<Button
+													type='button'
+													variant='ghost'
+													size='icon'
+													className='h-8 w-8'
+													disabled={idx === form.api_type_overrides.length - 1}
+													onClick={() => {
+														const updated = [...form.api_type_overrides]
+														;[updated[idx], updated[idx + 1]] = [updated[idx + 1], updated[idx]]
+														setForm(prev => ({ ...prev, api_type_overrides: updated }))
+													}}
+												>
+													<ArrowDown className='h-4 w-4' />
+												</Button>
+												<Button
+													type='button'
+													variant='ghost'
+													size='icon'
+													className='h-8 w-8 text-destructive'
+													onClick={() => {
+														setForm(prev => ({
+															...prev,
+															api_type_overrides: prev.api_type_overrides.filter((_, i) => i !== idx)
+														}))
+													}}
+												>
+													<Trash2 className='h-4 w-4' />
+												</Button>
+											</div>
+										))}
+									</div>
+								)}
 							</div>
 
 							<Separator />

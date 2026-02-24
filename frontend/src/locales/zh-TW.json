@@ -363,6 +363,7 @@
 		"validationChannelPassiveRate": "Channel 被動失敗率覆蓋必須在 [0.01, 1.00] 範圍內",
 		"validationChannelRateLimitCooldown": "Channel 429 冷卻覆蓋必須大於等於 1",
 		"validationProviderRequestTimeout": "供應商請求逾時覆蓋必須大於等於 1",
+		"validationApiTypeOverridePattern": "API 類型覆寫規則的模型模式不可為空",
 		"validationAtLeastOneChannel": "至少需要一個 Channel",
 		"baseUrlV1Title": "是否移除基底 URL 末尾的 /v1？",
 		"baseUrlV1Description": "此基底 URL 以 /v1 結尾。Monoize 會自動附加 /v1 端點，保留它將導致請求路徑類似 /v1/v1/chat/completions。",
@@ -384,7 +385,10 @@
 		"testIdle": "未測試",
 		"testAllRunning": "正在測試所有模型...",
 		"testAllComplete": "全部測試完成",
-		"testModel": "測試"
+		"testModel": "測試",
+		"apiTypeOverrides": "API 類型覆蓋規則",
+		"apiTypeOverridesDesc": "將特定模型模式路由至不同的 API 類型。規則依序比對，首個匹配生效。未匹配的模型使用上方預設類型。",
+		"addOverride": "新增規則"
 	},
 	"transforms": {
 		"titleProvider": "上游 Transform",
@@ -483,6 +487,7 @@
 		"inputCost": "輸入",
 		"outputCost": "輸出",
 		"cacheReadCost": "快取讀取",
+		"cacheWriteCost": "快取寫入成本（每 1M）",
 		"reasoningCost": "推理",
 		"context": "上下文",
 		"maxInput": "最大輸入",
@@ -519,8 +524,8 @@
 		"time": "時間",
 		"promptTokens": "輸入",
 		"completionTokens": "輸出",
-		"cachedTokens": "快取",
-		"reasoningTokens": "推理",
+		"cachedTokens": "快取 Token",
+		"reasoningTokens": "推理 Token",
 		"multiplier": "倍率",
 		"showing": "顯示 {{from}}-{{to}}，共 {{total}} 筆",
 		"prev": "上一頁",

@@ -1,14 +1,14 @@
 use crate::transforms::TransformRuleConfig;
+use crate::db::DbPool;
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use chrono::{DateTime, Utc};
+use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryResult, TransactionTrait};
+use sea_orm::Value as SeaValue;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{Pool, QueryBuilder, Row, Sqlite};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -204,11 +204,7 @@ pub struct UpdateApiKeyInput {
 
 #[derive(Clone)]
 pub struct UserStore {
-    pool: Pool<Sqlite>,
-    /// Serializes balance-mutating transactions to prevent SQLite lock-escalation
-    /// deadlocks (DEFERRED → SHARED → EXCLUSIVE promotion fails when another
-    /// connection already holds a SHARED lock on the same WAL page).
-    billing_mutex: Arc<Mutex<()>>,
+    db: DbPool,
 }
 
 const RESERVED_INTERNAL_USER_PREFIX: &str = "_monoize_";
@@ -221,302 +217,8 @@ impl UserStore {
             .starts_with(RESERVED_INTERNAL_USER_PREFIX)
     }
 
-    pub async fn new(pool: Pool<Sqlite>) -> Result<Self, String> {
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                last_login_at TEXT,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                balance_nano_usd TEXT NOT NULL DEFAULT '0',
-                balance_unlimited INTEGER NOT NULL DEFAULT 0
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                token TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS api_keys (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                key_prefix TEXT NOT NULL,
-                key TEXT NOT NULL DEFAULT '',
-                key_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT,
-                last_used_at TEXT,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                quota_remaining INTEGER,
-                quota_unlimited INTEGER NOT NULL DEFAULT 1,
-                model_limits_enabled INTEGER NOT NULL DEFAULT 0,
-                model_limits TEXT NOT NULL DEFAULT '[]',
-                ip_whitelist TEXT NOT NULL DEFAULT '[]',
-                token_group TEXT NOT NULL DEFAULT 'default',
-                max_multiplier REAL,
-                transforms TEXT NOT NULL DEFAULT '[]',
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS billing_ledger (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                delta_nano_usd TEXT NOT NULL,
-                balance_after_nano_usd TEXT,
-                meta_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_billing_ledger_user ON billing_ledger(user_id)",
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS request_logs (
-                id TEXT PRIMARY KEY,
-                request_id TEXT,
-                user_id TEXT NOT NULL,
-                api_key_id TEXT,
-                model TEXT NOT NULL,
-                provider_id TEXT,
-                upstream_model TEXT,
-                channel_id TEXT,
-                is_stream INTEGER NOT NULL DEFAULT 0,
-                prompt_tokens INTEGER,
-                completion_tokens INTEGER,
-                cached_tokens INTEGER,
-                reasoning_tokens INTEGER,
-                provider_multiplier REAL,
-                charge_nano_usd TEXT,
-                status TEXT NOT NULL DEFAULT 'success',
-                usage_breakdown_json TEXT,
-                billing_breakdown_json TEXT,
-                error_code TEXT,
-                error_message TEXT,
-                error_http_status INTEGER,
-                duration_ms INTEGER,
-                ttfb_ms INTEGER,
-                request_ip TEXT,
-                request_kind TEXT,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        for col in &[
-            "ALTER TABLE request_logs ADD COLUMN request_id TEXT",
-            "ALTER TABLE request_logs ADD COLUMN channel_id TEXT",
-            "ALTER TABLE request_logs ADD COLUMN ttfb_ms INTEGER",
-            "ALTER TABLE request_logs ADD COLUMN request_ip TEXT",
-            "ALTER TABLE request_logs ADD COLUMN usage_breakdown_json TEXT",
-            "ALTER TABLE request_logs ADD COLUMN billing_breakdown_json TEXT",
-            "ALTER TABLE request_logs ADD COLUMN error_code TEXT",
-            "ALTER TABLE request_logs ADD COLUMN error_message TEXT",
-            "ALTER TABLE request_logs ADD COLUMN error_http_status INTEGER",
-            "ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT",
-            "ALTER TABLE request_logs ADD COLUMN tried_providers_json TEXT",
-            "ALTER TABLE request_logs ADD COLUMN request_kind TEXT",
-        ] {
-            let _ = sqlx::query(col).execute(&pool).await;
-        }
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id, created_at DESC)",
-        )
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)")
-            .execute(&pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix)")
-            .execute(&pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let has_balance_nano_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'balance_nano_usd'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-        if !has_balance_nano_column {
-            sqlx::query("ALTER TABLE users ADD COLUMN balance_nano_usd TEXT NOT NULL DEFAULT '0'")
-                .execute(&pool)
-                .await
-                .ok();
-        }
-
-        let has_balance_unlimited_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'balance_unlimited'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-        if !has_balance_unlimited_column {
-            sqlx::query(
-                "ALTER TABLE users ADD COLUMN balance_unlimited INTEGER NOT NULL DEFAULT 0",
-            )
-            .execute(&pool)
-            .await
-            .ok();
-        }
-
-        // Migrate existing api_keys table to add new columns if they don't exist
-        // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check the schema first
-        let has_quota_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name = 'quota_remaining'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-
-        if !has_quota_column {
-            // Add new columns for existing databases
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN quota_remaining INTEGER")
-                .execute(&pool)
-                .await
-                .ok(); // Ignore error if column already exists
-            sqlx::query(
-                "ALTER TABLE api_keys ADD COLUMN quota_unlimited INTEGER NOT NULL DEFAULT 1",
-            )
-            .execute(&pool)
-            .await
-            .ok();
-            sqlx::query(
-                "ALTER TABLE api_keys ADD COLUMN model_limits_enabled INTEGER NOT NULL DEFAULT 0",
-            )
-            .execute(&pool)
-            .await
-            .ok();
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN model_limits TEXT NOT NULL DEFAULT '[]'")
-                .execute(&pool)
-                .await
-                .ok();
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN ip_whitelist TEXT NOT NULL DEFAULT '[]'")
-                .execute(&pool)
-                .await
-                .ok();
-            sqlx::query(
-                "ALTER TABLE api_keys ADD COLUMN token_group TEXT NOT NULL DEFAULT 'default'",
-            )
-            .execute(&pool)
-            .await
-            .ok();
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN max_multiplier REAL")
-                .execute(&pool)
-                .await
-                .ok();
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN transforms TEXT NOT NULL DEFAULT '[]'")
-                .execute(&pool)
-                .await
-                .ok();
-        }
-
-        // Migrate to add key column for storing the full API key
-        let has_key_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name = 'key'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-
-        if !has_key_column {
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN key TEXT NOT NULL DEFAULT ''")
-                .execute(&pool)
-                .await
-                .ok();
-        }
-
-        let has_max_multiplier_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name = 'max_multiplier'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-        if !has_max_multiplier_column {
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN max_multiplier REAL")
-                .execute(&pool)
-                .await
-                .ok();
-        }
-
-        let has_transforms_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name = 'transforms'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-        if !has_transforms_column {
-            sqlx::query("ALTER TABLE api_keys ADD COLUMN transforms TEXT NOT NULL DEFAULT '[]'")
-                .execute(&pool)
-                .await
-                .ok();
-        }
-
-        let has_email_column: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'email'",
-        )
-        .fetch_one(&pool)
-        .await
-        .map(|c| c > 0)
-        .unwrap_or(false);
-        if !has_email_column {
-            sqlx::query("ALTER TABLE users ADD COLUMN email TEXT")
-                .execute(&pool)
-                .await
-                .ok();
-        }
-
-        Ok(Self {
-            pool,
-            billing_mutex: Arc::new(Mutex::new(())),
-        })
+    pub async fn new(db: DbPool) -> Result<Self, String> {
+        Ok(Self { db })
     }
 
     pub fn hash_password(password: &str) -> Result<String, String> {
@@ -536,13 +238,15 @@ impl UserStore {
     }
 
     pub async fn user_count(&self) -> Result<i64, String> {
-        let row = sqlx::query(
-            "SELECT COUNT(*) as count FROM users WHERE substr(lower(username), 1, 9) != '_monoize_'",
-        )
-            .fetch_one(&self.pool)
+        let row = self.db.read()
+            .query_one(self.db.stmt(
+                "SELECT COUNT(*) as count FROM users WHERE substr(lower(username), 1, 9) != '_monoize_'",
+                vec![],
+            ))
             .await
             .map_err(|e| e.to_string())?;
-        row.try_get::<i64, _>("count").map_err(|e| e.to_string())
+        let row = row.ok_or_else(|| "no count row".to_string())?;
+        row.try_get::<i64>("", "count").map_err(|e| e.to_string())
     }
 
     pub async fn create_user(
@@ -555,19 +259,21 @@ impl UserStore {
         let password_hash = Self::hash_password(password)?;
         let now = Utc::now();
 
-        sqlx::query(
-            r#"INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled, balance_nano_usd, balance_unlimited)
-               VALUES (?, ?, ?, ?, ?, ?, 1, '0', 0)"#,
-        )
-        .bind(&id)
-        .bind(username)
-        .bind(&password_hash)
-        .bind(role.as_str())
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(
+                r#"INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled, balance_nano_usd, balance_unlimited)
+                   VALUES ($1, $2, $3, $4, $5, $6, 1, '0', 0)"#,
+                vec![
+                    id.clone().into(),
+                    username.into(),
+                    password_hash.clone().into(),
+                    role.as_str().into(),
+                    now.to_rfc3339().into(),
+                    now.to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         Ok(User {
             id,
@@ -585,13 +291,13 @@ impl UserStore {
     }
 
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, String> {
-        let row = sqlx::query(
-            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let row = self.db.read()
+            .query_one(self.db.stmt(
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE id = $1",
+                vec![id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
             Ok(Some(self.row_to_user(&row)?))
@@ -601,13 +307,13 @@ impl UserStore {
     }
 
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, String> {
-        let row = sqlx::query(
-            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE username = ?",
-        )
-        .bind(username)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let row = self.db.read()
+            .query_one(self.db.stmt(
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE username = $1",
+                vec![username.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
             Ok(Some(self.row_to_user(&row)?))
@@ -617,12 +323,13 @@ impl UserStore {
     }
 
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
-        let rows = sqlx::query(
-            "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let rows = self.db.read()
+            .query_all(self.db.stmt(
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         rows.iter().map(|row| self.row_to_user(row)).collect()
     }
@@ -638,69 +345,76 @@ impl UserStore {
         balance_unlimited: Option<bool>,
         email: Option<Option<&str>>,
     ) -> Result<(), String> {
-        let mut updates = Vec::new();
-        let mut bindings: Vec<String> = Vec::new();
+        let mut set_clauses = Vec::new();
+        let mut values: Vec<SeaValue> = Vec::new();
+        let mut idx = 1usize;
 
         if let Some(u) = username {
-            updates.push("username = ?");
-            bindings.push(u.to_string());
+            set_clauses.push(format!("username = ${idx}"));
+            values.push(u.into());
+            idx += 1;
         }
         if let Some(p) = password {
-            updates.push("password_hash = ?");
-            bindings.push(Self::hash_password(p)?);
+            set_clauses.push(format!("password_hash = ${idx}"));
+            values.push(Self::hash_password(p)?.into());
+            idx += 1;
         }
         if let Some(r) = role {
-            updates.push("role = ?");
-            bindings.push(r.as_str().to_string());
+            set_clauses.push(format!("role = ${idx}"));
+            values.push(r.as_str().into());
+            idx += 1;
         }
         if let Some(e) = enabled {
-            updates.push("enabled = ?");
-            bindings.push(if e { "1" } else { "0" }.to_string());
+            set_clauses.push(format!("enabled = ${idx}"));
+            values.push(SeaValue::Int(Some(if e { 1 } else { 0 })));
+            idx += 1;
         }
         if let Some(balance) = balance_nano_usd {
             parse_nano_usd(balance)?;
-            updates.push("balance_nano_usd = ?");
-            bindings.push(balance.to_string());
+            set_clauses.push(format!("balance_nano_usd = ${idx}"));
+            values.push(balance.into());
+            idx += 1;
         }
         if let Some(unlimited) = balance_unlimited {
-            updates.push("balance_unlimited = ?");
-            bindings.push(if unlimited { "1" } else { "0" }.to_string());
+            set_clauses.push(format!("balance_unlimited = ${idx}"));
+            values.push(SeaValue::Int(Some(if unlimited { 1 } else { 0 })));
+            idx += 1;
         }
         if let Some(email_opt) = email {
             match email_opt {
                 Some(e) if !e.trim().is_empty() => {
-                    updates.push("email = ?");
-                    bindings.push(e.trim().to_string());
+                    set_clauses.push(format!("email = ${idx}"));
+                    values.push(e.trim().into());
+                    idx += 1;
                 }
                 _ => {
-                    updates.push("email = NULL");
+                    set_clauses.push("email = NULL".to_string());
                 }
             }
         }
 
-        if updates.is_empty() {
+        if set_clauses.is_empty() {
             return Ok(());
         }
 
-        updates.push("updated_at = ?");
-        bindings.push(Utc::now().to_rfc3339());
-        bindings.push(id.to_string());
+        set_clauses.push(format!("updated_at = ${idx}"));
+        values.push(Utc::now().to_rfc3339().into());
+        idx += 1;
 
-        let query = format!("UPDATE users SET {} WHERE id = ?", updates.join(", "));
+        values.push(id.into());
 
-        let mut q = sqlx::query(&query);
-        for b in &bindings {
-            q = q.bind(b);
-        }
+        let query = format!("UPDATE users SET {} WHERE id = ${idx}", set_clauses.join(", "));
 
-        q.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(&query, values))
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn delete_user(&self, id: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM users WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
+        self.db.write()
+            .execute(self.db.stmt("DELETE FROM users WHERE id = $1", vec![id.into()]))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -708,10 +422,11 @@ impl UserStore {
 
     pub async fn update_last_login(&self, id: &str) -> Result<(), String> {
         let now = Utc::now();
-        sqlx::query("UPDATE users SET last_login_at = ? WHERE id = ?")
-            .bind(now.to_rfc3339())
-            .bind(id)
-            .execute(&self.pool)
+        self.db.write()
+            .execute(self.db.stmt(
+                "UPDATE users SET last_login_at = $1 WHERE id = $2",
+                vec![now.to_rfc3339().into(), id.into()],
+            ))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -726,18 +441,20 @@ impl UserStore {
         let now = Utc::now();
         let expires_at = now + chrono::Duration::days(7);
 
-        sqlx::query(
-            r#"INSERT INTO sessions (id, user_id, token, created_at, expires_at)
-               VALUES (?, ?, ?, ?, ?)"#,
-        )
-        .bind(&id)
-        .bind(user_id)
-        .bind(&token)
-        .bind(now.to_rfc3339())
-        .bind(expires_at.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(
+                r#"INSERT INTO sessions (id, user_id, token, created_at, expires_at)
+                   VALUES ($1, $2, $3, $4, $5)"#,
+                vec![
+                    id.clone().into(),
+                    user_id.into(),
+                    token.clone().into(),
+                    now.to_rfc3339().into(),
+                    expires_at.to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         Ok(Session {
             id,
@@ -749,16 +466,16 @@ impl UserStore {
     }
 
     pub async fn get_session_by_token(&self, token: &str) -> Result<Option<Session>, String> {
-        let row = sqlx::query(
-            "SELECT id, user_id, token, created_at, expires_at FROM sessions WHERE token = ?",
-        )
-        .bind(token)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let row = self.db.read()
+            .query_one(self.db.stmt(
+                "SELECT id, user_id, token, created_at, expires_at FROM sessions WHERE token = $1",
+                vec![token.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
-            let expires_at: String = row.try_get("expires_at").map_err(|e| e.to_string())?;
+            let expires_at: String = row.try_get("", "expires_at").map_err(|e| e.to_string())?;
             let expires_at = DateTime::parse_from_rfc3339(&expires_at)
                 .map_err(|e| e.to_string())?
                 .with_timezone(&Utc);
@@ -769,11 +486,11 @@ impl UserStore {
             }
 
             Ok(Some(Session {
-                id: row.try_get("id").map_err(|e| e.to_string())?,
-                user_id: row.try_get("user_id").map_err(|e| e.to_string())?,
-                token: row.try_get("token").map_err(|e| e.to_string())?,
+                id: row.try_get("", "id").map_err(|e| e.to_string())?,
+                user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+                token: row.try_get("", "token").map_err(|e| e.to_string())?,
                 created_at: DateTime::parse_from_rfc3339(
-                    &row.try_get::<String, _>("created_at")
+                    &row.try_get::<String>("", "created_at")
                         .map_err(|e| e.to_string())?,
                 )
                 .map_err(|e| e.to_string())?
@@ -786,18 +503,16 @@ impl UserStore {
     }
 
     pub async fn delete_session(&self, token: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM sessions WHERE token = ?")
-            .bind(token)
-            .execute(&self.pool)
+        self.db.write()
+            .execute(self.db.stmt("DELETE FROM sessions WHERE token = $1", vec![token.into()]))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn delete_user_sessions(&self, user_id: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
-            .bind(user_id)
-            .execute(&self.pool)
+        self.db.write()
+            .execute(self.db.stmt("DELETE FROM sessions WHERE user_id = $1", vec![user_id.into()]))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -846,29 +561,31 @@ impl UserStore {
         let ip_whitelist_json =
             serde_json::to_string(&input.ip_whitelist).map_err(|e| e.to_string())?;
 
-        sqlx::query(
-            r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&id)
-        .bind(user_id)
-        .bind(&input.name)
-        .bind(&key_prefix)
-        .bind(&key)
-        .bind(&key_hash)
-        .bind(now.to_rfc3339())
-        .bind(expires_at.map(|e| e.to_rfc3339()))
-        .bind(input.quota)
-        .bind(if input.quota_unlimited { 1 } else { 0 })
-        .bind(if input.model_limits_enabled { 1 } else { 0 })
-        .bind(&model_limits_json)
-        .bind(&ip_whitelist_json)
-        .bind(&input.group)
-        .bind(input.max_multiplier)
-        .bind(serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16)"#,
+                vec![
+                    id.clone().into(),
+                    user_id.into(),
+                    input.name.clone().into(),
+                    key_prefix.clone().into(),
+                    key.clone().into(),
+                    key_hash.clone().into(),
+                    now.to_rfc3339().into(),
+                    expires_at.map(|e| e.to_rfc3339()).into(),
+                    input.quota.map(|v| SeaValue::BigInt(Some(v))).unwrap_or(SeaValue::BigInt(None)),
+                    SeaValue::Int(Some(if input.quota_unlimited { 1 } else { 0 })),
+                    SeaValue::Int(Some(if input.model_limits_enabled { 1 } else { 0 })),
+                    model_limits_json.into(),
+                    ip_whitelist_json.into(),
+                    input.group.clone().into(),
+                    input.max_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
+                    serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?.into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         let api_key = ApiKey {
             id,
@@ -895,13 +612,13 @@ impl UserStore {
     }
 
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
-        let row = sqlx::query(
-            "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE key_prefix = ?",
-        )
-        .bind(prefix)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let row = self.db.read()
+            .query_one(self.db.stmt(
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE key_prefix = $1",
+                vec![prefix.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
             Ok(Some(self.row_to_api_key(&row)?))
@@ -911,32 +628,32 @@ impl UserStore {
     }
 
     pub async fn list_user_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>, String> {
-        let rows = sqlx::query(
-            "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let rows = self.db.read()
+            .query_all(self.db.stmt(
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         rows.iter().map(|row| self.row_to_api_key(row)).collect()
     }
 
     pub async fn update_api_key_last_used(&self, id: &str) -> Result<(), String> {
         let now = Utc::now();
-        sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE id = ?")
-            .bind(now.to_rfc3339())
-            .bind(id)
-            .execute(&self.pool)
+        self.db.write()
+            .execute(self.db.stmt(
+                "UPDATE api_keys SET last_used_at = $1 WHERE id = $2",
+                vec![now.to_rfc3339().into(), id.into()],
+            ))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn delete_api_key(&self, id: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM api_keys WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
+        self.db.write()
+            .execute(self.db.stmt("DELETE FROM api_keys WHERE id = $1", vec![id.into()]))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -981,94 +698,94 @@ impl UserStore {
         Ok(Some((api_key, user)))
     }
 
-    fn row_to_user(&self, row: &sqlx::sqlite::SqliteRow) -> Result<User, String> {
-        let role_str: String = row.try_get("role").map_err(|e| e.to_string())?;
+    fn row_to_user(&self, row: &QueryResult) -> Result<User, String> {
+        let role_str: String = row.try_get("", "role").map_err(|e| e.to_string())?;
         let role = UserRole::from_str(&role_str).ok_or_else(|| "invalid role".to_string())?;
 
         let last_login_at: Option<String> =
-            row.try_get("last_login_at").map_err(|e| e.to_string())?;
+            row.try_get("", "last_login_at").map_err(|e| e.to_string())?;
         let last_login_at = last_login_at
             .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
             .transpose()
             .map_err(|e| e.to_string())?;
 
         Ok(User {
-            id: row.try_get("id").map_err(|e| e.to_string())?,
-            username: row.try_get("username").map_err(|e| e.to_string())?,
-            password_hash: row.try_get("password_hash").map_err(|e| e.to_string())?,
+            id: row.try_get("", "id").map_err(|e| e.to_string())?,
+            username: row.try_get("", "username").map_err(|e| e.to_string())?,
+            password_hash: row.try_get("", "password_hash").map_err(|e| e.to_string())?,
             role,
             created_at: DateTime::parse_from_rfc3339(
-                &row.try_get::<String, _>("created_at")
+                &row.try_get::<String>("", "created_at")
                     .map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())?
             .with_timezone(&Utc),
             updated_at: DateTime::parse_from_rfc3339(
-                &row.try_get::<String, _>("updated_at")
+                &row.try_get::<String>("", "updated_at")
                     .map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())?
             .with_timezone(&Utc),
             last_login_at,
             enabled: row
-                .try_get::<i32, _>("enabled")
+                .try_get::<i32>("", "enabled")
                 .map_err(|e| e.to_string())?
                 == 1,
             balance_nano_usd: row
-                .try_get("balance_nano_usd")
+                .try_get("", "balance_nano_usd")
                 .unwrap_or_else(|_| "0".to_string()),
-            balance_unlimited: row.try_get::<i32, _>("balance_unlimited").unwrap_or(0) == 1,
-            email: row.try_get::<Option<String>, _>("email").unwrap_or(None),
+            balance_unlimited: row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1,
+            email: row.try_get::<Option<String>>("", "email").unwrap_or(None),
         })
     }
 
-    fn row_to_api_key(&self, row: &sqlx::sqlite::SqliteRow) -> Result<ApiKey, String> {
-        let expires_at: Option<String> = row.try_get("expires_at").map_err(|e| e.to_string())?;
+    fn row_to_api_key(&self, row: &QueryResult) -> Result<ApiKey, String> {
+        let expires_at: Option<String> = row.try_get("", "expires_at").map_err(|e| e.to_string())?;
         let expires_at = expires_at
             .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
             .transpose()
             .map_err(|e| e.to_string())?;
 
         let last_used_at: Option<String> =
-            row.try_get("last_used_at").map_err(|e| e.to_string())?;
+            row.try_get("", "last_used_at").map_err(|e| e.to_string())?;
         let last_used_at = last_used_at
             .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
             .transpose()
             .map_err(|e| e.to_string())?;
 
-        let quota_remaining: Option<i64> = row.try_get("quota_remaining").unwrap_or(None);
-        let quota_unlimited: i32 = row.try_get("quota_unlimited").unwrap_or(1);
-        let model_limits_enabled: i32 = row.try_get("model_limits_enabled").unwrap_or(0);
+        let quota_remaining: Option<i64> = row.try_get("", "quota_remaining").unwrap_or(None);
+        let quota_unlimited: i32 = row.try_get("", "quota_unlimited").unwrap_or(1);
+        let model_limits_enabled: i32 = row.try_get("", "model_limits_enabled").unwrap_or(0);
 
         let model_limits_str: String = row
-            .try_get("model_limits")
+            .try_get("", "model_limits")
             .unwrap_or_else(|_| "[]".to_string());
         let model_limits: Vec<String> = serde_json::from_str(&model_limits_str).unwrap_or_default();
 
         let ip_whitelist_str: String = row
-            .try_get("ip_whitelist")
+            .try_get("", "ip_whitelist")
             .unwrap_or_else(|_| "[]".to_string());
         let ip_whitelist: Vec<String> = serde_json::from_str(&ip_whitelist_str).unwrap_or_default();
 
         let group: String = row
-            .try_get("token_group")
+            .try_get("", "token_group")
             .unwrap_or_else(|_| "default".to_string());
-        let max_multiplier: Option<f64> = row.try_get("max_multiplier").unwrap_or(None);
+        let max_multiplier: Option<f64> = row.try_get("", "max_multiplier").unwrap_or(None);
         let transforms_str: String = row
-            .try_get("transforms")
+            .try_get("", "transforms")
             .unwrap_or_else(|_| "[]".to_string());
         let transforms: Vec<TransformRuleConfig> =
             serde_json::from_str(&transforms_str).unwrap_or_default();
 
         Ok(ApiKey {
-            id: row.try_get("id").map_err(|e| e.to_string())?,
-            user_id: row.try_get("user_id").map_err(|e| e.to_string())?,
-            name: row.try_get("name").map_err(|e| e.to_string())?,
-            key_prefix: row.try_get("key_prefix").map_err(|e| e.to_string())?,
-            key: row.try_get("key").unwrap_or_else(|_| String::new()),
-            key_hash: row.try_get("key_hash").map_err(|e| e.to_string())?,
+            id: row.try_get("", "id").map_err(|e| e.to_string())?,
+            user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+            name: row.try_get("", "name").map_err(|e| e.to_string())?,
+            key_prefix: row.try_get("", "key_prefix").map_err(|e| e.to_string())?,
+            key: row.try_get("", "key").unwrap_or_else(|_| String::new()),
+            key_hash: row.try_get("", "key_hash").map_err(|e| e.to_string())?,
             created_at: DateTime::parse_from_rfc3339(
-                &row.try_get::<String, _>("created_at")
+                &row.try_get::<String>("", "created_at")
                     .map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())?
@@ -1076,7 +793,7 @@ impl UserStore {
             expires_at,
             last_used_at,
             enabled: row
-                .try_get::<i32, _>("enabled")
+                .try_get::<i32>("", "enabled")
                 .map_err(|e| e.to_string())?
                 == 1,
             quota_remaining,
@@ -1096,71 +813,81 @@ impl UserStore {
         key_id: &str,
         input: UpdateApiKeyInput,
     ) -> Result<ApiKey, String> {
-        let mut updates = Vec::new();
-        let mut bindings: Vec<String> = Vec::new();
+        let mut set_clauses = Vec::new();
+        let mut values: Vec<SeaValue> = Vec::new();
+        let mut idx = 1usize;
 
         if let Some(name) = &input.name {
-            updates.push("name = ?");
-            bindings.push(name.clone());
+            set_clauses.push(format!("name = ${idx}"));
+            values.push(name.clone().into());
+            idx += 1;
         }
         if let Some(enabled) = input.enabled {
-            updates.push("enabled = ?");
-            bindings.push(if enabled { "1" } else { "0" }.to_string());
+            set_clauses.push(format!("enabled = ${idx}"));
+            values.push(SeaValue::Int(Some(if enabled { 1 } else { 0 })));
+            idx += 1;
         }
         if let Some(quota) = input.quota {
-            updates.push("quota_remaining = ?");
-            bindings.push(quota.to_string());
+            set_clauses.push(format!("quota_remaining = ${idx}"));
+            values.push(SeaValue::BigInt(Some(quota)));
+            idx += 1;
         }
         if let Some(quota_unlimited) = input.quota_unlimited {
-            updates.push("quota_unlimited = ?");
-            bindings.push(if quota_unlimited { "1" } else { "0" }.to_string());
+            set_clauses.push(format!("quota_unlimited = ${idx}"));
+            values.push(SeaValue::Int(Some(if quota_unlimited { 1 } else { 0 })));
+            idx += 1;
         }
         if let Some(model_limits_enabled) = input.model_limits_enabled {
-            updates.push("model_limits_enabled = ?");
-            bindings.push(if model_limits_enabled { "1" } else { "0" }.to_string());
+            set_clauses.push(format!("model_limits_enabled = ${idx}"));
+            values.push(SeaValue::Int(Some(if model_limits_enabled { 1 } else { 0 })));
+            idx += 1;
         }
         if let Some(model_limits) = &input.model_limits {
-            updates.push("model_limits = ?");
-            bindings.push(serde_json::to_string(model_limits).map_err(|e| e.to_string())?);
+            set_clauses.push(format!("model_limits = ${idx}"));
+            values.push(serde_json::to_string(model_limits).map_err(|e| e.to_string())?.into());
+            idx += 1;
         }
         if let Some(ip_whitelist) = &input.ip_whitelist {
-            updates.push("ip_whitelist = ?");
-            bindings.push(serde_json::to_string(ip_whitelist).map_err(|e| e.to_string())?);
+            set_clauses.push(format!("ip_whitelist = ${idx}"));
+            values.push(serde_json::to_string(ip_whitelist).map_err(|e| e.to_string())?.into());
+            idx += 1;
         }
         if let Some(group) = &input.group {
-            updates.push("token_group = ?");
-            bindings.push(group.clone());
+            set_clauses.push(format!("token_group = ${idx}"));
+            values.push(group.clone().into());
+            idx += 1;
         }
         if let Some(max_multiplier) = input.max_multiplier {
-            updates.push("max_multiplier = ?");
-            bindings.push(max_multiplier.to_string());
+            set_clauses.push(format!("max_multiplier = ${idx}"));
+            values.push(SeaValue::Double(Some(max_multiplier)));
+            idx += 1;
         }
         if let Some(transforms) = &input.transforms {
-            updates.push("transforms = ?");
-            bindings.push(serde_json::to_string(transforms).map_err(|e| e.to_string())?);
+            set_clauses.push(format!("transforms = ${idx}"));
+            values.push(serde_json::to_string(transforms).map_err(|e| e.to_string())?.into());
+            idx += 1;
         }
         if let Some(expires_at) = &input.expires_at {
-            updates.push("expires_at = ?");
-            bindings.push(expires_at.clone());
+            set_clauses.push(format!("expires_at = ${idx}"));
+            values.push(expires_at.clone().into());
+            idx += 1;
         }
 
-        if updates.is_empty() {
+        if set_clauses.is_empty() {
             return self
                 .get_api_key_by_id(key_id)
                 .await?
                 .ok_or_else(|| "API key not found".to_string());
         }
 
-        bindings.push(key_id.to_string());
+        values.push(key_id.into());
 
-        let query = format!("UPDATE api_keys SET {} WHERE id = ?", updates.join(", "));
+        let query = format!("UPDATE api_keys SET {} WHERE id = ${idx}", set_clauses.join(", "));
 
-        let mut q = sqlx::query(&query);
-        for b in &bindings {
-            q = q.bind(b);
-        }
-
-        q.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(&query, values))
+            .await
+            .map_err(|e| e.to_string())?;
 
         self.get_api_key_by_id(key_id)
             .await?
@@ -1169,13 +896,13 @@ impl UserStore {
 
     /// Get API key by ID
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
-        let row = sqlx::query(
-            "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let row = self.db.read()
+            .query_one(self.db.stmt(
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE id = $1",
+                vec![id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
             Ok(Some(self.row_to_api_key(&row)?))
@@ -1190,39 +917,42 @@ impl UserStore {
             return Ok(0);
         }
 
-        let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+        let mut values: Vec<SeaValue> = Vec::new();
+        let placeholders: Vec<String> = ids.iter().enumerate().map(|(i, id)| {
+            values.push(id.clone().into());
+            format!("${}", i + 1)
+        }).collect();
         let query = format!(
             "DELETE FROM api_keys WHERE id IN ({})",
             placeholders.join(", ")
         );
 
-        let mut q = sqlx::query(&query);
-        for id in ids {
-            q = q.bind(id);
-        }
-
-        let result = q.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        let result = self.db.write()
+            .execute(self.db.stmt(&query, values))
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(result.rows_affected() as usize)
     }
 
     pub async fn get_user_balance(&self, user_id: &str) -> Result<Option<UserBalance>, String> {
-        let row =
-            sqlx::query("SELECT id, balance_nano_usd, balance_unlimited FROM users WHERE id = ?")
-                .bind(user_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let row = self.db.read()
+            .query_one(self.db.stmt(
+                "SELECT id, balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
         let Some(row) = row else {
             return Ok(None);
         };
         let balance_raw: String = row
-            .try_get("balance_nano_usd")
+            .try_get("", "balance_nano_usd")
             .unwrap_or_else(|_| "0".to_string());
         let balance_nano_usd = parse_nano_usd(&balance_raw)?;
         Ok(Some(UserBalance {
-            user_id: row.try_get("id").map_err(|e| e.to_string())?,
+            user_id: row.try_get("", "id").map_err(|e| e.to_string())?,
             balance_nano_usd,
-            balance_unlimited: row.try_get::<i32, _>("balance_unlimited").unwrap_or(0) == 1,
+            balance_unlimited: row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1,
         }))
     }
 
@@ -1259,39 +989,8 @@ impl UserStore {
         if amount_nano_usd <= 0 {
             return Ok(());
         }
-
-        // Mutex serializes billing transactions against each other, but
-        // SQLITE_BUSY can still occur from concurrent non-billing writes
-        // (e.g. request_log inserts) sharing the same pool.  Retry on
-        // transient database-locked errors so charges are never silently
-        // dropped.
-        const MAX_ATTEMPTS: u32 = 5;
-        let mut last_err = None;
-        for attempt in 1..=MAX_ATTEMPTS {
-            let _guard = self.billing_mutex.lock().await;
-            match self
-                .charge_user_balance_nano_inner(user_id, amount_nano_usd, meta)
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(err) => match err.kind {
-                    BillingErrorKind::Internal => {
-                        tracing::warn!(
-                            "charge_user_balance_nano transient error (attempt {attempt}/{MAX_ATTEMPTS}): {}",
-                            err.message
-                        );
-                        last_err = Some(err);
-                        drop(_guard);
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            100 * u64::from(attempt),
-                        ))
-                        .await;
-                    }
-                    _ => return Err(err),
-                },
-            }
-        }
-        Err(last_err.unwrap())
+        self.charge_user_balance_nano_inner(user_id, amount_nano_usd, meta)
+            .await
     }
 
     async fn charge_user_balance_nano_inner(
@@ -1300,14 +999,17 @@ impl UserStore {
         amount_nano_usd: i128,
         meta: &Value,
     ) -> Result<(), BillingError> {
-        let mut tx = self
-            .pool
+        let tx = self
+            .db
+            .write()
             .begin()
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
-        let row = sqlx::query("SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
+        let row = tx
+            .query_one(self.db.stmt(
+                "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
+                vec![user_id.into()],
+            ))
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
         let Some(row) = row else {
@@ -1316,7 +1018,7 @@ impl UserStore {
                 "user not found",
             ));
         };
-        let unlimited = row.try_get::<i32, _>("balance_unlimited").unwrap_or(0) == 1;
+        let unlimited = row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1;
         if unlimited {
             tx.commit()
                 .await
@@ -1325,7 +1027,7 @@ impl UserStore {
         }
 
         let balance_raw: String = row
-            .try_get("balance_nano_usd")
+            .try_get("", "balance_nano_usd")
             .unwrap_or_else(|_| "0".to_string());
         let balance = parse_nano_usd(&balance_raw)
             .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
@@ -1340,16 +1042,19 @@ impl UserStore {
         }
 
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE users SET balance_nano_usd = ?, updated_at = ? WHERE id = ?")
-            .bind(next_balance.to_string())
-            .bind(now.clone())
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        tx.execute(self.db.stmt(
+            "UPDATE users SET balance_nano_usd = $1, updated_at = $2 WHERE id = $3",
+            vec![
+                next_balance.to_string().into(),
+                now.clone().into(),
+                user_id.into(),
+            ],
+        ))
+        .await
+        .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
 
         self.insert_billing_ledger_tx(
-            &mut tx,
+            &tx,
             user_id,
             "request_charge",
             -amount_nano_usd,
@@ -1376,21 +1081,22 @@ impl UserStore {
             return Ok(());
         }
 
-        let _guard = self.billing_mutex.lock().await;
-        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
-        let row = sqlx::query("SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
+        let tx = self.db.write().begin().await.map_err(|e| e.to_string())?;
+        let row = tx
+            .query_one(self.db.stmt(
+                "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
+                vec![user_id.into()],
+            ))
             .await
             .map_err(|e| e.to_string())?;
         let Some(row) = row else {
             return Err("user not found".to_string());
         };
         let current_balance_raw: String = row
-            .try_get("balance_nano_usd")
+            .try_get("", "balance_nano_usd")
             .unwrap_or_else(|_| "0".to_string());
         let current_balance = parse_nano_usd(&current_balance_raw)?;
-        let current_unlimited = row.try_get::<i32, _>("balance_unlimited").unwrap_or(0) == 1;
+        let current_unlimited = row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1;
 
         let new_balance = if let Some(balance_raw) = balance_nano_usd {
             parse_nano_usd(&balance_raw)?
@@ -1400,14 +1106,15 @@ impl UserStore {
         let new_unlimited = balance_unlimited.unwrap_or(current_unlimited);
 
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "UPDATE users SET balance_nano_usd = ?, balance_unlimited = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(new_balance.to_string())
-        .bind(if new_unlimited { 1 } else { 0 })
-        .bind(now.clone())
-        .bind(user_id)
-        .execute(&mut *tx)
+        tx.execute(self.db.stmt(
+            "UPDATE users SET balance_nano_usd = $1, balance_unlimited = $2, updated_at = $3 WHERE id = $4",
+            vec![
+                new_balance.to_string().into(),
+                SeaValue::Int(Some(if new_unlimited { 1 } else { 0 })),
+                now.clone().into(),
+                user_id.into(),
+            ],
+        ))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1423,7 +1130,7 @@ impl UserStore {
         });
 
         self.insert_billing_ledger_tx(
-            &mut tx,
+            &tx,
             user_id,
             "admin_adjustment",
             delta,
@@ -1440,7 +1147,7 @@ impl UserStore {
 
     async fn insert_billing_ledger_tx(
         &self,
-        tx: &mut sqlx::Transaction<'_, Sqlite>,
+        tx: &DatabaseTransaction,
         user_id: &str,
         kind: &str,
         delta_nano_usd: i128,
@@ -1449,18 +1156,19 @@ impl UserStore {
         created_at_rfc3339: &str,
     ) -> Result<(), BillingError> {
         let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
+        tx.execute(self.db.stmt(
             r#"INSERT INTO billing_ledger (id, user_id, kind, delta_nano_usd, balance_after_nano_usd, meta_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(id)
-        .bind(user_id)
-        .bind(kind)
-        .bind(delta_nano_usd.to_string())
-        .bind(balance_after_nano_usd.map(|v| v.to_string()))
-        .bind(meta.to_string())
-        .bind(created_at_rfc3339)
-        .execute(&mut **tx)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+            vec![
+                id.into(),
+                user_id.into(),
+                kind.into(),
+                delta_nano_usd.to_string().into(),
+                balance_after_nano_usd.map(|v| v.to_string()).into(),
+                meta.to_string().into(),
+                created_at_rfc3339.into(),
+            ],
+        ))
         .await
         .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
         Ok(())
@@ -1476,10 +1184,14 @@ pub struct InsertRequestLog {
     pub upstream_model: Option<String>,
     pub channel_id: Option<String>,
     pub is_stream: bool,
-    pub prompt_tokens: Option<u64>,
-    pub completion_tokens: Option<u64>,
-    pub cached_tokens: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_creation_tokens: Option<u64>,
+    pub tool_prompt_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    pub accepted_prediction_tokens: Option<u64>,
+    pub rejected_prediction_tokens: Option<u64>,
     pub provider_multiplier: Option<f64>,
     pub charge_nano_usd: Option<i128>,
     pub status: String,
@@ -1511,10 +1223,14 @@ pub struct RequestLogRow {
     pub upstream_model: Option<String>,
     pub channel_id: Option<String>,
     pub is_stream: bool,
-    pub prompt_tokens: Option<i64>,
-    pub completion_tokens: Option<i64>,
-    pub cached_tokens: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub cache_creation_tokens: Option<i64>,
+    pub tool_prompt_tokens: Option<i64>,
     pub reasoning_tokens: Option<i64>,
+    pub accepted_prediction_tokens: Option<i64>,
+    pub rejected_prediction_tokens: Option<i64>,
     pub provider_multiplier: Option<f64>,
     pub charge_nano_usd: Option<String>,
     pub status: String,
@@ -1548,7 +1264,9 @@ fn parse_optional_json_text(value: Option<String>) -> Option<Value> {
 }
 
 fn append_request_log_filters(
-    query: &mut QueryBuilder<'_, Sqlite>,
+    sql: &mut String,
+    values: &mut Vec<SeaValue>,
+    idx: &mut usize,
     model: Option<&str>,
     status: Option<&str>,
     api_key_id: Option<&str>,
@@ -1564,54 +1282,58 @@ fn append_request_log_filters(
             .filter(|s| !s.is_empty())
             .collect();
         if models.len() == 1 {
-            query.push(" AND rl.model LIKE '%' || ");
-            query.push_bind(models[0].to_string());
-            query.push(" || '%'");
+            sql.push_str(&format!(" AND rl.model LIKE '%' || ${} || '%'", *idx));
+            values.push(models[0].into());
+            *idx += 1;
         } else if !models.is_empty() {
-            query.push(" AND (");
+            sql.push_str(" AND (");
             for (i, m) in models.iter().enumerate() {
                 if i > 0 {
-                    query.push(" OR ");
+                    sql.push_str(" OR ");
                 }
-                query.push("rl.model LIKE '%' || ");
-                query.push_bind(m.to_string());
-                query.push(" || '%'");
+                sql.push_str(&format!("rl.model LIKE '%' || ${} || '%'", *idx));
+                values.push((*m).into());
+                *idx += 1;
             }
-            query.push(")");
+            sql.push(')');
         }
     }
     if let Some(status) = status {
-        query.push(" AND rl.status = ");
-        query.push_bind(status.to_string());
+        sql.push_str(&format!(" AND rl.status = ${}", *idx));
+        values.push(status.into());
+        *idx += 1;
     }
     if let Some(api_key_id) = api_key_id {
-        query.push(" AND rl.api_key_id = ");
-        query.push_bind(api_key_id.to_string());
+        sql.push_str(&format!(" AND rl.api_key_id = ${}", *idx));
+        values.push(api_key_id.into());
+        *idx += 1;
     }
     if let Some(username) = username {
-        query.push(" AND (u.username = ");
-        query.push_bind(username.to_string());
-        query.push(" OR rl.request_kind = 'active_probe_connectivity')");
+        sql.push_str(&format!(" AND (u.username = ${} OR rl.request_kind = 'active_probe_connectivity')", *idx));
+        values.push(username.into());
+        *idx += 1;
     }
     if let Some(search) = search {
         let search_like = format!("%{search}%");
-        query.push(" AND (rl.model LIKE ");
-        query.push_bind(search_like.clone());
-        query.push(" OR rl.upstream_model LIKE ");
-        query.push_bind(search_like.clone());
-        query.push(" OR rl.request_id LIKE ");
-        query.push_bind(search_like.clone());
-        query.push(" OR rl.request_ip LIKE ");
-        query.push_bind(search_like);
-        query.push(")");
+        sql.push_str(&format!(
+            " AND (rl.model LIKE ${i} OR rl.upstream_model LIKE ${j} OR rl.request_id LIKE ${k} OR rl.request_ip LIKE ${l})",
+            i = *idx, j = *idx + 1, k = *idx + 2, l = *idx + 3
+        ));
+        values.push(search_like.clone().into());
+        values.push(search_like.clone().into());
+        values.push(search_like.clone().into());
+        values.push(search_like.into());
+        *idx += 4;
     }
     if let Some(time_from) = time_from {
-        query.push(" AND rl.created_at >= ");
-        query.push_bind(time_from.to_string());
+        sql.push_str(&format!(" AND rl.created_at >= ${}", *idx));
+        values.push(time_from.into());
+        *idx += 1;
     }
     if let Some(time_to) = time_to {
-        query.push(" AND rl.created_at < ");
-        query.push_bind(time_to.to_string());
+        sql.push_str(&format!(" AND rl.created_at < ${}", *idx));
+        values.push(time_to.into());
+        *idx += 1;
     }
 }
 
@@ -1639,12 +1361,13 @@ pub struct DashboardAnalyticsRaw {
 
 impl UserStore {
     pub async fn cleanup_pending_request_logs(&self) -> Result<u64, String> {
-        let result = sqlx::query(
-            "UPDATE request_logs SET status = 'error', error_code = 'server_shutdown', error_message = 'interrupted by server restart' WHERE status = 'pending'"
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        let result = self.db.write()
+            .execute(self.db.stmt(
+                "UPDATE request_logs SET status = 'error', error_code = 'server_shutdown', error_message = 'interrupted by server restart' WHERE status = 'pending'",
+                vec![],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(result.rows_affected())
     }
 
@@ -1666,10 +1389,14 @@ impl UserStore {
             upstream_model: None,
             channel_id: None,
             is_stream,
-            prompt_tokens: None,
-            completion_tokens: None,
-            cached_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
             reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
             provider_multiplier: None,
             charge_nano_usd: None,
             status: REQUEST_LOG_STATUS_PENDING.to_string(),
@@ -1697,20 +1424,22 @@ impl UserStore {
         upstream_model: &str,
         provider_multiplier: f64,
     ) -> Result<(), String> {
-        sqlx::query(
-            r#"UPDATE request_logs
-               SET provider_id = ?, channel_id = ?, upstream_model = ?, provider_multiplier = ?
-               WHERE user_id = ? AND request_id = ? AND status = 'pending' AND request_kind IS NULL"#,
-        )
-        .bind(provider_id)
-        .bind(channel_id)
-        .bind(upstream_model)
-        .bind(provider_multiplier)
-        .bind(user_id)
-        .bind(request_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(
+                r#"UPDATE request_logs
+                   SET provider_id = $1, channel_id = $2, upstream_model = $3, provider_multiplier = $4
+                   WHERE user_id = $5 AND request_id = $6 AND status = 'pending' AND request_kind IS NULL"#,
+                vec![
+                    provider_id.into(),
+                    channel_id.into(),
+                    upstream_model.into(),
+                    SeaValue::Double(Some(provider_multiplier)),
+                    user_id.into(),
+                    request_id.into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -1718,28 +1447,44 @@ impl UserStore {
         &self,
         user_id: &str,
         request_id: &str,
-        prompt_tokens: u64,
-        completion_tokens: u64,
-        cached_tokens: Option<u64>,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: Option<u64>,
+        cache_creation_tokens: Option<u64>,
+        tool_prompt_tokens: Option<u64>,
         reasoning_tokens: Option<u64>,
+        accepted_prediction_tokens: Option<u64>,
+        rejected_prediction_tokens: Option<u64>,
         usage_breakdown_json: Option<Value>,
     ) -> Result<(), String> {
-        sqlx::query(
-            r#"UPDATE request_logs
-               SET prompt_tokens = ?, completion_tokens = ?, cached_tokens = ?, reasoning_tokens = ?,
-                   usage_breakdown_json = ?
-               WHERE user_id = ? AND request_id = ? AND status = 'pending' AND request_kind IS NULL"#,
-        )
-        .bind(prompt_tokens as i64)
-        .bind(completion_tokens as i64)
-        .bind(cached_tokens.map(|v| v as i64))
-        .bind(reasoning_tokens.map(|v| v as i64))
-        .bind(usage_breakdown_json.map(|v| v.to_string()))
-        .bind(user_id)
-        .bind(request_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(
+                r#"UPDATE request_logs
+                   SET input_tokens = $1, output_tokens = $2, cache_read_tokens = $3,
+                        cache_creation_tokens = $4, tool_prompt_tokens = $5, reasoning_tokens = $6,
+                        accepted_prediction_tokens = $7, rejected_prediction_tokens = $8,
+                        usage_breakdown_json = $9
+                   WHERE user_id = $10 AND request_id = $11 AND status = 'pending' AND request_kind IS NULL"#,
+                vec![
+                    SeaValue::BigInt(Some(input_tokens as i64)),
+                    SeaValue::BigInt(Some(output_tokens as i64)),
+                    cache_read_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    cache_creation_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    tool_prompt_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    reasoning_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    accepted_prediction_tokens
+                        .map(|v| SeaValue::BigInt(Some(v as i64)))
+                        .unwrap_or(SeaValue::BigInt(None)),
+                    rejected_prediction_tokens
+                        .map(|v| SeaValue::BigInt(Some(v as i64)))
+                        .unwrap_or(SeaValue::BigInt(None)),
+                    usage_breakdown_json.map(|v| v.to_string()).into(),
+                    user_id.into(),
+                    request_id.into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -1750,45 +1495,52 @@ impl UserStore {
             .map(str::trim)
             .filter(|v| !v.is_empty())
         {
-            let updated = sqlx::query(
-                r#"UPDATE request_logs
-                   SET api_key_id = ?, model = ?, provider_id = ?, upstream_model = ?, channel_id = ?,
-                       is_stream = ?, prompt_tokens = ?, completion_tokens = ?, cached_tokens = ?,
-                       reasoning_tokens = ?, provider_multiplier = ?, charge_nano_usd = ?, status = ?,
-                       usage_breakdown_json = ?, billing_breakdown_json = ?, error_code = ?,
-                       error_message = ?, error_http_status = ?, duration_ms = ?, ttfb_ms = ?,
-                       request_ip = ?, reasoning_effort = ?, tried_providers_json = ?, request_kind = ?
-                   WHERE user_id = ? AND request_id = ? AND status = 'pending' AND request_kind IS NULL"#,
-            )
-            .bind(&log.api_key_id)
-            .bind(&log.model)
-            .bind(&log.provider_id)
-            .bind(&log.upstream_model)
-            .bind(&log.channel_id)
-            .bind(if log.is_stream { 1 } else { 0 })
-            .bind(log.prompt_tokens.map(|v| v as i64))
-            .bind(log.completion_tokens.map(|v| v as i64))
-            .bind(log.cached_tokens.map(|v| v as i64))
-            .bind(log.reasoning_tokens.map(|v| v as i64))
-            .bind(log.provider_multiplier)
-            .bind(log.charge_nano_usd.map(|v| v.to_string()))
-            .bind(&log.status)
-            .bind(log.usage_breakdown_json.as_ref().map(Value::to_string))
-            .bind(log.billing_breakdown_json.as_ref().map(Value::to_string))
-            .bind(&log.error_code)
-            .bind(&log.error_message)
-            .bind(log.error_http_status.map(i64::from))
-            .bind(log.duration_ms.map(|v| v as i64))
-            .bind(log.ttfb_ms.map(|v| v as i64))
-            .bind(&log.request_ip)
-            .bind(&log.reasoning_effort)
-            .bind(log.tried_providers_json.as_ref().map(Value::to_string))
-            .bind(&log.request_kind)
-            .bind(&log.user_id)
-            .bind(request_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+            let updated = self.db.write()
+                .execute(self.db.stmt(
+                    r#"UPDATE request_logs
+                       SET api_key_id = $1, model = $2, provider_id = $3, upstream_model = $4, channel_id = $5,
+                            is_stream = $6, input_tokens = $7, output_tokens = $8, cache_read_tokens = $9,
+                            cache_creation_tokens = $10, tool_prompt_tokens = $11, reasoning_tokens = $12,
+                            accepted_prediction_tokens = $13, rejected_prediction_tokens = $14, provider_multiplier = $15, charge_nano_usd = $16, status = $17,
+                            usage_breakdown_json = $18, billing_breakdown_json = $19, error_code = $20,
+                            error_message = $21, error_http_status = $22, duration_ms = $23, ttfb_ms = $24,
+                            request_ip = $25, reasoning_effort = $26, tried_providers_json = $27, request_kind = $28
+                       WHERE user_id = $29 AND request_id = $30 AND status = 'pending' AND request_kind IS NULL"#,
+                    vec![
+                        log.api_key_id.clone().into(),
+                        log.model.clone().into(),
+                        log.provider_id.clone().into(),
+                        log.upstream_model.clone().into(),
+                        log.channel_id.clone().into(),
+                        SeaValue::Int(Some(if log.is_stream { 1 } else { 0 })),
+                        log.input_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.output_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.cache_read_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.cache_creation_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.tool_prompt_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.reasoning_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.accepted_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.rejected_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.provider_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
+                        log.charge_nano_usd.map(|v| v.to_string()).into(),
+                        log.status.clone().into(),
+                        log.usage_breakdown_json.as_ref().map(Value::to_string).into(),
+                        log.billing_breakdown_json.as_ref().map(Value::to_string).into(),
+                        log.error_code.clone().into(),
+                        log.error_message.clone().into(),
+                        log.error_http_status.map(|v| SeaValue::BigInt(Some(i64::from(v)))).unwrap_or(SeaValue::BigInt(None)),
+                        log.duration_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.ttfb_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                        log.request_ip.clone().into(),
+                        log.reasoning_effort.clone().into(),
+                        log.tried_providers_json.as_ref().map(Value::to_string).into(),
+                        log.request_kind.clone().into(),
+                        log.user_id.clone().into(),
+                        request_id.into(),
+                    ],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
 
             if updated.rows_affected() > 0 {
                 return Ok(());
@@ -1801,46 +1553,53 @@ impl UserStore {
     pub async fn insert_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            r#"INSERT INTO request_logs
-               (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
-                prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens,
-                provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
-                billing_breakdown_json, error_code, error_message, error_http_status,
-                duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&id)
-        .bind(&log.request_id)
-        .bind(&log.user_id)
-        .bind(&log.api_key_id)
-        .bind(&log.model)
-        .bind(&log.provider_id)
-        .bind(&log.upstream_model)
-        .bind(&log.channel_id)
-        .bind(if log.is_stream { 1 } else { 0 })
-        .bind(log.prompt_tokens.map(|v| v as i64))
-        .bind(log.completion_tokens.map(|v| v as i64))
-        .bind(log.cached_tokens.map(|v| v as i64))
-        .bind(log.reasoning_tokens.map(|v| v as i64))
-        .bind(log.provider_multiplier)
-        .bind(log.charge_nano_usd.map(|v| v.to_string()))
-        .bind(&log.status)
-        .bind(log.usage_breakdown_json.map(|v| v.to_string()))
-        .bind(log.billing_breakdown_json.map(|v| v.to_string()))
-        .bind(&log.error_code)
-        .bind(&log.error_message)
-        .bind(log.error_http_status.map(i64::from))
-        .bind(log.duration_ms.map(|v| v as i64))
-        .bind(log.ttfb_ms.map(|v| v as i64))
-        .bind(&log.request_ip)
-        .bind(&log.reasoning_effort)
-        .bind(log.tried_providers_json.map(|v| v.to_string()))
-        .bind(&log.request_kind)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.db.write()
+            .execute(self.db.stmt(
+                r#"INSERT INTO request_logs
+                   (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
+                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tool_prompt_tokens, reasoning_tokens,
+                    accepted_prediction_tokens, rejected_prediction_tokens,
+                    provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
+                    billing_breakdown_json, error_code, error_message, error_http_status,
+                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)"#,
+                vec![
+                    id.into(),
+                    log.request_id.into(),
+                    log.user_id.into(),
+                    log.api_key_id.into(),
+                    log.model.into(),
+                    log.provider_id.into(),
+                    log.upstream_model.into(),
+                    log.channel_id.into(),
+                    SeaValue::Int(Some(if log.is_stream { 1 } else { 0 })),
+                    log.input_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.output_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.cache_read_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.cache_creation_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.tool_prompt_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.reasoning_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.accepted_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.rejected_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.provider_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
+                    log.charge_nano_usd.map(|v| v.to_string()).into(),
+                    log.status.into(),
+                    log.usage_breakdown_json.map(|v| v.to_string()).into(),
+                    log.billing_breakdown_json.map(|v| v.to_string()).into(),
+                    log.error_code.into(),
+                    log.error_message.into(),
+                    log.error_http_status.map(|v| SeaValue::BigInt(Some(i64::from(v)))).unwrap_or(SeaValue::BigInt(None)),
+                    log.duration_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.ttfb_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
+                    log.request_ip.into(),
+                    log.reasoning_effort.into(),
+                    log.tried_providers_json.map(|v| v.to_string()).into(),
+                    log.request_kind.into(),
+                    now.into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -1861,11 +1620,14 @@ impl UserStore {
         let api_key_id = normalize_request_log_filter(api_key_id);
         let search = normalize_request_log_filter(search);
 
-        let mut count_query =
-            QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM request_logs rl WHERE rl.user_id = ");
-        count_query.push_bind(user_id);
+        // Count query
+        let mut count_sql = "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.user_id = $1".to_string();
+        let mut count_values: Vec<SeaValue> = vec![user_id.into()];
+        let mut count_idx = 2usize;
         append_request_log_filters(
-            &mut count_query,
+            &mut count_sql,
+            &mut count_values,
+            &mut count_idx,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -1874,18 +1636,23 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let total: i64 = count_query
-            .build_query_scalar()
-            .fetch_one(&self.pool)
+        let count_row = self.db.read()
+            .query_one(self.db.stmt(&count_sql, count_values))
             .await
             .map_err(|e| e.to_string())?;
+        let total: i64 = count_row
+            .ok_or_else(|| "no count row".to_string())?
+            .try_get("", "cnt")
+            .map_err(|e| e.to_string())?;
 
-        let mut sum_query = QueryBuilder::<Sqlite>::new(
-            "SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) FROM request_logs rl WHERE rl.user_id = ",
-        );
-        sum_query.push_bind(user_id);
+        // Sum query
+        let mut sum_sql = "SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) as total_charge FROM request_logs rl WHERE rl.user_id = $1".to_string();
+        let mut sum_values: Vec<SeaValue> = vec![user_id.into()];
+        let mut sum_idx = 2usize;
         append_request_log_filters(
-            &mut sum_query,
+            &mut sum_sql,
+            &mut sum_values,
+            &mut sum_idx,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -1894,17 +1661,22 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let total_charge: i64 = sum_query
-            .build_query_scalar()
-            .fetch_one(&self.pool)
+        let sum_row = self.db.read()
+            .query_one(self.db.stmt(&sum_sql, sum_values))
             .await
+            .map_err(|e| e.to_string())?;
+        let total_charge: i64 = sum_row
+            .ok_or_else(|| "no sum row".to_string())?
+            .try_get("", "total_charge")
             .map_err(|e| e.to_string())?;
         let total_charge_nano_usd = total_charge.to_string();
 
-        let mut rows_query = QueryBuilder::<Sqlite>::new(
-            r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        // Rows query
+        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
                       rl.channel_id, rl.is_stream,
-                      rl.prompt_tokens, rl.completion_tokens, rl.cached_tokens, rl.reasoning_tokens,
+                      rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
+                      rl.tool_prompt_tokens, rl.reasoning_tokens,
+                      rl.accepted_prediction_tokens, rl.rejected_prediction_tokens,
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
@@ -1916,11 +1688,13 @@ impl UserStore {
                LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
                LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
-               WHERE rl.user_id = "#,
-        );
-        rows_query.push_bind(user_id);
+               WHERE rl.user_id = $1"#.to_string();
+        let mut rows_values: Vec<SeaValue> = vec![user_id.into()];
+        let mut rows_idx = 2usize;
         append_request_log_filters(
-            &mut rows_query,
+            &mut rows_sql,
+            &mut rows_values,
+            &mut rows_idx,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -1929,66 +1703,18 @@ impl UserStore {
             time_from,
             time_to,
         );
-        rows_query.push(" ORDER BY rl.created_at DESC LIMIT ");
-        rows_query.push_bind(limit);
-        rows_query.push(" OFFSET ");
-        rows_query.push_bind(offset);
+        rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+        rows_values.push(SeaValue::BigInt(Some(limit)));
+        rows_values.push(SeaValue::BigInt(Some(offset)));
 
-        let rows = rows_query
-            .build()
-            .fetch_all(&self.pool)
+        let rows = self.db.read()
+            .query_all(self.db.stmt(&rows_sql, rows_values))
             .await
             .map_err(|e| e.to_string())?;
 
         let logs = rows
             .into_iter()
-            .map(|row| RequestLogRow {
-                id: row.try_get("id").unwrap_or_default(),
-                request_id: row.try_get("request_id").unwrap_or(None),
-                user_id: row.try_get("user_id").unwrap_or_default(),
-                api_key_id: row.try_get("api_key_id").unwrap_or(None),
-                model: row.try_get("model").unwrap_or_default(),
-                provider_id: row.try_get("provider_id").unwrap_or(None),
-                upstream_model: row.try_get("upstream_model").unwrap_or(None),
-                channel_id: row.try_get("channel_id").unwrap_or(None),
-                is_stream: row.try_get::<i32, _>("is_stream").unwrap_or(0) == 1,
-                prompt_tokens: row.try_get("prompt_tokens").unwrap_or(None),
-                completion_tokens: row.try_get("completion_tokens").unwrap_or(None),
-                cached_tokens: row.try_get("cached_tokens").unwrap_or(None),
-                reasoning_tokens: row.try_get("reasoning_tokens").unwrap_or(None),
-                provider_multiplier: row.try_get("provider_multiplier").unwrap_or(None),
-                charge_nano_usd: row
-                    .try_get::<Option<String>, _>("charge_nano_usd")
-                    .unwrap_or(None),
-                status: row
-                    .try_get("status")
-                    .unwrap_or_else(|_| "unknown".to_string()),
-                usage_breakdown_json: parse_optional_json_text(
-                    row.try_get::<Option<String>, _>("usage_breakdown_json")
-                        .unwrap_or(None),
-                ),
-                billing_breakdown_json: parse_optional_json_text(
-                    row.try_get::<Option<String>, _>("billing_breakdown_json")
-                        .unwrap_or(None),
-                ),
-                error_code: row.try_get("error_code").unwrap_or(None),
-                error_message: row.try_get("error_message").unwrap_or(None),
-                error_http_status: row.try_get("error_http_status").unwrap_or(None),
-                duration_ms: row.try_get("duration_ms").unwrap_or(None),
-                ttfb_ms: row.try_get("ttfb_ms").unwrap_or(None),
-                request_ip: row.try_get("request_ip").unwrap_or(None),
-                reasoning_effort: row.try_get("reasoning_effort").unwrap_or(None),
-                tried_providers_json: parse_optional_json_text(
-                    row.try_get::<Option<String>, _>("tried_providers_json")
-                        .unwrap_or(None),
-                ),
-                request_kind: row.try_get("request_kind").unwrap_or(None),
-                created_at: row.try_get("created_at").unwrap_or_default(),
-                username: row.try_get("username").unwrap_or(None),
-                api_key_name: row.try_get("api_key_name").unwrap_or(None),
-                channel_name: row.try_get("channel_name").unwrap_or(None),
-                provider_name: row.try_get("provider_name").unwrap_or(None),
-            })
+            .map(|row| row_to_request_log(&row))
             .collect();
 
         Ok((logs, total, total_charge_nano_usd))
@@ -2012,13 +1738,16 @@ impl UserStore {
         let username = normalize_request_log_filter(username);
         let search = normalize_request_log_filter(search);
 
-        let mut count_query = QueryBuilder::<Sqlite>::new(
-            r#"SELECT COUNT(*) FROM request_logs rl
+        // Count query
+        let mut count_sql = r#"SELECT COUNT(*) as cnt FROM request_logs rl
                LEFT JOIN users u ON rl.user_id = u.id
-               WHERE 1 = 1"#,
-        );
+               WHERE 1 = 1"#.to_string();
+        let mut count_values: Vec<SeaValue> = Vec::new();
+        let mut count_idx = 1usize;
         append_request_log_filters(
-            &mut count_query,
+            &mut count_sql,
+            &mut count_values,
+            &mut count_idx,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -2027,19 +1756,25 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let total: i64 = count_query
-            .build_query_scalar()
-            .fetch_one(&self.pool)
+        let count_row = self.db.read()
+            .query_one(self.db.stmt(&count_sql, count_values))
             .await
             .map_err(|e| e.to_string())?;
+        let total: i64 = count_row
+            .ok_or_else(|| "no count row".to_string())?
+            .try_get("", "cnt")
+            .map_err(|e| e.to_string())?;
 
-        let mut sum_query = QueryBuilder::<Sqlite>::new(
-            r#"SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) FROM request_logs rl
+        // Sum query
+        let mut sum_sql = r#"SELECT COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) as total_charge FROM request_logs rl
                LEFT JOIN users u ON rl.user_id = u.id
-               WHERE 1 = 1"#,
-        );
+               WHERE 1 = 1"#.to_string();
+        let mut sum_values: Vec<SeaValue> = Vec::new();
+        let mut sum_idx = 1usize;
         append_request_log_filters(
-            &mut sum_query,
+            &mut sum_sql,
+            &mut sum_values,
+            &mut sum_idx,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -2048,17 +1783,22 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let total_charge: i64 = sum_query
-            .build_query_scalar()
-            .fetch_one(&self.pool)
+        let sum_row = self.db.read()
+            .query_one(self.db.stmt(&sum_sql, sum_values))
             .await
+            .map_err(|e| e.to_string())?;
+        let total_charge: i64 = sum_row
+            .ok_or_else(|| "no sum row".to_string())?
+            .try_get("", "total_charge")
             .map_err(|e| e.to_string())?;
         let total_charge_nano_usd = total_charge.to_string();
 
-        let mut rows_query = QueryBuilder::<Sqlite>::new(
-            r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        // Rows query
+        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
                       rl.channel_id, rl.is_stream,
-                      rl.prompt_tokens, rl.completion_tokens, rl.cached_tokens, rl.reasoning_tokens,
+                      rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
+                      rl.tool_prompt_tokens, rl.reasoning_tokens,
+                      rl.accepted_prediction_tokens, rl.rejected_prediction_tokens,
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
@@ -2070,10 +1810,13 @@ impl UserStore {
                LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
                LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
-               WHERE 1 = 1"#,
-        );
+               WHERE 1 = 1"#.to_string();
+        let mut rows_values: Vec<SeaValue> = Vec::new();
+        let mut rows_idx = 1usize;
         append_request_log_filters(
-            &mut rows_query,
+            &mut rows_sql,
+            &mut rows_values,
+            &mut rows_idx,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -2082,66 +1825,18 @@ impl UserStore {
             time_from,
             time_to,
         );
-        rows_query.push(" ORDER BY rl.created_at DESC LIMIT ");
-        rows_query.push_bind(limit);
-        rows_query.push(" OFFSET ");
-        rows_query.push_bind(offset);
+        rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+        rows_values.push(SeaValue::BigInt(Some(limit)));
+        rows_values.push(SeaValue::BigInt(Some(offset)));
 
-        let rows = rows_query
-            .build()
-            .fetch_all(&self.pool)
+        let rows = self.db.read()
+            .query_all(self.db.stmt(&rows_sql, rows_values))
             .await
             .map_err(|e| e.to_string())?;
 
         let logs = rows
             .into_iter()
-            .map(|row| RequestLogRow {
-                id: row.try_get("id").unwrap_or_default(),
-                request_id: row.try_get("request_id").unwrap_or(None),
-                user_id: row.try_get("user_id").unwrap_or_default(),
-                api_key_id: row.try_get("api_key_id").unwrap_or(None),
-                model: row.try_get("model").unwrap_or_default(),
-                provider_id: row.try_get("provider_id").unwrap_or(None),
-                upstream_model: row.try_get("upstream_model").unwrap_or(None),
-                channel_id: row.try_get("channel_id").unwrap_or(None),
-                is_stream: row.try_get::<i32, _>("is_stream").unwrap_or(0) == 1,
-                prompt_tokens: row.try_get("prompt_tokens").unwrap_or(None),
-                completion_tokens: row.try_get("completion_tokens").unwrap_or(None),
-                cached_tokens: row.try_get("cached_tokens").unwrap_or(None),
-                reasoning_tokens: row.try_get("reasoning_tokens").unwrap_or(None),
-                provider_multiplier: row.try_get("provider_multiplier").unwrap_or(None),
-                charge_nano_usd: row
-                    .try_get::<Option<String>, _>("charge_nano_usd")
-                    .unwrap_or(None),
-                status: row
-                    .try_get("status")
-                    .unwrap_or_else(|_| "unknown".to_string()),
-                usage_breakdown_json: parse_optional_json_text(
-                    row.try_get::<Option<String>, _>("usage_breakdown_json")
-                        .unwrap_or(None),
-                ),
-                billing_breakdown_json: parse_optional_json_text(
-                    row.try_get::<Option<String>, _>("billing_breakdown_json")
-                        .unwrap_or(None),
-                ),
-                error_code: row.try_get("error_code").unwrap_or(None),
-                error_message: row.try_get("error_message").unwrap_or(None),
-                error_http_status: row.try_get("error_http_status").unwrap_or(None),
-                duration_ms: row.try_get("duration_ms").unwrap_or(None),
-                ttfb_ms: row.try_get("ttfb_ms").unwrap_or(None),
-                request_ip: row.try_get("request_ip").unwrap_or(None),
-                reasoning_effort: row.try_get("reasoning_effort").unwrap_or(None),
-                tried_providers_json: parse_optional_json_text(
-                    row.try_get::<Option<String>, _>("tried_providers_json")
-                        .unwrap_or(None),
-                ),
-                request_kind: row.try_get("request_kind").unwrap_or(None),
-                created_at: row.try_get("created_at").unwrap_or_default(),
-                username: row.try_get("username").unwrap_or(None),
-                api_key_name: row.try_get("api_key_name").unwrap_or(None),
-                channel_name: row.try_get("channel_name").unwrap_or(None),
-                provider_name: row.try_get("provider_name").unwrap_or(None),
-            })
+            .map(|row| row_to_request_log(&row))
             .collect();
 
         Ok((logs, total, total_charge_nano_usd))
@@ -2156,140 +1851,155 @@ impl UserStore {
         bucket_count: i64,
         bucket_width_days: f64,
     ) -> Result<DashboardAnalyticsRaw, String> {
+        let is_sqlite = self.db.is_sqlite();
+
         // 1. Model bucketed aggregation (cost + calls)
-        let mut model_q = QueryBuilder::<Sqlite>::new(
+        let bucket_expr = if is_sqlite {
+            "CAST((julianday(rl.created_at) - julianday($1)) / $2 AS INTEGER)".to_string()
+        } else {
+            "CAST(EXTRACT(EPOCH FROM (CAST(rl.created_at AS TIMESTAMPTZ) - CAST($1 AS TIMESTAMPTZ))) / ($2 * 86400.0) AS INTEGER)".to_string()
+        };
+
+        let mut model_sql = format!(
             r#"SELECT
-                 CAST((julianday(rl.created_at) - julianday("#,
-        );
-        model_q.push_bind(time_from.to_string());
-        model_q.push(")) / ");
-        model_q.push_bind(bucket_width_days);
-        model_q.push(
-            r#" AS INTEGER) AS bucket_idx,
+                 {bucket_expr} AS bucket_idx,
                  rl.model,
                  COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS cost_nano,
                  COUNT(*) AS call_count
                FROM request_logs rl
-               WHERE rl.created_at >= "#,
+               WHERE rl.created_at >= $3 AND rl.created_at < $4"#
         );
-        model_q.push_bind(time_from.to_string());
-        model_q.push(" AND rl.created_at < ");
-        model_q.push_bind(time_to.to_string());
-        if let Some(uid) = user_id {
-            model_q.push(" AND rl.user_id = ");
-            model_q.push_bind(uid.to_string());
-        }
-        model_q.push(" GROUP BY bucket_idx, rl.model");
+        let mut model_values: Vec<SeaValue> = vec![
+            time_from.into(),
+            SeaValue::Double(Some(bucket_width_days)),
+            time_from.into(),
+            time_to.into(),
+        ];
+        let mut model_idx = 5usize;
 
-        let model_rows = model_q
-            .build()
-            .fetch_all(&self.pool)
+        if let Some(uid) = user_id {
+            model_sql.push_str(&format!(" AND rl.user_id = ${model_idx}"));
+            model_values.push(uid.into());
+            model_idx += 1;
+        }
+        let _ = model_idx;
+        model_sql.push_str(" GROUP BY bucket_idx, rl.model");
+
+        let model_rows = self.db.read()
+            .query_all(self.db.stmt(&model_sql, model_values))
             .await
             .map_err(|e| e.to_string())?;
 
         let model_buckets: Vec<AnalyticsModelBucketRow> = model_rows
             .into_iter()
             .map(|row| {
-                let idx: i64 = row.try_get("bucket_idx").unwrap_or(0);
+                let idx: i64 = row.try_get("", "bucket_idx").unwrap_or(0);
                 AnalyticsModelBucketRow {
                     bucket_idx: idx.clamp(0, bucket_count - 1),
-                    model: row.try_get("model").unwrap_or_default(),
-                    cost_nano: row.try_get("cost_nano").unwrap_or(0),
-                    call_count: row.try_get("call_count").unwrap_or(0),
+                    model: row.try_get("", "model").unwrap_or_default(),
+                    cost_nano: row.try_get("", "cost_nano").unwrap_or(0),
+                    call_count: row.try_get("", "call_count").unwrap_or(0),
                 }
             })
             .collect();
 
         // 2. Provider bucketed aggregation (calls only)
-        let mut prov_q = QueryBuilder::<Sqlite>::new(
+        let mut prov_sql = format!(
             r#"SELECT
-                 CAST((julianday(rl.created_at) - julianday("#,
-        );
-        prov_q.push_bind(time_from.to_string());
-        prov_q.push(")) / ");
-        prov_q.push_bind(bucket_width_days);
-        prov_q.push(
-            r#" AS INTEGER) AS bucket_idx,
+                 {bucket_expr} AS bucket_idx,
                  COALESCE(mp.name, rl.provider_id, 'unknown') AS provider_label,
                  COUNT(*) AS call_count
                FROM request_logs rl
                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
-               WHERE rl.created_at >= "#,
+               WHERE rl.created_at >= $3 AND rl.created_at < $4"#
         );
-        prov_q.push_bind(time_from.to_string());
-        prov_q.push(" AND rl.created_at < ");
-        prov_q.push_bind(time_to.to_string());
-        if let Some(uid) = user_id {
-            prov_q.push(" AND rl.user_id = ");
-            prov_q.push_bind(uid.to_string());
-        }
-        prov_q.push(" GROUP BY bucket_idx, provider_label");
+        let mut prov_values: Vec<SeaValue> = vec![
+            time_from.into(),
+            SeaValue::Double(Some(bucket_width_days)),
+            time_from.into(),
+            time_to.into(),
+        ];
+        let mut prov_idx = 5usize;
 
-        let prov_rows = prov_q
-            .build()
-            .fetch_all(&self.pool)
+        if let Some(uid) = user_id {
+            prov_sql.push_str(&format!(" AND rl.user_id = ${prov_idx}"));
+            prov_values.push(uid.into());
+            prov_idx += 1;
+        }
+        let _ = prov_idx;
+        prov_sql.push_str(" GROUP BY bucket_idx, provider_label");
+
+        let prov_rows = self.db.read()
+            .query_all(self.db.stmt(&prov_sql, prov_values))
             .await
             .map_err(|e| e.to_string())?;
 
         let provider_buckets: Vec<AnalyticsProviderBucketRow> = prov_rows
             .into_iter()
             .map(|row| {
-                let idx: i64 = row.try_get("bucket_idx").unwrap_or(0);
+                let idx: i64 = row.try_get("", "bucket_idx").unwrap_or(0);
                 AnalyticsProviderBucketRow {
                     bucket_idx: idx.clamp(0, bucket_count - 1),
-                    provider_label: row.try_get("provider_label").unwrap_or_default(),
-                    call_count: row.try_get("call_count").unwrap_or(0),
+                    provider_label: row.try_get("", "provider_label").unwrap_or_default(),
+                    call_count: row.try_get("", "call_count").unwrap_or(0),
                 }
             })
             .collect();
 
         // 3. Total stats for the range
-        let mut total_q = QueryBuilder::<Sqlite>::new(
-            r#"SELECT
+        let mut total_sql = r#"SELECT
                  COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS total_cost,
                  COUNT(*) AS total_calls
                FROM request_logs rl
-               WHERE rl.created_at >= "#,
-        );
-        total_q.push_bind(time_from.to_string());
-        total_q.push(" AND rl.created_at < ");
-        total_q.push_bind(time_to.to_string());
-        if let Some(uid) = user_id {
-            total_q.push(" AND rl.user_id = ");
-            total_q.push_bind(uid.to_string());
-        }
+               WHERE rl.created_at >= $1 AND rl.created_at < $2"#.to_string();
+        let mut total_values: Vec<SeaValue> = vec![
+            time_from.into(),
+            time_to.into(),
+        ];
+        let mut total_idx = 3usize;
 
-        let total_row = total_q
-            .build()
-            .fetch_one(&self.pool)
+        if let Some(uid) = user_id {
+            total_sql.push_str(&format!(" AND rl.user_id = ${total_idx}"));
+            total_values.push(uid.into());
+            total_idx += 1;
+        }
+        let _ = total_idx;
+
+        let total_row = self.db.read()
+            .query_one(self.db.stmt(&total_sql, total_values))
             .await
             .map_err(|e| e.to_string())?;
+        let total_row = total_row.ok_or_else(|| "no total row".to_string())?;
 
-        let total_cost_nano_usd: i64 = total_row.try_get("total_cost").unwrap_or(0);
-        let total_calls: i64 = total_row.try_get("total_calls").unwrap_or(0);
+        let total_cost_nano_usd: i64 = total_row.try_get("", "total_cost").unwrap_or(0);
+        let total_calls: i64 = total_row.try_get("", "total_calls").unwrap_or(0);
 
         // 4. Today stats
-        let mut today_q = QueryBuilder::<Sqlite>::new(
-            r#"SELECT
+        let mut today_sql = r#"SELECT
                  COALESCE(SUM(CAST(rl.charge_nano_usd AS INTEGER)), 0) AS today_cost,
                  COUNT(*) AS today_calls
                FROM request_logs rl
-               WHERE rl.created_at >= "#,
-        );
-        today_q.push_bind(today_start.to_string());
-        if let Some(uid) = user_id {
-            today_q.push(" AND rl.user_id = ");
-            today_q.push_bind(uid.to_string());
-        }
+               WHERE rl.created_at >= $1"#.to_string();
+        let mut today_values: Vec<SeaValue> = vec![
+            today_start.into(),
+        ];
+        let mut today_idx = 2usize;
 
-        let today_row = today_q
-            .build()
-            .fetch_one(&self.pool)
+        if let Some(uid) = user_id {
+            today_sql.push_str(&format!(" AND rl.user_id = ${today_idx}"));
+            today_values.push(uid.into());
+            today_idx += 1;
+        }
+        let _ = today_idx;
+
+        let today_row = self.db.read()
+            .query_one(self.db.stmt(&today_sql, today_values))
             .await
             .map_err(|e| e.to_string())?;
+        let today_row = today_row.ok_or_else(|| "no today row".to_string())?;
 
-        let today_cost_nano_usd: i64 = today_row.try_get("today_cost").unwrap_or(0);
-        let today_calls: i64 = today_row.try_get("today_calls").unwrap_or(0);
+        let today_cost_nano_usd: i64 = today_row.try_get("", "today_cost").unwrap_or(0);
+        let today_calls: i64 = today_row.try_get("", "today_calls").unwrap_or(0);
 
         Ok(DashboardAnalyticsRaw {
             model_buckets,
@@ -2299,6 +2009,64 @@ impl UserStore {
             today_cost_nano_usd,
             today_calls,
         })
+    }
+}
+
+fn row_to_request_log(row: &QueryResult) -> RequestLogRow {
+    RequestLogRow {
+        id: row.try_get("", "id").unwrap_or_default(),
+        request_id: row.try_get("", "request_id").unwrap_or(None),
+        user_id: row.try_get("", "user_id").unwrap_or_default(),
+        api_key_id: row.try_get("", "api_key_id").unwrap_or(None),
+        model: row.try_get("", "model").unwrap_or_default(),
+        provider_id: row.try_get("", "provider_id").unwrap_or(None),
+        upstream_model: row.try_get("", "upstream_model").unwrap_or(None),
+        channel_id: row.try_get("", "channel_id").unwrap_or(None),
+        is_stream: row.try_get::<i32>("", "is_stream").unwrap_or(0) == 1,
+        input_tokens: row.try_get("", "input_tokens").unwrap_or(None),
+        output_tokens: row.try_get("", "output_tokens").unwrap_or(None),
+        cache_read_tokens: row.try_get("", "cache_read_tokens").unwrap_or(None),
+        cache_creation_tokens: row.try_get("", "cache_creation_tokens").unwrap_or(None),
+        tool_prompt_tokens: row.try_get("", "tool_prompt_tokens").unwrap_or(None),
+        reasoning_tokens: row.try_get("", "reasoning_tokens").unwrap_or(None),
+        accepted_prediction_tokens: row
+            .try_get("", "accepted_prediction_tokens")
+            .unwrap_or(None),
+        rejected_prediction_tokens: row
+            .try_get("", "rejected_prediction_tokens")
+            .unwrap_or(None),
+        provider_multiplier: row.try_get("", "provider_multiplier").unwrap_or(None),
+        charge_nano_usd: row
+            .try_get::<Option<String>>("", "charge_nano_usd")
+            .unwrap_or(None),
+        status: row
+            .try_get("", "status")
+            .unwrap_or_else(|_| "unknown".to_string()),
+        usage_breakdown_json: parse_optional_json_text(
+            row.try_get::<Option<String>>("", "usage_breakdown_json")
+                .unwrap_or(None),
+        ),
+        billing_breakdown_json: parse_optional_json_text(
+            row.try_get::<Option<String>>("", "billing_breakdown_json")
+                .unwrap_or(None),
+        ),
+        error_code: row.try_get("", "error_code").unwrap_or(None),
+        error_message: row.try_get("", "error_message").unwrap_or(None),
+        error_http_status: row.try_get("", "error_http_status").unwrap_or(None),
+        duration_ms: row.try_get("", "duration_ms").unwrap_or(None),
+        ttfb_ms: row.try_get("", "ttfb_ms").unwrap_or(None),
+        request_ip: row.try_get("", "request_ip").unwrap_or(None),
+        reasoning_effort: row.try_get("", "reasoning_effort").unwrap_or(None),
+        tried_providers_json: parse_optional_json_text(
+            row.try_get::<Option<String>>("", "tried_providers_json")
+                .unwrap_or(None),
+        ),
+        request_kind: row.try_get("", "request_kind").unwrap_or(None),
+        created_at: row.try_get("", "created_at").unwrap_or_default(),
+        username: row.try_get("", "username").unwrap_or(None),
+        api_key_name: row.try_get("", "api_key_name").unwrap_or(None),
+        channel_name: row.try_get("", "channel_name").unwrap_or(None),
+        provider_name: row.try_get("", "provider_name").unwrap_or(None),
     }
 }
 

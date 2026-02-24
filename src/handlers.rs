@@ -381,10 +381,7 @@ pub async fn create_embeddings(
     let final_err = AppError::new(
         StatusCode::BAD_GATEWAY,
         "upstream_error",
-        format!(
-            "No available upstream provider for model: {}",
-            logical_model
-        ),
+        build_exhausted_error_message(&logical_model, &tried_providers),
     );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
@@ -536,12 +533,10 @@ async fn record_stream_usage_if_present(
         return;
     };
     let mut guard = runtime_metrics.lock().await;
-    let new_total = usage.prompt_tokens.saturating_add(usage.completion_tokens);
+    let new_total = usage.total_tokens();
     let replace = match guard.usage.as_ref() {
         Some(existing) => {
-            let existing_total = existing
-                .prompt_tokens
-                .saturating_add(existing.completion_tokens);
+            let existing_total = existing.total_tokens();
             new_total >= existing_total
         }
         None => true,
@@ -565,15 +560,39 @@ async fn record_stream_usage_if_present(
 
     if let Some((user_store, user_id, request_id, usage)) = pending_update {
         let usage_breakdown = build_usage_breakdown(&usage);
+        let cache_creation_tokens = usage
+            .input_details
+            .as_ref()
+            .map(|d| d.cache_creation_tokens)
+            .filter(|&v| v > 0);
+        let tool_prompt_tokens = usage
+            .input_details
+            .as_ref()
+            .map(|d| d.tool_prompt_tokens)
+            .filter(|&v| v > 0);
+        let accepted_prediction_tokens = usage
+            .output_details
+            .as_ref()
+            .map(|d| d.accepted_prediction_tokens)
+            .filter(|&v| v > 0);
+        let rejected_prediction_tokens = usage
+            .output_details
+            .as_ref()
+            .map(|d| d.rejected_prediction_tokens)
+            .filter(|&v| v > 0);
         tokio::spawn(async move {
             if let Err(e) = user_store
                 .update_pending_request_log_usage(
                     &user_id,
                     &request_id,
-                    usage.prompt_tokens,
-                    usage.completion_tokens,
-                    usage.cached_tokens,
-                    usage.reasoning_tokens,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cached_tokens(),
+                    cache_creation_tokens,
+                    tool_prompt_tokens,
+                    usage.reasoning_tokens(),
+                    accepted_prediction_tokens,
+                    rejected_prediction_tokens,
                     Some(usage_breakdown),
                 )
                 .await
@@ -596,14 +615,14 @@ async fn latest_stream_usage_snapshot(
 
 fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-        "total_tokens": usage.prompt_tokens.saturating_add(usage.completion_tokens),
+        "prompt_tokens": usage.input_tokens,
+        "completion_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens(),
         "completion_tokens_details": {
-            "reasoning_tokens": usage.reasoning_tokens.unwrap_or(0)
+            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0)
         },
         "prompt_tokens_details": {
-            "cached_tokens": usage.cached_tokens.unwrap_or(0)
+            "cached_tokens": usage.cached_tokens().unwrap_or(0)
         }
     });
     // Overwrite with full upstream detail objects (e.g. cache_write_tokens)
@@ -617,14 +636,14 @@ fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
 
 fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
-        "input_tokens": usage.prompt_tokens,
-        "output_tokens": usage.completion_tokens,
-        "total_tokens": usage.prompt_tokens.saturating_add(usage.completion_tokens),
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens(),
         "output_tokens_details": {
-            "reasoning_tokens": usage.reasoning_tokens.unwrap_or(0)
+            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0)
         },
         "input_tokens_details": {
-            "cached_tokens": usage.cached_tokens.unwrap_or(0)
+            "cached_tokens": usage.cached_tokens().unwrap_or(0)
         }
     });
     if let Some(map) = obj.as_object_mut() {
@@ -637,9 +656,9 @@ fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
 
 fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
-        "input_tokens": usage.prompt_tokens,
-        "output_tokens": usage.completion_tokens,
-        "cache_read_input_tokens": usage.cached_tokens.unwrap_or(0)
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cache_read_input_tokens": usage.cached_tokens().unwrap_or(0)
     });
     if let Some(map) = obj.as_object_mut() {
         for (k, v) in &usage.extra_body {
@@ -649,18 +668,111 @@ fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
     obj
 }
 
+fn parse_modality_breakdown_from_detail_object(
+    detail: Option<&Map<String, Value>>,
+) -> Option<urp::ModalityBreakdown> {
+    let detail = detail?;
+    let modality = detail
+        .get("modality_breakdown")
+        .and_then(|v| v.as_object())
+        .unwrap_or(detail);
+    let breakdown = urp::ModalityBreakdown {
+        text_tokens: modality.get("text_tokens").and_then(|v| v.as_u64()),
+        image_tokens: modality.get("image_tokens").and_then(|v| v.as_u64()),
+        audio_tokens: modality.get("audio_tokens").and_then(|v| v.as_u64()),
+        video_tokens: modality.get("video_tokens").and_then(|v| v.as_u64()),
+        document_tokens: modality.get("document_tokens").and_then(|v| v.as_u64()),
+    };
+    if breakdown.text_tokens.is_some()
+        || breakdown.image_tokens.is_some()
+        || breakdown.audio_tokens.is_some()
+        || breakdown.video_tokens.is_some()
+        || breakdown.document_tokens.is_some()
+    {
+        Some(breakdown)
+    } else {
+        None
+    }
+}
+
+fn make_input_details(
+    standard_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    tool_prompt_tokens: u64,
+    modality_breakdown: Option<urp::ModalityBreakdown>,
+) -> Option<urp::InputDetails> {
+    if standard_tokens > 0
+        || cache_read_tokens > 0
+        || cache_creation_tokens > 0
+        || tool_prompt_tokens > 0
+        || modality_breakdown.is_some()
+    {
+        Some(urp::InputDetails {
+            standard_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            tool_prompt_tokens,
+            modality_breakdown,
+        })
+    } else {
+        None
+    }
+}
+
+fn make_output_details(
+    standard_tokens: u64,
+    reasoning_tokens: u64,
+    accepted_prediction_tokens: u64,
+    rejected_prediction_tokens: u64,
+    modality_breakdown: Option<urp::ModalityBreakdown>,
+) -> Option<urp::OutputDetails> {
+    if standard_tokens > 0
+        || reasoning_tokens > 0
+        || accepted_prediction_tokens > 0
+        || rejected_prediction_tokens > 0
+        || modality_breakdown.is_some()
+    {
+        Some(urp::OutputDetails {
+            standard_tokens,
+            reasoning_tokens,
+            accepted_prediction_tokens,
+            rejected_prediction_tokens,
+            modality_breakdown,
+        })
+    } else {
+        None
+    }
+}
+
 fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
-    let prompt_tokens = usage.get("prompt_tokens")?.as_u64()?;
-    let completion_tokens = usage.get("completion_tokens")?.as_u64()?;
+    let input_tokens = usage.get("prompt_tokens")?.as_u64()?;
+    let output_tokens = usage.get("completion_tokens")?.as_u64()?;
+    let prompt_details = usage.get("prompt_tokens_details").and_then(|v| v.as_object());
+    let completion_details = usage
+        .get("completion_tokens_details")
+        .and_then(|v| v.as_object());
     let cached_tokens = usage
         .get("prompt_tokens_details")
         .and_then(|v| v.get("cached_tokens"))
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let reasoning_tokens = usage
         .get("completion_tokens_details")
         .and_then(|v| v.get("reasoning_tokens"))
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let accepted_prediction_tokens = usage
+        .get("completion_tokens_details")
+        .and_then(|v| v.get("accepted_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rejected_prediction_tokens = usage
+        .get("completion_tokens_details")
+        .and_then(|v| v.get("rejected_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let mut extra_body = HashMap::new();
     if let Some(v) = usage.get("prompt_tokens_details") {
         extra_body.insert("prompt_tokens_details".to_string(), v.clone());
@@ -672,10 +784,22 @@ fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
         extra_body.insert("total_tokens".to_string(), v.clone());
     }
     Some(urp::Usage {
-        prompt_tokens,
-        completion_tokens,
-        reasoning_tokens,
-        cached_tokens,
+        input_tokens,
+        output_tokens,
+        input_details: make_input_details(
+            0,
+            cached_tokens,
+            0,
+            0,
+            parse_modality_breakdown_from_detail_object(prompt_details),
+        ),
+        output_details: make_output_details(
+            0,
+            reasoning_tokens,
+            accepted_prediction_tokens,
+            rejected_prediction_tokens,
+            parse_modality_breakdown_from_detail_object(completion_details),
+        ),
         extra_body,
     })
 }
@@ -684,14 +808,22 @@ fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj
         .get("usage")
         .or_else(|| obj.get("response").and_then(|v| v.get("usage")))?;
-    let prompt_tokens = usage
+    let input_tokens = usage
         .get("input_tokens")
         .or_else(|| usage.get("prompt_tokens"))
         .and_then(|v| v.as_u64())?;
-    let completion_tokens = usage
+    let output_tokens = usage
         .get("output_tokens")
         .or_else(|| usage.get("completion_tokens"))
         .and_then(|v| v.as_u64())?;
+    let input_details_obj = usage
+        .get("input_tokens_details")
+        .or_else(|| usage.get("prompt_tokens_details"))
+        .and_then(|v| v.as_object());
+    let output_details_obj = usage
+        .get("output_tokens_details")
+        .or_else(|| usage.get("completion_tokens_details"))
+        .and_then(|v| v.as_object());
     let cached_tokens = usage
         .get("input_tokens_details")
         .and_then(|v| v.get("cached_tokens"))
@@ -700,7 +832,8 @@ fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {
                 .get("prompt_tokens_details")
                 .and_then(|v| v.get("cached_tokens"))
         })
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let reasoning_tokens = usage
         .get("output_tokens_details")
         .and_then(|v| v.get("reasoning_tokens"))
@@ -709,7 +842,33 @@ fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {
                 .get("completion_tokens_details")
                 .and_then(|v| v.get("reasoning_tokens"))
         })
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation_tokens = usage
+        .get("input_tokens_details")
+        .and_then(|v| v.get("cache_creation_tokens"))
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(|v| v.get("cache_write_tokens"))
+        })
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let tool_prompt_tokens = usage
+        .get("input_tokens_details")
+        .and_then(|v| v.get("tool_prompt_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let accepted_prediction_tokens = usage
+        .get("output_tokens_details")
+        .and_then(|v| v.get("accepted_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rejected_prediction_tokens = usage
+        .get("output_tokens_details")
+        .and_then(|v| v.get("rejected_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let mut extra_body = HashMap::new();
     if let Some(v) = usage.get("input_tokens_details") {
         extra_body.insert("input_tokens_details".to_string(), v.clone());
@@ -727,10 +886,22 @@ fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {
         extra_body.insert("total_tokens".to_string(), v.clone());
     }
     Some(urp::Usage {
-        prompt_tokens,
-        completion_tokens,
-        reasoning_tokens,
-        cached_tokens,
+        input_tokens,
+        output_tokens,
+        input_details: make_input_details(
+            0,
+            cached_tokens,
+            cache_creation_tokens,
+            tool_prompt_tokens,
+            parse_modality_breakdown_from_detail_object(input_details_obj),
+        ),
+        output_details: make_output_details(
+            0,
+            reasoning_tokens,
+            accepted_prediction_tokens,
+            rejected_prediction_tokens,
+            parse_modality_breakdown_from_detail_object(output_details_obj),
+        ),
         extra_body,
     })
 }
@@ -740,11 +911,16 @@ fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage> {
         .get("usage")
         .or_else(|| obj.get("message").and_then(|v| v.get("usage")))?
         .as_object()?;
-    let prompt_tokens = usage.get("input_tokens")?.as_u64()?;
-    let completion_tokens = usage.get("output_tokens")?.as_u64()?;
-    let cached_tokens = usage
+    let input_tokens = usage.get("input_tokens")?.as_u64()?;
+    let output_tokens = usage.get("output_tokens")?.as_u64()?;
+    let cache_read_tokens = usage
         .get("cache_read_input_tokens")
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation_tokens = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let mut extra_body = HashMap::new();
     if let Some(v) = usage.get("cache_creation_input_tokens") {
         extra_body.insert("cache_creation_input_tokens".to_string(), v.clone());
@@ -753,32 +929,34 @@ fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage> {
         extra_body.insert("cache_read_input_tokens".to_string(), v.clone());
     }
     Some(urp::Usage {
-        prompt_tokens,
-        completion_tokens,
-        reasoning_tokens: None,
-        cached_tokens,
+        input_tokens,
+        output_tokens,
+        input_details: make_input_details(0, cache_read_tokens, cache_creation_tokens, 0, None),
+        output_details: None,
         extra_body,
     })
 }
 
 fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usageMetadata")?.as_object()?;
-    let prompt_tokens = usage
+    let input_tokens = usage
         .get("promptTokenCount")
         .or_else(|| usage.get("prompt_token_count"))
         .and_then(|v| v.as_u64())?;
-    let completion_tokens = usage
+    let output_tokens = usage
         .get("candidatesTokenCount")
         .or_else(|| usage.get("candidates_token_count"))
         .and_then(|v| v.as_u64())?;
-    let cached_tokens = usage
+    let cache_read_tokens = usage
         .get("cachedContentTokenCount")
         .or_else(|| usage.get("cached_content_token_count"))
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let reasoning_tokens = usage
         .get("thoughtsTokenCount")
         .or_else(|| usage.get("thoughts_token_count"))
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let mut extra_body = HashMap::new();
     if let Some(v) = usage.get("cachedContentTokenCount") {
         extra_body.insert("cachedContentTokenCount".to_string(), v.clone());
@@ -799,25 +977,25 @@ fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> {
         extra_body.insert("total_token_count".to_string(), v.clone());
     }
     Some(urp::Usage {
-        prompt_tokens,
-        completion_tokens,
-        reasoning_tokens,
-        cached_tokens,
+        input_tokens,
+        output_tokens,
+        input_details: make_input_details(0, cache_read_tokens, 0, 0, None),
+        output_details: make_output_details(0, reasoning_tokens, 0, 0, None),
         extra_body,
     })
 }
 
 fn parse_usage_from_embeddings_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
-    let prompt_tokens = usage.get("prompt_tokens")?.as_u64()?;
+    let input_tokens = usage.get("prompt_tokens")?.as_u64()?;
     let total_tokens = usage.get("total_tokens")?.as_u64()?;
     let mut extra_body = HashMap::new();
     extra_body.insert("total_tokens".to_string(), Value::from(total_tokens));
     Some(urp::Usage {
-        prompt_tokens,
-        completion_tokens: 0,
-        reasoning_tokens: None,
-        cached_tokens: None,
+        input_tokens,
+        output_tokens: 0,
+        input_details: None,
+        output_details: None,
         extra_body,
     })
 }
@@ -1218,7 +1396,7 @@ async fn execute_nonstream_typed(
     let final_err = AppError::new(
         StatusCode::BAD_GATEWAY,
         "upstream_error",
-        format!("No available upstream provider for model: {}", req.model),
+        build_exhausted_error_message(&req.model, &tried_providers),
     );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
@@ -1328,6 +1506,9 @@ struct ChargeComponents {
     prompt_tokens: i128,
     completion_tokens: i128,
     cached_tokens: i128,
+    cache_creation_tokens: i128,
+    billed_cache_creation_tokens: i128,
+    cache_creation_charge: i128,
     reasoning_tokens: i128,
     billed_uncached_prompt_tokens: i128,
     billed_cached_prompt_tokens: i128,
@@ -1373,10 +1554,10 @@ fn calculate_charge_components(
     pricing: &ModelPricing,
     provider_multiplier: f64,
 ) -> Option<ChargeComponents> {
-    let prompt_tokens = i128::from(usage.prompt_tokens);
-    let completion_tokens = i128::from(usage.completion_tokens);
-    let cached_tokens = i128::from(usage.cached_tokens.unwrap_or(0));
-    let reasoning_tokens = i128::from(usage.reasoning_tokens.unwrap_or(0));
+    let prompt_tokens = i128::from(usage.input_tokens);
+    let completion_tokens = i128::from(usage.output_tokens);
+    let cached_tokens = i128::from(usage.cached_tokens().unwrap_or(0));
+    let reasoning_tokens = i128::from(usage.reasoning_tokens().unwrap_or(0));
 
     let uncached_prompt_tokens = (prompt_tokens - cached_tokens).max(0);
     let non_reasoning_completion_tokens = (completion_tokens - reasoning_tokens).max(0);
@@ -1406,6 +1587,17 @@ fn calculate_charge_components(
     };
     let prompt_charge = uncached_prompt_charge.checked_add(cached_prompt_charge)?;
 
+    let cache_creation_tokens =
+        i128::from(usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0));
+    let (billed_cache_creation_tokens, cache_creation_charge) =
+        if let Some(cache_creation_rate) = pricing.cache_creation_input_cost_per_token_nano {
+            let tokens = cache_creation_tokens.max(0);
+            let charge = tokens.checked_mul(cache_creation_rate)?;
+            (tokens, charge)
+        } else {
+            (0, 0)
+        };
+
     let (
         billed_non_reasoning_completion_tokens,
         billed_reasoning_completion_tokens,
@@ -1432,13 +1624,18 @@ fn calculate_charge_components(
     let completion_charge =
         non_reasoning_completion_charge.checked_add(reasoning_completion_charge)?;
 
-    let base_charge = prompt_charge.checked_add(completion_charge)?;
+    let base_charge = prompt_charge
+        .checked_add(completion_charge)?
+        .checked_add(cache_creation_charge)?;
     let final_charge = scale_charge_with_multiplier(base_charge, provider_multiplier)?;
 
     Some(ChargeComponents {
         prompt_tokens,
         completion_tokens,
         cached_tokens,
+        cache_creation_tokens,
+        billed_cache_creation_tokens,
+        cache_creation_charge,
         reasoning_tokens,
         billed_uncached_prompt_tokens,
         billed_cached_prompt_tokens,
@@ -1465,45 +1662,82 @@ fn calculate_charge_nano(
 }
 
 fn build_usage_breakdown(usage: &urp::Usage) -> Value {
-    let input_details = usage
-        .extra_body
-        .get("input_tokens_details")
-        .or_else(|| usage.extra_body.get("prompt_tokens_details"))
-        .and_then(|v| v.as_object());
-    let output_details = usage
-        .extra_body
-        .get("output_tokens_details")
-        .or_else(|| usage.extra_body.get("completion_tokens_details"))
-        .and_then(|v| v.as_object());
+    let input_details = usage.input_details.as_ref();
+    let output_details = usage.output_details.as_ref();
 
-    let input_cached = usage
-        .cached_tokens
-        .or_else(|| input_details.and_then(|d| map_get_u64(d, "cached_tokens")))
+    let input_cached = input_details
+        .map(|d| d.cache_read_tokens)
+        .filter(|&v| v > 0)
         .or_else(|| {
             usage
                 .extra_body
                 .get("cache_read_input_tokens")
                 .and_then(parse_u64_value)
+        })
+        .or_else(|| {
+            usage
+                .extra_body
+                .get("input_tokens_details")
+                .and_then(|v| v.as_object())
+                .and_then(|d| map_get_u64(d, "cached_tokens"))
+        })
+        .or_else(|| {
+            usage
+                .extra_body
+                .get("prompt_tokens_details")
+                .and_then(|v| v.as_object())
+                .and_then(|d| map_get_u64(d, "cached_tokens"))
         });
-    let input_cache_creation = usage
-        .extra_body
-        .get("cache_creation_input_tokens")
-        .and_then(parse_u64_value);
-    let input_audio = input_details.and_then(|d| map_get_u64(d, "audio_tokens"));
-    let input_image = input_details.and_then(|d| map_get_u64(d, "image_tokens"));
-    let input_text = input_details.and_then(|d| map_get_u64(d, "text_tokens"));
-    let output_reasoning = usage
-        .reasoning_tokens
-        .or_else(|| output_details.and_then(|d| map_get_u64(d, "reasoning_tokens")));
-    let output_audio = output_details.and_then(|d| map_get_u64(d, "audio_tokens"));
-    let output_image = output_details.and_then(|d| map_get_u64(d, "image_tokens"));
-    let output_text = output_details.and_then(|d| map_get_u64(d, "text_tokens"));
+    let input_cache_creation = input_details
+        .map(|d| d.cache_creation_tokens)
+        .filter(|&v| v > 0)
+        .or_else(|| {
+            usage
+                .extra_body
+                .get("cache_creation_input_tokens")
+                .and_then(parse_u64_value)
+        });
+    let input_text = input_details
+        .and_then(|d| d.modality_breakdown.as_ref())
+        .and_then(|m| m.text_tokens);
+    let input_audio = input_details
+        .and_then(|d| d.modality_breakdown.as_ref())
+        .and_then(|m| m.audio_tokens);
+    let input_image = input_details
+        .and_then(|d| d.modality_breakdown.as_ref())
+        .and_then(|m| m.image_tokens);
+    let output_reasoning = output_details
+        .map(|d| d.reasoning_tokens)
+        .filter(|&v| v > 0)
+        .or_else(|| {
+            usage
+                .extra_body
+                .get("output_tokens_details")
+                .and_then(|v| v.as_object())
+                .and_then(|d| map_get_u64(d, "reasoning_tokens"))
+        })
+        .or_else(|| {
+            usage
+                .extra_body
+                .get("completion_tokens_details")
+                .and_then(|v| v.as_object())
+                .and_then(|d| map_get_u64(d, "reasoning_tokens"))
+        });
+    let output_text = output_details
+        .and_then(|d| d.modality_breakdown.as_ref())
+        .and_then(|m| m.text_tokens);
+    let output_audio = output_details
+        .and_then(|d| d.modality_breakdown.as_ref())
+        .and_then(|m| m.audio_tokens);
+    let output_image = output_details
+        .and_then(|d| d.modality_breakdown.as_ref())
+        .and_then(|m| m.image_tokens);
 
     json!({
         "version": 1,
         "input": {
-            "total_tokens": usage.prompt_tokens,
-            "uncached_tokens": usage.prompt_tokens.saturating_sub(input_cached.unwrap_or(0)),
+            "total_tokens": usage.input_tokens,
+            "uncached_tokens": usage.input_tokens.saturating_sub(input_cached.unwrap_or(0)),
             "text_tokens": input_text,
             "cached_tokens": input_cached,
             "cache_creation_tokens": input_cache_creation,
@@ -1511,8 +1745,8 @@ fn build_usage_breakdown(usage: &urp::Usage) -> Value {
             "image_tokens": input_image
         },
         "output": {
-            "total_tokens": usage.completion_tokens,
-            "non_reasoning_tokens": usage.completion_tokens.saturating_sub(output_reasoning.unwrap_or(0)),
+            "total_tokens": usage.output_tokens,
+            "non_reasoning_tokens": usage.output_tokens.saturating_sub(output_reasoning.unwrap_or(0)),
             "text_tokens": output_text,
             "reasoning_tokens": output_reasoning,
             "audio_tokens": output_audio,
@@ -1544,6 +1778,10 @@ fn build_billing_breakdown(
             "cached_unit_price_nano": pricing.cache_read_input_cost_per_token_nano.map(|v| v.to_string()),
             "uncached_charge_nano": components.uncached_prompt_charge.to_string(),
             "cached_charge_nano": components.cached_prompt_charge.to_string(),
+            "cache_creation_tokens": non_negative_i128_to_u64(components.cache_creation_tokens),
+            "billed_cache_creation_tokens": non_negative_i128_to_u64(components.billed_cache_creation_tokens),
+            "cache_creation_unit_price_nano": pricing.cache_creation_input_cost_per_token_nano.map(|v| v.to_string()),
+            "cache_creation_charge_nano": components.cache_creation_charge.to_string(),
             "total_charge_nano": components.prompt_charge.to_string(),
         },
         "output": {
@@ -1633,10 +1871,11 @@ async fn maybe_charge_usage(
         "upstream_model": attempt.upstream_model,
         "provider_id": attempt.provider_id,
         "provider_multiplier": attempt.model_multiplier,
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-        "cached_tokens": usage.cached_tokens,
-        "reasoning_tokens": usage.reasoning_tokens,
+        "prompt_tokens": usage.input_tokens,
+        "completion_tokens": usage.output_tokens,
+        "cached_tokens": usage.cached_tokens(),
+        "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens),
+        "reasoning_tokens": usage.reasoning_tokens(),
         "charge_nano_usd": charge_nano.to_string(),
     });
 
@@ -1786,10 +2025,34 @@ fn spawn_request_log(
             upstream_model: Some(upstream_model),
             channel_id: Some(channel_id),
             is_stream,
-            prompt_tokens: usage.as_ref().map(|u| u.prompt_tokens),
-            completion_tokens: usage.as_ref().map(|u| u.completion_tokens),
-            cached_tokens: usage.as_ref().and_then(|u| u.cached_tokens),
-            reasoning_tokens: usage.as_ref().and_then(|u| u.reasoning_tokens),
+            input_tokens: usage.as_ref().map(|u| u.input_tokens),
+            output_tokens: usage.as_ref().map(|u| u.output_tokens),
+            cache_read_tokens: usage.as_ref().and_then(|u| u.cached_tokens()),
+            cache_creation_tokens: usage
+                .as_ref()
+                .and_then(|u| u.input_details.as_ref().map(|d| d.cache_creation_tokens))
+                .filter(|&v| v > 0),
+            tool_prompt_tokens: usage
+                .as_ref()
+                .and_then(|u| u.input_details.as_ref().map(|d| d.tool_prompt_tokens))
+                .filter(|&v| v > 0),
+            reasoning_tokens: usage.as_ref().and_then(|u| u.reasoning_tokens()),
+            accepted_prediction_tokens: usage
+                .as_ref()
+                .and_then(|u| {
+                    u.output_details
+                        .as_ref()
+                        .map(|d| d.accepted_prediction_tokens)
+                })
+                .filter(|&v| v > 0),
+            rejected_prediction_tokens: usage
+                .as_ref()
+                .and_then(|u| {
+                    u.output_details
+                        .as_ref()
+                        .map(|d| d.rejected_prediction_tokens)
+                })
+                .filter(|&v| v > 0),
             provider_multiplier: Some(model_multiplier),
             charge_nano_usd,
             status: REQUEST_LOG_STATUS_SUCCESS.to_string(),
@@ -1854,10 +2117,14 @@ fn spawn_request_log_error(
             upstream_model: Some(upstream_model),
             channel_id: Some(channel_id),
             is_stream,
-            prompt_tokens: None,
-            completion_tokens: None,
-            cached_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
             reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
             provider_multiplier: Some(model_multiplier),
             charge_nano_usd: None,
             status: REQUEST_LOG_STATUS_ERROR.to_string(),
@@ -1917,10 +2184,14 @@ fn spawn_request_log_error_no_attempt(
             upstream_model: None,
             channel_id: None,
             is_stream,
-            prompt_tokens: None,
-            completion_tokens: None,
-            cached_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
             reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
             provider_multiplier: None,
             charge_nano_usd: None,
             status: REQUEST_LOG_STATUS_ERROR.to_string(),
@@ -2505,7 +2776,7 @@ async fn forward_stream_typed(
     let final_err = AppError::new(
         StatusCode::BAD_GATEWAY,
         "upstream_error",
-        format!("No available upstream provider for model: {}", req.model),
+        build_exhausted_error_message(&req.model, &tried_providers),
     );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
@@ -2857,10 +3128,10 @@ async fn emit_synthetic_messages_stream(
     let message_id = format!("msg_{}", uuid::Uuid::new_v4());
     let mut saw_tool_use = false;
     let usage = resp.usage.clone().unwrap_or(urp::Usage {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        reasoning_tokens: None,
-        cached_tokens: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        input_details: None,
+        output_details: None,
         extra_body: HashMap::new(),
     });
     let start = json!({
@@ -2874,8 +3145,8 @@ async fn emit_synthetic_messages_stream(
             "stop_reason": Value::Null,
             "stop_sequence": Value::Null,
             "usage": {
-                "input_tokens": usage.prompt_tokens,
-                "output_tokens": usage.completion_tokens
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens
             }
         }
     });
@@ -3036,8 +3307,8 @@ async fn emit_synthetic_messages_stream(
             "stop_sequence": Value::Null
         },
         "usage": {
-            "input_tokens": usage.prompt_tokens,
-            "output_tokens": usage.completion_tokens
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens
         }
     });
     tx.send(Event::default().data(message_delta.to_string()))
@@ -3408,7 +3679,7 @@ async fn collect_provider_attempts(
             .max(1);
         out.push(MonoizeAttempt {
             provider_id: provider.id.clone(),
-            provider_type: provider.provider_type.to_config_type(),
+            provider_type: crate::monoize_routing::resolve_effective_api_type(&provider.api_type_overrides, provider.provider_type, &upstream_model).to_config_type(),
             channel_id: channel.id.clone(),
             base_url: channel.base_url.clone(),
             api_key: channel.api_key.clone(),
@@ -3532,6 +3803,18 @@ fn provider_extra_headers(provider_type: ProviderType) -> &'static [(&'static st
         ProviderType::Messages => &[("anthropic-version", "2023-06-01")],
         _ => &[],
     }
+}
+
+
+fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]) -> String {
+    if tried.is_empty() {
+        return format!("No available upstream provider for model: {model}");
+    }
+    let last_error = &tried[tried.len() - 1].error;
+    format!(
+        "All {n} upstream attempt(s) failed for model: {model}. Last error: {last_error}",
+        n = tried.len(),
+    )
 }
 
 fn is_non_retryable_client_error(err: &UpstreamCallError) -> bool {
@@ -6701,16 +6984,17 @@ mod tests {
     #[test]
     fn calculate_charge_nano_uses_model_price_and_multiplier() {
         let usage = urp::Usage {
-            prompt_tokens: 15,
-            completion_tokens: 5,
-            reasoning_tokens: None,
-            cached_tokens: Some(0),
+            input_tokens: 15,
+            output_tokens: 5,
+            input_details: None,
+            output_details: None,
             extra_body: HashMap::new(),
         };
         let pricing = ModelPricing {
             input_cost_per_token_nano: 2500,
             output_cost_per_token_nano: 10000,
             cache_read_input_cost_per_token_nano: None,
+            cache_creation_input_cost_per_token_nano: None,
             output_cost_per_reasoning_token_nano: None,
         };
 
@@ -6722,16 +7006,29 @@ mod tests {
     #[test]
     fn calculate_charge_nano_handles_cached_and_reasoning_tokens() {
         let usage = urp::Usage {
-            prompt_tokens: 100,
-            completion_tokens: 80,
-            reasoning_tokens: Some(30),
-            cached_tokens: Some(60),
+            input_tokens: 100,
+            output_tokens: 80,
+            input_details: Some(urp::InputDetails {
+                standard_tokens: 0,
+                cache_read_tokens: 60,
+                cache_creation_tokens: 0,
+                tool_prompt_tokens: 0,
+                modality_breakdown: None,
+            }),
+            output_details: Some(urp::OutputDetails {
+                standard_tokens: 0,
+                reasoning_tokens: 30,
+                accepted_prediction_tokens: 0,
+                rejected_prediction_tokens: 0,
+                modality_breakdown: None,
+            }),
             extra_body: HashMap::new(),
         };
         let pricing = ModelPricing {
             input_cost_per_token_nano: 1000,
             output_cost_per_token_nano: 2000,
             cache_read_input_cost_per_token_nano: Some(100),
+            cache_creation_input_cost_per_token_nano: None,
             output_cost_per_reasoning_token_nano: Some(3000),
         };
 

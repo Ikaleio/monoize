@@ -81,7 +81,7 @@ BE3. Before upstream forwarding, if `balance_unlimited = false` and `balance_nan
 
 C1. Charge requires both:
 
-- upstream response usage (`prompt_tokens`, `completion_tokens`), and
+- upstream response usage (`input_tokens`, `output_tokens`), and
 - model metadata pricing for the served upstream model (`input_cost_per_token_nano`, `output_cost_per_token_nano`).
 
 C1.1. Served upstream model resolution for billing:
@@ -92,24 +92,34 @@ C1.1. Served upstream model resolution for billing:
 C2. Base charge formula (nano-dollar):
 
 ```
-prompt_charge = prompt_tokens * input_cost_per_token_nano
-completion_charge = completion_tokens * output_cost_per_token_nano
-base_charge = prompt_charge + completion_charge
+input_charge = input_tokens * input_cost_per_token_nano
+output_charge = output_tokens * output_cost_per_token_nano
+base_charge = input_charge + output_charge + cache_creation_charge
 ```
 
-C3. If `usage.cached_tokens` is present and metadata provides `cache_read_input_cost_per_token_nano`, prompt charge MUST be:
+(where `cache_creation_charge` defaults to `0` when not applicable).
+
+C3. If `usage.input_details.cache_read_tokens` is present and metadata provides `cache_read_input_cost_per_token_nano`, input charge MUST be:
 
 ```
-prompt_charge =
-  (prompt_tokens - cached_tokens) * input_cost_per_token_nano
-  + cached_tokens * cache_read_input_cost_per_token_nano
+input_charge =
+  (input_tokens - cache_read_tokens) * input_cost_per_token_nano
+  + cache_read_tokens * cache_read_input_cost_per_token_nano
 ```
 
-C4. If `usage.reasoning_tokens` is present and metadata provides `output_cost_per_reasoning_token_nano`, completion charge MUST be:
+C3a. If `usage.input_details.cache_creation_tokens` is present and metadata provides `cache_creation_input_cost_per_token_nano`, an additional charge MUST be added:
 
 ```
-completion_charge =
-  (completion_tokens - reasoning_tokens) * output_cost_per_token_nano
+cache_creation_charge = cache_creation_tokens * cache_creation_input_cost_per_token_nano
+```
+
+This charge is additive to the input charge computed in C2/C3.
+
+C4. If `usage.output_details.reasoning_tokens` is present and metadata provides `output_cost_per_reasoning_token_nano`, output charge MUST be:
+
+```
+output_charge =
+  (output_tokens - reasoning_tokens) * output_cost_per_token_nano
   + reasoning_tokens * output_cost_per_reasoning_token_nano
 ```
 
@@ -123,8 +133,8 @@ C6. If any required pricing field is missing, charge MUST be skipped for that re
 
 C7. For embeddings responses, billing MUST treat usage as:
 
-- `prompt_tokens = usage.prompt_tokens`
-- `completion_tokens = 0`
+- `input_tokens = usage.input_tokens`
+- `output_tokens = 0`
 
 ## 6. Billing execution and ledger
 
@@ -153,15 +163,15 @@ and MUST NOT write deduction.
 
 ## 6a. Billing concurrency control
 
-LC1. All balance-mutating operations (request charges and admin adjustments) MUST be serialized through a single application-level mutex (`billing_mutex: Arc<tokio::sync::Mutex<()>>`) held on the `UserStore` instance.
+LC1. The application MUST use two SQLite pools against the same DSN: a read pool (`max_connections = 10`) and a write pool (`max_connections = 1`).
 
-LC2. The mutex MUST be acquired before beginning the SQLite transaction and released after the transaction commits or rolls back (via RAII guard).
+LC2. All balance-mutating operations (request charges and admin adjustments) MUST execute on the write pool.
 
-LC3. Rationale: SQLite DEFERRED transactions promote locks from SHARED to EXCLUSIVE on first write. When two concurrent connections each hold a SHARED lock and both attempt promotion, one fails with `SQLITE_BUSY` ("database is locked"). The mutex prevents this lock-escalation deadlock by ensuring at most one balance transaction is in-flight at any time.
+LC3. Balance reads used for eligibility and analytics MAY execute on the read pool.
 
-LC4. The mutex scope MUST cover exactly the balance read-modify-write transaction. It MUST NOT be held during non-balance database operations (e.g., logging, settings reads).
+LC4. The write pool's single connection is the required serialization mechanism for billing writes; an additional application-level billing mutex MUST NOT be required.
 
-LC5. Balance transactions MUST use a retry loop with exponential backoff in addition to the mutex. Rationale: the mutex serializes billing-vs-billing transactions, but `SQLITE_BUSY` can still occur from contention with non-billing writes (e.g., `request_logs` INSERT/UPDATE in background tasks) that share the same connection pool. The retry policy MUST satisfy: (a) maximum 5 attempts, (b) backoff of 100ms × attempt number between retries, (c) the mutex guard MUST be dropped before sleeping to avoid holding it during backoff, (d) only transient errors (`BillingErrorKind::Internal`, which includes `SQLITE_BUSY`) are retried — non-transient errors (`InsufficientBalance`, `NotFound`, etc.) MUST be returned immediately.
+LC5. The billing charge path (`charge_user_balance_nano`) MUST execute a single attempt and MUST NOT include an explicit retry loop. Error behavior for non-transient failures remains unchanged.
 
 ## 7. Model metadata store
 
@@ -177,6 +187,7 @@ M3. Table MUST contain at least:
 - `input_cost_per_token_nano: TEXT NULL`
 - `output_cost_per_token_nano: TEXT NULL`
 - `cache_read_input_cost_per_token_nano: TEXT NULL`
+- `cache_creation_input_cost_per_token_nano: TEXT NULL`
 - `output_cost_per_reasoning_token_nano: TEXT NULL`
 - `max_input_tokens: INTEGER NULL`
 - `max_output_tokens: INTEGER NULL`
@@ -211,6 +222,7 @@ S5. Field mapping from models.dev model object to `model_metadata_records`:
 | `cost.input` | `input_cost_per_token_nano` (after S4 conversion) |
 | `cost.output` | `output_cost_per_token_nano` (after S4 conversion) |
 | `cost.cache_read` | `cache_read_input_cost_per_token_nano` (after S4 conversion) |
+| `cost.cache_write` | `cache_creation_input_cost_per_token_nano` (after S4 conversion) |
 | `cost.reasoning` | `output_cost_per_reasoning_token_nano` (after S4 conversion) |
 | `limit.context` | `max_tokens` |
 | `limit.input` | `max_input_tokens` |

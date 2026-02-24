@@ -5,7 +5,7 @@ pub mod openai_chat;
 pub mod openai_responses;
 
 use crate::urp::{Part, Role, ToolChoice};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {

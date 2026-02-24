@@ -363,6 +363,7 @@
 		"validationChannelPassiveRate": "通道被动失败率覆盖必须在 [0.01, 1.00] 范围内",
 		"validationChannelRateLimitCooldown": "通道 429 冷却覆盖必须大于等于 1",
 		"validationProviderRequestTimeout": "提供者请求超时覆盖必须大于等于 1",
+		"validationApiTypeOverridePattern": "API 类型覆盖规则的模型模式不能为空",
 		"validationAtLeastOneChannel": "至少需要一个通道",
 		"baseUrlV1Title": "是否移除 Base URL 末尾的 /v1？",
 		"baseUrlV1Description": "当前 Base URL 以 /v1 结尾。Monoize 会自动拼接 /v1 接口，保留它将导致请求路径类似 /v1/v1/chat/completions。",
@@ -384,7 +385,10 @@
 		"testIdle": "未测试",
 		"testAllRunning": "正在测试所有模型...",
 		"testAllComplete": "全部测试完成",
-		"testModel": "测试"
+		"testModel": "测试",
+		"apiTypeOverrides": "API 类型覆盖规则",
+		"apiTypeOverridesDesc": "将特定模型模式路由到不同的 API 类型。规则按顺序匹配，首个匹配生效。未匹配的模型使用上方默认类型。",
+		"addOverride": "添加规则"
 	},
 	"transforms": {
 		"titleProvider": "上游 Transform",
@@ -483,6 +487,7 @@
 		"inputCost": "输入",
 		"outputCost": "输出",
 		"cacheReadCost": "缓存读取",
+		"cacheWriteCost": "缓存写入成本（每 1M）",
 		"reasoningCost": "推理",
 		"context": "上下文",
 		"maxInput": "最大输入",
@@ -519,8 +524,8 @@
 		"time": "时间",
 		"promptTokens": "输入",
 		"completionTokens": "输出",
-		"cachedTokens": "缓存",
-		"reasoningTokens": "推理",
+		"cachedTokens": "缓存 Token",
+		"reasoningTokens": "推理 Token",
 		"multiplier": "倍率",
 		"showing": "显示 {{from}}-{{to}}，共 {{total}} 条",
 		"prev": "上一页",

@@ -35,7 +35,7 @@ SP2. Rows with `source = 'models_dev'` (or no prior row) MUST be upserted normal
 
 SP3. When models.dev contains the same bare model name under multiple providers:
   - Group all variants by bare model name.
-  - Select the variant with the lowest non-zero `input_cost_per_token_nano` as the default.
+  - Select the variant with the **highest** non-zero `input_cost_per_token_nano` as the default. This prevents resale losses when the platform charges users based on the stored price — using the maximum ensures the billed price is never below the actual upstream cost of any provider.
   - Store all variants in `raw_json.providers` so the user can switch sources in the edit UI.
 
 SP4. Sync MUST first delete all records with `source != 'manual'`, then insert new data. This ensures models removed upstream are also cleaned up. Sync response MUST return `upserted`, `skipped`, and `deleted` counts.

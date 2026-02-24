@@ -63,10 +63,23 @@ A provider record MUST include:
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
 
 Implementation-specific extension:
+- `provider_type: enum("responses","chat_completion","messages","gemini","grok")` MUST be present and determines the default upstream request shape.
+- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","grok") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
 
-- `provider_type: enum("responses","chat_completion","messages","gemini","grok")` MAY be present and determines upstream request shape.
+### 2.4 API Type Resolution
 
-### 2.4 Router Configuration
+AT-1. For a given request model, the effective API type MUST be resolved as follows:
+
+1. Iterate `api_type_overrides` in array order.
+2. For each entry, test if `pattern` matches the requested model using glob semantics (case-sensitive, anchored).
+3. If a match is found, the effective API type is that entry's `api_type`. Stop.
+4. If no entry matches (or `api_type_overrides` is empty), the effective API type is `provider_type`.
+
+AT-2. Glob matching MUST use the same semantics as transform model filtering: `*` matches zero or more characters, `?` matches exactly one character, matching is anchored (full string).
+
+AT-3. The effective API type determines the upstream endpoint path and request encoding for that specific request.
+
+### 2.5 Router Configuration
 
 The router subsystem MUST support:
 

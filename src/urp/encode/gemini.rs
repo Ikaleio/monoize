@@ -3,7 +3,7 @@ use crate::urp::{
     AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Part, Role, ToolChoice,
     ToolDefinition, UrpRequest, UrpResponse,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut contents = Vec::new();
@@ -140,15 +140,15 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             "finishReason": finish_reason_to_gemini(resp.finish_reason),
         }],
         "usageMetadata": {
-            "promptTokenCount": resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
-            "candidatesTokenCount": resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
+            "promptTokenCount": resp.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
+            "candidatesTokenCount": resp.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
             "totalTokenCount": resp
                 .usage
                 .as_ref()
-                .map(|u| u.prompt_tokens + u.completion_tokens)
+                .map(|u| u.input_tokens + u.output_tokens)
                 .unwrap_or(0),
-            "thoughtsTokenCount": resp.usage.as_ref().and_then(|u| u.reasoning_tokens).unwrap_or(0),
-            "cachedContentTokenCount": resp.usage.as_ref().and_then(|u| u.cached_tokens).unwrap_or(0),
+            "thoughtsTokenCount": resp.usage.as_ref().and_then(|u| u.reasoning_tokens()).unwrap_or(0),
+            "cachedContentTokenCount": resp.usage.as_ref().and_then(|u| u.cached_tokens()).unwrap_or(0),
         },
         "modelVersion": logical_model,
     });

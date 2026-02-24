@@ -5,7 +5,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat, Role, ToolDefinition,
     UrpRequest, UrpResponse,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut input_items = Vec::new();
@@ -134,14 +134,14 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
 
     if let Some(usage) = &resp.usage {
         body["usage"] = json!({
-            "input_tokens": usage.prompt_tokens,
-            "output_tokens": usage.completion_tokens,
-            "total_tokens": usage.prompt_tokens + usage.completion_tokens,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens(),
             "output_tokens_details": {
-                "reasoning_tokens": usage.reasoning_tokens.unwrap_or(0)
+                "reasoning_tokens": usage.output_details.as_ref().map(|d| d.reasoning_tokens).unwrap_or(0)
             },
             "input_tokens_details": {
-                "cached_tokens": usage.cached_tokens.unwrap_or(0)
+                "cached_tokens": usage.input_details.as_ref().map(|d| d.cache_read_tokens).unwrap_or(0)
             }
         });
     }

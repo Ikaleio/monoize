@@ -14,12 +14,14 @@ A provider object MUST include:
 
 - `id: string` (immutable, server-generated, 8-character random string from `[a-z0-9]`)
 - `name: string`
-- `provider_type: enum("responses","chat_completion","messages")`
+- `provider_type: enum("responses","chat_completion","messages","gemini","grok")`
 - `enabled: boolean`
 - `priority: integer` (lower value means earlier routing order)
 - `max_retries: integer` (default `-1`)
 - `models: Record<string, { redirect: string | null, multiplier: number }>`
 - `channels: Channel[]`
+- `transforms: TransformRuleConfig[]` (ordered, default empty)
+- `api_type_overrides?: ApiTypeOverride[]` (ordered, default empty) — see §2.4 of `monoize-upstream-routing.spec.md` for resolution semantics. Each entry: `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","grok") }`.
 - `created_at: RFC3339`
 - `updated_at: RFC3339`
 
@@ -51,7 +53,9 @@ CP-INV-3. Every model entry multiplier MUST satisfy `multiplier > 0`.
 
 CP-INV-4. Every channel weight MUST satisfy `weight >= 0`.
 
-CP-INV-5. `provider_type` MUST be concrete (`responses`, `chat_completion`, or `messages`).
+CP-INV-5. `provider_type` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `grok`.
+
+CP-INV-6. If `api_type_overrides` is present, every entry's `api_type` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `grok`, and every entry's `pattern` MUST be a non-empty string.
 
 ## 3. Endpoints
 
@@ -73,12 +77,13 @@ All endpoints require an authenticated dashboard admin session.
 - Method/Path: `POST /api/dashboard/providers`
 - Body:
   - `name: string`
-  - `provider_type: "responses" | "chat_completion" | "messages"`
+  - `provider_type: "responses" | "chat_completion" | "messages" | "gemini" | "grok"`
   - `enabled?: boolean`
   - `priority?: integer`
   - `max_retries?: integer`
   - `models: Record<string, { redirect: string | null, multiplier: number }>`
   - `channels: Array<{ id?: string, name: string, base_url: string, api_key: string, weight?: number, enabled?: boolean }>`
+  - `api_type_overrides?: Array<{ pattern: string, api_type: "responses" | "chat_completion" | "messages" | "gemini" | "grok" }>`
 - Response: `201` + created provider
 - Errors: `400 invalid_request` when invariants fail
 
@@ -115,7 +120,13 @@ All endpoints require an authenticated dashboard admin session.
 - Method/Path: `POST /api/dashboard/providers/{provider_id}/channels/{channel_id}/test`
 - Body (optional):
   - `model?: string` — If provided, test with this specific model. If omitted, use the provider's configured active probe model override, falling back to global probe model, falling back to the provider's first model key.
-- Semantics: Sends a minimal completion request (`max_tokens: 16`, `messages: [{"role":"user","content":"hi"}]`) to the channel using the provider's `provider_type` to determine the wire format. Measures wall-clock time from request start to response completion.
+- Semantics: Sends a minimal request to the channel using the effective API type resolved for the probe model (see §2.4 of `monoize-upstream-routing.spec.md`):
+  - `chat_completion`: `POST /v1/chat/completions` with `{ "model", "max_tokens": 16, "messages": [{"role":"user","content":"hi"}] }`
+  - `messages`: `POST /v1/messages` with `{ "model", "max_tokens": 16, "messages": [{"role":"user","content":"hi"}] }` and header `anthropic-version: 2023-06-01`
+  - `responses`: `POST /v1/responses` with `{ "model", "max_output_tokens": 16, "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}] }`
+  - `grok`: same path/payload shape as `responses`
+  - `gemini`: `POST /v1beta/models/{model}:generateContent` with `{ "contents": [{"role":"user","parts":[{"text":"hi"}]}], "generationConfig": {"maxOutputTokens": 16} }` and header `x-goog-api-key: <channel api key>`
+  Measures wall-clock time from request start to response completion.
   - **Health side-effect**: If `success` is `true`, the channel's health state MUST be reset to healthy. Specifically: `healthy := true`, `failure_count := 0`, `cooldown_until := None`, `last_success_at := now`, `probe_success_count := 0`, `last_probe_at := None`. This allows manual testing to recover an unhealthy channel without waiting for the active probe cycle.
 - Response: `200`
   ```json
@@ -139,4 +150,3 @@ All endpoints require an authenticated dashboard admin session.
 CP-SEC-1. `api_key` MUST be accepted in create/update payloads.
 
 CP-SEC-2. `api_key` MUST NOT be returned in any read response.
-

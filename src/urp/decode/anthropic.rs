@@ -3,7 +3,8 @@ use crate::urp::decode::{
     value_to_text,
 };
 use crate::urp::{
-    FinishReason, Message, Part, ReasoningConfig, Role, ToolChoice, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Message, Part, ReasoningConfig, Role, ToolChoice, UrpRequest,
+    UrpResponse, Usage,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -343,12 +344,36 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         _ => Some(FinishReason::Other),
     };
 
-    let usage = obj.get("usage").and_then(|v| v.as_object()).map(|u| Usage {
-        prompt_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        reasoning_tokens: None,
-        cached_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()),
-        extra_body: split_extra(u, &["input_tokens", "output_tokens"]),
+    let usage = obj.get("usage").and_then(|v| v.as_object()).map(|u| {
+        let input_tokens = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output_tokens = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cache_read_tokens = u
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cache_creation_tokens = u
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let input_details = if cache_read_tokens > 0 || cache_creation_tokens > 0 {
+            Some(InputDetails {
+                standard_tokens: 0,
+                cache_read_tokens,
+                cache_creation_tokens,
+                tool_prompt_tokens: 0,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
+
+        Usage {
+            input_tokens,
+            output_tokens,
+            input_details,
+            output_details: None,
+            extra_body: split_extra(u, &["input_tokens", "output_tokens"]),
+        }
     });
 
     Ok(UrpResponse {

@@ -233,7 +233,7 @@ XF4. Content-block-level unknown fields:
 
 XF5. Usage-level unknown fields:
 
- When parsing upstream usage objects, Monoize MUST capture unknown fields (e.g. `cache_creation_input_tokens`, `cache_write_tokens`, `prompt_tokens_details` sub-fields) into the URP `Usage.extra_body`.
+ When parsing upstream usage objects, Monoize MUST populate the URP `Usage` struct's structured fields (`input_tokens`, `output_tokens`, `input_details`, `output_details`) from recognized provider-specific fields. Any unrecognized fields MUST be captured into `Usage.extra_body`.
  When encoding downstream usage objects for any downstream endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`), Monoize MUST merge `Usage.extra_body` into the generated usage JSON, overwriting adapter-generated keys when present (the upstream's full detail objects take precedence over synthesized defaults).
 
 ### 7.2 Provider adapter: `type=responses`
@@ -440,9 +440,10 @@ PG5. Monoize MUST decode Gemini responses from `candidates[].content.parts[]` an
 
 PG6. Monoize MUST map Gemini usage metadata to URP usage fields using:
 
-- `promptTokenCount -> prompt_tokens`
-- `candidatesTokenCount -> completion_tokens`
-- `thoughtsTokenCount -> reasoning_tokens` when present.
+- `promptTokenCount -> input_tokens`
+- `candidatesTokenCount -> output_tokens`
+- `thoughtsTokenCount -> output_details.reasoning_tokens` when present.
+- `cachedContentTokenCount -> input_details.cache_read_tokens` when present.
 
 PG7. Monoize MUST preserve unknown Gemini request/response fields in URP `extra_body` according to §3 and §7.7.
 
@@ -547,8 +548,8 @@ DE6. Monoize MUST parse upstream usage from `usage.prompt_tokens` and `usage.tot
 
 DE7. Billing tokens for embeddings MUST be:
 
-- `prompt_tokens = usage.prompt_tokens`
-- `completion_tokens = 0`
+- `input_tokens = usage.prompt_tokens`
+- `output_tokens = 0`
 
 DE8. Downstream response body MUST preserve upstream payload structure, except top-level `model` MUST be rewritten to the logical model requested by the client.
 

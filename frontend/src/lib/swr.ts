@@ -489,6 +489,7 @@ export async function upsertModelMetadataOptimistic(
     input_cost_per_token_nano: input.input_cost_per_token_nano ?? undefined,
     output_cost_per_token_nano: input.output_cost_per_token_nano ?? undefined,
     cache_read_input_cost_per_token_nano: input.cache_read_input_cost_per_token_nano ?? undefined,
+    cache_creation_input_cost_per_token_nano: input.cache_creation_input_cost_per_token_nano ?? undefined,
     output_cost_per_reasoning_token_nano: input.output_cost_per_reasoning_token_nano ?? undefined,
     max_input_tokens: input.max_input_tokens ?? undefined,
     max_output_tokens: input.max_output_tokens ?? undefined,

@@ -363,6 +363,7 @@
 		"validationChannelPassiveRate": "Channel パッシブ失敗率上書きは [0.01, 1.00] の範囲である必要があります",
 		"validationChannelRateLimitCooldown": "Channel 429 クールダウン上書きは 1 以上である必要があります",
 		"validationProviderRequestTimeout": "プロバイダー リクエストタイムアウト上書きは 1 以上である必要があります",
+		"validationApiTypeOverridePattern": "API タイプオーバーライドのパターンは必須です",
 		"validationAtLeastOneChannel": "少なくとも 1 つの Channel が必要です",
 		"baseUrlV1Title": "ベース URL の末尾の /v1 を削除しますか？",
 		"baseUrlV1Description": "このベース URL は /v1 で終わっています。Monoize は自動的に /v1 エンドポイントを付加するため、そのままだと /v1/v1/chat/completions のようなパスになります。",
@@ -384,7 +385,10 @@
 		"testIdle": "未テスト",
 		"testAllRunning": "全モデルをテスト中...",
 		"testAllComplete": "全テスト完了",
-		"testModel": "テスト"
+		"testModel": "テスト",
+		"apiTypeOverrides": "API タイプオーバーライド",
+		"apiTypeOverridesDesc": "特定のモデルパターンを異なる API タイプにルーティングします。ルールは順に評価され、最初にマッチしたものが適用されます。未マッチのモデルは上のデフォルトタイプを使用します。",
+		"addOverride": "ルールを追加"
 	},
 	"transforms": {
 		"titleProvider": "上流 Transform",

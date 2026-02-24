@@ -85,11 +85,12 @@ CREATE INDEX IF NOT EXISTS idx_model_registry_enabled ON model_registry_records(
 
 ```rust
 pub struct ModelRegistryStore {
-    pool: Pool<Sqlite>,
+    read_pool: Pool<Sqlite>,
+    write_pool: Pool<Sqlite>,
 }
 
 impl ModelRegistryStore {
-    pub async fn new(pool: Pool<Sqlite>) -> Result<Self, String>;
+    pub async fn new(read_pool: Pool<Sqlite>, write_pool: Pool<Sqlite>) -> Result<Self, String>;
     pub async fn list_models(&self) -> Result<Vec<DbModelRecord>, String>;
     pub async fn get_model(&self, id: &str) -> Result<Option<DbModelRecord>, String>;
     pub async fn get_model_by_logical_and_provider(&self, logical_model: &str, provider_id: &str) -> Result<Option<DbModelRecord>, String>;
@@ -99,6 +100,12 @@ impl ModelRegistryStore {
     pub async fn find_by_logical_model(&self, logical_model: &str) -> Result<Vec<DbModelRecord>, String>;
 }
 ```
+
+Pool routing constraints:
+
+1. Read-only methods (`list_models`, `list_enabled_models`, `get_model`, `get_model_by_logical_and_provider`, `find_by_logical_model`, `list_model_metadata`, `list_priced_model_ids`, `get_model_metadata`, `get_model_pricing`) MUST use `read_pool`.
+2. Mutating methods (`create_model`, `update_model`, `delete_model`, `upsert_model_metadata`, `delete_model_metadata`, `sync_from_models_dev`) MUST use `write_pool`.
+3. Schema creation and migration in `new(...)` MUST execute on `write_pool`.
 
 ### CreateModelInput
 

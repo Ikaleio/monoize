@@ -3,7 +3,8 @@ use crate::urp::decode::{
     value_to_text,
 };
 use crate::urp::{
-    FinishReason, Message, Part, ReasoningConfig, Role, ToolChoice, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
+    UrpRequest, UrpResponse, Usage,
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -486,29 +487,62 @@ fn summary_to_text(item_obj: &Map<String, Value>) -> Option<String> {
             }
         }
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
+    let input_tokens = obj
+        .get("input_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| obj.get("prompt_tokens").and_then(|v| v.as_u64()))
+        .unwrap_or(0);
+    let output_tokens = obj
+        .get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| obj.get("completion_tokens").and_then(|v| v.as_u64()))
+        .unwrap_or(0);
+    let reasoning_tokens = obj
+        .get("output_tokens_details")
+        .and_then(|v| v.get("reasoning_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_read_tokens = obj
+        .get("input_tokens_details")
+        .and_then(|v| v.get("cached_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let input_details = if cache_read_tokens > 0 {
+        Some(InputDetails {
+            standard_tokens: 0,
+            cache_read_tokens,
+            cache_creation_tokens: 0,
+            tool_prompt_tokens: 0,
+            modality_breakdown: None,
+        })
+    } else {
+        None
+    };
+    let output_details = if reasoning_tokens > 0 {
+        Some(OutputDetails {
+            standard_tokens: 0,
+            reasoning_tokens,
+            accepted_prediction_tokens: 0,
+            rejected_prediction_tokens: 0,
+            modality_breakdown: None,
+        })
+    } else {
+        None
+    };
+
     Usage {
-        prompt_tokens: obj
-            .get("input_tokens")
-            .and_then(|v| v.as_u64())
-            .or_else(|| obj.get("prompt_tokens").and_then(|v| v.as_u64()))
-            .unwrap_or(0),
-        completion_tokens: obj
-            .get("output_tokens")
-            .and_then(|v| v.as_u64())
-            .or_else(|| obj.get("completion_tokens").and_then(|v| v.as_u64()))
-            .unwrap_or(0),
-        reasoning_tokens: obj
-            .get("output_tokens_details")
-            .and_then(|v| v.get("reasoning_tokens"))
-            .and_then(|v| v.as_u64()),
-        cached_tokens: obj
-            .get("input_tokens_details")
-            .and_then(|v| v.get("cached_tokens"))
-            .and_then(|v| v.as_u64()),
+        input_tokens,
+        output_tokens,
+        input_details,
+        output_details,
         extra_body: split_extra(
             obj,
             &[

@@ -1158,6 +1158,7 @@ async fn create_test_provider(
             name: name.to_string(),
             provider_type,
             models,
+            api_type_overrides: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: None,
                 name: format!("{name}-channel"),
@@ -1198,6 +1199,7 @@ async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&s
                     input_cost_per_token_nano: Some("1000".to_string()),
                     output_cost_per_token_nano: Some("1000".to_string()),
                     cache_read_input_cost_per_token_nano: None,
+                    cache_creation_input_cost_per_token_nano: None,
                     output_cost_per_reasoning_token_nano: None,
                     max_input_tokens: None,
                     max_output_tokens: None,
@@ -1600,8 +1602,8 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
         matched = logs.into_iter().find(|log| {
             log.model == "gpt-5-mini-chat"
                 && log.is_stream
-                && log.prompt_tokens == Some(12)
-                && log.completion_tokens == Some(8)
+                && log.input_tokens == Some(12)
+                && log.output_tokens == Some(8)
                 && log.charge_nano_usd.as_deref() == Some("20000")
         });
         if matched.is_some() {
@@ -1613,8 +1615,8 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
     let log = matched.expect("request log should be inserted");
     assert!(log.is_stream);
     assert!(log.ttfb_ms.is_some());
-    assert_eq!(log.prompt_tokens, Some(12));
-    assert_eq!(log.completion_tokens, Some(8));
+    assert_eq!(log.input_tokens, Some(12));
+    assert_eq!(log.output_tokens, Some(8));
     assert_eq!(log.charge_nano_usd.as_deref(), Some("20000"));
 }
 
@@ -1669,8 +1671,8 @@ async fn chat_streaming_requests_upstream_include_usage_by_default() {
         matched = logs.into_iter().find(|log| {
             log.model == "gpt-5-mini-chat"
                 && log.is_stream
-                && log.prompt_tokens == Some(12)
-                && log.completion_tokens == Some(8)
+                && log.input_tokens == Some(12)
+                && log.output_tokens == Some(8)
                 && log.charge_nano_usd.as_deref() == Some("20000")
         });
         if matched.is_some() {
@@ -1845,7 +1847,11 @@ async fn request_logs_pending_usage_can_be_updated_incrementally() {
             12,
             8,
             Some(0),
+            Some(3),
+            Some(2),
             Some(0),
+            Some(5),
+            Some(1),
             Some(json!({
                 "input": { "total_tokens": 12 },
                 "output": { "total_tokens": 8 }
@@ -1876,8 +1882,12 @@ async fn request_logs_pending_usage_can_be_updated_incrementally() {
         .find(|row| row.request_id.as_deref() == Some(request_id))
         .expect("pending row should exist");
     assert_eq!(log.status, "pending");
-    assert_eq!(log.prompt_tokens, Some(12));
-    assert_eq!(log.completion_tokens, Some(8));
+    assert_eq!(log.input_tokens, Some(12));
+    assert_eq!(log.output_tokens, Some(8));
+    assert_eq!(log.cache_creation_tokens, Some(3));
+    assert_eq!(log.tool_prompt_tokens, Some(2));
+    assert_eq!(log.accepted_prediction_tokens, Some(5));
+    assert_eq!(log.rejected_prediction_tokens, Some(1));
     assert!(log.usage_breakdown_json.is_some());
 }
 
@@ -1991,6 +2001,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
             name: "override-threshold-provider".to_string(),
             provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
             models,
+            api_type_overrides: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("override-threshold-ch".to_string()),
                 name: "override-threshold-ch".to_string(),
@@ -2100,8 +2111,8 @@ async fn chat_streaming_length_finish_is_still_billed() {
         matched = logs.into_iter().find(|log| {
             log.model == "gpt-5-mini-chat"
                 && log.is_stream
-                && log.prompt_tokens == Some(12)
-                && log.completion_tokens == Some(8)
+                && log.input_tokens == Some(12)
+                && log.output_tokens == Some(8)
                 && log.charge_nano_usd.as_deref() == Some("20000")
                 && log.status == "success"
         });
@@ -3011,6 +3022,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         name: "mono-transform-strip".to_string(),
         provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
         models,
+        api_type_overrides: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-strip-ch1".to_string()),
             name: "mono-transform-strip-ch1".to_string(),

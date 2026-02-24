@@ -3,7 +3,8 @@ use crate::urp::decode::{
     value_to_text,
 };
 use crate::urp::{
-    FinishReason, Message, Part, ReasoningConfig, Role, ToolChoice, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
+    UrpRequest, UrpResponse, Usage,
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -555,28 +556,71 @@ fn parse_finish_reason(s: &str) -> FinishReason {
 }
 
 fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
-    let prompt_tokens = obj
+    let input_tokens = obj
         .get("prompt_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let completion_tokens = obj
+    let output_tokens = obj
         .get("completion_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let reasoning_tokens = obj
         .get("completion_tokens_details")
         .and_then(|v| v.get("reasoning_tokens"))
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let cached_tokens = obj
         .get("prompt_tokens_details")
         .and_then(|v| v.get("cached_tokens"))
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_write_tokens = obj
+        .get("prompt_tokens_details")
+        .and_then(|v| v.get("cache_write_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let accepted_prediction_tokens = obj
+        .get("completion_tokens_details")
+        .and_then(|v| v.get("accepted_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rejected_prediction_tokens = obj
+        .get("completion_tokens_details")
+        .and_then(|v| v.get("rejected_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let input_details = if cached_tokens > 0 || cache_write_tokens > 0 {
+        Some(InputDetails {
+            standard_tokens: 0,
+            cache_read_tokens: cached_tokens,
+            cache_creation_tokens: cache_write_tokens,
+            tool_prompt_tokens: 0,
+            modality_breakdown: None,
+        })
+    } else {
+        None
+    };
+
+    let output_details =
+        if reasoning_tokens > 0 || accepted_prediction_tokens > 0 || rejected_prediction_tokens > 0
+        {
+            Some(OutputDetails {
+                standard_tokens: 0,
+                reasoning_tokens,
+                accepted_prediction_tokens,
+                rejected_prediction_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
 
     Usage {
-        prompt_tokens,
-        completion_tokens,
-        reasoning_tokens,
-        cached_tokens,
+        input_tokens,
+        output_tokens,
+        input_details,
+        output_details,
         extra_body: split_extra(obj, &["prompt_tokens", "completion_tokens", "total_tokens"]),
     }
 }

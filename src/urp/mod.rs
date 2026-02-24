@@ -219,16 +219,78 @@ pub enum FinishReason {
     Other,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModalityBreakdown {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InputDetails {
+    #[serde(default)]
+    pub standard_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+    #[serde(default)]
+    pub tool_prompt_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modality_breakdown: Option<ModalityBreakdown>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OutputDetails {
+    #[serde(default)]
+    pub standard_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub accepted_prediction_tokens: u64,
+    #[serde(default)]
+    pub rejected_prediction_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modality_breakdown: Option<ModalityBreakdown>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_tokens: Option<u64>,
+    pub input_details: Option<InputDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cached_tokens: Option<u64>,
+    pub output_details: Option<OutputDetails>,
     #[serde(flatten)]
     pub extra_body: HashMap<String, Value>,
+}
+
+impl Usage {
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+
+    pub fn cached_tokens(&self) -> Option<u64> {
+        self.input_details
+            .as_ref()
+            .map(|d| d.cache_read_tokens)
+            .filter(|&v| v > 0)
+    }
+
+    pub fn reasoning_tokens(&self) -> Option<u64> {
+        self.output_details
+            .as_ref()
+            .map(|d| d.reasoning_tokens)
+            .filter(|&v| v > 0)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

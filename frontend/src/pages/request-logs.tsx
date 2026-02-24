@@ -458,8 +458,8 @@ export function RequestLogsPage() {
 		return new Intl.NumberFormat('en-US', {
 			style: 'currency',
 			currency: 'USD',
-			minimumSignificantDigits: 6,
-			maximumSignificantDigits: 6
+			minimumFractionDigits: 6,
+			maximumFractionDigits: 9
 		}).format(cost)
 	}
 
@@ -471,7 +471,7 @@ export function RequestLogsPage() {
 			style: 'currency',
 			currency: 'USD',
 			minimumFractionDigits: 6,
-			maximumFractionDigits: 6
+			maximumFractionDigits: 9
 		}).format(cost)
 	}
 
@@ -876,13 +876,13 @@ function LogRowCells({
 	const outputDetailRows: Array<[string, string]> = []
 
 	const inputTotal =
-		readTokenCount(usageInput, 'total_tokens') ?? log.prompt_tokens ?? null
+		readTokenCount(usageInput, 'total_tokens') ?? log.input_tokens ?? null
 	const inputUncached =
 		readTokenCount(usageInput, 'uncached_tokens') ??
-		Math.max((log.prompt_tokens ?? 0) - (log.cached_tokens ?? 0), 0)
+		Math.max((log.input_tokens ?? 0) - (log.cache_read_tokens ?? 0), 0)
 	const inputText = readTokenCount(usageInput, 'text_tokens')
 	const inputCached =
-		readTokenCount(usageInput, 'cached_tokens') ?? log.cached_tokens ?? null
+		readTokenCount(usageInput, 'cached_tokens') ?? log.cache_read_tokens ?? null
 	const inputCacheCreation = readTokenCount(usageInput, 'cache_creation_tokens')
 	const inputAudio = readTokenCount(usageInput, 'audio_tokens')
 	const inputImage = readTokenCount(usageInput, 'image_tokens')
@@ -925,10 +925,10 @@ function LogRowCells({
 		])
 
 	const outputTotal =
-		readTokenCount(usageOutput, 'total_tokens') ?? log.completion_tokens ?? null
+		readTokenCount(usageOutput, 'total_tokens') ?? log.output_tokens ?? null
 	const outputNonReasoning =
 		readTokenCount(usageOutput, 'non_reasoning_tokens') ??
-		Math.max((log.completion_tokens ?? 0) - (log.reasoning_tokens ?? 0), 0)
+		Math.max((log.output_tokens ?? 0) - (log.reasoning_tokens ?? 0), 0)
 	const outputText = readTokenCount(usageOutput, 'text_tokens')
 	const outputReasoning =
 		readTokenCount(usageOutput, 'reasoning_tokens') ??
@@ -978,6 +978,11 @@ function LogRowCells({
 		readTokenCount(billingInput, 'billed_cached_tokens'),
 		readNanoString(billingInput, 'cached_unit_price_nano'),
 		readNanoString(billingInput, 'cached_charge_nano')
+	)
+	const inputCacheCreationCostDetail = formatRateTimesUsage(
+		readTokenCount(billingInput, 'billed_cache_creation_tokens'),
+		readNanoString(billingInput, 'cache_creation_unit_price_nano'),
+		readNanoString(billingInput, 'cache_creation_charge_nano')
 	)
 	const outputTextCostDetail = formatRateTimesUsage(
 		readTokenCount(billingOutput, 'billed_non_reasoning_tokens'),
@@ -1207,21 +1212,24 @@ function LogRowCells({
 											<span>{t('requestLogs.duration')}</span>
 											<span className='font-mono'>{duration}</span>
 										</div>
-									{log.duration_ms != null &&
-										log.ttfb_ms != null &&
-										log.duration_ms > log.ttfb_ms &&
-										(log.completion_tokens ?? 0) > 0 && (
-											<div className='flex items-center justify-between gap-3'>
-												<span>{t('requestLogs.avgTps')}</span>
-												<span className='font-mono'>
-													{(
-														(log.completion_tokens ?? 0) /
-														((log.duration_ms - log.ttfb_ms) / 1000)
-													).toFixed(2)}{' '}
-													t/s
-												</span>
-											</div>
-										)}
+										{log.duration_ms != null &&
+											log.duration_ms > 0 &&
+									(log.output_tokens ?? 0) > 0 && (() => {
+												// When ttfb ≈ duration (no visible streaming output,
+												// e.g. pure reasoning then tool_call), use total time
+												const generationMs = (log.ttfb_ms != null && log.duration_ms! > log.ttfb_ms)
+													? log.duration_ms! - log.ttfb_ms
+													: log.duration_ms!;
+										const tpsValue = (log.output_tokens ?? 0) / (generationMs / 1000);
+												return (
+													<div className='flex items-center justify-between gap-3'>
+														<span>{t('requestLogs.avgTps')}</span>
+														<span className='font-mono'>
+															{tpsValue.toFixed(2)} t/s
+														</span>
+													</div>
+												);
+											})()}
 									</div>
 								</TooltipContent>
 							</Tooltip>
@@ -1256,7 +1264,7 @@ function LogRowCells({
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='cursor-default'>{log.prompt_tokens ?? 0}</span>
+							<span className='cursor-default'>{log.input_tokens ?? 0}</span>
 						</TooltipTrigger>
 						<TooltipContent>
 							<div className='text-xs space-y-0.5 min-w-[220px]'>
@@ -1280,7 +1288,7 @@ function LogRowCells({
 					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>
-								{log.completion_tokens ?? 0}
+								{log.output_tokens ?? 0}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>
@@ -1325,6 +1333,14 @@ function LogRowCells({
 											{t('requestLogs.input')} ({t('requestLogs.cachedTokens')})
 										</span>
 										<span className='font-mono'>{inputCachedCostDetail}</span>
+									</div>
+								)}
+								{inputCacheCreationCostDetail && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>
+											{t('requestLogs.input')} ({t('requestLogs.cacheCreationTokens')})
+										</span>
+										<span className='font-mono'>{inputCacheCreationCostDetail}</span>
 									</div>
 								)}
 								{outputTextCostDetail && (

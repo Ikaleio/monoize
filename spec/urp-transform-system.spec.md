@@ -104,11 +104,11 @@ TF-7. Built-ins that MUST exist:
 
 AEUM-1. Phase: `request` only.
 
-AEUM-2. Config: empty object (no configuration required).
-
+AEUM-2. Config MAY contain:
+- `content` (string, optional): text content for the padding user message. Defaults to `" "` (a single space).
 AEUM-3. On apply:
 1. Inspect the last element of `req.messages`.
-2. If the last message has `role == assistant`, append a new `Message { role: user, parts: [] }` to `req.messages`.
+2. If the last message has `role == assistant`, append a new `Message { role: user, parts: [Text { content: config.content }] }` to `req.messages`.
 3. If the last message is not `assistant`, or `messages` is empty, no-op.
 
 ### 4.1 `reasoning_effort_to_model_suffix`

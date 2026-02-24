@@ -1,3 +1,6 @@
+pub mod db;
+pub mod entity;
+pub mod migration;
 pub mod app;
 pub mod auth;
 pub mod config;

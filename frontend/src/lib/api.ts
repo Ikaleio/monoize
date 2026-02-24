@@ -167,14 +167,21 @@ export interface MonoizeChannel {
   _health_status?: "healthy" | "probing" | "unhealthy";
 }
 
+export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini" | "grok";
+
+export interface ApiTypeOverride {
+  pattern: string;
+  api_type: ProviderType;
+}
 export interface Provider {
   id: string;
   name: string;
-  provider_type: "responses" | "chat_completion" | "messages" | "gemini" | "grok";
+  provider_type: ProviderType;
   models: Record<string, MonoizeModelEntry>;
   channels: MonoizeChannel[];
   max_retries: number;
   transforms: TransformRuleConfig[];
+  api_type_overrides: ApiTypeOverride[];
   active_probe_enabled_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
@@ -204,11 +211,12 @@ export interface CreateMonoizeChannelInput {
 
 export interface CreateProviderInput {
   name: string;
-  provider_type: "responses" | "chat_completion" | "messages" | "gemini" | "grok";
+  provider_type: ProviderType;
   models: Record<string, MonoizeModelEntry>;
   channels: CreateMonoizeChannelInput[];
   max_retries?: number;
   transforms?: TransformRuleConfig[];
+  api_type_overrides?: ApiTypeOverride[];
   active_probe_enabled_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
@@ -220,11 +228,12 @@ export interface CreateProviderInput {
 
 export interface UpdateProviderInput {
   name?: string;
-  provider_type?: "responses" | "chat_completion" | "messages" | "gemini" | "grok";
+  provider_type?: ProviderType;
   models?: Record<string, MonoizeModelEntry>;
   channels?: CreateMonoizeChannelInput[];
   max_retries?: number;
   transforms?: TransformRuleConfig[];
+  api_type_overrides?: ApiTypeOverride[];
   active_probe_enabled_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
@@ -241,6 +250,7 @@ export interface ModelMetadataRecord {
   input_cost_per_token_nano?: string;
   output_cost_per_token_nano?: string;
   cache_read_input_cost_per_token_nano?: string;
+  cache_creation_input_cost_per_token_nano?: string;
   output_cost_per_reasoning_token_nano?: string;
   max_input_tokens?: number;
   max_output_tokens?: number;
@@ -256,6 +266,7 @@ export interface UpsertModelMetadataInput {
   input_cost_per_token_nano?: string | null;
   output_cost_per_token_nano?: string | null;
   cache_read_input_cost_per_token_nano?: string | null;
+  cache_creation_input_cost_per_token_nano?: string | null;
   output_cost_per_reasoning_token_nano?: string | null;
   max_input_tokens?: number | null;
   max_output_tokens?: number | null;
@@ -280,9 +291,11 @@ export interface RequestLog {
   channel_id?: string;
   channel_name?: string;
   is_stream: boolean;
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  cached_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  tool_prompt_tokens?: number;
   reasoning_tokens?: number;
   provider_multiplier?: number;
   charge_nano_usd?: string;
