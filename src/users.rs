@@ -19,6 +19,7 @@ pub enum UserRole {
 }
 
 impl UserRole {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "super_admin" => Some(Self::SuperAdmin),
@@ -334,6 +335,7 @@ impl UserStore {
         rows.iter().map(|row| self.row_to_user(row)).collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_user(
         &self,
         id: &str,
@@ -1005,11 +1007,13 @@ impl UserStore {
             .begin()
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        let select_sql = if self.db.is_postgres() {
+            "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1 FOR UPDATE"
+        } else {
+            "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1"
+        };
         let row = tx
-            .query_one(self.db.stmt(
-                "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
-                vec![user_id.into()],
-            ))
+            .query_one(self.db.stmt(select_sql, vec![user_id.into()]))
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
         let Some(row) = row else {
@@ -1082,11 +1086,13 @@ impl UserStore {
         }
 
         let tx = self.db.write().begin().await.map_err(|e| e.to_string())?;
+        let select_sql = if self.db.is_postgres() {
+            "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1 FOR UPDATE"
+        } else {
+            "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1"
+        };
         let row = tx
-            .query_one(self.db.stmt(
-                "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
-                vec![user_id.into()],
-            ))
+            .query_one(self.db.stmt(select_sql, vec![user_id.into()]))
             .await
             .map_err(|e| e.to_string())?;
         let Some(row) = row else {
@@ -1145,6 +1151,7 @@ impl UserStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn insert_billing_ledger_tx(
         &self,
         tx: &DatabaseTransaction,
@@ -1263,6 +1270,7 @@ fn parse_optional_json_text(value: Option<String>) -> Option<Value> {
     value.and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_request_log_filters(
     sql: &mut String,
     values: &mut Vec<SeaValue>,
@@ -1443,6 +1451,7 @@ impl UserStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_pending_request_log_usage(
         &self,
         user_id: &str,
@@ -1603,6 +1612,7 @@ impl UserStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_request_logs_by_user(
         &self,
         user_id: &str,
@@ -1720,6 +1730,7 @@ impl UserStore {
         Ok((logs, total, total_charge_nano_usd))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_all_request_logs(
         &self,
         limit: i64,

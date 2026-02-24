@@ -176,7 +176,7 @@ fn encode_messages(messages: &[Message]) -> Vec<Value> {
                     source, extra_body, ..
                 } => {
                     let text = match source {
-                        FileSource::Url { url } => format!("[file:{}]", url),
+                        FileSource::Url { url } => format!("[file:{url}]"),
                         FileSource::Base64 {
                             filename,
                             media_type,

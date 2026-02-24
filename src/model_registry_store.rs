@@ -130,7 +130,7 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter().map(|r| row_to_record(r)).collect()
+        rows.iter().map(row_to_record).collect()
     }
 
     pub async fn list_enabled_models(&self) -> Result<Vec<DbModelRecord>, String> {
@@ -148,7 +148,7 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter().map(|r| row_to_record(r)).collect()
+        rows.iter().map(row_to_record).collect()
     }
 
     pub async fn get_model(&self, id: &str) -> Result<Option<DbModelRecord>, String> {
@@ -212,7 +212,7 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter().map(|r| row_to_record(r)).collect()
+        rows.iter().map(row_to_record).collect()
     }
 
     pub async fn create_model(&self, input: CreateModelInput) -> Result<DbModelRecord, String> {
@@ -381,7 +381,7 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter().map(|r| row_to_model_metadata(r)).collect()
+        rows.iter().map(row_to_model_metadata).collect()
     }
 
     pub async fn list_priced_model_ids(&self) -> Result<std::collections::HashSet<String>, String> {

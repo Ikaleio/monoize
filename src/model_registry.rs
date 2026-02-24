@@ -68,51 +68,39 @@ impl Default for ReasoningControls {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct ImageInputSupport {
     pub supported: bool,
     pub max_images: Option<u64>,
 }
 
-impl Default for ImageInputSupport {
-    fn default() -> Self {
-        Self {
-            supported: false,
-            max_images: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct FileInputSupport {
     pub supported: bool,
     pub max_files: Option<u64>,
 }
 
-impl Default for FileInputSupport {
-    fn default() -> Self {
-        Self {
-            supported: false,
-            max_files: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct ImageOutputSupport {
     pub supported: bool,
 }
 
-impl Default for ImageOutputSupport {
-    fn default() -> Self {
-        Self { supported: false }
-    }
-}
 
 #[derive(Clone)]
 pub struct ModelRegistry {
     inner: Arc<RwLock<HashMap<(String, String), ModelRecord>>>,
+}
+
+impl Default for ModelRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ModelRegistry {

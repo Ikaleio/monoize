@@ -40,9 +40,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .get("effort")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            if effort.is_none() {
-                return None;
-            }
+            effort.as_ref()?;
             Some(ReasoningConfig {
                 effort,
                 extra_body: split_extra(reasoning_obj, &["effort"]),

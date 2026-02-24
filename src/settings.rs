@@ -369,9 +369,7 @@ impl SettingsStore {
         self.set(
             "monoize_active_probe_model",
             settings
-                .monoize_active_probe_model
-                .as_ref()
-                .map(|s| s.as_str())
+                .monoize_active_probe_model.as_deref()
                 .unwrap_or(""),
         )
         .await?;

@@ -34,11 +34,11 @@ pub async fn frontend_fallback(req: Request<Body>) -> Response {
     #[cfg(not(embed_frontend))]
     {
         let _ = req;
-        return Response::builder()
+        Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/plain")
             .body(Body::from("Frontend not embedded. Use Vite dev server."))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
     }
 
     #[cfg(embed_frontend)]

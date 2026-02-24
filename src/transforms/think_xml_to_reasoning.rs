@@ -98,8 +98,8 @@ impl Transform for ThinkXmlToReasoningTransform {
 }
 
 fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
     let mut parts = Vec::new();
     let mut rest = content;
 
@@ -143,8 +143,8 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
 }
 
 fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
     match event {
         UrpStreamEvent::PartStart {
             part_index, part, ..

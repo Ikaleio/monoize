@@ -16,6 +16,7 @@ pub enum ProviderType {
 }
 
 impl ProviderType {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "responses" => Some(Self::Responses),
@@ -49,6 +50,7 @@ pub enum AuthType {
 }
 
 impl AuthType {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "bearer" => Some(Self::Bearer),
@@ -350,10 +352,8 @@ impl ProviderStore {
             if input.auth.is_none() {
                 return Err("auth is required for concrete providers".to_string());
             }
-        } else {
-            if input.base_url.is_some() || input.auth.is_some() {
-                return Err("group providers must not have base_url or auth".to_string());
-            }
+        } else if input.base_url.is_some() || input.auth.is_some() {
+            return Err("group providers must not have base_url or auth".to_string());
         }
 
         let capabilities_json: Option<String> = None;
@@ -361,7 +361,7 @@ impl ProviderStore {
         let strategy_json = input
             .strategy
             .as_ref()
-            .map(|s| serde_json::to_string(s))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(|e| e.to_string())?;
 
@@ -729,7 +729,7 @@ impl ProviderStore {
         let provider_type_str: String =
             row.try_get("", "provider_type").map_err(|e| e.to_string())?;
         let provider_type = ProviderType::from_str(&provider_type_str)
-            .ok_or_else(|| format!("invalid provider type: {}", provider_type_str))?;
+            .ok_or_else(|| format!("invalid provider type: {provider_type_str}"))?;
 
         let auth_type_str: Option<String> =
             row.try_get("", "auth_type").map_err(|e| e.to_string())?;
@@ -744,7 +744,7 @@ impl ProviderStore {
 
         let auth = if let (Some(auth_type_str), Some(value)) = (auth_type_str, auth_value) {
             let auth_type = AuthType::from_str(&auth_type_str)
-                .ok_or_else(|| format!("invalid auth type: {}", auth_type_str))?;
+                .ok_or_else(|| format!("invalid auth type: {auth_type_str}"))?;
             Some(ProviderAuth {
                 auth_type,
                 value,
@@ -819,15 +819,14 @@ impl ProviderStore {
                 continue;
             }
 
-            if provider.provider_type != ProviderType::Group {
-                if provider
+            if provider.provider_type != ProviderType::Group
+                && provider
                     .model_map
                     .iter()
                     .any(|m| m.logical_model == logical_model)
                 {
                     result.push(provider);
                 }
-            }
         }
 
         Ok(result)

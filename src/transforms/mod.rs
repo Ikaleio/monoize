@@ -55,9 +55,9 @@ pub enum UrpData<'a> {
 impl<'a> UrpData<'a> {
     pub fn reborrow(&mut self) -> UrpData<'_> {
         match self {
-            Self::Request(v) => UrpData::Request(*v),
-            Self::Response(v) => UrpData::Response(*v),
-            Self::Stream(v) => UrpData::Stream(*v),
+            Self::Request(v) => UrpData::Request(v),
+            Self::Response(v) => UrpData::Response(v),
+            Self::Stream(v) => UrpData::Stream(v),
         }
     }
 }

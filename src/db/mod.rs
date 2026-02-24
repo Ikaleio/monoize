@@ -36,7 +36,7 @@ impl DbPool {
     }
 
     async fn connect_sqlite(dsn: &str) -> Result<Self, DbErr> {
-        ensure_sqlite_file(dsn).map_err(|e| DbErr::Custom(e))?;
+        ensure_sqlite_file(dsn).map_err(DbErr::Custom)?;
 
         if is_sqlite_memory_dsn(dsn) {
             let opts = ConnectOptions::new(dsn)
@@ -147,8 +147,8 @@ impl DbPool {
             let mut result = String::with_capacity(sql.len());
             let mut chars = sql.chars().peekable();
             while let Some(ch) = chars.next() {
-                if ch == '$' && chars.peek().map_or(false, |c| c.is_ascii_digit()) {
-                    while chars.peek().map_or(false, |c| c.is_ascii_digit()) {
+                if ch == '$' && chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
                         chars.next();
                     }
                     result.push('?');

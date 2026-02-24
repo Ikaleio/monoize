@@ -94,7 +94,7 @@ fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
     req.messages.iter().any(|msg| {
         msg.parts
             .iter()
-            .any(|part| part_extra_body(part).map_or(false, |eb| eb.contains_key("cache_control")))
+            .any(|part| part_extra_body(part).is_some_and(|eb| eb.contains_key("cache_control")))
     })
 }
 

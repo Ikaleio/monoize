@@ -171,7 +171,7 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
         return Err(UpstreamCallError::new(
             UpstreamErrorKind::Http,
             Some(status),
-            format!("upstream status {}: {}", status, text),
+            format!("upstream status {status}: {text}"),
         )
         .with_code(code));
     }
@@ -242,7 +242,7 @@ fn join_url(base: &str, path: &str) -> String {
     if path.is_empty() {
         base.to_string()
     } else {
-        format!("{}/{}", base, path)
+        format!("{base}/{path}")
     }
 }
 

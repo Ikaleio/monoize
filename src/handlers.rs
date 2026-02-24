@@ -606,9 +606,7 @@ async fn record_stream_usage_if_present(
 async fn latest_stream_usage_snapshot(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> Option<urp::Usage> {
-    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
-        return None;
-    };
+    let runtime_metrics = runtime_metrics.as_ref()?;
     let guard = runtime_metrics.lock().await;
     guard.usage.clone()
 }
@@ -1981,6 +1979,7 @@ async fn update_pending_channel_info(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_request_log(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -2074,6 +2073,7 @@ fn spawn_request_log(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_request_log_error(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -2146,6 +2146,7 @@ fn spawn_request_log_error(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_request_log_error_no_attempt(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -4279,11 +4280,10 @@ async fn stream_responses_sse_as_responses(
                 if reasoning_sig.is_empty() && !sig.is_empty() {
                     reasoning_sig = sig;
                 }
-            } else if item.get("type").and_then(|v| v.as_str()) == Some("message") {
-                if !saw_text_delta {
+            } else if item.get("type").and_then(|v| v.as_str()) == Some("message")
+                && !saw_text_delta {
                     output_text.push_str(&extract_responses_message_text(item));
                 }
-            }
         }
         let name = if ev.event.is_empty() {
             "message"
@@ -5381,7 +5381,7 @@ async fn stream_gemini_sse_as_messages(
         }
     }
 
-    for idx in started.iter().copied() {
+    for idx in started.iter() {
         let stop = json!({ "type": "content_block_stop", "index": idx });
         let _ = tx.send(Event::default().data(stop.to_string())).await;
     }
@@ -6949,7 +6949,7 @@ async fn stream_any_sse_as_messages(
     }
 
     // Close all started blocks in the order they were created.
-    for idx in started.iter().copied() {
+    for idx in started.iter() {
         let stop = json!({ "type": "content_block_stop", "index": idx });
         let _ = tx.send(Event::default().data(stop.to_string())).await;
     }

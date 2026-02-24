@@ -76,7 +76,7 @@ impl Transform for AutoCacheSystemTransform {
         let already_has_cache = req.messages[idx]
             .parts
             .iter()
-            .any(|p| part_extra_body(p).map_or(false, |eb| eb.contains_key("cache_control")));
+            .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")));
         if already_has_cache {
             return Ok(());
         }
@@ -96,7 +96,7 @@ fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
     req.messages
         .iter()
         .flat_map(|m| m.parts.iter())
-        .filter(|p| part_extra_body(p).map_or(false, |eb| eb.contains_key("cache_control")))
+        .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
         .count()
 }
 

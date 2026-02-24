@@ -77,6 +77,7 @@ pub async fn load_state() -> AppResult<AppState> {
 }
 
 
+#[allow(clippy::field_reassign_with_default)]
 pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppState> {
     let auth = AuthState::new();
 
@@ -472,6 +473,7 @@ fn build_probe_usage_breakdown(prompt_tokens: u64, completion_tokens: u64) -> Va
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_probe_billing_breakdown(
     provider_name: String,
     upstream_model: String,
@@ -525,6 +527,7 @@ fn build_probe_billing_breakdown(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_active_probe_request_log(
     user_store: UserStore,
     model_registry_store: ModelRegistryStore,

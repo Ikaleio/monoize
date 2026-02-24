@@ -18,6 +18,12 @@ pub struct AuthResult {
 #[derive(Clone)]
 pub struct AuthState;
 
+impl Default for AuthState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AuthState {
     pub fn new() -> Self {
         Self
