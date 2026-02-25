@@ -889,11 +889,12 @@ function LogRowCells({
 
 	const hasInputBreakdown = !!(inputCached || inputCacheCreation || inputText || inputAudio || inputImage)
 
-	inputDetailRows.push([
-		t('requestLogs.totalTokens'),
-		formatTokenCount(inputTotal)
-	])
-	if (hasInputBreakdown)
+	if (inputTotal)
+		inputDetailRows.push([
+			t('requestLogs.totalTokens'),
+			formatTokenCount(inputTotal)
+		])
+	if (hasInputBreakdown && inputUncached)
 		inputDetailRows.push([
 			t('requestLogs.uncachedTokens'),
 			formatTokenCount(inputUncached)
@@ -941,11 +942,12 @@ function LogRowCells({
 
 	const hasOutputBreakdown = !!(outputReasoning || outputText || outputAudio || outputImage)
 
-	outputDetailRows.push([
-		t('requestLogs.totalTokens'),
-		formatTokenCount(outputTotal)
-	])
-	if (hasOutputBreakdown)
+	if (outputTotal)
+		outputDetailRows.push([
+			t('requestLogs.totalTokens'),
+			formatTokenCount(outputTotal)
+		])
+	if (hasOutputBreakdown && outputNonReasoning)
 		outputDetailRows.push([
 			t('requestLogs.nonReasoningTokens'),
 			formatTokenCount(outputNonReasoning)
