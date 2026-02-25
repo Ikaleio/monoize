@@ -184,8 +184,9 @@ impl SettingsStore {
         )
         .do_nothing();
 
+        let _write_guard = self.db.write().await;
         insert
-            .exec(self.db.write())
+            .exec(&*_write_guard)
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -219,8 +220,9 @@ impl SettingsStore {
                     .to_owned(),
             );
 
+        let _write_guard = self.db.write().await;
         insert
-            .exec(self.db.write())
+            .exec(&*_write_guard)
             .await
             .map_err(|e| e.to_string())?;
         Ok(())

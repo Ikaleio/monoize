@@ -413,7 +413,7 @@ impl MonoizeRoutingStore {
             serde_json::to_string(&input.api_type_overrides).map_err(|e| e.to_string())?;
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 r#"INSERT INTO monoize_providers (
                         id, name, provider_type, max_retries, transforms, api_type_overrides,
@@ -517,7 +517,7 @@ impl MonoizeRoutingStore {
             serde_json::to_string(&api_type_overrides).map_err(|e| e.to_string())?;
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 r#"UPDATE monoize_providers
                    SET name = $1, provider_type = $2, max_retries = $3, transforms = $4,
@@ -564,7 +564,7 @@ impl MonoizeRoutingStore {
     pub async fn delete_provider(&self, id: &str) -> Result<(), String> {
         let result = self
             .db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "DELETE FROM monoize_providers WHERE id = $1",
                 vec![id.into()],
@@ -604,7 +604,7 @@ impl MonoizeRoutingStore {
 
         for (i, id) in input.provider_ids.iter().enumerate() {
             self.db
-                .write()
+                .write().await
                 .execute(self.db.stmt(
                     "UPDATE monoize_providers SET priority = $1, updated_at = $2 WHERE id = $3",
                     vec![
@@ -626,7 +626,7 @@ impl MonoizeRoutingStore {
         models: &HashMap<String, MonoizeModelEntry>,
     ) -> Result<(), String> {
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "DELETE FROM monoize_provider_models WHERE provider_id = $1",
                 vec![provider_id.into()],
@@ -636,7 +636,7 @@ impl MonoizeRoutingStore {
 
         for (model_name, entry) in models {
             self.db
-                .write()
+                .write().await
                 .execute(self.db.stmt(
                     r#"INSERT INTO monoize_provider_models
                        (id, provider_id, model_name, redirect, multiplier, created_at)
@@ -724,7 +724,7 @@ impl MonoizeRoutingStore {
         }
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "DELETE FROM monoize_channels WHERE provider_id = $1",
                 vec![provider_id.into()],
@@ -773,7 +773,7 @@ impl MonoizeRoutingStore {
             let now_str = Utc::now().to_rfc3339();
 
             self.db
-                .write()
+                .write().await
                 .execute(self.db.stmt(
                     r#"INSERT INTO monoize_channels
                        (id, provider_id, name, base_url, api_key, weight, enabled,

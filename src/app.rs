@@ -102,7 +102,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
 
     {
         use sea_orm_migration::MigratorTrait;
-        crate::migration::Migrator::up(db.write(), None).await.map_err(|err| {
+        let _write_guard = db.write().await;
+        crate::migration::Migrator::up(&*_write_guard, None).await.map_err(|err| {
             AppError::new(
                 axum::http::StatusCode::BAD_REQUEST,
                 "database_migration_failed",

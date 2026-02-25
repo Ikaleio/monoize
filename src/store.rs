@@ -123,7 +123,7 @@ impl StateStore for DbStateStore {
             }
         };
         self.db
-            .write()
+            .write().await
             .execute(Statement::from_sql_and_values(
                 backend,
                 sql,
@@ -177,7 +177,7 @@ impl StateStore for DbStateStore {
     async fn delete(&self, tenant_id: &str, kind: &str, id: &str) -> Result<(), String> {
         let backend = self.db.backend();
         self.db
-            .write()
+            .write().await
             .execute(Statement::from_sql_and_values(
                 backend,
                 "DELETE FROM state_records WHERE tenant_id=$1 AND kind=$2 AND id=$3",
@@ -293,7 +293,7 @@ impl FileStore for DbFileStore {
             }
         };
         self.db
-            .write()
+            .write().await
             .execute(Statement::from_sql_and_values(
                 backend,
                 sql,
@@ -328,7 +328,7 @@ impl FileStore for DbFileStore {
     async fn delete_bytes(&self, tenant_id: &str, file_id: &str) -> Result<(), String> {
         let backend = self.db.backend();
         self.db
-            .write()
+            .write().await
             .execute(Statement::from_sql_and_values(
                 backend,
                 "DELETE FROM file_bytes WHERE tenant_id=$1 AND file_id=$2",

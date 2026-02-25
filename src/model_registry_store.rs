@@ -228,7 +228,7 @@ impl ModelRegistryStore {
         let enabled_i: i32 = if input.enabled { 1 } else { 0 };
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "INSERT INTO model_registry_records
                  (id, logical_model, provider_id, upstream_model, capabilities_json,
@@ -325,7 +325,7 @@ impl ModelRegistryStore {
             );
 
             self.db
-                .write()
+                .write().await
                 .execute(self.db.stmt(&sql, values))
                 .await
                 .map_err(|e| {
@@ -349,7 +349,7 @@ impl ModelRegistryStore {
     pub async fn delete_model(&self, id: &str) -> Result<(), String> {
         let result = self
             .db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "DELETE FROM model_registry_records WHERE id = $1",
                 vec![id.into()],
@@ -478,7 +478,7 @@ impl ModelRegistryStore {
     ) -> Result<DbModelMetadataRecord, String> {
         let now = Utc::now().to_rfc3339();
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "INSERT INTO model_metadata_records
                  (model_id, models_dev_provider, mode, input_cost_per_token_nano, output_cost_per_token_nano,
@@ -537,7 +537,7 @@ impl ModelRegistryStore {
     pub async fn delete_model_metadata(&self, model_id: &str) -> Result<bool, String> {
         let result = self
             .db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "DELETE FROM model_metadata_records WHERE model_id = $1",
                 vec![model_id.into()],
@@ -628,9 +628,8 @@ impl ModelRegistryStore {
         }
 
         let fetched_at = Utc::now().to_rfc3339();
-        let txn = self
-            .db
-            .write()
+        let _write_guard = self.db.write().await;
+        let txn = _write_guard
             .begin()
             .await
             .map_err(|e| e.to_string())?;

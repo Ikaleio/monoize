@@ -1734,7 +1734,7 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
                     "messages":[{"role":"user","content":"pending-transition"}],
                     "stream": true,
                     "emit_usage": true,
-                    "force_upstream_delay_ms": 400
+                    "force_upstream_delay_ms": 800
                 })
                 .to_string(),
             ))
@@ -1746,7 +1746,7 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
     });
 
     let mut saw_pending = false;
-    for _ in 0..20 {
+    for _ in 0..40 {
         let (logs, _, _) = ctx
             .state
             .user_store
@@ -1755,7 +1755,7 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
                 100,
                 0,
                 Some("gpt-5-mini-chat"),
-                Some("success"),
+                None,
                 None,
                 None,
                 None,

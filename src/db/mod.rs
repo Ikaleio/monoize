@@ -1,13 +1,34 @@
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbBackend, DbErr, Statement, Value};
+use std::ops::Deref;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
+
+/// Serializes write access for SQLite backends. For PostgreSQL the guard is a
+/// no-op — PostgreSQL handles write concurrency natively via MVCC.
+pub struct WriteGuard<'a> {
+    conn: &'a DatabaseConnection,
+    _guard: Option<tokio::sync::MutexGuard<'a, ()>>,
+}
+
+impl Deref for WriteGuard<'_> {
+    type Target = DatabaseConnection;
+    fn deref(&self) -> &Self::Target {
+        self.conn
+    }
+}
 
 /// Wraps a pair of Sea ORM connections: one for writes (single-connection for SQLite,
 /// standard pool for PostgreSQL) and one for reads (10-connection pool for SQLite,
 /// shared with write pool for PostgreSQL).
+///
+/// For SQLite, all write access is serialized through a tokio Mutex to prevent
+/// concurrent write failures and billing bypass via race conditions.
 #[derive(Debug, Clone)]
 pub struct DbPool {
     read: DatabaseConnection,
-    write: DatabaseConnection,
+    write_conn: DatabaseConnection,
+    write_lock: Arc<Mutex<()>>,
     backend: DbBackend,
 }
 
@@ -49,7 +70,8 @@ impl DbPool {
             Self::sqlite_pragmas(&conn).await?;
             return Ok(Self {
                 read: conn.clone(),
-                write: conn,
+                write_conn: conn,
+                write_lock: Arc::new(Mutex::new(())),
                 backend: DbBackend::Sqlite,
             });
         }
@@ -84,7 +106,8 @@ impl DbPool {
 
         Ok(Self {
             read,
-            write,
+            write_conn: write,
+            write_lock: Arc::new(Mutex::new(())),
             backend: DbBackend::Sqlite,
         })
     }
@@ -101,7 +124,8 @@ impl DbPool {
 
         Ok(Self {
             read: conn.clone(),
-            write: conn,
+            write_conn: conn,
+            write_lock: Arc::new(Mutex::new(())),
             backend: DbBackend::Postgres,
         })
     }
@@ -119,9 +143,22 @@ impl DbPool {
         &self.read
     }
 
-    /// Get the write connection (for INSERT/UPDATE/DELETE/DDL).
-    pub fn write(&self) -> &DatabaseConnection {
-        &self.write
+    /// Acquire the write connection. For SQLite, this serializes all writes
+    /// through a tokio Mutex to prevent concurrent write failures.
+    /// For PostgreSQL, the returned guard holds no lock (no-op).
+    pub async fn write(&self) -> WriteGuard<'_> {
+        if self.backend == DbBackend::Sqlite {
+            let guard = self.write_lock.lock().await;
+            WriteGuard {
+                conn: &self.write_conn,
+                _guard: Some(guard),
+            }
+        } else {
+            WriteGuard {
+                conn: &self.write_conn,
+                _guard: None,
+            }
+        }
     }
 
     /// Get the database backend type.

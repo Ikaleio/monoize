@@ -373,7 +373,7 @@ impl ProviderStore {
         let auth_query_name = input.auth.as_ref().and_then(|a| a.query_name.as_deref());
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 r#"INSERT INTO providers (id, name, provider_type, base_url, auth_type, auth_value,
                                           auth_header_name, auth_query_name, capabilities_json,
@@ -514,7 +514,7 @@ impl ProviderStore {
             values.push(id.into());
 
             self.db
-                .write()
+                .write().await
                 .execute(self.db.stmt(&sql, values))
                 .await
                 .map_err(|e| e.to_string())?;
@@ -522,7 +522,7 @@ impl ProviderStore {
 
         if let Some(model_map) = &input.model_map {
             self.db
-                .write()
+                .write().await
                 .execute(self.db.stmt(
                     "DELETE FROM model_mappings WHERE provider_id = $1",
                     vec![id.into()],
@@ -538,7 +538,7 @@ impl ProviderStore {
         if let Some(members) = &input.members {
             if existing.provider_type == ProviderType::Group {
                 self.db
-                    .write()
+                    .write().await
                     .execute(self.db.stmt(
                         "DELETE FROM group_members WHERE group_provider_id = $1",
                         vec![id.into()],
@@ -576,7 +576,7 @@ impl ProviderStore {
         }
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "DELETE FROM providers WHERE id = $1",
                 vec![id.into()],
@@ -672,7 +672,7 @@ impl ProviderStore {
         let now = Utc::now();
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "INSERT INTO model_mappings (id, provider_id, logical_model, upstream_model, created_at) VALUES ($1, $2, $3, $4, $5)",
                 vec![
@@ -707,7 +707,7 @@ impl ProviderStore {
         let now = Utc::now();
 
         self.db
-            .write()
+            .write().await
             .execute(self.db.stmt(
                 "INSERT INTO group_members (id, group_provider_id, member_provider_id, weight, priority, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
                 vec![

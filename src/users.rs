@@ -260,7 +260,7 @@ impl UserStore {
         let password_hash = Self::hash_password(password)?;
         let now = Utc::now();
 
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 r#"INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled, balance_nano_usd, balance_unlimited)
                    VALUES ($1, $2, $3, $4, $5, $6, 1, '0', 0)"#,
@@ -407,7 +407,7 @@ impl UserStore {
 
         let query = format!("UPDATE users SET {} WHERE id = ${idx}", set_clauses.join(", "));
 
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
@@ -415,7 +415,7 @@ impl UserStore {
     }
 
     pub async fn delete_user(&self, id: &str) -> Result<(), String> {
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt("DELETE FROM users WHERE id = $1", vec![id.into()]))
             .await
             .map_err(|e| e.to_string())?;
@@ -424,7 +424,7 @@ impl UserStore {
 
     pub async fn update_last_login(&self, id: &str) -> Result<(), String> {
         let now = Utc::now();
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 "UPDATE users SET last_login_at = $1 WHERE id = $2",
                 vec![now.to_rfc3339().into(), id.into()],
@@ -443,7 +443,7 @@ impl UserStore {
         let now = Utc::now();
         let expires_at = now + chrono::Duration::days(7);
 
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 r#"INSERT INTO sessions (id, user_id, token, created_at, expires_at)
                    VALUES ($1, $2, $3, $4, $5)"#,
@@ -505,7 +505,7 @@ impl UserStore {
     }
 
     pub async fn delete_session(&self, token: &str) -> Result<(), String> {
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt("DELETE FROM sessions WHERE token = $1", vec![token.into()]))
             .await
             .map_err(|e| e.to_string())?;
@@ -513,7 +513,7 @@ impl UserStore {
     }
 
     pub async fn delete_user_sessions(&self, user_id: &str) -> Result<(), String> {
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt("DELETE FROM sessions WHERE user_id = $1", vec![user_id.into()]))
             .await
             .map_err(|e| e.to_string())?;
@@ -563,7 +563,7 @@ impl UserStore {
         let ip_whitelist_json =
             serde_json::to_string(&input.ip_whitelist).map_err(|e| e.to_string())?;
 
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16)"#,
@@ -643,7 +643,7 @@ impl UserStore {
 
     pub async fn update_api_key_last_used(&self, id: &str) -> Result<(), String> {
         let now = Utc::now();
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 "UPDATE api_keys SET last_used_at = $1 WHERE id = $2",
                 vec![now.to_rfc3339().into(), id.into()],
@@ -654,7 +654,7 @@ impl UserStore {
     }
 
     pub async fn delete_api_key(&self, id: &str) -> Result<(), String> {
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt("DELETE FROM api_keys WHERE id = $1", vec![id.into()]))
             .await
             .map_err(|e| e.to_string())?;
@@ -886,7 +886,7 @@ impl UserStore {
 
         let query = format!("UPDATE api_keys SET {} WHERE id = ${idx}", set_clauses.join(", "));
 
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
@@ -929,7 +929,7 @@ impl UserStore {
             placeholders.join(", ")
         );
 
-        let result = self.db.write()
+        let result = self.db.write().await
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
@@ -1001,9 +1001,8 @@ impl UserStore {
         amount_nano_usd: i128,
         meta: &Value,
     ) -> Result<(), BillingError> {
-        let tx = self
-            .db
-            .write()
+        let _write_guard = self.db.write().await;
+        let tx = _write_guard
             .begin()
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
@@ -1085,7 +1084,8 @@ impl UserStore {
             return Ok(());
         }
 
-        let tx = self.db.write().begin().await.map_err(|e| e.to_string())?;
+        let _write_guard = self.db.write().await;
+        let tx = _write_guard.begin().await.map_err(|e| e.to_string())?;
         let select_sql = if self.db.is_postgres() {
             "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1 FOR UPDATE"
         } else {
@@ -1369,7 +1369,7 @@ pub struct DashboardAnalyticsRaw {
 
 impl UserStore {
     pub async fn cleanup_pending_request_logs(&self) -> Result<u64, String> {
-        let result = self.db.write()
+        let result = self.db.write().await
             .execute(self.db.stmt(
                 "UPDATE request_logs SET status = 'error', error_code = 'server_shutdown', error_message = 'interrupted by server restart' WHERE status = 'pending'",
                 vec![],
@@ -1432,7 +1432,7 @@ impl UserStore {
         upstream_model: &str,
         provider_multiplier: f64,
     ) -> Result<(), String> {
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 r#"UPDATE request_logs
                    SET provider_id = $1, channel_id = $2, upstream_model = $3, provider_multiplier = $4
@@ -1466,7 +1466,7 @@ impl UserStore {
         rejected_prediction_tokens: Option<u64>,
         usage_breakdown_json: Option<Value>,
     ) -> Result<(), String> {
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 r#"UPDATE request_logs
                    SET input_tokens = $1, output_tokens = $2, cache_read_tokens = $3,
@@ -1504,7 +1504,7 @@ impl UserStore {
             .map(str::trim)
             .filter(|v| !v.is_empty())
         {
-            let updated = self.db.write()
+            let updated = self.db.write().await
                 .execute(self.db.stmt(
                     r#"UPDATE request_logs
                        SET api_key_id = $1, model = $2, provider_id = $3, upstream_model = $4, channel_id = $5,
@@ -1562,7 +1562,7 @@ impl UserStore {
     pub async fn insert_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        self.db.write()
+        self.db.write().await
             .execute(self.db.stmt(
                 r#"INSERT INTO request_logs
                    (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
