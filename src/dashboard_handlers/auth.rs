@@ -143,8 +143,12 @@ pub async fn register(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    let session_ttl_days = state.settings_store.get_all().await
+        .map(|s| s.session_ttl_days)
+        .unwrap_or(7);
+
     let session = user_store
-        .create_session(&user.id)
+        .create_session(&user.id, session_ttl_days)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
@@ -201,8 +205,12 @@ pub async fn login(
 
     user_store.update_last_login(&user.id).await.ok();
 
+    let session_ttl_days = state.settings_store.get_all().await
+        .map(|s| s.session_ttl_days)
+        .unwrap_or(7);
+
     let session = user_store
-        .create_session(&user.id)
+        .create_session(&user.id, session_ttl_days)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 

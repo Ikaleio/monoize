@@ -20,6 +20,8 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -688,6 +690,21 @@ pub fn build_app(state: AppState) -> Router {
             axum::http::header::HeaderName::from_static("x-request-id"),
         ))
         .layer(TraceLayer::new_for_http())
+        // 10 MiB body size limit
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
+        // Security headers
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::HeaderName::from_static("x-content-type-options"),
+            axum::http::HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::HeaderName::from_static("x-frame-options"),
+            axum::http::HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::HeaderName::from_static("content-security-policy"),
+            axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"),
+        ))
 }
 
 fn build_root_api_router(metrics_path: &str) -> Router<AppState> {

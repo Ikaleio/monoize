@@ -53,6 +53,25 @@ pub(super) fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
         })
 }
 
+/// Reject the request if the API key has an IP whitelist and the client IP is not in it.
+pub(super) fn check_ip_whitelist(
+    auth: &crate::auth::AuthResult,
+    headers: &HeaderMap,
+) -> AppResult<()> {
+    if auth.ip_whitelist.is_empty() {
+        return Ok(());
+    }
+    let client_ip = extract_client_ip(headers).unwrap_or_default();
+    if client_ip.is_empty() || !auth.ip_whitelist.iter().any(|allowed| allowed == &client_ip) {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "ip_not_allowed",
+            "client IP is not in the API key whitelist",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn extract_request_id(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-request-id")

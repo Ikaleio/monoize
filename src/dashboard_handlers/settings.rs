@@ -208,7 +208,7 @@ pub async fn get_config_overview(
             "metrics_path": state.runtime.metrics_path.clone(),
         },
         "database": {
-            "dsn": state.runtime.database_dsn.clone(),
+            "dsn": redact_dsn(&state.runtime.database_dsn),
         },
         "routing": {
             "providers_count": providers_count,
@@ -230,4 +230,18 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<imp
         "site_description": settings.site_description,
         "api_base_url": settings.api_base_url,
     })))
+}
+
+/// Redact credentials from a DSN string.
+/// e.g. postgres://user:password@host/db → postgres://***@host/db
+fn redact_dsn(dsn: &str) -> String {
+    if let Some(at_pos) = dsn.find('@') {
+        if let Some(scheme_end) = dsn.find("://") {
+            return format!("{}://***@{}", &dsn[..scheme_end], &dsn[at_pos + 1..]);
+        }
+    }
+    if dsn.starts_with("sqlite") {
+        return dsn.to_string();
+    }
+    "***".to_string()
 }

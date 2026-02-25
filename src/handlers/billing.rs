@@ -350,11 +350,15 @@ pub(super) async fn maybe_charge_usage(
 
     let Some(components) = calculate_charge_components(usage, &pricing, attempt.model_multiplier)
     else {
-        tracing::warn!(
-            "billing skipped: overflow/invalid charge for model={}",
+        tracing::error!(
+            "billing error: charge overflow for model={}",
             attempt.upstream_model
         );
-        return Ok(ChargeComputation::default());
+        return Err(AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "billing_overflow",
+            format!("charge calculation overflow for model={}", attempt.upstream_model),
+        ));
     };
     let billing_breakdown = build_billing_breakdown(logical_model, attempt, &pricing, &components);
     let charge_nano = components.final_charge;

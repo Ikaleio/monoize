@@ -86,6 +86,7 @@ pub async fn create_response(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
+    ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     // S2/S3: stateful fields must not be forwarded upstream
@@ -146,6 +147,7 @@ pub async fn create_chat_completions(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
+    ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
@@ -188,6 +190,7 @@ pub async fn create_messages(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
+    ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
@@ -230,6 +233,7 @@ pub async fn create_embeddings(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
+    ensure_quota_before_forward(&state, &auth).await?;
 
     let obj = body.as_object().ok_or_else(|| {
         AppError::new(
@@ -540,6 +544,7 @@ async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::
         .authenticate_token(token, Some(&state.user_store))
         .await
         .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "invalid token"))?;
+    check_ip_whitelist(&auth_result, headers)?;
     Ok(auth_result)
 }
 
@@ -570,6 +575,25 @@ async fn ensure_balance_before_forward(
             )),
         },
     }
+}
+
+async fn ensure_quota_before_forward(
+    _state: &AppState,
+    auth: &crate::auth::AuthResult,
+) -> AppResult<()> {
+    if auth.quota_unlimited {
+        return Ok(());
+    }
+    if let Some(remaining) = auth.quota_remaining {
+        if remaining <= 0 {
+            return Err(AppError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "quota_exceeded",
+                "API key quota exhausted",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn split_body(

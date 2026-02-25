@@ -82,6 +82,8 @@ pub(super) fn spawn_request_log(
         return;
     };
     let api_key_id = auth.api_key_id.clone();
+    let quota_unlimited = auth.quota_unlimited;
+    let api_key_id_for_quota = api_key_id.clone();
     let provider_id = attempt.provider_id.clone();
     let upstream_model = attempt.upstream_model.clone();
     let model_multiplier = attempt.model_multiplier;
@@ -151,6 +153,13 @@ pub(super) fn spawn_request_log(
         if let Err(e) = user_store.finalize_request_log(log).await {
             tracing::warn!("failed to finalize request log: {e}");
         }
+        if !quota_unlimited {
+            if let Some(key_id) = api_key_id_for_quota.as_deref() {
+                if let Err(e) = user_store.decrement_api_key_quota(key_id).await {
+                    tracing::warn!("failed to decrement api key quota: {e}");
+                }
+            }
+        }
     });
 }
 
@@ -180,7 +189,7 @@ pub(super) fn spawn_request_log_error(
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
-    let error_message = Some(error.message.clone());
+    let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));
     let error_http_status = Some(error.status.as_u16());
     let tried_providers_json = if tried_providers.is_empty() {
         None
@@ -248,7 +257,7 @@ pub(super) fn spawn_request_log_error_no_attempt(
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
-    let error_message = Some(error.message.clone());
+    let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));
     let error_http_status = Some(error.status.as_u16());
     let tried_providers_json = if tried_providers.is_empty() {
         None

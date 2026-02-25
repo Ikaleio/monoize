@@ -452,7 +452,9 @@ pub(super) async fn mark_channel_retryable_failure(
 }
 pub(super) fn upstream_error_to_app(err: UpstreamCallError) -> AppError {
     let status = err.status.unwrap_or(StatusCode::BAD_GATEWAY);
-    AppError::new(status, "upstream_error", err.message)
+    tracing::warn!(status = %status, upstream_error = %err.message, "upstream request failed");
+    AppError::new(status, "upstream_error", "upstream request failed")
+        .with_internal_message(err.message)
 }
 
 pub(super) fn error_to_sse_stream(

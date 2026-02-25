@@ -9,6 +9,9 @@ pub struct AppError {
     pub message: String,
     pub error_type: String,
     pub param: Option<String>,
+    /// When set, request logs use this instead of `message` so the client
+    /// receives sanitized text while internal logs retain full detail.
+    pub internal_message: Option<String>,
 }
 
 impl AppError {
@@ -19,9 +22,14 @@ impl AppError {
             message: message.into(),
             error_type: "invalid_request_error".to_string(),
             param: None,
+            internal_message: None,
         }
     }
 
+    pub fn with_internal_message(mut self, msg: impl Into<String>) -> Self {
+        self.internal_message = Some(msg.into());
+        self
+    }
     pub fn with_type(mut self, error_type: impl Into<String>) -> Self {
         self.error_type = error_type.into();
         self

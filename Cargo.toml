@@ -34,7 +34,7 @@ tiktoken-rs = "0.9.1"
 tokio = { version = "1.49.0", features = ["full"] }
 tokio-stream = "0.1.18"
 tokio-tungstenite = "0.28.0"
-tower-http = { version = "0.6.8", features = ["trace", "request-id", "cors"] }
+tower-http = { version = "0.6.8", features = ["trace", "request-id", "cors", "set-header", "limit"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1.19.0", features = ["v4", "serde"] }

@@ -13,6 +13,9 @@ pub struct AuthResult {
     pub transforms: Vec<TransformRuleConfig>,
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
+    pub ip_whitelist: Vec<String>,
+    pub quota_remaining: Option<i64>,
+    pub quota_unlimited: bool,
 }
 
 #[derive(Clone)]
@@ -50,6 +53,9 @@ impl AuthState {
                             transforms: api_key.transforms,
                             model_limits_enabled: api_key.model_limits_enabled,
                             model_limits: api_key.model_limits,
+                            ip_whitelist: api_key.ip_whitelist,
+                            quota_remaining: api_key.quota_remaining,
+                            quota_unlimited: api_key.quota_unlimited,
                         });
                     }
                     Ok(None) => {}

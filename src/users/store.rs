@@ -237,14 +237,14 @@ impl UserStore {
         Ok(())
     }
 
-    pub async fn create_session(&self, user_id: &str) -> Result<Session, String> {
+    pub async fn create_session(&self, user_id: &str, session_ttl_days: i64) -> Result<Session, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let token = format!(
             "urp_session_{}",
             uuid::Uuid::new_v4().to_string().replace("-", "")
         );
         let now = Utc::now();
-        let expires_at = now + chrono::Duration::days(7);
+        let expires_at = now + chrono::Duration::days(session_ttl_days);
 
         self.db.write().await
             .execute(self.db.stmt(
@@ -450,6 +450,18 @@ impl UserStore {
             .execute(self.db.stmt(
                 "UPDATE api_keys SET last_used_at = $1 WHERE id = $2",
                 vec![now.to_rfc3339().into(), id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Decrement quota_remaining by 1 for non-unlimited API keys.
+    pub async fn decrement_api_key_quota(&self, api_key_id: &str) -> Result<(), String> {
+        self.db.write().await
+            .execute(self.db.stmt(
+                "UPDATE api_keys SET quota_remaining = quota_remaining - 1 WHERE id = $1 AND quota_unlimited = 0 AND quota_remaining IS NOT NULL",
+                vec![api_key_id.into()],
             ))
             .await
             .map_err(|e| e.to_string())?;
