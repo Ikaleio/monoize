@@ -934,6 +934,8 @@ function LogRowCells({
 		readTokenCount(usageOutput, 'reasoning_tokens') ??
 		log.reasoning_tokens ??
 		null
+	const inputTokensForDisplay = inputTotal ?? 0
+	const outputTokensForDisplay = outputTotal ?? 0
 	const outputAudio = readTokenCount(usageOutput, 'audio_tokens')
 	const outputImage = readTokenCount(usageOutput, 'image_tokens')
 
@@ -1214,13 +1216,13 @@ function LogRowCells({
 										</div>
 										{log.duration_ms != null &&
 											log.duration_ms > 0 &&
-									(log.output_tokens ?? 0) > 0 && (() => {
+									outputTokensForDisplay > 0 && (() => {
 												// When ttfb ≈ duration (no visible streaming output,
 												// e.g. pure reasoning then tool_call), use total time
 												const generationMs = (log.ttfb_ms != null && log.duration_ms! > log.ttfb_ms)
 													? log.duration_ms! - log.ttfb_ms
 													: log.duration_ms!;
-										const tpsValue = (log.output_tokens ?? 0) / (generationMs / 1000);
+										const tpsValue = outputTokensForDisplay / (generationMs / 1000);
 												return (
 													<div className='flex items-center justify-between gap-3'>
 														<span>{t('requestLogs.avgTps')}</span>
@@ -1264,7 +1266,7 @@ function LogRowCells({
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='cursor-default'>{log.input_tokens ?? 0}</span>
+							<span className='cursor-default'>{new Intl.NumberFormat('en-US').format(inputTokensForDisplay)}</span>
 						</TooltipTrigger>
 						<TooltipContent>
 							<div className='text-xs space-y-0.5 min-w-[220px]'>
@@ -1288,7 +1290,7 @@ function LogRowCells({
 					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>
-								{log.output_tokens ?? 0}
+								{new Intl.NumberFormat('en-US').format(outputTokensForDisplay)}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>

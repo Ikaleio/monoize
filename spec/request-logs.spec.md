@@ -281,6 +281,8 @@ FL26. Hovering the `charge_nano_usd` (Cost) cell MUST show billing breakdown det
 
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 
+FL27a. In the request-logs table, the visible Input and Output token cell values MUST prefer `usage_breakdown_json.input.total_tokens` and `usage_breakdown_json.output.total_tokens` when those fields are present. If those fields are absent, the UI MUST fall back to scalar columns `input_tokens` and `output_tokens`. If neither source is available, the UI MUST display `0`.
+
 FL28. For rows with `status = "error"`, hovering the request-id/status indicator MUST show error details from `error_code`, `error_message`, and `error_http_status` when present.
 
 FL29. When `tried_providers_json` is non-empty, the request-id tooltip MUST additionally display the list of tried providers/channels with their error messages, separated from the main error details by a visual divider.
