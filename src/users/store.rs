@@ -355,7 +355,7 @@ impl UserStore {
         let id = uuid::Uuid::new_v4().to_string();
         let key = format!("sk-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let key_prefix = key[..12].to_string();
-        let key_hash = Self::hash_password(&key)?;
+        let key_hash = String::new();
         let now = Utc::now();
         let expires_at = input
             .expires_in_days
@@ -497,7 +497,7 @@ impl UserStore {
             }
         }
 
-        if !Self::verify_password(key, &api_key.key_hash)? {
+        if key != api_key.key {
             return Ok(None);
         }
 
