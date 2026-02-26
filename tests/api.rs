@@ -1582,6 +1582,7 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let _ = resp.into_body().collect().await.unwrap().to_bytes();
+    ctx.state.user_store.flush_all_batchers().await;
 
     let user = ctx
         .state
@@ -1641,6 +1642,7 @@ async fn chat_streaming_requests_upstream_include_usage_by_default() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let _ = resp.into_body().collect().await.unwrap().to_bytes();
+    ctx.state.user_store.flush_all_batchers().await;
 
     let user = ctx
         .state
@@ -1745,36 +1747,8 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
         let _ = resp.into_body().collect().await.unwrap().to_bytes();
     });
 
-    let mut saw_pending = false;
-    for _ in 0..40 {
-        let (logs, _, _) = ctx
-            .state
-            .user_store
-            .list_request_logs_by_user(
-                &user.id,
-                100,
-                0,
-                Some("gpt-5-mini-chat"),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await
-            .expect("list pending request logs");
-        if !logs.is_empty() {
-            saw_pending = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(
-        saw_pending,
-        "pending request log should appear while request is in progress"
-    );
-
     request_task.await.expect("request task");
+    ctx.state.user_store.flush_all_batchers().await;
 
     let mut model_logs = Vec::new();
     for _ in 0..30 {
@@ -1823,6 +1797,9 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
 
 #[tokio::test]
 async fn request_logs_pending_usage_can_be_updated_incrementally() {
+    // With the batcher pattern, insert_request_log_pending and
+    // update_pending_request_log_usage are no-ops. Verify they succeed
+    // without error but produce no persisted row.
     let ctx = setup().await;
     let user = ctx
         .state
@@ -1837,7 +1814,7 @@ async fn request_logs_pending_usage_can_be_updated_incrementally() {
         .user_store
         .insert_request_log_pending(request_id, &user.id, None, "gpt-5-mini-chat", true, None)
         .await
-        .expect("insert pending request log");
+        .expect("insert_request_log_pending should succeed (no-op)");
 
     ctx.state
         .user_store
@@ -1858,8 +1835,9 @@ async fn request_logs_pending_usage_can_be_updated_incrementally() {
             })),
         )
         .await
-        .expect("update pending usage");
+        .expect("update_pending_request_log_usage should succeed (no-op)");
 
+    // No row should be persisted since both methods are no-ops under batcher pattern
     let (logs, _, _) = ctx
         .state
         .user_store
@@ -1877,18 +1855,10 @@ async fn request_logs_pending_usage_can_be_updated_incrementally() {
         .await
         .expect("list pending logs");
 
-    let log = logs
-        .into_iter()
-        .find(|row| row.request_id.as_deref() == Some(request_id))
-        .expect("pending row should exist");
-    assert_eq!(log.status, "pending");
-    assert_eq!(log.input_tokens, Some(12));
-    assert_eq!(log.output_tokens, Some(8));
-    assert_eq!(log.cache_creation_tokens, Some(3));
-    assert_eq!(log.tool_prompt_tokens, Some(2));
-    assert_eq!(log.accepted_prediction_tokens, Some(5));
-    assert_eq!(log.rejected_prediction_tokens, Some(1));
-    assert!(log.usage_breakdown_json.is_some());
+    assert!(
+        logs.is_empty(),
+        "no pending row should exist under batcher pattern"
+    );
 }
 
 #[tokio::test]
@@ -1915,6 +1885,7 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    ctx.state.user_store.flush_all_batchers().await;
 
     let user = ctx
         .state
@@ -2081,6 +2052,7 @@ async fn chat_streaming_length_finish_is_still_billed() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let _ = resp.into_body().collect().await.unwrap().to_bytes();
+    ctx.state.user_store.flush_all_batchers().await;
 
     let user = ctx
         .state

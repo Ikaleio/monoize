@@ -1,4 +1,5 @@
 pub mod db;
+pub mod db_cache;
 pub mod entity;
 pub mod migration;
 pub mod app;

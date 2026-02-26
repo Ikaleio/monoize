@@ -1,8 +1,7 @@
 use super::{
     AnalyticsModelBucketRow, AnalyticsProviderBucketRow, DashboardAnalyticsRaw,
-    InsertRequestLog, RequestLogRow, UserStore, REQUEST_LOG_STATUS_PENDING,
+    InsertRequestLog, RequestLogRow, UserStore,
 };
-use chrono::Utc;
 use sea_orm::ConnectionTrait;
 use sea_orm::Value as SeaValue;
 use serde_json::Value;
@@ -165,234 +164,53 @@ impl UserStore {
 
     pub async fn insert_request_log_pending(
         &self,
-        request_id: &str,
-        user_id: &str,
-        api_key_id: Option<&str>,
-        model: &str,
-        is_stream: bool,
-        request_ip: Option<&str>,
+        _request_id: &str,
+        _user_id: &str,
+        _api_key_id: Option<&str>,
+        _model: &str,
+        _is_stream: bool,
+        _request_ip: Option<&str>,
     ) -> Result<(), String> {
-        self.insert_request_log(InsertRequestLog {
-            request_id: Some(request_id.to_string()),
-            user_id: user_id.to_string(),
-            api_key_id: api_key_id.map(ToOwned::to_owned),
-            model: model.to_string(),
-            provider_id: None,
-            upstream_model: None,
-            channel_id: None,
-            is_stream,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-            tool_prompt_tokens: None,
-            reasoning_tokens: None,
-            accepted_prediction_tokens: None,
-            rejected_prediction_tokens: None,
-            provider_multiplier: None,
-            charge_nano_usd: None,
-            status: REQUEST_LOG_STATUS_PENDING.to_string(),
-            usage_breakdown_json: None,
-            billing_breakdown_json: None,
-            error_code: None,
-            error_message: None,
-            error_http_status: None,
-            duration_ms: None,
-            ttfb_ms: None,
-            request_ip: request_ip.map(ToOwned::to_owned),
-            reasoning_effort: None,
-            tried_providers_json: None,
-            request_kind: None,
-        })
-        .await
+        Ok(())
     }
 
     pub async fn update_pending_request_log_channel(
         &self,
-        user_id: &str,
-        request_id: &str,
-        provider_id: &str,
-        channel_id: &str,
-        upstream_model: &str,
-        provider_multiplier: f64,
+        _user_id: &str,
+        _request_id: &str,
+        _provider_id: &str,
+        _channel_id: &str,
+        _upstream_model: &str,
+        _provider_multiplier: f64,
     ) -> Result<(), String> {
-        self.db.write().await
-            .execute(self.db.stmt(
-                r#"UPDATE request_logs
-                   SET provider_id = $1, channel_id = $2, upstream_model = $3, provider_multiplier = $4
-                   WHERE user_id = $5 AND request_id = $6 AND status = 'pending' AND request_kind IS NULL"#,
-                vec![
-                    provider_id.into(),
-                    channel_id.into(),
-                    upstream_model.into(),
-                    SeaValue::Double(Some(provider_multiplier)),
-                    user_id.into(),
-                    request_id.into(),
-                ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn update_pending_request_log_usage(
         &self,
-        user_id: &str,
-        request_id: &str,
-        input_tokens: u64,
-        output_tokens: u64,
-        cache_read_tokens: Option<u64>,
-        cache_creation_tokens: Option<u64>,
-        tool_prompt_tokens: Option<u64>,
-        reasoning_tokens: Option<u64>,
-        accepted_prediction_tokens: Option<u64>,
-        rejected_prediction_tokens: Option<u64>,
-        usage_breakdown_json: Option<Value>,
+        _user_id: &str,
+        _request_id: &str,
+        _input_tokens: u64,
+        _output_tokens: u64,
+        _cache_read_tokens: Option<u64>,
+        _cache_creation_tokens: Option<u64>,
+        _tool_prompt_tokens: Option<u64>,
+        _reasoning_tokens: Option<u64>,
+        _accepted_prediction_tokens: Option<u64>,
+        _rejected_prediction_tokens: Option<u64>,
+        _usage_breakdown_json: Option<Value>,
     ) -> Result<(), String> {
-        self.db.write().await
-            .execute(self.db.stmt(
-                r#"UPDATE request_logs
-                   SET input_tokens = $1, output_tokens = $2, cache_read_tokens = $3,
-                        cache_creation_tokens = $4, tool_prompt_tokens = $5, reasoning_tokens = $6,
-                        accepted_prediction_tokens = $7, rejected_prediction_tokens = $8,
-                        usage_breakdown_json = $9
-                   WHERE user_id = $10 AND request_id = $11 AND status = 'pending' AND request_kind IS NULL"#,
-                vec![
-                    SeaValue::BigInt(Some(input_tokens as i64)),
-                    SeaValue::BigInt(Some(output_tokens as i64)),
-                    cache_read_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    cache_creation_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    tool_prompt_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    reasoning_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    accepted_prediction_tokens
-                        .map(|v| SeaValue::BigInt(Some(v as i64)))
-                        .unwrap_or(SeaValue::BigInt(None)),
-                    rejected_prediction_tokens
-                        .map(|v| SeaValue::BigInt(Some(v as i64)))
-                        .unwrap_or(SeaValue::BigInt(None)),
-                    usage_breakdown_json.map(|v| v.to_string()).into(),
-                    user_id.into(),
-                    request_id.into(),
-                ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn finalize_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
-        if let Some(request_id) = log
-            .request_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-        {
-            let updated = self.db.write().await
-                .execute(self.db.stmt(
-                    r#"UPDATE request_logs
-                       SET api_key_id = $1, model = $2, provider_id = $3, upstream_model = $4, channel_id = $5,
-                            is_stream = $6, input_tokens = $7, output_tokens = $8, cache_read_tokens = $9,
-                            cache_creation_tokens = $10, tool_prompt_tokens = $11, reasoning_tokens = $12,
-                            accepted_prediction_tokens = $13, rejected_prediction_tokens = $14, provider_multiplier = $15, charge_nano_usd = $16, status = $17,
-                            usage_breakdown_json = $18, billing_breakdown_json = $19, error_code = $20,
-                            error_message = $21, error_http_status = $22, duration_ms = $23, ttfb_ms = $24,
-                            request_ip = $25, reasoning_effort = $26, tried_providers_json = $27, request_kind = $28
-                       WHERE user_id = $29 AND request_id = $30 AND status = 'pending' AND request_kind IS NULL"#,
-                    vec![
-                        log.api_key_id.clone().into(),
-                        log.model.clone().into(),
-                        log.provider_id.clone().into(),
-                        log.upstream_model.clone().into(),
-                        log.channel_id.clone().into(),
-                        SeaValue::Int(Some(if log.is_stream { 1 } else { 0 })),
-                        log.input_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.output_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.cache_read_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.cache_creation_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.tool_prompt_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.reasoning_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.accepted_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.rejected_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.provider_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
-                        log.charge_nano_usd.map(|v| v.to_string()).into(),
-                        log.status.clone().into(),
-                        log.usage_breakdown_json.as_ref().map(Value::to_string).into(),
-                        log.billing_breakdown_json.as_ref().map(Value::to_string).into(),
-                        log.error_code.clone().into(),
-                        log.error_message.clone().into(),
-                        log.error_http_status.map(|v| SeaValue::BigInt(Some(i64::from(v)))).unwrap_or(SeaValue::BigInt(None)),
-                        log.duration_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.ttfb_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                        log.request_ip.clone().into(),
-                        log.reasoning_effort.clone().into(),
-                        log.tried_providers_json.as_ref().map(Value::to_string).into(),
-                        log.request_kind.clone().into(),
-                        log.user_id.clone().into(),
-                        request_id.into(),
-                    ],
-                ))
-                .await
-                .map_err(|e| e.to_string())?;
-
-            if updated.rows_affected() > 0 {
-                return Ok(());
-            }
-        }
-
-        self.insert_request_log(log).await
+        self.request_log_batcher.push(log).await;
+        Ok(())
     }
 
     pub async fn insert_request_log(&self, log: InsertRequestLog) -> Result<(), String> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = Utc::now().to_rfc3339();
-        self.db.write().await
-            .execute(self.db.stmt(
-                r#"INSERT INTO request_logs
-                   (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tool_prompt_tokens, reasoning_tokens,
-                    accepted_prediction_tokens, rejected_prediction_tokens,
-                    provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
-                    billing_breakdown_json, error_code, error_message, error_http_status,
-                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)"#,
-                vec![
-                    id.into(),
-                    log.request_id.into(),
-                    log.user_id.into(),
-                    log.api_key_id.into(),
-                    log.model.into(),
-                    log.provider_id.into(),
-                    log.upstream_model.into(),
-                    log.channel_id.into(),
-                    SeaValue::Int(Some(if log.is_stream { 1 } else { 0 })),
-                    log.input_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.output_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.cache_read_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.cache_creation_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.tool_prompt_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.reasoning_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.accepted_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.rejected_prediction_tokens.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.provider_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
-                    log.charge_nano_usd.map(|v| v.to_string()).into(),
-                    log.status.into(),
-                    log.usage_breakdown_json.map(|v| v.to_string()).into(),
-                    log.billing_breakdown_json.map(|v| v.to_string()).into(),
-                    log.error_code.into(),
-                    log.error_message.into(),
-                    log.error_http_status.map(|v| SeaValue::BigInt(Some(i64::from(v)))).unwrap_or(SeaValue::BigInt(None)),
-                    log.duration_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.ttfb_ms.map(|v| SeaValue::BigInt(Some(v as i64))).unwrap_or(SeaValue::BigInt(None)),
-                    log.request_ip.into(),
-                    log.reasoning_effort.into(),
-                    log.tried_providers_json.map(|v| v.to_string()).into(),
-                    log.request_kind.into(),
-                    now.into(),
-                ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
+        self.request_log_batcher.push(log).await;
         Ok(())
     }
 

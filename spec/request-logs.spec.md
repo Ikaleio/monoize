@@ -56,14 +56,14 @@ When returning request log rows via the dashboard API, the following fields are 
 
 RL1. For every API-key-authenticated proxy request (`user_id` is present), the system MUST create exactly one lifecycle request-log row.
 
-RL1a. Before the first upstream attempt is sent, the lifecycle row MUST be present with `status = "pending"`.
+RL1a. The lifecycle row MUST be accumulated in memory during request processing. No database row is written until terminal state. The row MUST be submitted as a single INSERT with all fields (status, usage, billing, provider metadata) populated at terminal state. The INSERT is submitted to a write batcher (see `db-performance-tuning.spec.md` §2 RequestLogBatcher) and is NOT guaranteed to be persisted synchronously.
 
 RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal status:
 
 - `"success"` when the downstream client received a normal API response payload (including truncated/cutoff completion cases such as `finish_reason = "length"`, and including cases where the downstream client disconnected mid-stream after partial delivery),
 - `"error"` only when the request ends with an API error response.
 
-RL1c. Terminal logging MUST update the existing pending row for the same request identity (request ID + user scope). If no pending row exists (legacy/backward-compatible path), the terminal row MAY be inserted directly.
+RL1c. Terminal logging MUST insert a new row with all fields populated (including terminal status, usage, billing, and provider metadata). There is no preceding pending row to update. If the write batcher has not yet flushed when the process terminates, unflushed rows are lost (acceptable trade-off for write throughput).
 
 RL1d. Creating or updating `pending` status MUST NOT trigger any extra billing call. Request billing execution count MUST remain identical to pre-pending behavior (at most once per billable request outcome).
 
@@ -71,17 +71,17 @@ RL1e. When all provider attempts are exhausted (including the case where zero at
 
 RL1f. On server startup, all request-log rows with `status = "pending"` MUST be transitioned to `status = "error"` with `error_code = "server_shutdown"` and `error_message = "interrupted by server restart"`. This cleanup MUST execute before the HTTP listener begins accepting connections.
 
-RL1g. On receipt of SIGINT or SIGTERM, the server MUST initiate graceful shutdown: stop accepting new connections, allow in-flight requests to drain, then transition any remaining `"pending"` rows to `"error"` with the same fields as RL1f before process exit.
+RL1g. On receipt of SIGINT or SIGTERM, the server MUST initiate graceful shutdown: stop accepting new connections, allow in-flight requests to drain, flush all write batchers (including the request-log batcher), then transition any remaining `"pending"` rows (legacy) to `"error"` with the same fields as RL1f before process exit.
 
 RL1h. For pass-through streaming requests, if the downstream client disconnects (the response channel closes) before the upstream stream completes, the stream adapter MUST stop consuming upstream events at the next iteration boundary. The request MUST finalize as `status = "success"` with whatever usage was accumulated up to the point of disconnection, and billing MUST execute normally on that accumulated usage.
 
-RL1i. When a provider attempt is selected (upstream call succeeds or streaming begins), the pending row MUST be updated with `provider_id`, `channel_id`, `upstream_model`, and `provider_multiplier` immediately, before response processing or streaming starts. This update MUST NOT trigger billing and MUST NOT change the row's `status`.
+RL1i. When a provider attempt is selected (upstream call succeeds or streaming begins), the provider metadata (`provider_id`, `channel_id`, `upstream_model`, `provider_multiplier`) MUST be captured in memory and included in the terminal INSERT. No intermediate database write is performed.
 
 RL2. Requests authenticated only by static config keys MUST NOT generate request logs.
 
 RL3. Terminal log finalization (`pending -> success/error`) MUST be fire-and-forget (spawned asynchronously) and MUST NOT block the response to the client.
 
-RL3a. Initial `pending` row creation MAY be executed before upstream forwarding starts to guarantee deterministic lifecycle transition.
+RL3a. *(Removed — pending row creation is no longer performed. See RL1a for the in-memory accumulation pattern.)*
 
 RL4. For non-streaming requests, the log MUST include token usage from the upstream response. `ttfb_ms` MUST be null.
 
@@ -91,9 +91,9 @@ RL6. For pass-through streaming requests, `ttfb_ms` MUST record the time from `s
 
 RL6a. For pass-through streaming requests where usage cannot be extracted from streamed events, token usage fields MAY be omitted (set to null).
 
-RL6b. For pass-through streaming requests where usage is extracted while the lifecycle row is still `status = "pending"`, Monoize MUST incrementally update the pending row usage fields (`input_tokens`, `output_tokens`, `cache_read_tokens`, `reasoning_tokens`, `cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`, `usage_breakdown_json`) using the latest cumulative usage snapshot.
+RL6b. For pass-through streaming requests, usage fields (`input_tokens`, `output_tokens`, `cached_tokens`, `reasoning_tokens`, `cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`, `usage_breakdown_json`) MUST be accumulated in memory via `StreamRuntimeMetrics` during streaming. No incremental database updates are performed. The final cumulative usage snapshot is included in the terminal INSERT (see RL1a).
 
-RL6c. RL6b incremental pending updates MUST NOT execute billing deduction and MUST NOT replace terminal finalization (`pending -> success/error`).
+RL6c. *(Removed — no incremental pending updates exist. Usage is written once at terminal state per RL6b.)*
 
 RL7. The `duration_ms` field MUST measure wall-clock time from the start of request processing (after auth) to the point where the upstream response is received.
 

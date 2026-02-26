@@ -43,8 +43,11 @@ DB6. SQLite MUST use a split read/write pool architecture:
 DB7. On both SQLite pools, the following PRAGMAs MUST be executed at connection time:
 
 - `PRAGMA journal_mode=WAL`
-- `PRAGMA busy_timeout=5000`
+- `PRAGMA synchronous=NORMAL`
+- `PRAGMA busy_timeout=15000`
 - `PRAGMA foreign_keys=ON`
+- `PRAGMA cache_size=-65536` (64 MB page cache)
+- `PRAGMA mmap_size=268435456` (256 MB memory-mapped I/O)
 
 DB8. If the SQLite DSN does not contain a `?` query string, `?mode=rwc` MUST be appended.
 

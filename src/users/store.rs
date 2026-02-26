@@ -22,7 +22,24 @@ impl UserStore {
     }
 
     pub async fn new(db: crate::db::DbPool) -> Result<Self, String> {
-        Ok(Self { db })
+        use std::time::Duration;
+        Ok(Self {
+            db,
+            last_used_batcher: crate::db_cache::LastUsedBatcher::new(),
+            request_log_batcher: crate::db_cache::RequestLogBatcher::new(128),
+            api_key_cache: crate::db_cache::ApiKeyCache::new(Duration::from_secs(60)),
+            balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
+        })
+    }
+
+    pub fn spawn_background_tasks(&self) {
+        self.last_used_batcher.clone().spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(30));
+        self.request_log_batcher.clone().spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(2));
+    }
+
+    pub async fn flush_all_batchers(&self) {
+        self.last_used_batcher.flush(&self.db).await;
+        self.request_log_batcher.flush(&self.db).await;
     }
 
     pub fn hash_password(password: &str) -> Result<String, String> {
@@ -214,6 +231,14 @@ impl UserStore {
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
+
+        if enabled.is_some() {
+            self.api_key_cache.invalidate_by_user_id(id);
+        }
+        if balance_nano_usd.is_some() {
+            self.balance_cache.invalidate(id);
+        }
+
         Ok(())
     }
 
@@ -222,6 +247,7 @@ impl UserStore {
             .execute(self.db.stmt("DELETE FROM users WHERE id = $1", vec![id.into()]))
             .await
             .map_err(|e| e.to_string())?;
+        self.api_key_cache.invalidate_by_user_id(id);
         Ok(())
     }
 
@@ -473,6 +499,7 @@ impl UserStore {
             .execute(self.db.stmt("DELETE FROM api_keys WHERE id = $1", vec![id.into()]))
             .await
             .map_err(|e| e.to_string())?;
+        self.api_key_cache.invalidate_by_key_id(id);
         Ok(())
     }
 
@@ -482,6 +509,27 @@ impl UserStore {
         }
         let prefix = &key[..12];
 
+        // Check cache first
+        if let Some((cached_key, cached_user)) = self.api_key_cache.get(prefix) {
+            if !cached_key.enabled {
+                return Ok(None);
+            }
+            if !cached_user.enabled {
+                return Ok(None);
+            }
+            if let Some(expires_at) = cached_key.expires_at {
+                if expires_at < Utc::now() {
+                    return Ok(None);
+                }
+            }
+            if key != cached_key.key {
+                return Ok(None);
+            }
+            self.last_used_batcher.record(cached_key.id.clone(), Utc::now());
+            return Ok(Some((cached_key, cached_user)));
+        }
+
+        // Cache miss — DB lookup
         let api_key = match self.get_api_key_by_prefix(prefix).await? {
             Some(k) => k,
             None => return Ok(None),
@@ -510,7 +558,8 @@ impl UserStore {
             return Ok(None);
         }
 
-        self.update_api_key_last_used(&api_key.id).await?;
+        self.api_key_cache.insert(prefix.to_string(), api_key.clone(), user.clone());
+        self.last_used_batcher.record(api_key.id.clone(), Utc::now());
 
         Ok(Some((api_key, user)))
     }
@@ -706,6 +755,8 @@ impl UserStore {
             .await
             .map_err(|e| e.to_string())?;
 
+        self.api_key_cache.invalidate_by_key_id(key_id);
+
         self.get_api_key_by_id(key_id)
             .await?
             .ok_or_else(|| "API key not found after update".to_string())
@@ -748,10 +799,14 @@ impl UserStore {
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
+        self.api_key_cache.invalidate_by_key_ids(ids);
         Ok(result.rows_affected() as usize)
     }
 
     pub async fn get_user_balance(&self, user_id: &str) -> Result<Option<UserBalance>, String> {
+        if let Some(cached) = self.balance_cache.get(user_id) {
+            return Ok(Some(cached));
+        }
         let row = self.db.read()
             .query_one(self.db.stmt(
                 "SELECT id, balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
@@ -766,11 +821,13 @@ impl UserStore {
             .try_get("", "balance_nano_usd")
             .unwrap_or_else(|_| "0".to_string());
         let balance_nano_usd = parse_nano_usd(&balance_raw)?;
-        Ok(Some(UserBalance {
+        let balance = UserBalance {
             user_id: row.try_get("", "id").map_err(|e| e.to_string())?,
             balance_nano_usd,
             balance_unlimited: row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1,
-        }))
+        };
+        self.balance_cache.insert(user_id.to_string(), balance.clone());
+        Ok(Some(balance))
     }
 
     pub async fn ensure_user_can_spend(&self, user_id: &str) -> Result<(), BillingError> {
@@ -885,6 +942,7 @@ impl UserStore {
         tx.commit()
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        self.balance_cache.invalidate(user_id);
         Ok(())
     }
 
@@ -963,6 +1021,7 @@ impl UserStore {
         .map_err(|e| e.message)?;
 
         tx.commit().await.map_err(|e| e.to_string())?;
+        self.balance_cache.invalidate(user_id);
         Ok(())
     }
 

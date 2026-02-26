@@ -204,10 +204,15 @@ pub struct UpdateApiKeyInput {
 #[derive(Clone)]
 pub struct UserStore {
     pub(crate) db: DbPool,
+    pub(crate) last_used_batcher: crate::db_cache::LastUsedBatcher,
+    pub(crate) request_log_batcher: crate::db_cache::RequestLogBatcher,
+    pub(crate) api_key_cache: crate::db_cache::ApiKeyCache,
+    pub(crate) balance_cache: crate::db_cache::BalanceCache,
 }
 
 pub(crate) const RESERVED_INTERNAL_USER_PREFIX: &str = "_monoize_";
 
+#[derive(Debug, Clone)]
 pub struct InsertRequestLog {
     pub request_id: Option<String>,
     pub user_id: String,

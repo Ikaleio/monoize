@@ -133,8 +133,11 @@ impl DbPool {
     async fn sqlite_pragmas(conn: &DatabaseConnection) -> Result<(), DbErr> {
         use sea_orm::ConnectionTrait;
         conn.execute_unprepared("PRAGMA journal_mode=WAL").await?;
-        conn.execute_unprepared("PRAGMA busy_timeout=5000").await?;
+        conn.execute_unprepared("PRAGMA busy_timeout=15000").await?;
         conn.execute_unprepared("PRAGMA foreign_keys=ON").await?;
+        conn.execute_unprepared("PRAGMA synchronous=NORMAL").await?;
+        conn.execute_unprepared("PRAGMA cache_size=-65536").await?;
+        conn.execute_unprepared("PRAGMA mmap_size=268435456").await?;
         Ok(())
     }
 

@@ -18,6 +18,7 @@ async fn main() {
 
 async fn run() -> Result<(), AppError> {
     let state = monoize::app::load_state().await?;
+    state.user_store.spawn_background_tasks();
 
     match state.user_store.cleanup_pending_request_logs().await {
         Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up stale pending request logs"),
@@ -59,6 +60,8 @@ async fn run() -> Result<(), AppError> {
             )
         })?;
 
+    state.user_store.flush_all_batchers().await;
+
     match state.user_store.cleanup_pending_request_logs().await {
         Ok(n) if n > 0 => tracing::info!(count = n, "finalized pending request logs on shutdown"),
         Ok(_) => {}
@@ -90,6 +93,8 @@ async fn shutdown_signal(state: monoize::app::AppState) {
         _ = ctrl_c => { tracing::info!("received SIGINT, shutting down"); }
         _ = terminate => { tracing::info!("received SIGTERM, shutting down"); }
     }
+
+    state.user_store.flush_all_batchers().await;
 
     match state.user_store.cleanup_pending_request_logs().await {
         Ok(n) if n > 0 => {

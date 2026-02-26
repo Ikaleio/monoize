@@ -42,6 +42,7 @@ argon2 = { version = "0.5", features = ["std"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 jsonwebtoken = "9"
 inventory = "0.3.21"
+dashmap = "6.1.0"
 
 [dev-dependencies]
 http-body-util = "0.1.3"
