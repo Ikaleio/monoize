@@ -3843,3 +3843,815 @@ async fn models_list_model_limits_disabled_shows_all() {
 
     assert!(ids.len() > 1, "should return all models when limits disabled");
 }
+
+#[tokio::test]
+async fn auth_missing_authorization_header() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"hi"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("unauthorized"));
+    assert_eq!(v["error"]["message"].as_str(), Some("missing auth"));
+}
+
+#[tokio::test]
+async fn auth_no_bearer_prefix() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, "Token sk-test123456")
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"hi"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("unauthorized"));
+    assert_eq!(v["error"]["message"].as_str(), Some("invalid auth"));
+}
+
+#[tokio::test]
+async fn auth_short_token() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, "Bearer sk-short")
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"hi"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("unauthorized"));
+    assert_eq!(v["error"]["message"].as_str(), Some("invalid token"));
+}
+
+#[tokio::test]
+async fn auth_invalid_token_format() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, "Bearer not-starting-with-sk-xxxx")
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"hi"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("unauthorized"));
+    assert_eq!(v["error"]["message"].as_str(), Some("invalid token"));
+}
+
+#[tokio::test]
+async fn auth_nonexistent_valid_format_token() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, "Bearer sk-doesnotexistindb")
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"hi"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("unauthorized"));
+    assert_eq!(v["error"]["message"].as_str(), Some("invalid token"));
+}
+
+#[tokio::test]
+async fn body_not_json_returns_bad_request() {
+    let ctx = setup().await;
+    for path in ["/v1/responses", "/v1/chat/completions", "/v1/messages"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, ctx.auth_header.clone())
+            .body(Body::from("this-is-not-json"))
+            .unwrap();
+        let resp = ctx.router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn body_json_array_returns_bad_request() {
+    let ctx = setup().await;
+    for path in ["/v1/responses", "/v1/chat/completions", "/v1/messages"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, ctx.auth_header.clone())
+            .body(Body::from("[1,2,3]"))
+            .unwrap();
+        let resp = ctx.router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+        assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+        assert_eq!(v["error"]["message"].as_str(), Some("body must be object"));
+    }
+}
+
+#[tokio::test]
+async fn body_missing_model_returns_bad_request() {
+    let ctx = setup().await;
+    let (status, body) = json_post(&ctx, "/v1/responses", json!({"input":"hi"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(v["error"]["message"].as_str(), Some("missing model"));
+}
+
+#[tokio::test]
+async fn body_empty_model_returns_bad_request() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/embeddings",
+        json!({"model":"","input":"hi"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(v["error"]["message"].as_str(), Some("missing model"));
+}
+
+#[tokio::test]
+async fn body_model_wrong_type_returns_bad_request() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({"model":123,"input":"hi"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(v["error"]["message"].as_str(), Some("missing model"));
+}
+
+#[tokio::test]
+async fn billing_injected_usage_field_ignored() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let before: i64 = user_before.balance_nano_usd.parse().unwrap();
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model":"gpt-5-mini-chat",
+            "messages":[{"role":"user","content":"billing usage injection"}],
+            "stream": true,
+            "emit_usage": true,
+            "usage": {"input_tokens": 0, "output_tokens": 0}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+
+    assert_eq!(before - after, 20000);
+}
+
+#[tokio::test]
+async fn billing_injected_pricing_field_ignored() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let before: i64 = user_before.balance_nano_usd.parse().unwrap();
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model":"gpt-5-mini-chat",
+            "messages":[{"role":"user","content":"billing pricing injection"}],
+            "stream": true,
+            "emit_usage": true,
+            "pricing": {"input_cost": 0}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+
+    assert_eq!(before - after, 20000);
+}
+
+#[tokio::test]
+async fn billing_model_field_does_not_affect_upstream_charge() {
+    let ctx = setup().await;
+
+    let providers = ctx
+        .state
+        .monoize_store
+        .list_providers()
+        .await
+        .expect("list providers");
+    let base_url = providers
+        .iter()
+        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .expect("base_url");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "alias-route-model".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: Some("gpt-5-mini".to_string()),
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "alias-route-provider".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("alias-route-ch".to_string()),
+                name: "alias-route-ch".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-50),
+        })
+        .await
+        .expect("create alias provider");
+
+    ctx.state
+        .model_registry_store
+        .upsert_model_metadata(
+            "alias-route-model",
+            monoize::model_registry_store::UpsertModelMetadataInput {
+                models_dev_provider: Some("test".to_string()),
+                mode: Some("chat".to_string()),
+                input_cost_per_token_nano: Some("999999".to_string()),
+                output_cost_per_token_nano: Some("999999".to_string()),
+                cache_read_input_cost_per_token_nano: None,
+                cache_creation_input_cost_per_token_nano: None,
+                output_cost_per_reasoning_token_nano: None,
+                max_input_tokens: None,
+                max_output_tokens: None,
+                max_tokens: None,
+            },
+        )
+        .await
+        .expect("seed alias model pricing");
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let before: i64 = user_before.balance_nano_usd.parse().unwrap();
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model":"alias-route-model",
+            "input":"route-charge",
+            "stream": true,
+            "emit_usage": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+
+    assert_eq!(before - after, 20000);
+}
+
+#[tokio::test]
+async fn balance_zero_returns_payment_required() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(&user.id, None, None, None, None, Some("0"), Some(false), None)
+        .await
+        .expect("update user");
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({"model":"gpt-5-mini","input":"hi"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("insufficient_balance"));
+}
+
+#[tokio::test]
+async fn balance_exact_covers_request() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("20000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model":"gpt-5-mini-chat",
+            "messages":[{"role":"user","content":"hi"}],
+            "stream": true,
+            "emit_usage": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+    assert_eq!(after, 0);
+}
+
+#[tokio::test]
+async fn balance_insufficient_after_charge() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("10000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model":"gpt-5-mini-chat",
+            "messages":[{"role":"user","content":"hi"}],
+            "stream": true,
+            "emit_usage": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("[DONE]"));
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+    assert_eq!(after, 10000);
+}
+
+#[tokio::test]
+async fn embeddings_missing_model() {
+    let ctx = setup().await;
+    let (status, body) = json_post(&ctx, "/v1/embeddings", json!({"input":"hello"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(v["error"]["message"].as_str(), Some("missing model"));
+}
+
+#[tokio::test]
+async fn embeddings_missing_input() {
+    let ctx = setup().await;
+    let (status, body) = json_post(&ctx, "/v1/embeddings", json!({"model":"gpt-5-mini"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(v["error"]["message"].as_str(), Some("missing input"));
+}
+
+#[tokio::test]
+async fn embeddings_invalid_input_type() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/embeddings",
+        json!({"model":"gpt-5-mini","input":123}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(
+        v["error"]["message"].as_str(),
+        Some("input must be string or array of strings")
+    );
+}
+
+#[tokio::test]
+async fn embeddings_invalid_encoding_format() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/embeddings",
+        json!({"model":"gpt-5-mini","input":"hi","encoding_format":"xml"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(
+        v["error"]["message"].as_str(),
+        Some("encoding_format must be 'float' or 'base64'")
+    );
+}
+
+#[tokio::test]
+async fn embeddings_encoding_format_wrong_type() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/embeddings",
+        json!({"model":"gpt-5-mini","input":"hi","encoding_format":42}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    assert_eq!(
+        v["error"]["message"].as_str(),
+        Some("encoding_format must be 'float' or 'base64'")
+    );
+}
+
+#[tokio::test]
+async fn quota_exhausted_returns_429() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let (_, token) = ctx
+        .state
+        .user_store
+        .create_api_key_extended(
+            &user.id,
+            monoize::users::CreateApiKeyInput {
+                name: "quota-zero-key".to_string(),
+                expires_in_days: None,
+                quota: Some(0),
+                quota_unlimited: false,
+                model_limits_enabled: false,
+                model_limits: vec![],
+                ip_whitelist: Vec::new(),
+                group: "default".to_string(),
+                max_multiplier: None,
+                transforms: Vec::new(),
+            },
+        )
+        .await
+        .expect("create quota api key");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"quota check"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("quota_exceeded"));
+}
+
+#[tokio::test]
+async fn unknown_model_returns_error() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({"model":"nonexistent-model-xyz","input":"hi"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("upstream_error"));
+}
+
+#[tokio::test]
+async fn extra_fields_do_not_corrupt_response() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let before: i64 = user_before.balance_nano_usd.parse().unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"edge-extra-fields"}],
+                "stream": true,
+                "emit_usage": true,
+                "hack_model":"free-model",
+                "override_billing": true,
+                "admin": true,
+                "nested": {"inject": [1,2,3], "bypass": "no"}
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(text.contains("edge-extra-fields"));
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+    assert_eq!(before - after, 20000);
+}
+
+#[tokio::test]
+async fn ip_whitelist_blocks_non_whitelisted() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let (_, token) = ctx
+        .state
+        .user_store
+        .create_api_key_extended(
+            &user.id,
+            monoize::users::CreateApiKeyInput {
+                name: "ip-restricted-key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: false,
+                model_limits: vec![],
+                ip_whitelist: vec!["192.168.1.1".to_string()],
+                group: "default".to_string(),
+                max_multiplier: None,
+                transforms: Vec::new(),
+            },
+        )
+        .await
+        .expect("create ip restricted api key");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"ip-check"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("ip_not_allowed"));
+}
