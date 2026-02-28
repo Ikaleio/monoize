@@ -116,19 +116,12 @@ impl RequestLogBatcher {
         };
 
         let mut insert_failed = false;
+        let is_postgres = db.is_postgres();
 
         for log in &entries {
             let id = uuid::Uuid::new_v4().to_string();
             let created_at = log.created_at.to_rfc3339();
-            let sql = r#"INSERT INTO request_logs
-                   (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tool_prompt_tokens, reasoning_tokens,
-                    accepted_prediction_tokens, rejected_prediction_tokens,
-                    provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
-                    billing_breakdown_json, error_code, error_message, error_http_status,
-                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)"#;
-            let values = vec![
+            let mut values = vec![
                 id.into(),
                 log.request_id.clone().into(),
                 log.user_id.clone().into(),
@@ -195,6 +188,34 @@ impl RequestLogBatcher {
                 log.request_kind.clone().into(),
                 created_at.into(),
             ];
+
+            let sql = if is_postgres {
+                values.push(log.created_at.to_rfc3339().into());
+                values.push(SeaValue::Bool(Some(log.is_stream)));
+                values.push(log.charge_nano_usd.map(|v| v.to_string()).into());
+                r#"INSERT INTO request_logs
+                   (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
+                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tool_prompt_tokens, reasoning_tokens,
+                    accepted_prediction_tokens, rejected_prediction_tokens,
+                    provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
+                    billing_breakdown_json, error_code, error_message, error_http_status,
+                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at,
+                    created_at_ts, is_stream_bool, charge_nano_usd_decimal)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
+                           CAST($33 AS TIMESTAMPTZ),
+                           CAST($34 AS BOOLEAN),
+                           CAST($35 AS NUMERIC(39,0)))"#
+            } else {
+                r#"INSERT INTO request_logs
+                   (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
+                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tool_prompt_tokens, reasoning_tokens,
+                    accepted_prediction_tokens, rejected_prediction_tokens,
+                    provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
+                    billing_breakdown_json, error_code, error_message, error_http_status,
+                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)"#
+            };
+
             if let Err(e) = tx.execute(db.stmt(sql, values)).await {
                 tracing::warn!("request_log_batcher flush error: {e}");
                 insert_failed = true;

@@ -2,6 +2,9 @@ use super::{
     AnalyticsModelBucketRow, AnalyticsProviderBucketRow, DashboardAnalyticsRaw,
     InsertRequestLog, RequestLogRow, UserStore,
 };
+use chrono::{DateTime, FixedOffset};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use sea_orm::ConnectionTrait;
 use sea_orm::Value as SeaValue;
 use serde_json::Value;
@@ -17,11 +20,70 @@ fn parse_optional_json_text(value: Option<String>) -> Option<Value> {
     value.and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
 }
 
+fn parse_optional_charge_decimal(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Decimal::from_str_exact(trimmed)
+            .ok()
+            .map(|v| v.trunc().to_string())
+    })
+}
+
+fn decimal_to_nano_i64(value: Decimal) -> Option<i64> {
+    value.trunc().to_i64()
+}
+
+fn row_decimal_to_string(row: &sea_orm::QueryResult, col: &str) -> Option<String> {
+    row.try_get::<Option<Decimal>>("", col)
+        .ok()
+        .flatten()
+        .map(|v| v.trunc().to_string())
+        .or_else(|| parse_optional_charge_decimal(row.try_get::<Option<String>>("", col).unwrap_or(None)))
+}
+
+fn row_decimal_to_nano_i64(row: &sea_orm::QueryResult, col: &str) -> i64 {
+    row.try_get::<Option<Decimal>>("", col)
+        .ok()
+        .flatten()
+        .and_then(decimal_to_nano_i64)
+        .or_else(|| {
+            parse_optional_charge_decimal(row.try_get::<Option<String>>("", col).unwrap_or(None))
+                .and_then(|v| decimal_to_nano_i64(Decimal::from_str_exact(&v).ok()?))
+        })
+        .unwrap_or(0)
+}
+
+fn parse_decimal_query_to_i64(value: Option<String>) -> i64 {
+    value
+        .and_then(|v| {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            Decimal::from_str_exact(trimmed)
+                .ok()
+                .and_then(decimal_to_nano_i64)
+        })
+        .unwrap_or(0)
+}
+
+fn row_timestamp_to_rfc3339(row: &sea_orm::QueryResult, col: &str) -> Option<String> {
+    row.try_get::<Option<DateTime<FixedOffset>>>("", col)
+        .ok()
+        .flatten()
+        .map(|dt| dt.to_rfc3339())
+        .or_else(|| row.try_get::<Option<String>>("", col).unwrap_or(None))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_request_log_filters(
     sql: &mut String,
     values: &mut Vec<SeaValue>,
     idx: &mut usize,
+    is_postgres: bool,
     model: Option<&str>,
     status: Option<&str>,
     api_key_id: Option<&str>,
@@ -81,18 +143,47 @@ fn append_request_log_filters(
         *idx += 4;
     }
     if let Some(time_from) = time_from {
-        sql.push_str(&format!(" AND rl.created_at >= ${}", *idx));
+        if is_postgres {
+            sql.push_str(&format!(
+                " AND COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ)) >= CAST(${} AS TIMESTAMPTZ)",
+                *idx
+            ));
+        } else {
+            sql.push_str(&format!(" AND rl.created_at >= ${}", *idx));
+        }
         values.push(time_from.into());
         *idx += 1;
     }
     if let Some(time_to) = time_to {
-        sql.push_str(&format!(" AND rl.created_at < ${}", *idx));
+        if is_postgres {
+            sql.push_str(&format!(
+                " AND COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ)) < CAST(${} AS TIMESTAMPTZ)",
+                *idx
+            ));
+        } else {
+            sql.push_str(&format!(" AND rl.created_at < ${}", *idx));
+        }
         values.push(time_to.into());
         *idx += 1;
     }
 }
 
 fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
+    let is_stream = row
+        .try_get::<Option<bool>>("", "is_stream_bool")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| {
+            row.try_get::<i32>("", "is_stream").unwrap_or_else(|_| {
+                row.try_get::<Option<i32>>("", "is_stream")
+                    .unwrap_or(None)
+                    .unwrap_or(0)
+            }) == 1
+        });
+
+    let charge_nano_usd = row_decimal_to_string(row, "charge_nano_usd_decimal")
+    .or_else(|| row.try_get::<Option<String>>("", "charge_nano_usd").unwrap_or(None));
+
     RequestLogRow {
         id: row.try_get("", "id").unwrap_or_default(),
         request_id: row.try_get("", "request_id").unwrap_or(None),
@@ -102,7 +193,7 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
         provider_id: row.try_get("", "provider_id").unwrap_or(None),
         upstream_model: row.try_get("", "upstream_model").unwrap_or(None),
         channel_id: row.try_get("", "channel_id").unwrap_or(None),
-        is_stream: row.try_get::<i32>("", "is_stream").unwrap_or(0) == 1,
+        is_stream,
         input_tokens: row.try_get("", "input_tokens").unwrap_or(None),
         output_tokens: row.try_get("", "output_tokens").unwrap_or(None),
         cache_read_tokens: row.try_get("", "cache_read_tokens").unwrap_or(None),
@@ -116,9 +207,7 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
             .try_get("", "rejected_prediction_tokens")
             .unwrap_or(None),
         provider_multiplier: row.try_get("", "provider_multiplier").unwrap_or(None),
-        charge_nano_usd: row
-            .try_get::<Option<String>>("", "charge_nano_usd")
-            .unwrap_or(None),
+        charge_nano_usd,
         status: row
             .try_get("", "status")
             .unwrap_or_else(|_| "unknown".to_string()),
@@ -142,7 +231,8 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
                 .unwrap_or(None),
         ),
         request_kind: row.try_get("", "request_kind").unwrap_or(None),
-        created_at: row.try_get("", "created_at").unwrap_or_default(),
+        created_at: row_timestamp_to_rfc3339(row, "created_at_ts")
+            .unwrap_or_else(|| row.try_get("", "created_at").unwrap_or_default()),
         username: row.try_get("", "username").unwrap_or(None),
         api_key_name: row.try_get("", "api_key_name").unwrap_or(None),
         channel_name: row.try_get("", "channel_name").unwrap_or(None),
@@ -227,6 +317,8 @@ impl UserStore {
         time_from: Option<&str>,
         time_to: Option<&str>,
     ) -> Result<(Vec<RequestLogRow>, i64, String), String> {
+        let is_postgres = self.db.is_postgres();
+
         let model = normalize_request_log_filter(model);
         let status = normalize_request_log_filter(status);
         let api_key_id = normalize_request_log_filter(api_key_id);
@@ -240,6 +332,7 @@ impl UserStore {
             &mut count_sql,
             &mut count_values,
             &mut count_idx,
+            is_postgres,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -258,13 +351,18 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         // Sum query
-        let mut sum_sql = "SELECT CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) as total_charge FROM request_logs rl WHERE rl.user_id = $1".to_string();
+        let mut sum_sql = if is_postgres {
+            "SELECT COALESCE(SUM(COALESCE(rl.charge_nano_usd_decimal, CASE WHEN rl.charge_nano_usd ~ '^-?[0-9]+$' THEN CAST(rl.charge_nano_usd AS NUMERIC(39,0)) ELSE NULL END)), 0) as total_charge FROM request_logs rl WHERE rl.user_id = $1".to_string()
+        } else {
+            "SELECT CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) as total_charge FROM request_logs rl WHERE rl.user_id = $1".to_string()
+        };
         let mut sum_values: Vec<SeaValue> = vec![user_id.into()];
         let mut sum_idx = 2usize;
         append_request_log_filters(
             &mut sum_sql,
             &mut sum_values,
             &mut sum_idx,
+            is_postgres,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -277,22 +375,39 @@ impl UserStore {
             .query_one(self.db.stmt(&sum_sql, sum_values))
             .await
             .map_err(|e| e.to_string())?;
-        let total_charge: i64 = sum_row
-            .ok_or_else(|| "no sum row".to_string())?
-            .try_get("", "total_charge")
-            .map_err(|e| e.to_string())?;
-        let total_charge_nano_usd = total_charge.to_string();
+        let total_charge_row = sum_row.ok_or_else(|| "no sum row".to_string())?;
+        let total_charge_nano_usd = if is_postgres {
+            parse_optional_charge_decimal(
+                total_charge_row
+                    .try_get::<Option<String>>("", "total_charge")
+                    .unwrap_or(None),
+            )
+            .unwrap_or_else(|| "0".to_string())
+        } else {
+            total_charge_row
+                .try_get::<i64>("", "total_charge")
+                .map(|v| v.to_string())
+                .map_err(|e| e.to_string())?
+        };
+
+        let is_stream_bool_col = if is_postgres { ", rl.is_stream_bool" } else { "" };
+        let charge_decimal_col = if is_postgres {
+            ", rl.charge_nano_usd_decimal"
+        } else {
+            ""
+        };
+        let created_at_ts_col = if is_postgres { ", rl.created_at_ts" } else { "" };
 
         // Rows query
-        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
-                      rl.channel_id, rl.is_stream,
+        let mut rows_sql = format!(r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+                      rl.channel_id, rl.is_stream{is_stream_bool_col},
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
                       rl.accepted_prediction_tokens, rl.rejected_prediction_tokens,
-                      rl.provider_multiplier, rl.charge_nano_usd, rl.status,
+                      rl.provider_multiplier, rl.charge_nano_usd{charge_decimal_col}, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at{created_at_ts_col},
                       u.username, ak.name AS api_key_name, ch.name AS channel_name,
                       mp.name AS provider_name
                FROM request_logs rl
@@ -300,13 +415,14 @@ impl UserStore {
                LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
                LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
-               WHERE rl.user_id = $1"#.to_string();
+               WHERE rl.user_id = $1"#);
         let mut rows_values: Vec<SeaValue> = vec![user_id.into()];
         let mut rows_idx = 2usize;
         append_request_log_filters(
             &mut rows_sql,
             &mut rows_values,
             &mut rows_idx,
+            is_postgres,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -315,7 +431,15 @@ impl UserStore {
             time_from,
             time_to,
         );
-        rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+        if is_postgres {
+            rows_sql.push_str(&format!(
+                " ORDER BY COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ)) DESC LIMIT ${} OFFSET ${}",
+                rows_idx,
+                rows_idx + 1
+            ));
+        } else {
+            rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+        }
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
 
@@ -345,6 +469,8 @@ impl UserStore {
         time_from: Option<&str>,
         time_to: Option<&str>,
     ) -> Result<(Vec<RequestLogRow>, i64, String), String> {
+        let is_postgres = self.db.is_postgres();
+
         let model = normalize_request_log_filter(model);
         let status = normalize_request_log_filter(status);
         let api_key_id = normalize_request_log_filter(api_key_id);
@@ -361,6 +487,7 @@ impl UserStore {
             &mut count_sql,
             &mut count_values,
             &mut count_idx,
+            is_postgres,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -379,15 +506,22 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         // Sum query
-        let mut sum_sql = r#"SELECT CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) as total_charge FROM request_logs rl
+        let mut sum_sql = if is_postgres {
+            r#"SELECT COALESCE(SUM(COALESCE(rl.charge_nano_usd_decimal, CASE WHEN rl.charge_nano_usd ~ '^-?[0-9]+$' THEN CAST(rl.charge_nano_usd AS NUMERIC(39,0)) ELSE NULL END)), 0) as total_charge FROM request_logs rl
                LEFT JOIN users u ON rl.user_id = u.id
-               WHERE 1 = 1"#.to_string();
+               WHERE 1 = 1"#.to_string()
+        } else {
+            r#"SELECT CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) as total_charge FROM request_logs rl
+               LEFT JOIN users u ON rl.user_id = u.id
+               WHERE 1 = 1"#.to_string()
+        };
         let mut sum_values: Vec<SeaValue> = Vec::new();
         let mut sum_idx = 1usize;
         append_request_log_filters(
             &mut sum_sql,
             &mut sum_values,
             &mut sum_idx,
+            is_postgres,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -400,22 +534,39 @@ impl UserStore {
             .query_one(self.db.stmt(&sum_sql, sum_values))
             .await
             .map_err(|e| e.to_string())?;
-        let total_charge: i64 = sum_row
-            .ok_or_else(|| "no sum row".to_string())?
-            .try_get("", "total_charge")
-            .map_err(|e| e.to_string())?;
-        let total_charge_nano_usd = total_charge.to_string();
+        let total_charge_row = sum_row.ok_or_else(|| "no sum row".to_string())?;
+        let total_charge_nano_usd = if is_postgres {
+            parse_optional_charge_decimal(
+                total_charge_row
+                    .try_get::<Option<String>>("", "total_charge")
+                    .unwrap_or(None),
+            )
+            .unwrap_or_else(|| "0".to_string())
+        } else {
+            total_charge_row
+                .try_get::<i64>("", "total_charge")
+                .map(|v| v.to_string())
+                .map_err(|e| e.to_string())?
+        };
+
+        let is_stream_bool_col = if is_postgres { ", rl.is_stream_bool" } else { "" };
+        let charge_decimal_col = if is_postgres {
+            ", rl.charge_nano_usd_decimal"
+        } else {
+            ""
+        };
+        let created_at_ts_col = if is_postgres { ", rl.created_at_ts" } else { "" };
 
         // Rows query
-        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
-                      rl.channel_id, rl.is_stream,
+        let mut rows_sql = format!(r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+                      rl.channel_id, rl.is_stream{is_stream_bool_col},
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
                       rl.accepted_prediction_tokens, rl.rejected_prediction_tokens,
-                      rl.provider_multiplier, rl.charge_nano_usd, rl.status,
+                      rl.provider_multiplier, rl.charge_nano_usd{charge_decimal_col}, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at{created_at_ts_col},
                       u.username, ak.name AS api_key_name, ch.name AS channel_name,
                       mp.name AS provider_name
                FROM request_logs rl
@@ -423,13 +574,14 @@ impl UserStore {
                LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
                LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
-               WHERE 1 = 1"#.to_string();
+               WHERE 1 = 1"#);
         let mut rows_values: Vec<SeaValue> = Vec::new();
         let mut rows_idx = 1usize;
         append_request_log_filters(
             &mut rows_sql,
             &mut rows_values,
             &mut rows_idx,
+            is_postgres,
             model.as_deref(),
             status.as_deref(),
             api_key_id.as_deref(),
@@ -438,7 +590,15 @@ impl UserStore {
             time_from,
             time_to,
         );
-        rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+        if is_postgres {
+            rows_sql.push_str(&format!(
+                " ORDER BY COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ)) DESC LIMIT ${} OFFSET ${}",
+                rows_idx,
+                rows_idx + 1
+            ));
+        } else {
+            rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+        }
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
 
@@ -465,22 +625,28 @@ impl UserStore {
         bucket_width_days: f64,
     ) -> Result<DashboardAnalyticsRaw, String> {
         let is_sqlite = self.db.is_sqlite();
+        let charge_expr = if is_sqlite {
+            "CAST(rl.charge_nano_usd AS BIGINT)"
+        } else {
+            "COALESCE(rl.charge_nano_usd_decimal, CASE WHEN rl.charge_nano_usd ~ '^-?[0-9]+$' THEN CAST(rl.charge_nano_usd AS NUMERIC(39,0)) ELSE NULL END)"
+        };
 
         // 1. Model bucketed aggregation (cost + calls)
         let bucket_expr = if is_sqlite {
             "CAST((julianday(rl.created_at) - julianday($1)) / $2 AS BIGINT)".to_string()
         } else {
-            "CAST(EXTRACT(EPOCH FROM (CAST(rl.created_at AS TIMESTAMPTZ) - CAST($1 AS TIMESTAMPTZ))) / ($2 * 86400.0) AS BIGINT)".to_string()
+            "CAST(EXTRACT(EPOCH FROM (COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ)) - CAST($1 AS TIMESTAMPTZ))) / ($2 * 86400.0) AS BIGINT)".to_string()
         };
 
         let mut model_sql = format!(
             r#"SELECT
                  {bucket_expr} AS bucket_idx,
                  rl.model,
-                 CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) AS cost_nano,
+                 COALESCE(SUM({charge_expr}), 0) AS cost_nano,
                  COUNT(*) AS call_count
                FROM request_logs rl
-               WHERE rl.created_at >= $3 AND rl.created_at < $4"#
+               WHERE {time_col} >= $3 AND {time_col} < $4"#,
+            time_col = if is_sqlite { "rl.created_at" } else { "COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ))" }
         );
         let mut model_values: Vec<SeaValue> = vec![
             time_from.into(),
@@ -507,10 +673,15 @@ impl UserStore {
             .into_iter()
             .map(|row| {
                 let idx: i64 = row.try_get("", "bucket_idx").unwrap_or(0);
+                let cost_nano = if is_sqlite {
+                    row.try_get::<i64>("", "cost_nano").unwrap_or(0)
+                } else {
+                    row_decimal_to_nano_i64(&row, "cost_nano")
+                };
                 AnalyticsModelBucketRow {
                     bucket_idx: idx.clamp(0, bucket_count - 1),
                     model: row.try_get("", "model").unwrap_or_default(),
-                    cost_nano: row.try_get("", "cost_nano").unwrap_or(0),
+                    cost_nano,
                     call_count: row.try_get("", "call_count").unwrap_or(0),
                 }
             })
@@ -524,7 +695,8 @@ impl UserStore {
                  COUNT(*) AS call_count
                FROM request_logs rl
                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
-               WHERE rl.created_at >= $3 AND rl.created_at < $4"#
+               WHERE {time_col} >= $3 AND {time_col} < $4"#,
+            time_col = if is_sqlite { "rl.created_at" } else { "COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ))" }
         );
         let mut prov_values: Vec<SeaValue> = vec![
             time_from.into(),
@@ -560,11 +732,14 @@ impl UserStore {
             .collect();
 
         // 3. Total stats for the range
-        let mut total_sql = r#"SELECT
-                 CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) AS total_cost,
+        let mut total_sql = format!(
+            r#"SELECT
+                 COALESCE(SUM({charge_expr}), 0) AS total_cost,
                  COUNT(*) AS total_calls
                FROM request_logs rl
-               WHERE rl.created_at >= $1 AND rl.created_at < $2"#.to_string();
+               WHERE {time_col} >= $1 AND {time_col} < $2"#,
+            time_col = if is_sqlite { "rl.created_at" } else { "COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ))" }
+        );
         let mut total_values: Vec<SeaValue> = vec![
             time_from.into(),
             time_to.into(),
@@ -584,15 +759,33 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
         let total_row = total_row.ok_or_else(|| "no total row".to_string())?;
 
-        let total_cost_nano_usd: i64 = total_row.try_get("", "total_cost").unwrap_or(0);
+        let total_cost_nano_usd: i64 = if is_sqlite {
+            total_row.try_get("", "total_cost").unwrap_or(0)
+        } else {
+            total_row
+                .try_get::<Option<Decimal>>("", "total_cost")
+                .ok()
+                .flatten()
+                .and_then(decimal_to_nano_i64)
+                .unwrap_or_else(|| {
+                    parse_decimal_query_to_i64(
+                        total_row
+                            .try_get::<Option<String>>("", "total_cost")
+                            .unwrap_or(None),
+                    )
+                })
+        };
         let total_calls: i64 = total_row.try_get("", "total_calls").unwrap_or(0);
 
         // 4. Today stats
-        let mut today_sql = r#"SELECT
-                 CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) AS today_cost,
+        let mut today_sql = format!(
+            r#"SELECT
+                 COALESCE(SUM({charge_expr}), 0) AS today_cost,
                  COUNT(*) AS today_calls
                FROM request_logs rl
-               WHERE rl.created_at >= $1"#.to_string();
+               WHERE {time_col} >= $1"#,
+            time_col = if is_sqlite { "rl.created_at" } else { "COALESCE(rl.created_at_ts, CAST(rl.created_at AS TIMESTAMPTZ))" }
+        );
         let mut today_values: Vec<SeaValue> = vec![
             today_start.into(),
         ];
@@ -611,7 +804,22 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
         let today_row = today_row.ok_or_else(|| "no today row".to_string())?;
 
-        let today_cost_nano_usd: i64 = today_row.try_get("", "today_cost").unwrap_or(0);
+        let today_cost_nano_usd: i64 = if is_sqlite {
+            today_row.try_get("", "today_cost").unwrap_or(0)
+        } else {
+            today_row
+                .try_get::<Option<Decimal>>("", "today_cost")
+                .ok()
+                .flatten()
+                .and_then(decimal_to_nano_i64)
+                .unwrap_or_else(|| {
+                    parse_decimal_query_to_i64(
+                        today_row
+                            .try_get::<Option<String>>("", "today_cost")
+                            .unwrap_or(None),
+                    )
+                })
+        };
         let today_calls: i64 = today_row.try_get("", "today_calls").unwrap_or(0);
 
         Ok(DashboardAnalyticsRaw {

@@ -1896,6 +1896,7 @@ dependencies = [
  "rand_core 0.6.4",
  "regex",
  "reqwest",
+ "rust_decimal",
  "sea-orm",
  "sea-orm-migration",
  "sea-query",

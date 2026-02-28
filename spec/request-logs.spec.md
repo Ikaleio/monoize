@@ -189,6 +189,13 @@ RL-S1. Request logs MUST be stored in table `request_logs`.
 
 RL-S2. The table MUST have a composite index on `(user_id, created_at DESC)` for efficient pagination.
 
+RL-S2a. For PostgreSQL backends, request-log reads MUST use native shadow columns and indexes:
+- `created_at_ts TIMESTAMPTZ` for time filters/order,
+- `is_stream_bool BOOLEAN` for stream flag reads,
+- `charge_nano_usd_decimal NUMERIC(39,0)` for charge aggregation.
+
+RL-S2b. For PostgreSQL backends, the table MUST additionally have indexes on `(user_id, created_at_ts DESC)` and `(created_at_ts DESC)`.
+
 RL-S3. The `user_id` foreign key MUST cascade on delete.
 
 RL-S4. New columns (`request_id`, `channel_id`, `ttfb_ms`, `request_ip`, `usage_breakdown_json`, `billing_breakdown_json`, `error_code`, `error_message`, `error_http_status`, `tried_providers_json`) MUST be added via `ALTER TABLE ADD COLUMN` statements in the migration logic. All new columns are nullable to preserve backward compatibility with existing rows.
@@ -196,6 +203,10 @@ RL-S4. New columns (`request_id`, `channel_id`, `ttfb_ms`, `request_ip`, `usage_
 RL-S6. The migration from `prompt_tokens`/`completion_tokens` to `input_tokens`/`output_tokens` MUST be performed via `ALTER TABLE RENAME COLUMN` when the database supports it, otherwise via column addition + data copy. New usage detail columns (`cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`) MUST be added via `ALTER TABLE ADD COLUMN` with nullable defaults.
 
 RL-S5. `request_kind` MUST be added as a nullable `TEXT` column via migration logic, with null as backward-compatible default for existing rows.
+
+RL-S7. PostgreSQL shadow columns (`created_at_ts`, `is_stream_bool`, `charge_nano_usd_decimal`) MUST be backfilled from legacy columns (`created_at`, `is_stream`, `charge_nano_usd`) during migration. Invalid legacy values MUST map to `NULL` in shadow columns rather than aborting migration.
+
+RL-S8. While SQLite and PostgreSQL both remain supported, write paths MUST continue writing legacy columns. PostgreSQL read/aggregation paths SHOULD prefer shadow columns and fall back to legacy columns only when shadow values are null.
 
 ## 5. Frontend display
 
@@ -208,6 +219,7 @@ FL2. The `created_at` field MUST be displayed as a localized timestamp in format
 FL3. The model column MUST use the `ModelBadge` component (same as Provider page).
 
 FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a single cell with adjacent rounded badges: `[总用时] [首字时间] [流]` (where 首字时间 and 流 badges are only shown when applicable).
+FL4b. The frontend MUST treat request-log timing values as numeric-compatible inputs. For badge rendering and tooltip math, it MUST accept canonical fields `duration_ms` and `ttfb_ms`, and it MUST also accept the compatibility aliases `durationMs`, `elapsed_ms`, or `latency_ms` (total duration) and `ttfbMs`, `first_token_ms`, or `firstTokenMs` (TTFB) when those aliases are present. String values that parse to finite numbers MUST be rendered identically to numeric values.
 FL4a. Hovering the `duration_ms` badge MUST show a tooltip containing the total duration, and an "Average TPS" (tokens per second) metric when `duration_ms > 0` and `output_tokens > 0`. The TPS denominator MUST be computed as follows:
 
 - If `ttfb_ms` is present and `duration_ms > ttfb_ms`: denominator = `duration_ms - ttfb_ms` (generation window only).

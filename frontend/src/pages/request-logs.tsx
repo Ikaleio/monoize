@@ -34,6 +34,17 @@ const REQUEST_LOGS_PAGE_SIZE = 100
 
 type TimeRangePreset = '1h' | '24h' | '7d' | '30d' | 'today' | 'yesterday' | 'this_month' | 'last_month'
 
+type TimingValue = number | string | null | undefined
+
+type RequestLogWithTimingAliases = RequestLog & {
+	durationMs?: number | string
+	ttfbMs?: number | string
+	elapsed_ms?: number | string
+	latency_ms?: number | string
+	first_token_ms?: number | string
+	firstTokenMs?: number | string
+}
+
 function applyPreset(preset: TimeRangePreset): { from: Date; to?: Date } {
 	const now = new Date()
 	switch (preset) {
@@ -93,6 +104,42 @@ function detectFixedPreset(from: Date | undefined, to: Date | undefined): TimeRa
 	// last_month: from=startOfMonth(lastMonth), to=startOfMonth(now)
 	if (to && close(from, startOfMonth(subMonths(now, 1))) && close(to, startOfMonth(now))) return 'last_month'
 	return null
+}
+
+function parseTimingMs(value: TimingValue): number | null {
+	if (typeof value === 'number') {
+		return Number.isFinite(value) && value >= 0 ? value : null
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim()
+		if (!trimmed) return null
+
+		const parsed = Number(trimmed)
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+	}
+
+	return null
+}
+
+function getDurationMs(log: RequestLog): number | null {
+	const source = log as RequestLogWithTimingAliases
+	return parseTimingMs(
+		log.duration_ms ??
+			source.durationMs ??
+			source.elapsed_ms ??
+			source.latency_ms
+	)
+}
+
+function getTtfbMs(log: RequestLog): number | null {
+	const source = log as RequestLogWithTimingAliases
+	return parseTimingMs(
+		log.ttfb_ms ??
+			source.ttfbMs ??
+			source.first_token_ms ??
+			source.firstTokenMs
+	)
 }
 
 function DateRangePicker({
@@ -839,8 +886,10 @@ function LogRowCells({
 }) {
 	const isConnectivityTest =
 		log.request_kind === 'active_probe_connectivity' && !log.api_key_name
-	const duration = formatDuration(log.duration_ms)
-	const ttfb = formatDuration(log.ttfb_ms)
+	const durationMs = getDurationMs(log)
+	const ttfbMs = getTtfbMs(log)
+	const duration = formatDuration(durationMs)
+	const ttfb = formatDuration(ttfbMs)
 	const channelDisplay = log.channel_name?.trim() || log.channel_id || null
 	const providerDisplay = log.provider_name?.trim() || log.provider_id || null
 	const costDisplay = formatCostFullPrecision(log.charge_nano_usd)
@@ -1216,15 +1265,15 @@ function LogRowCells({
 											<span>{t('requestLogs.duration')}</span>
 											<span className='font-mono'>{duration}</span>
 										</div>
-										{log.duration_ms != null &&
-											log.duration_ms > 0 &&
-									outputTokensForDisplay > 0 && (() => {
+										{durationMs != null &&
+											durationMs > 0 &&
+											outputTokensForDisplay > 0 && (() => {
 												// When ttfb ≈ duration (no visible streaming output,
 												// e.g. pure reasoning then tool_call), use total time
-												const generationMs = (log.ttfb_ms != null && log.duration_ms! > log.ttfb_ms)
-													? log.duration_ms! - log.ttfb_ms
-													: log.duration_ms!;
-										const tpsValue = outputTokensForDisplay / (generationMs / 1000);
+												const generationMs = (ttfbMs != null && durationMs > ttfbMs)
+													? durationMs - ttfbMs
+													: durationMs
+												const tpsValue = outputTokensForDisplay / (generationMs / 1000);
 												return (
 													<div className='flex items-center justify-between gap-3'>
 														<span>{t('requestLogs.avgTps')}</span>
