@@ -224,6 +224,12 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
         error_http_status: row.try_get("", "error_http_status").unwrap_or(None),
         duration_ms: row.try_get("", "duration_ms").unwrap_or(None),
         ttfb_ms: row.try_get("", "ttfb_ms").unwrap_or(None),
+        duration_ms_camel: row.try_get("", "duration_ms").unwrap_or(None),
+        elapsed_ms: row.try_get("", "duration_ms").unwrap_or(None),
+        latency_ms: row.try_get("", "duration_ms").unwrap_or(None),
+        ttfb_ms_camel: row.try_get("", "ttfb_ms").unwrap_or(None),
+        first_token_ms: row.try_get("", "ttfb_ms").unwrap_or(None),
+        first_token_ms_camel: row.try_get("", "ttfb_ms").unwrap_or(None),
         request_ip: row.try_get("", "request_ip").unwrap_or(None),
         reasoning_effort: row.try_get("", "reasoning_effort").unwrap_or(None),
         tried_providers_json: parse_optional_json_text(

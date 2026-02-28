@@ -15,6 +15,9 @@ step() { echo -e "${GREEN}[DEPLOY]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail() { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
+WATCHDOG_NAME="${PM2_NAME}-deploy-watchdog"
+WATCHDOG_DELAY_SEC="120"
+
 # --- 1. Frontend build ---
 step "Building frontend..."
 (cd "$SCRIPT_DIR/frontend" && bun run build) || fail "Frontend build failed"
@@ -37,9 +40,31 @@ step "Deploying binary to $DEPLOY_DIR..."
 cp "$SCRIPT_DIR/target/release/$BINARY_NAME" "$DEPLOY_DIR/${BINARY_NAME}.next"
 mv "$DEPLOY_DIR/${BINARY_NAME}.next" "$DEPLOY_DIR/$BINARY_NAME"
 
+WATCHDOG_SCRIPT="$DEPLOY_DIR/.${BINARY_NAME}_rollback_watchdog.sh"
+cat > "$WATCHDOG_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+sleep ${WATCHDOG_DELAY_SEC}
+latest_backup=\$(ls -t "$DEPLOY_DIR"/${BINARY_NAME}.bak.* 2>/dev/null | head -n 1 || true)
+if [ -n "\$latest_backup" ] && [ -f "\$latest_backup" ]; then
+  cp "\$latest_backup" "$DEPLOY_DIR/$BINARY_NAME"
+  pm2 restart "$PM2_NAME" >/dev/null 2>&1 || true
+  pm2 save >/dev/null 2>&1 || true
+fi
+EOF
+chmod +x "$WATCHDOG_SCRIPT"
+step "Arming rollback watchdog (${WATCHDOG_DELAY_SEC}s)..."
+pm2 delete "$WATCHDOG_NAME" >/dev/null 2>&1 || true
+pm2 start "$WATCHDOG_SCRIPT" --name "$WATCHDOG_NAME" --no-autorestart >/dev/null || fail "Failed to arm rollback watchdog"
+
 # --- 5. Restart ---
 step "Restarting PM2 process..."
 pm2 restart "$PM2_NAME" || fail "PM2 restart failed"
 pm2 save || warn "PM2 save failed (non-fatal)"
+
+step "Waiting ${WATCHDOG_DELAY_SEC}s stability window before disarming watchdog..."
+sleep "$WATCHDOG_DELAY_SEC"
+pm2 delete "$WATCHDOG_NAME" >/dev/null 2>&1 || warn "Failed to delete rollback watchdog"
+rm -f "$WATCHDOG_SCRIPT" || warn "Failed to remove rollback watchdog script"
 
 step "Deploy complete."

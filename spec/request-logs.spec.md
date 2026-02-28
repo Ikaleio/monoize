@@ -220,6 +220,7 @@ FL3. The model column MUST use the `ModelBadge` component (same as Provider page
 
 FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a single cell with adjacent rounded badges: `[总用时] [首字时间] [流]` (where 首字时间 and 流 badges are only shown when applicable).
 FL4b. The frontend MUST treat request-log timing values as numeric-compatible inputs. For badge rendering and tooltip math, it MUST accept canonical fields `duration_ms` and `ttfb_ms`, and it MUST also accept the compatibility aliases `durationMs`, `elapsed_ms`, or `latency_ms` (total duration) and `ttfbMs`, `first_token_ms`, or `firstTokenMs` (TTFB) when those aliases are present. String values that parse to finite numbers MUST be rendered identically to numeric values.
+FL4c. Backend request-log API responses MUST include compatibility aliases for timing fields (`durationMs`, `elapsed_ms`, `latency_ms`, `ttfbMs`, `first_token_ms`, `firstTokenMs`) with values equal to canonical `duration_ms` / `ttfb_ms`, so updated frontend builds do not rely on client-side fallback only.
 FL4a. Hovering the `duration_ms` badge MUST show a tooltip containing the total duration, and an "Average TPS" (tokens per second) metric when `duration_ms > 0` and `output_tokens > 0`. The TPS denominator MUST be computed as follows:
 
 - If `ttfb_ms` is present and `duration_ms > ttfb_ms`: denominator = `duration_ms - ttfb_ms` (generation window only).

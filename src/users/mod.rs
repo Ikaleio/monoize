@@ -280,6 +280,15 @@ pub struct RequestLogRow {
     pub error_http_status: Option<i64>,
     pub duration_ms: Option<i64>,
     pub ttfb_ms: Option<i64>,
+    #[serde(rename = "durationMs")]
+    pub duration_ms_camel: Option<i64>,
+    pub elapsed_ms: Option<i64>,
+    pub latency_ms: Option<i64>,
+    #[serde(rename = "ttfbMs")]
+    pub ttfb_ms_camel: Option<i64>,
+    pub first_token_ms: Option<i64>,
+    #[serde(rename = "firstTokenMs")]
+    pub first_token_ms_camel: Option<i64>,
     pub request_ip: Option<String>,
     pub reasoning_effort: Option<String>,
     pub tried_providers_json: Option<Value>,
