@@ -52,11 +52,11 @@ DPT-RL3. `push(log)` MUST append the `InsertRequestLog` to the internal buffer u
 
 ### 3.3 Flush
 
-DPT-RL4. `flush(db)` MUST atomically drain the buffer (via `std::mem::replace` with a fresh `Vec` of the same capacity hint) and execute one `INSERT INTO request_logs (...) VALUES (...)` per drained entry within a single write-lock acquisition.
+DPT-RL4. `flush(db)` MUST atomically drain the buffer (via `std::mem::replace` with a fresh `Vec` of the same capacity hint), open a single database transaction, execute one `INSERT INTO request_logs (...) VALUES (...)` per drained entry inside that transaction, and commit at the end.
 
-DPT-RL5. Each INSERT MUST generate a new UUID `id` and set `created_at` to `Utc::now()` at flush time.
+DPT-RL5. Each INSERT MUST generate a new UUID `id` and use the log entry's captured `created_at` value (request terminalization time) instead of flush time.
 
-DPT-RL6. If an individual INSERT fails, the error MUST be logged at `warn` level. The flush MUST continue processing remaining entries.
+DPT-RL6. If any INSERT fails, the transaction MUST be rolled back and the flush failure MUST be logged at `warn` level.
 
 DPT-RL7. If the buffer is empty at flush time, the method MUST return immediately without acquiring a write lock.
 

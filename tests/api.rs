@@ -1594,6 +1594,7 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
 
     let mut matched = None;
     for _ in 0..20 {
+        ctx.state.user_store.flush_all_batchers().await;
         let (logs, _, _) = ctx
             .state
             .user_store
@@ -1654,6 +1655,7 @@ async fn chat_streaming_requests_upstream_include_usage_by_default() {
 
     let mut matched = None;
     for _ in 0..20 {
+        ctx.state.user_store.flush_all_batchers().await;
         let (logs, _, _) = ctx
             .state
             .user_store

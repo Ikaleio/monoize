@@ -244,6 +244,7 @@ pub struct InsertRequestLog {
     pub reasoning_effort: Option<String>,
     pub tried_providers_json: Option<Value>,
     pub request_kind: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 pub const REQUEST_LOG_STATUS_PENDING: &str = "pending";

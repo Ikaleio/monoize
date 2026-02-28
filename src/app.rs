@@ -651,6 +651,7 @@ fn spawn_active_probe_request_log(
             reasoning_effort: None,
             tried_providers_json: None,
             request_kind: Some(ACTIVE_PROBE_CONNECTIVITY_KIND.to_string()),
+            created_at: chrono::Utc::now(),
         };
 
         if let Err(err) = user_store.insert_request_log(log).await {

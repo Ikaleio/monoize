@@ -104,12 +104,22 @@ impl RequestLogBatcher {
         }
 
         let write = db.write().await;
-        use sea_orm::ConnectionTrait;
+        use sea_orm::{ConnectionTrait, TransactionTrait};
         use sea_orm::Value as SeaValue;
+
+        let tx = match write.begin().await {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::warn!("request_log_batcher flush begin tx error: {e}");
+                return;
+            }
+        };
+
+        let mut insert_failed = false;
 
         for log in &entries {
             let id = uuid::Uuid::new_v4().to_string();
-            let now = Utc::now().to_rfc3339();
+            let created_at = log.created_at.to_rfc3339();
             let sql = r#"INSERT INTO request_logs
                    (id, request_id, user_id, api_key_id, model, provider_id, upstream_model, channel_id, is_stream,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, tool_prompt_tokens, reasoning_tokens,
@@ -183,11 +193,24 @@ impl RequestLogBatcher {
                     .map(serde_json::Value::to_string)
                     .into(),
                 log.request_kind.clone().into(),
-                now.into(),
+                created_at.into(),
             ];
-            if let Err(e) = write.execute(db.stmt(sql, values)).await {
+            if let Err(e) = tx.execute(db.stmt(sql, values)).await {
                 tracing::warn!("request_log_batcher flush error: {e}");
+                insert_failed = true;
+                break;
             }
+        }
+
+        if insert_failed {
+            if let Err(e) = tx.rollback().await {
+                tracing::warn!("request_log_batcher rollback error: {e}");
+            }
+            return;
+        }
+
+        if let Err(e) = tx.commit().await {
+            tracing::warn!("request_log_batcher commit error: {e}");
         }
     }
 

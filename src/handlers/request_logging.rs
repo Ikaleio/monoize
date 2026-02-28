@@ -1,4 +1,5 @@
 use super::*;
+use chrono::Utc;
 
 pub(super) async fn insert_pending_request_log(
     state: &AppState,
@@ -89,6 +90,7 @@ pub(super) fn spawn_request_log(
     let model_multiplier = attempt.model_multiplier;
     let model = model.to_string();
     let duration_ms = started_at.elapsed().as_millis() as u64;
+    let created_at = Utc::now();
     let user_store = state.user_store.clone();
     let usage_breakdown_json = usage.as_ref().map(build_usage_breakdown);
     let tried_providers_json = if tried_providers.is_empty() {
@@ -149,6 +151,7 @@ pub(super) fn spawn_request_log(
             reasoning_effort,
             tried_providers_json,
             request_kind: None,
+            created_at,
         };
         if let Err(e) = user_store.finalize_request_log(log).await {
             tracing::warn!("failed to finalize request log: {e}");
@@ -187,6 +190,7 @@ pub(super) fn spawn_request_log_error(
     let model_multiplier = attempt.model_multiplier;
     let channel_id = attempt.channel_id.clone();
     let duration_ms = started_at.elapsed().as_millis() as u64;
+    let created_at = Utc::now();
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
     let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));
@@ -229,6 +233,7 @@ pub(super) fn spawn_request_log_error(
             reasoning_effort,
             tried_providers_json,
             request_kind: None,
+            created_at,
         };
         if let Err(e) = user_store.finalize_request_log(log).await {
             tracing::warn!("failed to finalize request log: {e}");
@@ -255,6 +260,7 @@ pub(super) fn spawn_request_log_error_no_attempt(
     let api_key_id = auth.api_key_id.clone();
     let model = model.to_string();
     let duration_ms = started_at.elapsed().as_millis() as u64;
+    let created_at = Utc::now();
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
     let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));
@@ -297,6 +303,7 @@ pub(super) fn spawn_request_log_error_no_attempt(
             reasoning_effort,
             tried_providers_json,
             request_kind: None,
+            created_at,
         };
         if let Err(e) = user_store.finalize_request_log(log).await {
             tracing::warn!("failed to finalize request log: {e}");

@@ -468,9 +468,9 @@ impl UserStore {
 
         // 1. Model bucketed aggregation (cost + calls)
         let bucket_expr = if is_sqlite {
-            "CAST((julianday(rl.created_at) - julianday($1)) / $2 AS INTEGER)".to_string()
+            "CAST((julianday(rl.created_at) - julianday($1)) / $2 AS BIGINT)".to_string()
         } else {
-            "CAST(EXTRACT(EPOCH FROM (CAST(rl.created_at AS TIMESTAMPTZ) - CAST($1 AS TIMESTAMPTZ))) / ($2 * 86400.0) AS INTEGER)".to_string()
+            "CAST(EXTRACT(EPOCH FROM (CAST(rl.created_at AS TIMESTAMPTZ) - CAST($1 AS TIMESTAMPTZ))) / ($2 * 86400.0) AS BIGINT)".to_string()
         };
 
         let mut model_sql = format!(

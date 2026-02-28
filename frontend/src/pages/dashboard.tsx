@@ -500,7 +500,7 @@ export function DashboardPage() {
 
               {analysisData.rows.length > 0 ? (
                 <div className="flex-1 min-h-0 flex flex-col rounded-lg border bg-muted/20 p-2 sm:p-3">
-                  <div className="flex-1 min-h-0">
+                  <div className="flex-1 min-h-0 overflow-hidden">
                     <ChartContainer config={analysisChartConfig} className="h-full min-h-[170px] w-full !aspect-auto">
                       <BarChart data={analysisData.rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                         <CartesianGrid vertical={false} />
