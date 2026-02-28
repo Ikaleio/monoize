@@ -35,6 +35,15 @@ async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) 
     provider
 }
 
+async fn prune_provider_channel_health(state: &AppState, channel_ids: &[String]) {
+    if channel_ids.is_empty() {
+        return;
+    }
+    let ids: std::collections::HashSet<&str> = channel_ids.iter().map(String::as_str).collect();
+    let mut health = state.channel_health.lock().await;
+    health.retain(|channel_id, _| !ids.contains(channel_id.as_str()));
+}
+
 pub(super) fn provider_pricing_model<'a>(
     logical_model: &'a str,
     model_entry: &'a crate::monoize_routing::MonoizeModelEntry,
@@ -135,6 +144,13 @@ pub async fn update_provider(
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
 
+    let prev_provider = state
+        .monoize_store
+        .get_provider(&provider_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found"))?;
+
     let provider = state
         .monoize_store
         .update_provider(&provider_id, body)
@@ -147,6 +163,16 @@ pub async fn update_provider(
             }
         })?;
 
+    let next_channel_ids: std::collections::HashSet<&str> =
+        provider.channels.iter().map(|ch| ch.id.as_str()).collect();
+    let removed_channel_ids: Vec<String> = prev_provider
+        .channels
+        .iter()
+        .filter(|ch| !next_channel_ids.contains(ch.id.as_str()))
+        .map(|ch| ch.id.clone())
+        .collect();
+    prune_provider_channel_health(&state, &removed_channel_ids).await;
+
     Ok(Json(provider_with_runtime(&state, provider).await))
 }
 
@@ -156,6 +182,13 @@ pub async fn delete_provider(
     Path(provider_id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
+
+    let existing_provider = state
+        .monoize_store
+        .get_provider(&provider_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "provider not found"))?;
 
     state
         .monoize_store
@@ -168,6 +201,13 @@ pub async fn delete_provider(
                 AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
             }
         })?;
+
+    let removed_channel_ids: Vec<String> = existing_provider
+        .channels
+        .iter()
+        .map(|ch| ch.id.clone())
+        .collect();
+    prune_provider_channel_health(&state, &removed_channel_ids).await;
 
     Ok(Json(json!({ "success": true })))
 }

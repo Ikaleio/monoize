@@ -247,7 +247,8 @@ impl ApiKeyCache {
         let entry = self.cache.get(prefix)?;
         if entry.cached_at.elapsed() > self.ttl {
             drop(entry);
-            self.cache.remove(prefix);
+            self.cache
+                .remove_if(prefix, |_, v| v.cached_at.elapsed() > self.ttl);
             return None;
         }
         Some((entry.api_key.clone(), entry.user.clone()))
@@ -276,13 +277,31 @@ impl ApiKeyCache {
 
     /// Invalidate entries matching any of the given key IDs.
     pub fn invalidate_by_key_ids(&self, key_ids: &[String]) {
+        let key_id_set: std::collections::HashSet<&str> =
+            key_ids.iter().map(String::as_str).collect();
         self.cache
-            .retain(|_, v| !key_ids.iter().any(|id| id == &v.api_key.id));
+            .retain(|_, v| !key_id_set.contains(v.api_key.id.as_str()));
+    }
+
+    pub fn invalidate_by_prefix(&self, prefix: &str) {
+        self.cache.remove(prefix);
     }
 
     /// Remove all entries.
     pub fn invalidate_all(&self) {
         self.cache.clear();
+    }
+
+    pub fn spawn_eviction_task(self, interval: Duration) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let ttl = self.ttl;
+                self.cache.retain(|_, v| v.cached_at.elapsed() <= ttl);
+            }
+        })
     }
 }
 
@@ -316,7 +335,8 @@ impl BalanceCache {
         let entry = self.cache.get(user_id)?;
         if entry.cached_at.elapsed() > self.ttl {
             drop(entry);
-            self.cache.remove(user_id);
+            self.cache
+                .remove_if(user_id, |_, v| v.cached_at.elapsed() > self.ttl);
             return None;
         }
         Some(entry.balance.clone())
@@ -338,5 +358,17 @@ impl BalanceCache {
 
     pub fn invalidate_all(&self) {
         self.cache.clear();
+    }
+
+    pub fn spawn_eviction_task(self, interval: Duration) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let ttl = self.ttl;
+                self.cache.retain(|_, v| v.cached_at.elapsed() <= ttl);
+            }
+        })
     }
 }

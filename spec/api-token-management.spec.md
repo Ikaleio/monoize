@@ -15,7 +15,7 @@ An API key row has:
 - `user_id: string`
 - `name: string`
 - `key_prefix: string` (first 12 characters of the full key)
-- `key_hash: string` (Argon2 hash of full key)
+- `key_hash: string` (reserved; currently not used for runtime validation)
 - `key: string` (the full key, stored for display)
 - `created_at: RFC3339 string`
 - `expires_at: RFC3339 string?`
@@ -67,7 +67,9 @@ TM-CREATE-1. The generated full key MUST start with the literal prefix `sk-`.
 
 TM-CREATE-2. The server MUST compute `key_prefix` as the first 12 characters of the full key.
 
-TM-CREATE-3. The server MUST store an Argon2 hash of the full key in `key_hash`.
+TM-CREATE-3. The server MUST persist `key_hash` as a reserved compatibility field. Runtime token validation semantics are defined in `api-key-authentication.spec.md`.
+
+TM-CREATE-4. After successful key creation, there is no required cache invalidation side-effect because the new key does not exist in cache yet.
 
 ### 2.4 Update API key
 
@@ -87,11 +89,15 @@ TM-CREATE-3. The server MUST store an Argon2 hash of the full key in `key_hash`.
   - `expires_at` (RFC3339 string or null)
 - **Errors:** `404 not_found` if the key does not exist or is not owned by the user.
 
+TM-UPD-1. A successful API key update MUST invalidate in-memory API key cache entries for the updated key id before returning the response.
+
 ### 2.5 Delete API key
 
 - **Endpoint:** `DELETE /api/dashboard/tokens/{key_id}`
 - **Authorization:** Any authenticated user, but only for keys owned by that user.
 - **Response:** `{ "success": true }`
+
+TM-DEL-1. A successful API key delete MUST invalidate in-memory API key cache entries for the deleted key id before returning the response.
 
 ### 2.6 Batch delete API keys
 
@@ -100,3 +106,9 @@ TM-CREATE-3. The server MUST store an Argon2 hash of the full key in `key_hash`.
 - **Request body:** `{ "ids": string[] }`
 - **Behavior:** The server MUST delete only keys owned by the current user.
 - **Response:** `{ "success": true, "deleted_count": integer }`
+
+TM-BATCH-1. A successful batch delete MUST invalidate in-memory API key cache entries for all deleted key ids before returning the response.
+
+## 3. Runtime quota cache coherence
+
+TM-Q1. Any operation that decrements `quota_remaining` for an API key MUST invalidate in-memory API key cache entries for that key id in the same process before returning.

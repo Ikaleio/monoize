@@ -64,8 +64,10 @@ impl StateStore for MemoryStateStore {
         id: &str,
     ) -> Result<Option<StoredRecord>, String> {
         let guard = self.inner.read().await;
+        let now = chrono::Utc::now().timestamp();
         Ok(guard
             .get(&(tenant_id.to_string(), kind.to_string(), id.to_string()))
+            .filter(|record| record.expires_at.is_none_or(|exp| exp > now))
             .cloned())
     }
 
@@ -77,9 +79,10 @@ impl StateStore for MemoryStateStore {
 
     async fn list(&self, tenant_id: &str, kind: &str) -> Result<Vec<StoredRecord>, String> {
         let guard = self.inner.read().await;
+        let now = chrono::Utc::now().timestamp();
         let mut out = Vec::new();
         for ((t, k, _), record) in guard.iter() {
-            if t == tenant_id && k == kind {
+            if t == tenant_id && k == kind && record.expires_at.is_none_or(|exp| exp > now) {
                 out.push(record.clone());
             }
         }
@@ -162,6 +165,10 @@ impl StateStore for DbStateStore {
                 let value_text: String = row.try_get("", "value").map_err(|e| e.to_string())?;
                 let expires_at: Option<i64> =
                     row.try_get("", "expires_at").map_err(|e| e.to_string())?;
+                let now = chrono::Utc::now().timestamp();
+                if expires_at.is_some_and(|exp| exp <= now) {
+                    return Ok(None);
+                }
                 let value: Value =
                     serde_json::from_str(&value_text).map_err(|err| err.to_string())?;
                 Ok(Some(StoredRecord {
@@ -201,11 +208,15 @@ impl StateStore for DbStateStore {
             .await
             .map_err(|err| err.to_string())?;
         let mut out = Vec::new();
+        let now = chrono::Utc::now().timestamp();
         for row in rows {
             let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
             let value_text: String = row.try_get("", "value").map_err(|e| e.to_string())?;
             let expires_at: Option<i64> =
                 row.try_get("", "expires_at").map_err(|e| e.to_string())?;
+            if expires_at.is_some_and(|exp| exp <= now) {
+                continue;
+            }
             let value: Value =
                 serde_json::from_str(&value_text).map_err(|err| err.to_string())?;
             out.push(StoredRecord {

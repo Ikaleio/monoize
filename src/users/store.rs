@@ -35,6 +35,8 @@ impl UserStore {
     pub fn spawn_background_tasks(&self) {
         self.last_used_batcher.clone().spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(30));
         self.request_log_batcher.clone().spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(2));
+        self.api_key_cache.clone().spawn_eviction_task(std::time::Duration::from_secs(30));
+        self.balance_cache.clone().spawn_eviction_task(std::time::Duration::from_secs(30));
     }
 
     pub async fn flush_all_batchers(&self) {
@@ -232,10 +234,10 @@ impl UserStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        if enabled.is_some() {
+        if !set_clauses.is_empty() {
             self.api_key_cache.invalidate_by_user_id(id);
         }
-        if balance_nano_usd.is_some() {
+        if balance_nano_usd.is_some() || balance_unlimited.is_some() {
             self.balance_cache.invalidate(id);
         }
 
@@ -248,6 +250,7 @@ impl UserStore {
             .await
             .map_err(|e| e.to_string())?;
         self.api_key_cache.invalidate_by_user_id(id);
+        self.balance_cache.invalidate(id);
         Ok(())
     }
 
@@ -491,6 +494,7 @@ impl UserStore {
             ))
             .await
             .map_err(|e| e.to_string())?;
+        self.api_key_cache.invalidate_by_key_id(api_key_id);
         Ok(())
     }
 
@@ -511,22 +515,16 @@ impl UserStore {
 
         // Check cache first
         if let Some((cached_key, cached_user)) = self.api_key_cache.get(prefix) {
-            if !cached_key.enabled {
-                return Ok(None);
+            let now = Utc::now();
+            let not_expired = cached_key.expires_at.is_none_or(|expires_at| expires_at >= now);
+            let is_valid =
+                cached_key.enabled && cached_user.enabled && not_expired && key == cached_key.key;
+            if is_valid {
+                self.last_used_batcher.record(cached_key.id.clone(), now);
+                return Ok(Some((cached_key, cached_user)));
             }
-            if !cached_user.enabled {
-                return Ok(None);
-            }
-            if let Some(expires_at) = cached_key.expires_at {
-                if expires_at < Utc::now() {
-                    return Ok(None);
-                }
-            }
-            if key != cached_key.key {
-                return Ok(None);
-            }
-            self.last_used_batcher.record(cached_key.id.clone(), Utc::now());
-            return Ok(Some((cached_key, cached_user)));
+
+            self.api_key_cache.invalidate_by_prefix(prefix);
         }
 
         // Cache miss — DB lookup

@@ -89,7 +89,7 @@ DPT-AK4. `get(prefix)` MUST return `Some((ApiKey, User))` if and only if:
 1. An entry exists for the given prefix, AND
 2. `cached_at.elapsed() <= ttl`.
 
-DPT-AK5. If an entry exists but `cached_at.elapsed() > ttl`, the entry MUST be removed from the cache and `None` MUST be returned.
+DPT-AK5. If an entry exists but `cached_at.elapsed() > ttl`, the cache MUST remove the entry only if the currently stored entry is still expired at removal time (conditional remove), and then return `None`.
 
 ### 4.3 Security Invariant
 
@@ -107,6 +107,7 @@ DPT-AK9. The following invalidation methods MUST exist:
 - `invalidate_by_key_id(key_id)`: Remove all entries where `entry.api_key.id == key_id`.
 - `invalidate_by_user_id(user_id)`: Remove all entries where `entry.api_key.user_id == user_id`.
 - `invalidate_by_key_ids(key_ids)`: Remove all entries where `entry.api_key.id` is in `key_ids`.
+- `invalidate_by_prefix(prefix)`: Remove the entry for the given key prefix.
 - `invalidate_all()`: Clear the entire cache.
 
 DPT-AK10. Invalidation MUST be called on the following mutation paths:
@@ -117,9 +118,14 @@ DPT-AK10. Invalidation MUST be called on the following mutation paths:
 | `update_api_key(key_id, input)` | `invalidate_by_key_id(key_id)` |
 | `batch_delete_api_keys(ids)` | `invalidate_by_key_ids(ids)` |
 | `delete_user(id)` | `invalidate_by_user_id(id)` |
-| `update_user(id, ..., enabled=Some(_), ...)` | `invalidate_by_user_id(id)` |
+| `update_user(id, ..., any persisted field changed, ...)` | `invalidate_by_user_id(id)` |
+| `decrement_api_key_quota(api_key_id)` | `invalidate_by_key_id(api_key_id)` |
 
-DPT-AK11. `update_user` MUST invalidate the API key cache only when the `enabled` field is being changed (i.e., `enabled.is_some()`). Other user field updates (username, password, role, email) MUST NOT trigger API key cache invalidation.
+DPT-AK11. `update_user` MUST invalidate the API key cache whenever the update modifies any persisted user field.
+
+DPT-AK12. `decrement_api_key_quota(api_key_id)` MUST invalidate API key cache entries for that key via `invalidate_by_key_id(api_key_id)` after the quota update executes.
+
+DPT-AK13. `ApiKeyCache` MUST provide a background eviction task that periodically removes expired entries using `retain`.
 
 ## 5. BalanceCache
 
@@ -139,7 +145,7 @@ DPT-BC4. `get(user_id)` MUST return `Some(UserBalance)` if and only if:
 1. An entry exists for the given user_id, AND
 2. `cached_at.elapsed() <= ttl`.
 
-DPT-BC5. If an entry exists but `cached_at.elapsed() > ttl`, the entry MUST be removed from the cache and `None` MUST be returned.
+DPT-BC5. If an entry exists but `cached_at.elapsed() > ttl`, the cache MUST remove the entry only if the currently stored entry is still expired at removal time (conditional remove), and then return `None`.
 
 ### 5.3 Insertion
 
@@ -159,12 +165,15 @@ DPT-BC8. Invalidation MUST be called on the following mutation paths:
 | `admin_adjust_user_balance(user_id, ...)` | `invalidate(user_id)` — after transaction commit |
 | `update_user(id, ..., balance_nano_usd=Some(_), ...)` | `invalidate(id)` |
 | `update_user(id, ..., balance_unlimited=Some(_), ...)` | `invalidate(id)` |
+| `delete_user(id)` | `invalidate(id)` |
 
 DPT-BC9. `update_user` MUST invalidate the balance cache only when `balance_nano_usd` or `balance_unlimited` is being changed. Other user field updates MUST NOT trigger balance cache invalidation.
 
 ### 5.5 Staleness Bound
 
 DPT-BC10. The maximum staleness of a cached balance is bounded by the TTL (30 seconds). A user who receives a deposit or is charged will see the updated balance within at most 30 seconds, or immediately if the cache is explicitly invalidated by a mutation on the same process.
+
+DPT-BC11. `BalanceCache` MUST provide a background eviction task that periodically removes expired entries using `retain`.
 
 ## 6. UserStore Integration
 
@@ -178,7 +187,11 @@ DPT-US1. `UserStore::new(db)` MUST construct all four subsystems:
 
 ### 6.2 Lifecycle
 
-DPT-US2. `spawn_background_tasks()` MUST be called after `UserStore` construction (during application startup, after `load_state()`). It MUST spawn flush tasks for both `LastUsedBatcher` (30s interval) and `RequestLogBatcher` (2s interval).
+DPT-US2. `spawn_background_tasks()` MUST be called after `UserStore` construction (during application startup, after `load_state()`). It MUST spawn:
+- flush task for `LastUsedBatcher` (30s interval),
+- flush task for `RequestLogBatcher` (2s interval),
+- eviction task for `ApiKeyCache` (30s interval),
+- eviction task for `BalanceCache` (30s interval).
 
 DPT-US3. `flush_all_batchers()` MUST be called during application shutdown. It MUST flush both `LastUsedBatcher` and `RequestLogBatcher` to ensure buffered data is persisted.
 
@@ -192,7 +205,7 @@ DPT-US5. `validate_api_key(key)` MUST follow this execution path:
 1. If `key.len() < 12`, return `None`.
 2. Extract `prefix = key[..12]`.
 3. Check `ApiKeyCache::get(prefix)`.
-4. On cache hit: verify `enabled`, `user.enabled`, `expires_at`, and `key != cached_key.key` (plaintext equality). If all pass, call `last_used_batcher.record(...)` and return the cached result. If any check fails, invalidate the cache entry and fall through.
+4. On cache hit: verify `enabled`, `user.enabled`, `expires_at`, and `key != cached_key.key` (plaintext equality). If all pass, call `last_used_batcher.record(...)` and return the cached result. If any check fails, invalidate the cache entry and MUST immediately revalidate via the database path in the same call; cache validation failure alone MUST NOT produce an authentication error response.
 5. On cache miss: query DB for API key by prefix, verify enabled/expired/key-equality/user, call `last_used_batcher.record(...)`, insert into `ApiKeyCache`, and return.
 
 ### 6.4 Request Log Integration

@@ -99,11 +99,15 @@ All endpoints require an authenticated dashboard admin session.
 - Response: updated provider
 - Errors: `404 not_found`, `400 invalid_request`
 
+CP-UPD-1. After a successful provider update, runtime `channel_health` entries whose channel ids are no longer present in the updated provider's `channels` set MUST be removed from the in-memory health map before the response is returned.
+
 ### 3.5 Delete provider
 
 - Method/Path: `DELETE /api/dashboard/providers/{provider_id}`
 - Response: `{ "success": true }`
 - Errors: `404 not_found`
+
+CP-DEL-1. After a successful provider deletion, runtime `channel_health` entries for all channels that belonged to the deleted provider MUST be removed from the in-memory health map before the success response is returned.
 
 ### 3.6 Reorder providers
 

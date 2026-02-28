@@ -37,8 +37,9 @@ AKP2. If AKP1 holds, Monoize MUST:
 4. If a row exists, Monoize MUST validate the token as follows:
    - `enabled` MUST be true.
    - `expires_at` MUST be null or a future timestamp.
-   - the Argon2 hash `key_hash` MUST verify against the full token.
+   - the stored full key value MUST equal the full token.
    - the referenced user MUST exist and have `enabled` true.
+   - if an in-memory cache entry for the same `key_prefix` exists but fails cache-side validation, Monoize MUST invalidate that cache entry and continue with the database validation path in the same request.
 5. If validation succeeds:
    - Monoize MUST update `last_used_at` to the current time.
    - Monoize MUST authenticate the request with `tenant_id = user.id`.
