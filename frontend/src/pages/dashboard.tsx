@@ -231,8 +231,8 @@ export function DashboardPage() {
 
     for (const log of rawLogs) {
       if (log.status === "success") successCount++;
-      if (log.duration_ms != null && log.duration_ms > 0) {
-        durationSum += log.duration_ms;
+      if (log.timing?.duration_ms != null && log.timing.duration_ms > 0) {
+        durationSum += log.timing.duration_ms;
         durationCount++;
       }
     }

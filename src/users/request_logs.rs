@@ -1,6 +1,8 @@
 use super::{
     AnalyticsModelBucketRow, AnalyticsProviderBucketRow, DashboardAnalyticsRaw,
-    InsertRequestLog, RequestLogRow, UserStore,
+    InsertRequestLog, RequestLogApiKey, RequestLogBilling, RequestLogChannel,
+    RequestLogError, RequestLogProvider, RequestLogRow, RequestLogTiming,
+    RequestLogTokens, RequestLogUser, UserStore,
 };
 use chrono::{DateTime, FixedOffset};
 use rust_decimal::Decimal;
@@ -187,52 +189,68 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
     RequestLogRow {
         id: row.try_get("", "id").unwrap_or_default(),
         request_id: row.try_get("", "request_id").unwrap_or(None),
-        user_id: row.try_get("", "user_id").unwrap_or_default(),
-        api_key_id: row.try_get("", "api_key_id").unwrap_or(None),
-        model: row.try_get("", "model").unwrap_or_default(),
-        provider_id: row.try_get("", "provider_id").unwrap_or(None),
-        upstream_model: row.try_get("", "upstream_model").unwrap_or(None),
-        channel_id: row.try_get("", "channel_id").unwrap_or(None),
-        is_stream,
-        input_tokens: row.try_get::<Option<i32>>("" , "input_tokens").unwrap_or(None).map(|v| v as i64),
-        output_tokens: row.try_get::<Option<i32>>("" , "output_tokens").unwrap_or(None).map(|v| v as i64),
-        cache_read_tokens: row.try_get::<Option<i32>>("" , "cache_read_tokens").unwrap_or(None).map(|v| v as i64),
-        cache_creation_tokens: row.try_get::<Option<i32>>("" , "cache_creation_tokens").unwrap_or(None).map(|v| v as i64),
-        tool_prompt_tokens: row.try_get::<Option<i32>>("" , "tool_prompt_tokens").unwrap_or(None).map(|v| v as i64),
-        reasoning_tokens: row.try_get::<Option<i32>>("" , "reasoning_tokens").unwrap_or(None).map(|v| v as i64),
-        accepted_prediction_tokens: row.try_get::<Option<i32>>("" , "accepted_prediction_tokens").unwrap_or(None).map(|v| v as i64),
-        rejected_prediction_tokens: row.try_get::<Option<i32>>("" , "rejected_prediction_tokens").unwrap_or(None).map(|v| v as i64),
-        provider_multiplier: row.try_get("", "provider_multiplier").unwrap_or(None),
-        charge_nano_usd,
+        created_at: row_timestamp_to_rfc3339(row, "created_at_ts")
+            .unwrap_or_else(|| row.try_get("", "created_at").unwrap_or_default()),
         status: row
             .try_get("", "status")
             .unwrap_or_else(|_| "unknown".to_string()),
-        usage_breakdown_json: parse_optional_json_text(
-            row.try_get::<Option<String>>("", "usage_breakdown_json")
-                .unwrap_or(None),
-        ),
-        billing_breakdown_json: parse_optional_json_text(
-            row.try_get::<Option<String>>("", "billing_breakdown_json")
-                .unwrap_or(None),
-        ),
-        error_code: row.try_get("", "error_code").unwrap_or(None),
-        error_message: row.try_get("", "error_message").unwrap_or(None),
-        error_http_status: row.try_get::<Option<i32>>("" , "error_http_status").unwrap_or(None).map(|v| v as i64),
-        duration_ms: row.try_get::<Option<i32>>("" , "duration_ms").unwrap_or(None).map(|v| v as i64),
-        ttfb_ms: row.try_get::<Option<i32>>("" , "ttfb_ms").unwrap_or(None).map(|v| v as i64),
-        request_ip: row.try_get("", "request_ip").unwrap_or(None),
+        is_stream,
+        model: row.try_get("", "model").unwrap_or_default(),
+        upstream_model: row.try_get("", "upstream_model").unwrap_or(None),
+        request_kind: row.try_get("", "request_kind").unwrap_or(None),
         reasoning_effort: row.try_get("", "reasoning_effort").unwrap_or(None),
-        tried_providers_json: parse_optional_json_text(
+        request_ip: row.try_get("", "request_ip").unwrap_or(None),
+        tried_providers: parse_optional_json_text(
             row.try_get::<Option<String>>("", "tried_providers_json")
                 .unwrap_or(None),
         ),
-        request_kind: row.try_get("", "request_kind").unwrap_or(None),
-        created_at: row_timestamp_to_rfc3339(row, "created_at_ts")
-            .unwrap_or_else(|| row.try_get("", "created_at").unwrap_or_default()),
-        username: row.try_get("", "username").unwrap_or(None),
-        api_key_name: row.try_get("", "api_key_name").unwrap_or(None),
-        channel_name: row.try_get("", "channel_name").unwrap_or(None),
-        provider_name: row.try_get("", "provider_name").unwrap_or(None),
+        provider: RequestLogProvider {
+            id: row.try_get("", "provider_id").unwrap_or(None),
+            name: row.try_get("", "provider_name").unwrap_or(None),
+            multiplier: row.try_get("", "provider_multiplier").unwrap_or(None),
+        },
+        channel: RequestLogChannel {
+            id: row.try_get("", "channel_id").unwrap_or(None),
+            name: row.try_get("", "channel_name").unwrap_or(None),
+        },
+        user: RequestLogUser {
+            id: row.try_get("", "user_id").unwrap_or_default(),
+            username: row.try_get("", "username").unwrap_or(None),
+        },
+        api_key: RequestLogApiKey {
+            id: row.try_get("", "api_key_id").unwrap_or(None),
+            name: row.try_get("", "api_key_name").unwrap_or(None),
+        },
+        tokens: RequestLogTokens {
+            input: row.try_get::<Option<i32>>("", "input_tokens").unwrap_or(None).map(|v| v as i64),
+            output: row.try_get::<Option<i32>>("", "output_tokens").unwrap_or(None).map(|v| v as i64),
+            cache_read: row.try_get::<Option<i32>>("", "cache_read_tokens").unwrap_or(None).map(|v| v as i64),
+            cache_creation: row.try_get::<Option<i32>>("", "cache_creation_tokens").unwrap_or(None).map(|v| v as i64),
+            tool_prompt: row.try_get::<Option<i32>>("", "tool_prompt_tokens").unwrap_or(None).map(|v| v as i64),
+            reasoning: row.try_get::<Option<i32>>("", "reasoning_tokens").unwrap_or(None).map(|v| v as i64),
+            accepted_prediction: row.try_get::<Option<i32>>("", "accepted_prediction_tokens").unwrap_or(None).map(|v| v as i64),
+            rejected_prediction: row.try_get::<Option<i32>>("", "rejected_prediction_tokens").unwrap_or(None).map(|v| v as i64),
+        },
+        timing: RequestLogTiming {
+            duration_ms: row.try_get::<Option<i32>>("", "duration_ms").unwrap_or(None).map(|v| v as i64),
+            ttfb_ms: row.try_get::<Option<i32>>("", "ttfb_ms").unwrap_or(None).map(|v| v as i64),
+        },
+        billing: RequestLogBilling {
+            charge_nano_usd,
+            breakdown: parse_optional_json_text(
+                row.try_get::<Option<String>>("", "billing_breakdown_json")
+                    .unwrap_or(None),
+            ),
+        },
+        usage: parse_optional_json_text(
+            row.try_get::<Option<String>>("", "usage_breakdown_json")
+                .unwrap_or(None),
+        ),
+        error: RequestLogError {
+            code: row.try_get("", "error_code").unwrap_or(None),
+            message: row.try_get("", "error_message").unwrap_or(None),
+            http_status: row.try_get::<Option<i32>>("", "error_http_status").unwrap_or(None).map(|v| v as i64),
+        },
     }
 }
 

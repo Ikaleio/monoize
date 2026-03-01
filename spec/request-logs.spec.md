@@ -294,6 +294,10 @@ FL25a. The Cost column MUST NOT truncate visible cell text. The table layout MUS
 
 FL26. Hovering the `charge_nano_usd` (Cost) cell MUST show billing breakdown details sourced from `billing_breakdown_json`, including per-class expression `unit_price × token_count` and subtotal, plus multiplier/base/final charge.
 
+FL26a. In the cost breakdown tooltip, any per-class line item whose computed charge is zero (i.e. `charge_nano = "0"` or token count is `0`) MUST be hidden from the rendered tooltip. The backend MUST continue to include all fields in `billing_breakdown_json` regardless of value; this is a frontend-only rendering filter.
+
+FL26b. In the cost breakdown tooltip, the "final cost" (`finalCharge`) line MUST be hidden when its value equals the total cost (`charge_nano_usd`). This avoids visual duplication when the multiplier is 1.0× and base charge equals total charge.
+
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 
 FL27a. In the request-logs table, the visible Input and Output token cell values MUST prefer `usage_breakdown_json.input.total_tokens` and `usage_breakdown_json.output.total_tokens` when those fields are present. If those fields are absent, the UI MUST fall back to scalar columns `input_tokens` and `output_tokens`. If neither source is available, the UI MUST display `0`.

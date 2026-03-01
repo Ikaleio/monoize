@@ -114,11 +114,11 @@ function parseTimingMs(value: TimingValue): number | null {
 }
 
 function getDurationMs(log: RequestLog): number | null {
-	return parseTimingMs(log.duration_ms)
+	return parseTimingMs(log.timing.duration_ms)
 }
 
 function getTtfbMs(log: RequestLog): number | null {
-	return parseTimingMs(log.ttfb_ms)
+	return parseTimingMs(log.timing.ttfb_ms)
 }
 
 function DateRangePicker({
@@ -864,18 +864,18 @@ function LogRowCells({
 	onTooltipOpenChange: (open: boolean) => void
 }) {
 	const isConnectivityTest =
-		log.request_kind === 'active_probe_connectivity' && !log.api_key_name
+		log.request_kind === 'active_probe_connectivity' && !log.api_key.name
 	const durationMs = getDurationMs(log)
 	const ttfbMs = getTtfbMs(log)
 	const duration = formatDuration(durationMs)
 	const ttfb = formatDuration(ttfbMs)
-	const channelDisplay = log.channel_name?.trim() || log.channel_id || null
-	const providerDisplay = log.provider_name?.trim() || log.provider_id || null
-	const costDisplay = formatCostFullPrecision(log.charge_nano_usd)
-	const usageSnapshot = asObject(log.usage_breakdown_json)
+	const channelDisplay = log.channel.name?.trim() || log.channel.id || null
+	const providerDisplay = log.provider.name?.trim() || log.provider.id || null
+	const costDisplay = formatCostFullPrecision(log.billing.charge_nano_usd)
+	const usageSnapshot = asObject(log.usage)
 	const usageInput = asObject(usageSnapshot?.input)
 	const usageOutput = asObject(usageSnapshot?.output)
-	const billingSnapshot = asObject(log.billing_breakdown_json)
+	const billingSnapshot = asObject(log.billing.breakdown)
 	const billingInput = asObject(billingSnapshot?.input)
 	const billingOutput = asObject(billingSnapshot?.output)
 	const multiplier = readNumber(billingSnapshot?.provider_multiplier)
@@ -896,7 +896,7 @@ function LogRowCells({
 		rateNano: string | null,
 		chargeNano: string | null
 	) => {
-		if (tokens == null || !rateNano || !chargeNano) return null
+		if (tokens == null || !rateNano || !chargeNano || Number(chargeNano) === 0) return null
 		return `${formatTokenCount(tokens)} × ${formatRatePerMillion(rateNano)} = ${formatCost(chargeNano)}`
 	}
 
@@ -904,13 +904,13 @@ function LogRowCells({
 	const outputDetailRows: Array<[string, string]> = []
 
 	const inputTotal =
-		readTokenCount(usageInput, 'total_tokens') ?? log.input_tokens ?? null
+		readTokenCount(usageInput, 'total_tokens') ?? log.tokens.input ?? null
 	const inputUncached =
 		readTokenCount(usageInput, 'uncached_tokens') ??
-		Math.max((log.input_tokens ?? 0) - (log.cache_read_tokens ?? 0), 0)
+		Math.max((log.tokens.input ?? 0) - (log.tokens.cache_read ?? 0), 0)
 	const inputText = readTokenCount(usageInput, 'text_tokens')
 	const inputCached =
-		readTokenCount(usageInput, 'cached_tokens') ?? log.cache_read_tokens ?? null
+		readTokenCount(usageInput, 'cached_tokens') ?? log.tokens.cache_read ?? null
 	const inputCacheCreation = readTokenCount(usageInput, 'cache_creation_tokens')
 	const inputAudio = readTokenCount(usageInput, 'audio_tokens')
 	const inputImage = readTokenCount(usageInput, 'image_tokens')
@@ -954,14 +954,14 @@ function LogRowCells({
 		])
 
 	const outputTotal =
-		readTokenCount(usageOutput, 'total_tokens') ?? log.output_tokens ?? null
+		readTokenCount(usageOutput, 'total_tokens') ?? log.tokens.output ?? null
 	const outputNonReasoning =
 		readTokenCount(usageOutput, 'non_reasoning_tokens') ??
-		Math.max((log.output_tokens ?? 0) - (log.reasoning_tokens ?? 0), 0)
+		Math.max((log.tokens.output ?? 0) - (log.tokens.reasoning ?? 0), 0)
 	const outputText = readTokenCount(usageOutput, 'text_tokens')
 	const outputReasoning =
 		readTokenCount(usageOutput, 'reasoning_tokens') ??
-		log.reasoning_tokens ??
+		log.tokens.reasoning ??
 		null
 	const inputTokensForDisplay = inputTotal ?? 0
 	const outputTokensForDisplay = outputTotal ?? 0
@@ -1034,7 +1034,7 @@ function LogRowCells({
 	const baseCharge = readNanoString(billingSnapshot, 'base_charge_nano')
 	const finalCharge =
 		readNanoString(billingSnapshot, 'final_charge_nano') ||
-		log.charge_nano_usd ||
+		log.billing.charge_nano_usd ||
 		null
 
 	return (
@@ -1063,31 +1063,31 @@ function LogRowCells({
 									<div className='font-mono'>{log.request_id}</div>
 									{log.status === 'error' && (
 										<>
-											{log.error_http_status != null && (
+											{log.error.http_status != null && (
 												<div>
 													{t('requestLogs.errorStatus')}:{' '}
-													{log.error_http_status}
+														{log.error.http_status}
 												</div>
 											)}
-											{log.error_code && (
+											{log.error.code && (
 												<div>
-													{t('requestLogs.errorCode')}: {log.error_code}
+														{t('requestLogs.errorCode')}: {log.error.code}
 												</div>
 											)}
-											{log.error_message && (
+											{log.error.message && (
 												<div className='break-words whitespace-pre-wrap'>
-													{t('requestLogs.errorMessage')}: {log.error_message}
+														{t('requestLogs.errorMessage')}: {log.error.message}
 												</div>
 											)}
 										</>
 									)}
-									{log.tried_providers_json &&
-										log.tried_providers_json.length > 0 && (
+									{log.tried_providers &&
+										log.tried_providers.length > 0 && (
 											<div className='border-t border-border/50 pt-1 mt-1'>
 												<div className='font-medium mb-0.5'>
 													{t('requestLogs.triedProviders')}:
 												</div>
-												{log.tried_providers_json.map(
+												{log.tried_providers.map(
 													(
 														tp: {
 															provider_id: string
@@ -1120,7 +1120,7 @@ function LogRowCells({
 							<span className='cursor-default'>
 								<ModelBadge
 									model={log.model}
-									multiplier={log.provider_multiplier}
+										multiplier={log.provider.multiplier}
 									showDetails={false}
 									truncateModelText={false}
 									className='text-[10px] h-5 px-1.5 min-w-max'
@@ -1139,18 +1139,18 @@ function LogRowCells({
 										<span className='font-mono'>{log.upstream_model}</span>
 									</div>
 								)}
-								{log.provider_id && (
+								{log.provider.id && (
 									<div className='flex items-center justify-between gap-3'>
 										<span>{t('requestLogs.modelProvider')}</span>
-										<span className='font-mono'>{log.provider_id}</span>
+											<span className='font-mono'>{log.provider.id}</span>
 									</div>
 								)}
-								{log.provider_multiplier != null &&
-									log.provider_multiplier !== 1 && (
+								{log.provider.multiplier != null &&
+											log.provider.multiplier !== 1 && (
 										<div className='flex items-center justify-between gap-3'>
 											<span>{t('requestLogs.multiplier')}</span>
 											<span className='font-mono'>
-												{log.provider_multiplier}x
+														{log.provider.multiplier}x
 											</span>
 										</div>
 									)}
@@ -1173,14 +1173,14 @@ function LogRowCells({
 							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
 								{isConnectivityTest ?
 									t('requestLogs.connectivityTest')
-								:	log.api_key_name || '-'}
+									:	log.api_key.name || '-'}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>
 							<span className='text-xs'>
 								{isConnectivityTest ?
 									t('requestLogs.connectivityTest')
-								:	log.api_key_name || '-'}
+									:	log.api_key.name || '-'}
 							</span>
 						</TooltipContent>
 					</Tooltip>
@@ -1190,7 +1190,7 @@ function LogRowCells({
 			{isAdmin && (
 				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
 					<span className='inline-flex h-4 items-center max-w-[5rem] truncate'>
-						{log.username || '-'}
+						{log.user.username || '-'}
 					</span>
 				</td>
 			)}
@@ -1406,7 +1406,7 @@ function LogRowCells({
 										<span className='font-mono'>{multiplier.toFixed(6)}x</span>
 									</div>
 								)}
-								{finalCharge && (
+								{finalCharge && finalCharge !== log.billing.charge_nano_usd && (
 									<div className='flex items-center justify-between gap-3'>
 										<span>{t('requestLogs.finalCost')}</span>
 										<span className='font-mono'>{formatCost(finalCharge)}</span>
@@ -1421,7 +1421,7 @@ function LogRowCells({
 									<div className='flex items-center justify-between gap-3'>
 										<span className='text-xs text-muted-foreground'>{t('requestLogs.totalCost')}</span>
 										<span className='font-mono text-xs'>
-											{formatCostFullPrecision(log.charge_nano_usd)}
+														{formatCostFullPrecision(log.billing.charge_nano_usd)}
 										</span>
 									</div>
 								</div>

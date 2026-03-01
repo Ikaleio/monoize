@@ -280,41 +280,75 @@ export interface ModelMetadataSyncResult {
   fetched_at: string;
 }
 
+export interface RequestLogProvider {
+  id?: string;
+  name?: string;
+  multiplier?: number;
+}
+
+export interface RequestLogChannel {
+  id?: string;
+  name?: string;
+}
+
+export interface RequestLogUser {
+  id: string;
+  username?: string;
+}
+
+export interface RequestLogApiKey {
+  id?: string;
+  name?: string;
+}
+
+export interface RequestLogTokens {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_creation?: number;
+  tool_prompt?: number;
+  reasoning?: number;
+  accepted_prediction?: number;
+  rejected_prediction?: number;
+}
+
+export interface RequestLogTiming {
+  duration_ms?: number;
+  ttfb_ms?: number;
+}
+
+export interface RequestLogBilling {
+  charge_nano_usd?: string;
+  breakdown?: Record<string, unknown>;
+}
+
+export interface RequestLogError {
+  code?: string;
+  message?: string;
+  http_status?: number;
+}
+
 export interface RequestLog {
   id: string;
   request_id?: string;
-  user_id: string;
-  api_key_id?: string;
-  model: string;
-  provider_id?: string;
-  upstream_model?: string;
-  channel_id?: string;
-  channel_name?: string;
-  is_stream: boolean;
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_tokens?: number;
-  cache_creation_tokens?: number;
-  tool_prompt_tokens?: number;
-  reasoning_tokens?: number;
-  provider_multiplier?: number;
-  charge_nano_usd?: string;
-  status: string;
-  usage_breakdown_json?: Record<string, unknown>;
-  billing_breakdown_json?: Record<string, unknown>;
-  error_code?: string;
-  error_message?: string;
-  error_http_status?: number;
-  tried_providers_json?: Array<{ provider_id: string; channel_id: string; error: string }>;
-  duration_ms?: number;
-  ttfb_ms?: number;
-  request_ip?: string;
-  reasoning_effort?: string;
-  request_kind?: string;
   created_at: string;
-  username?: string;
-  api_key_name?: string;
-  provider_name?: string;
+  status: string;
+  is_stream: boolean;
+  model: string;
+  upstream_model?: string;
+  request_kind?: string;
+  reasoning_effort?: string;
+  request_ip?: string;
+  tried_providers?: Array<{ provider_id: string; channel_id: string; error: string }>;
+  provider: RequestLogProvider;
+  channel: RequestLogChannel;
+  user: RequestLogUser;
+  api_key: RequestLogApiKey;
+  tokens: RequestLogTokens;
+  timing: RequestLogTiming;
+  billing: RequestLogBilling;
+  usage?: Record<string, unknown>;
+  error: RequestLogError;
 }
 
 export interface DashboardAnalyticsBucket {

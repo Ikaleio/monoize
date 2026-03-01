@@ -428,12 +428,18 @@ pub async fn test_channel(
         ));
     };
 
+    let upstream_model = provider
+        .models
+        .get(&model_name)
+        .map(|entry| provider_pricing_model(&model_name, entry).to_string())
+        .unwrap_or_else(|| model_name.clone());
+
     let started_at = std::time::Instant::now();
     let (ok, _usage) = crate::monoize_routing::probe_channel_completion(
         &state.http,
         channel,
         state.monoize_runtime.read().await.request_timeout_ms,
-        &model_name,
+        &upstream_model,
         provider.provider_type,
         &provider.api_type_overrides,
     )

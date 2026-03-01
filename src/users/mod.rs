@@ -252,43 +252,83 @@ pub const REQUEST_LOG_STATUS_SUCCESS: &str = "success";
 pub const REQUEST_LOG_STATUS_ERROR: &str = "error";
 
 #[derive(Debug, Serialize)]
+pub struct RequestLogProvider {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub multiplier: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogChannel {
+    pub id: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogUser {
+    pub id: String,
+    pub username: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogApiKey {
+    pub id: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogTokens {
+    pub input: Option<i64>,
+    pub output: Option<i64>,
+    pub cache_read: Option<i64>,
+    pub cache_creation: Option<i64>,
+    pub tool_prompt: Option<i64>,
+    pub reasoning: Option<i64>,
+    pub accepted_prediction: Option<i64>,
+    pub rejected_prediction: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogTiming {
+    pub duration_ms: Option<i64>,
+    pub ttfb_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogBilling {
+    pub charge_nano_usd: Option<String>,
+    pub breakdown: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogError {
+    pub code: Option<String>,
+    pub message: Option<String>,
+    pub http_status: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RequestLogRow {
     pub id: String,
     pub request_id: Option<String>,
-    pub user_id: String,
-    pub api_key_id: Option<String>,
-    pub model: String,
-    pub provider_id: Option<String>,
-    pub upstream_model: Option<String>,
-    pub channel_id: Option<String>,
-    pub is_stream: bool,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub cache_read_tokens: Option<i64>,
-    pub cache_creation_tokens: Option<i64>,
-    pub tool_prompt_tokens: Option<i64>,
-    pub reasoning_tokens: Option<i64>,
-    pub accepted_prediction_tokens: Option<i64>,
-    pub rejected_prediction_tokens: Option<i64>,
-    pub provider_multiplier: Option<f64>,
-    pub charge_nano_usd: Option<String>,
-    pub status: String,
-    pub usage_breakdown_json: Option<Value>,
-    pub billing_breakdown_json: Option<Value>,
-    pub error_code: Option<String>,
-    pub error_message: Option<String>,
-    pub error_http_status: Option<i64>,
-    pub duration_ms: Option<i64>,
-    pub ttfb_ms: Option<i64>,
-    pub request_ip: Option<String>,
-    pub reasoning_effort: Option<String>,
-    pub tried_providers_json: Option<Value>,
-    pub request_kind: Option<String>,
     pub created_at: String,
-    pub username: Option<String>,
-    pub api_key_name: Option<String>,
-    pub channel_name: Option<String>,
-    pub provider_name: Option<String>,
+    pub status: String,
+    pub is_stream: bool,
+    pub model: String,
+    pub upstream_model: Option<String>,
+    pub request_kind: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub request_ip: Option<String>,
+    pub tried_providers: Option<Value>,
+    pub provider: RequestLogProvider,
+    pub channel: RequestLogChannel,
+    pub user: RequestLogUser,
+    pub api_key: RequestLogApiKey,
+    pub tokens: RequestLogTokens,
+    pub timing: RequestLogTiming,
+    pub billing: RequestLogBilling,
+    pub usage: Option<Value>,
+    pub error: RequestLogError,
 }
 
 pub struct AnalyticsModelBucketRow {

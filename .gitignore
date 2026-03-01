@@ -5,3 +5,4 @@ frontend/playwright-report/
 frontend/test-results/
 .env
 .env.*
+deploy.sh
