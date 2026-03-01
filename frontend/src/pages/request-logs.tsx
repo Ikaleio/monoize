@@ -34,17 +34,8 @@ const REQUEST_LOGS_PAGE_SIZE = 100
 
 type TimeRangePreset = '1h' | '24h' | '7d' | '30d' | 'today' | 'yesterday' | 'this_month' | 'last_month'
 
+
 type TimingValue = number | string | null | undefined
-
-type RequestLogWithTimingAliases = RequestLog & {
-	durationMs?: number | string
-	ttfbMs?: number | string
-	elapsed_ms?: number | string
-	latency_ms?: number | string
-	first_token_ms?: number | string
-	firstTokenMs?: number | string
-}
-
 function applyPreset(preset: TimeRangePreset): { from: Date; to?: Date } {
 	const now = new Date()
 	switch (preset) {
@@ -123,23 +114,11 @@ function parseTimingMs(value: TimingValue): number | null {
 }
 
 function getDurationMs(log: RequestLog): number | null {
-	const source = log as RequestLogWithTimingAliases
-	return parseTimingMs(
-		log.duration_ms ??
-			source.durationMs ??
-			source.elapsed_ms ??
-			source.latency_ms
-	)
+	return parseTimingMs(log.duration_ms)
 }
 
 function getTtfbMs(log: RequestLog): number | null {
-	const source = log as RequestLogWithTimingAliases
-	return parseTimingMs(
-		log.ttfb_ms ??
-			source.ttfbMs ??
-			source.first_token_ms ??
-			source.firstTokenMs
-	)
+	return parseTimingMs(log.ttfb_ms)
 }
 
 function DateRangePicker({

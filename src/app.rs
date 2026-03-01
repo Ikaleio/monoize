@@ -704,7 +704,7 @@ pub fn build_app(state: AppState) -> Router {
         ))
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::HeaderName::from_static("content-security-policy"),
-            axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"),
+            axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fontsapi.zeoseven.com; img-src 'self' data: https://www.gravatar.com; connect-src 'self'; font-src 'self' https://fonts.gstatic.com https://fontsapi.zeoseven.com; frame-ancestors 'none'"),
         ))
 }
 

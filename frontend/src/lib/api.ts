@@ -308,12 +308,6 @@ export interface RequestLog {
   tried_providers_json?: Array<{ provider_id: string; channel_id: string; error: string }>;
   duration_ms?: number;
   ttfb_ms?: number;
-  durationMs?: number | string;
-  ttfbMs?: number | string;
-  elapsed_ms?: number | string;
-  latency_ms?: number | string;
-  first_token_ms?: number | string;
-  firstTokenMs?: number | string;
   request_ip?: string;
   reasoning_effort?: string;
   request_kind?: string;
