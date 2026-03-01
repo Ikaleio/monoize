@@ -20,6 +20,22 @@ pub(super) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string())
+        .or_else(|| extract_session_from_cookie(headers))
+}
+
+fn extract_session_from_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies
+                .split(';')
+                .map(|c| c.trim())
+                .find(|c| c.starts_with("monoize_session="))
+                .and_then(|c| c.strip_prefix("monoize_session="))
+                .filter(|v| !v.is_empty())
+                .map(|s| s.to_string())
+        })
 }
 
 pub(super) async fn get_current_user(headers: &HeaderMap, state: &AppState) -> AppResult<User> {

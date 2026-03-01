@@ -1032,10 +1032,6 @@ function LogRowCells({
 		: log.status === 'error' ? 'bg-red-500'
 		: 'bg-zinc-400'
 	const baseCharge = readNanoString(billingSnapshot, 'base_charge_nano')
-	const finalCharge =
-		readNanoString(billingSnapshot, 'final_charge_nano') ||
-		log.billing.charge_nano_usd ||
-		null
 
 	return (
 		<>
@@ -1404,12 +1400,6 @@ function LogRowCells({
 									<div className='flex items-center justify-between gap-3'>
 										<span>{t('requestLogs.multiplier')}</span>
 										<span className='font-mono'>{multiplier.toFixed(6)}x</span>
-									</div>
-								)}
-								{finalCharge && finalCharge !== log.billing.charge_nano_usd && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.finalCost')}</span>
-										<span className='font-mono'>{formatCost(finalCharge)}</span>
 									</div>
 								)}
 								{!billingSnapshot && (

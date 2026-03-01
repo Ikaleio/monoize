@@ -59,7 +59,9 @@ impl AuthState {
                         });
                     }
                     Ok(None) => {}
-                    Err(_) => {}
+                    Err(e) => {
+                        tracing::error!(token_prefix = &token[..token.len().min(8)], error = %e, "API key validation failed due to internal error");
+                    }
                 }
             }
         }

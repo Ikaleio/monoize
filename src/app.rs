@@ -2,6 +2,7 @@ use crate::auth::AuthState;
 use crate::error::{AppError, AppResult};
 use crate::model_registry::ModelRegistry;
 use crate::model_registry_store::ModelRegistryStore;
+use crate::rate_limit::RateLimiter;
 use crate::monoize_routing::{
     ChannelHealthState, MonoizeRoutingStore, MonoizeRuntimeConfig, probe_channel_completion,
 };
@@ -39,6 +40,7 @@ pub struct AppState {
     pub channel_health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
     pub model_registry_store: ModelRegistryStore,
     pub transform_registry: Arc<TransformRegistry>,
+    pub auth_rate_limiter: RateLimiter,
 }
 
 const ACTIVE_PROBE_CONNECTIVITY_KIND: &str = "active_probe_connectivity";
@@ -346,6 +348,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         channel_health,
         model_registry_store,
         transform_registry,
+        auth_rate_limiter: RateLimiter::new(10, std::time::Duration::from_secs(60)),
     })
 }
 
@@ -704,7 +707,7 @@ pub fn build_app(state: AppState) -> Router {
         ))
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::HeaderName::from_static("content-security-policy"),
-            axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fontsapi.zeoseven.com; img-src 'self' data: https://www.gravatar.com; connect-src 'self'; font-src 'self' https://fonts.gstatic.com https://fontsapi.zeoseven.com; frame-ancestors 'none'"),
+            axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fontsapi.zeoseven.com; img-src 'self' data: https://www.gravatar.com; connect-src 'self'; font-src 'self' https://fonts.gstatic.com https://fontsapi.zeoseven.com; frame-ancestors 'none'"),
         ))
 }
 

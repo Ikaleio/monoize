@@ -1604,9 +1604,9 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
         matched = logs.into_iter().find(|log| {
             log.model == "gpt-5-mini-chat"
                 && log.is_stream
-                && log.input_tokens == Some(12)
-                && log.output_tokens == Some(8)
-                && log.charge_nano_usd.as_deref() == Some("20000")
+                && log.tokens.input == Some(12)
+                && log.tokens.output == Some(8)
+                && log.billing.charge_nano_usd.as_deref() == Some("20000")
         });
         if matched.is_some() {
             break;
@@ -1616,10 +1616,10 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
 
     let log = matched.expect("request log should be inserted");
     assert!(log.is_stream);
-    assert!(log.ttfb_ms.is_some());
-    assert_eq!(log.input_tokens, Some(12));
-    assert_eq!(log.output_tokens, Some(8));
-    assert_eq!(log.charge_nano_usd.as_deref(), Some("20000"));
+    assert!(log.timing.ttfb_ms.is_some());
+    assert_eq!(log.tokens.input, Some(12));
+    assert_eq!(log.tokens.output, Some(8));
+    assert_eq!(log.billing.charge_nano_usd.as_deref(), Some("20000"));
 }
 
 #[tokio::test]
@@ -1675,9 +1675,9 @@ async fn chat_streaming_requests_upstream_include_usage_by_default() {
         matched = logs.into_iter().find(|log| {
             log.model == "gpt-5-mini-chat"
                 && log.is_stream
-                && log.input_tokens == Some(12)
-                && log.output_tokens == Some(8)
-                && log.charge_nano_usd.as_deref() == Some("20000")
+                && log.tokens.input == Some(12)
+                && log.tokens.output == Some(8)
+                && log.billing.charge_nano_usd.as_deref() == Some("20000")
         });
         if matched.is_some() {
             break;
@@ -1686,7 +1686,7 @@ async fn chat_streaming_requests_upstream_include_usage_by_default() {
     }
 
     let log = matched.expect("stream log should include usage without explicit emit_usage");
-    assert!(log.ttfb_ms.is_some());
+    assert!(log.timing.ttfb_ms.is_some());
 }
 
 #[tokio::test]
@@ -1777,7 +1777,7 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
     );
     let log = &model_logs[0];
     assert_eq!(log.status, "success");
-    assert_eq!(log.charge_nano_usd.as_deref(), Some("20000"));
+    assert_eq!(log.billing.charge_nano_usd.as_deref(), Some("20000"));
 
     let user_after = ctx
         .state
@@ -1899,6 +1899,7 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
 
     let mut matched = None;
     for _ in 0..20 {
+        ctx.state.user_store.flush_all_batchers().await;
         let (logs, _, _) = ctx
             .state
             .user_store
@@ -1917,7 +1918,7 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
             .expect("list request logs");
         matched = logs
             .into_iter()
-            .find(|log| log.status == "error" && log.error_http_status == Some(422));
+            .find(|log| log.status == "error" && log.error.http_status == Some(422));
         if matched.is_some() {
             break;
         }
@@ -1925,10 +1926,11 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
     }
 
     let log = matched.expect("error request log should be inserted");
-    assert_eq!(log.charge_nano_usd, None);
-    assert_eq!(log.error_code.as_deref(), Some("upstream_error"));
+    assert_eq!(log.billing.charge_nano_usd, None);
+    assert_eq!(log.error.code.as_deref(), Some("upstream_error"));
     assert!(
-        log.error_message
+        log.error
+            .message
             .as_deref()
             .unwrap_or("")
             .contains("upstream status 422")
@@ -2085,9 +2087,9 @@ async fn chat_streaming_length_finish_is_still_billed() {
         matched = logs.into_iter().find(|log| {
             log.model == "gpt-5-mini-chat"
                 && log.is_stream
-                && log.input_tokens == Some(12)
-                && log.output_tokens == Some(8)
-                && log.charge_nano_usd.as_deref() == Some("20000")
+                && log.tokens.input == Some(12)
+                && log.tokens.output == Some(8)
+                && log.billing.charge_nano_usd.as_deref() == Some("20000")
                 && log.status == "success"
         });
         if matched.is_some() {
@@ -2098,7 +2100,7 @@ async fn chat_streaming_length_finish_is_still_billed() {
 
     let log = matched.expect("stream length request should be billed");
     assert_eq!(log.status, "success");
-    assert_eq!(log.charge_nano_usd.as_deref(), Some("20000"));
+    assert_eq!(log.billing.charge_nano_usd.as_deref(), Some("20000"));
 }
 
 #[tokio::test]

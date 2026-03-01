@@ -130,6 +130,24 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         }
     }
 
+    let mut usage_metadata = json!({
+        "promptTokenCount": resp.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
+        "candidatesTokenCount": resp.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
+        "totalTokenCount": resp
+            .usage
+            .as_ref()
+            .map(|u| u.input_tokens + u.output_tokens)
+            .unwrap_or(0),
+        "thoughtsTokenCount": resp.usage.as_ref().and_then(|u| u.reasoning_tokens()).unwrap_or(0),
+        "cachedContentTokenCount": resp.usage.as_ref().and_then(|u| u.cached_tokens()).unwrap_or(0)
+    });
+    if let Some(usage) = &resp.usage {
+        if let Some(obj) = usage_metadata.as_object_mut() {
+            for (k, v) in &usage.extra_body {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
     let mut body = json!({
         "candidates": [{
             "index": 0,
@@ -139,17 +157,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             },
             "finishReason": finish_reason_to_gemini(resp.finish_reason),
         }],
-        "usageMetadata": {
-            "promptTokenCount": resp.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
-            "candidatesTokenCount": resp.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
-            "totalTokenCount": resp
-                .usage
-                .as_ref()
-                .map(|u| u.input_tokens + u.output_tokens)
-                .unwrap_or(0),
-            "thoughtsTokenCount": resp.usage.as_ref().and_then(|u| u.reasoning_tokens()).unwrap_or(0),
-            "cachedContentTokenCount": resp.usage.as_ref().and_then(|u| u.cached_tokens()).unwrap_or(0),
-        },
+        "usageMetadata": usage_metadata,
         "modelVersion": logical_model,
     });
 

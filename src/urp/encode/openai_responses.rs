@@ -133,17 +133,28 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     });
 
     if let Some(usage) = &resp.usage {
-        body["usage"] = json!({
+        let mut usage_value = json!({
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
             "total_tokens": usage.total_tokens(),
             "output_tokens_details": {
-                "reasoning_tokens": usage.output_details.as_ref().map(|d| d.reasoning_tokens).unwrap_or(0)
+                "reasoning_tokens": usage.output_details.as_ref().map(|d| d.reasoning_tokens).unwrap_or(0),
+                "accepted_prediction_tokens": usage.output_details.as_ref().map(|d| d.accepted_prediction_tokens).unwrap_or(0),
+                "rejected_prediction_tokens": usage.output_details.as_ref().map(|d| d.rejected_prediction_tokens).unwrap_or(0)
             },
             "input_tokens_details": {
-                "cached_tokens": usage.input_details.as_ref().map(|d| d.cache_read_tokens).unwrap_or(0)
+                "cached_tokens": usage.input_details.as_ref().map(|d| d.cache_read_tokens).unwrap_or(0),
+                "cache_write_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
+                "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
+                "tool_prompt_tokens": usage.input_details.as_ref().map(|d| d.tool_prompt_tokens).unwrap_or(0)
             }
         });
+        if let Some(obj) = usage_value.as_object_mut() {
+            for (k, v) in &usage.extra_body {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        body["usage"] = usage_value;
     }
 
     if let Some(obj) = body.as_object_mut() {

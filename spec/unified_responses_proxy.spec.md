@@ -236,6 +236,22 @@ XF5. Usage-level unknown fields:
  When parsing upstream usage objects, Monoize MUST populate the URP `Usage` struct's structured fields (`input_tokens`, `output_tokens`, `input_details`, `output_details`) from recognized provider-specific fields. Any unrecognized fields MUST be captured into `Usage.extra_body`.
  When encoding downstream usage objects for any downstream endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`), Monoize MUST merge `Usage.extra_body` into the generated usage JSON, overwriting adapter-generated keys when present (the upstream's full detail objects take precedence over synthesized defaults).
 
+XF5a. Usage alias acceptance and canonicalization:
+
+- For each provider adapter, Monoize MUST accept all observed upstream aliases for a semantic usage metric (for example cache creation/write aliases) and map them to one canonical URP field.
+- Alias handling MUST be deterministic. When multiple aliases for the same semantic metric are present simultaneously, Monoize MUST apply a fixed precedence order per adapter implementation.
+- Monoize MUST NOT sum alias variants unless the provider contract explicitly defines additive semantics for those fields.
+
+XF5b. Usage forwarding boundary:
+
+- Monoize MUST interpret only recognized usage fields into typed URP structured fields.
+- Monoize MUST preserve but MUST NOT reinterpret unknown usage fields. Unknown usage fields are forwarded through `Usage.extra_body` without semantic transformation.
+
+XF5c. Usage round-trip preservation:
+
+- For adapters that support opaque usage fields, decode→encode through Monoize MUST preserve unknown usage fields and values in downstream usage payloads.
+- If an adapter cannot represent a preserved field due to protocol limits, this loss MUST be adapter-specific and explicitly documented in the adapter section.
+
 ### 7.2 Provider adapter: `type=responses`
 
 PR1. Monoize MUST call the upstream path `POST /v1/responses`.

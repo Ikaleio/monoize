@@ -429,6 +429,7 @@ class ApiClient {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       headers,
+      credentials: "include",
     });
 
     const data = await response.json();

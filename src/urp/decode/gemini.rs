@@ -428,42 +428,75 @@ fn parse_finish_reason(reason: &str) -> FinishReason {
 fn parse_usage(obj: &Map<String, Value>) -> Usage {
     let input_tokens = obj
         .get("promptTokenCount")
+        .or_else(|| obj.get("prompt_token_count"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let output_tokens = obj
         .get("candidatesTokenCount")
+        .or_else(|| obj.get("candidates_token_count"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let reasoning_tokens = obj
         .get("thoughtsTokenCount")
+        .or_else(|| obj.get("thoughts_token_count"))
+        .or_else(|| obj.get("reasoning_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let cache_read_tokens = obj
         .get("cachedContentTokenCount")
+        .or_else(|| obj.get("cached_content_token_count"))
+        .or_else(|| obj.get("cached_tokens"))
+        .or_else(|| obj.get("cache_read_tokens"))
+        .or_else(|| obj.get("cache_read_input_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let input_details = if cache_read_tokens > 0 {
-        Some(InputDetails {
-            standard_tokens: 0,
-            cache_read_tokens,
-            cache_creation_tokens: 0,
-            tool_prompt_tokens: 0,
-            modality_breakdown: None,
-        })
-    } else {
-        None
-    };
-    let output_details = if reasoning_tokens > 0 {
-        Some(OutputDetails {
-            standard_tokens: 0,
-            reasoning_tokens,
-            accepted_prediction_tokens: 0,
-            rejected_prediction_tokens: 0,
-            modality_breakdown: None,
-        })
-    } else {
-        None
-    };
+    let cache_creation_tokens = obj
+        .get("cache_creation_tokens")
+        .or_else(|| obj.get("cache_creation_input_tokens"))
+        .or_else(|| obj.get("cache_write_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let tool_prompt_tokens = obj
+        .get("tool_prompt_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let accepted_prediction_tokens = obj
+        .get("acceptedPredictionTokenCount")
+        .or_else(|| obj.get("accepted_prediction_token_count"))
+        .or_else(|| obj.get("accepted_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rejected_prediction_tokens = obj
+        .get("rejectedPredictionTokenCount")
+        .or_else(|| obj.get("rejected_prediction_token_count"))
+        .or_else(|| obj.get("rejected_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let input_details =
+        if cache_read_tokens > 0 || cache_creation_tokens > 0 || tool_prompt_tokens > 0 {
+            Some(InputDetails {
+                standard_tokens: 0,
+                cache_read_tokens,
+                cache_creation_tokens,
+                tool_prompt_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
+    let output_details =
+        if reasoning_tokens > 0 || accepted_prediction_tokens > 0 || rejected_prediction_tokens > 0
+        {
+            Some(OutputDetails {
+                standard_tokens: 0,
+                reasoning_tokens,
+                accepted_prediction_tokens,
+                rejected_prediction_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
 
     Usage {
         input_tokens,
@@ -477,7 +510,17 @@ fn parse_usage(obj: &Map<String, Value>) -> Usage {
                 "candidatesTokenCount",
                 "totalTokenCount",
                 "thoughtsTokenCount",
+                "thoughts_token_count",
                 "cachedContentTokenCount",
+                "cached_content_token_count",
+                "prompt_token_count",
+                "candidates_token_count",
+                "acceptedPredictionTokenCount",
+                "accepted_prediction_token_count",
+                "accepted_prediction_tokens",
+                "rejectedPredictionTokenCount",
+                "rejected_prediction_token_count",
+                "rejected_prediction_tokens",
             ],
         ),
     }

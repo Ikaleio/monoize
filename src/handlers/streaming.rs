@@ -1725,7 +1725,10 @@ pub(super) async fn stream_chat_sse_as_responses(
                         .await;
                 }
 
-                let entry = calls.get_mut(&call_id).unwrap();
+                let Some(entry) = calls.get_mut(&call_id) else {
+                    tracing::warn!(call_id = %call_id, "unknown call_id in tool call stream delta, skipping");
+                    continue;
+                };
 
                 if !name.is_empty() && entry.0.is_empty() {
                     entry.0 = name.clone();

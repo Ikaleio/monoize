@@ -503,38 +503,62 @@ fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
         .and_then(|v| v.as_u64())
         .or_else(|| obj.get("completion_tokens").and_then(|v| v.as_u64()))
         .unwrap_or(0);
-    let reasoning_tokens = obj
-        .get("output_tokens_details")
-        .and_then(|v| v.get("reasoning_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_read_tokens = obj
+    let input_details_obj = obj
         .get("input_tokens_details")
+        .or_else(|| obj.get("prompt_tokens_details"));
+    let output_details_obj = obj
+        .get("output_tokens_details")
+        .or_else(|| obj.get("completion_tokens_details"));
+    let cache_read_tokens = input_details_obj
         .and_then(|v| v.get("cached_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let input_details = if cache_read_tokens > 0 {
-        Some(InputDetails {
-            standard_tokens: 0,
-            cache_read_tokens,
-            cache_creation_tokens: 0,
-            tool_prompt_tokens: 0,
-            modality_breakdown: None,
-        })
-    } else {
-        None
-    };
-    let output_details = if reasoning_tokens > 0 {
-        Some(OutputDetails {
-            standard_tokens: 0,
-            reasoning_tokens,
-            accepted_prediction_tokens: 0,
-            rejected_prediction_tokens: 0,
-            modality_breakdown: None,
-        })
-    } else {
-        None
-    };
+    let cache_creation_tokens = input_details_obj
+        .and_then(|v| v.get("cache_creation_tokens"))
+        .or_else(|| input_details_obj.and_then(|v| v.get("cache_write_tokens")))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let tool_prompt_tokens = input_details_obj
+        .and_then(|v| v.get("tool_prompt_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let reasoning_tokens = output_details_obj
+        .and_then(|v| v.get("reasoning_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let accepted_prediction_tokens = output_details_obj
+        .and_then(|v| v.get("accepted_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rejected_prediction_tokens = output_details_obj
+        .and_then(|v| v.get("rejected_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let input_details =
+        if cache_read_tokens > 0 || cache_creation_tokens > 0 || tool_prompt_tokens > 0 {
+            Some(InputDetails {
+                standard_tokens: 0,
+                cache_read_tokens,
+                cache_creation_tokens,
+                tool_prompt_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
+    let output_details =
+        if reasoning_tokens > 0 || accepted_prediction_tokens > 0 || rejected_prediction_tokens > 0
+        {
+            Some(OutputDetails {
+                standard_tokens: 0,
+                reasoning_tokens,
+                accepted_prediction_tokens,
+                rejected_prediction_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
 
     Usage {
         input_tokens,
@@ -551,6 +575,56 @@ fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
                 "completion_tokens",
             ],
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_usage_reads_cache_write_tokens_from_input_details() {
+        let usage = parse_usage_from_responses(
+            json!({
+                "input_tokens": 120,
+                "output_tokens": 35,
+                "input_tokens_details": {
+                    "cached_tokens": 10,
+                    "cache_write_tokens": 64
+                }
+            })
+            .as_object()
+            .expect("usage json object expected"),
+        );
+
+        let details = usage
+            .input_details
+            .expect("input_details should be present");
+        assert_eq!(details.cache_read_tokens, 10);
+        assert_eq!(details.cache_creation_tokens, 64);
+    }
+
+    #[test]
+    fn parse_usage_keeps_cache_creation_when_cached_tokens_are_zero() {
+        let usage = parse_usage_from_responses(
+            json!({
+                "input_tokens": 98,
+                "output_tokens": 2,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "cache_creation_tokens": 98
+                }
+            })
+            .as_object()
+            .expect("usage json object expected"),
+        );
+
+        let details = usage
+            .input_details
+            .expect("input_details should be present");
+        assert_eq!(details.cache_read_tokens, 0);
+        assert_eq!(details.cache_creation_tokens, 98);
     }
 }
 

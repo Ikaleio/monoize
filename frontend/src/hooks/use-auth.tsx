@@ -19,13 +19,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshUser = async () => {
     try {
-      const token = api.getToken();
-      if (token) {
-        const userData = await api.me();
-        setUser(userData);
-      } else {
-        setUser(null);
-      }
+      const userData = await api.me();
+      setUser(userData);
     } catch {
       setUser(null);
       api.setToken(null);
@@ -38,13 +33,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (username: string, password: string) => {
     const response = await api.login(username, password);
-    api.setToken(response.token);
+    setUser(response.user);
     setUser(response.user);
   };
 
   const register = async (username: string, password: string) => {
     const response = await api.register(username, password);
-    api.setToken(response.token);
+    setUser(response.user);
     setUser(response.user);
   };
 

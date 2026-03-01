@@ -116,10 +116,15 @@ pub(super) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
         "completion_tokens": usage.output_tokens,
         "total_tokens": usage.total_tokens(),
         "completion_tokens_details": {
-            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0)
+            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0),
+            "accepted_prediction_tokens": usage.output_details.as_ref().map(|d| d.accepted_prediction_tokens).unwrap_or(0),
+            "rejected_prediction_tokens": usage.output_details.as_ref().map(|d| d.rejected_prediction_tokens).unwrap_or(0)
         },
         "prompt_tokens_details": {
-            "cached_tokens": usage.cached_tokens().unwrap_or(0)
+            "cached_tokens": usage.cached_tokens().unwrap_or(0),
+            "cache_write_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
+            "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
+            "tool_prompt_tokens": usage.input_details.as_ref().map(|d| d.tool_prompt_tokens).unwrap_or(0)
         }
     });
     // Overwrite with full upstream detail objects (e.g. cache_write_tokens)
@@ -137,10 +142,15 @@ pub(super) fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
         "output_tokens": usage.output_tokens,
         "total_tokens": usage.total_tokens(),
         "output_tokens_details": {
-            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0)
+            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0),
+            "accepted_prediction_tokens": usage.output_details.as_ref().map(|d| d.accepted_prediction_tokens).unwrap_or(0),
+            "rejected_prediction_tokens": usage.output_details.as_ref().map(|d| d.rejected_prediction_tokens).unwrap_or(0)
         },
         "input_tokens_details": {
-            "cached_tokens": usage.cached_tokens().unwrap_or(0)
+            "cached_tokens": usage.cached_tokens().unwrap_or(0),
+            "cache_write_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
+            "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
+            "tool_prompt_tokens": usage.input_details.as_ref().map(|d| d.tool_prompt_tokens).unwrap_or(0)
         }
     });
     if let Some(map) = obj.as_object_mut() {
@@ -155,7 +165,8 @@ pub(super) fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
-        "cache_read_input_tokens": usage.cached_tokens().unwrap_or(0)
+        "cache_read_input_tokens": usage.cached_tokens().unwrap_or(0),
+        "cache_creation_input_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0)
     });
     if let Some(map) = obj.as_object_mut() {
         for (k, v) in &usage.extra_body {
@@ -163,6 +174,19 @@ pub(super) fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
         }
     }
     obj
+}
+
+fn split_usage_extra(usage: &Map<String, Value>, known_keys: &[&str]) -> HashMap<String, Value> {
+    usage
+        .iter()
+        .filter_map(|(k, v)| {
+            if known_keys.contains(&k.as_str()) {
+                None
+            } else {
+                Some((k.clone(), v.clone()))
+            }
+        })
+        .collect()
 }
 
 fn parse_modality_breakdown_from_detail_object(
@@ -244,50 +268,104 @@ fn make_output_details(
 
 pub(super) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
-    let input_tokens = usage.get("prompt_tokens")?.as_u64()?;
-    let output_tokens = usage.get("completion_tokens")?.as_u64()?;
-    let prompt_details = usage.get("prompt_tokens_details").and_then(|v| v.as_object());
+    let input_tokens = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))
+        .and_then(|v| v.as_u64())?;
+    let output_tokens = usage
+        .get("completion_tokens")
+        .or_else(|| usage.get("output_tokens"))
+        .and_then(|v| v.as_u64())?;
+    let prompt_details = usage
+        .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"))
+        .and_then(|v| v.as_object());
     let completion_details = usage
         .get("completion_tokens_details")
+        .or_else(|| usage.get("output_tokens_details"))
         .and_then(|v| v.as_object());
     let cached_tokens = usage
         .get("prompt_tokens_details")
         .and_then(|v| v.get("cached_tokens"))
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(|v| v.get("cached_tokens"))
+        })
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|v| v.get("cache_write_tokens"))
+        .or_else(|| {
+            usage
+                .get("prompt_tokens_details")
+                .and_then(|v| v.get("cache_creation_tokens"))
+        })
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(|v| v.get("cache_write_tokens"))
+        })
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(|v| v.get("cache_creation_tokens"))
+        })
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let tool_prompt_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|v| v.get("tool_prompt_tokens"))
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(|v| v.get("tool_prompt_tokens"))
+        })
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let reasoning_tokens = usage
         .get("completion_tokens_details")
         .and_then(|v| v.get("reasoning_tokens"))
+        .or_else(|| {
+            usage
+                .get("output_tokens_details")
+                .and_then(|v| v.get("reasoning_tokens"))
+        })
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let accepted_prediction_tokens = usage
         .get("completion_tokens_details")
         .and_then(|v| v.get("accepted_prediction_tokens"))
+        .or_else(|| {
+            usage
+                .get("output_tokens_details")
+                .and_then(|v| v.get("accepted_prediction_tokens"))
+        })
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let rejected_prediction_tokens = usage
         .get("completion_tokens_details")
         .and_then(|v| v.get("rejected_prediction_tokens"))
+        .or_else(|| {
+            usage
+                .get("output_tokens_details")
+                .and_then(|v| v.get("rejected_prediction_tokens"))
+        })
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let mut extra_body = HashMap::new();
-    if let Some(v) = usage.get("prompt_tokens_details") {
-        extra_body.insert("prompt_tokens_details".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("completion_tokens_details") {
-        extra_body.insert("completion_tokens_details".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("total_tokens") {
-        extra_body.insert("total_tokens".to_string(), v.clone());
-    }
+    let extra_body = split_usage_extra(
+        usage,
+        &["prompt_tokens", "completion_tokens", "input_tokens", "output_tokens"],
+    );
     Some(urp::Usage {
         input_tokens,
         output_tokens,
         input_details: make_input_details(
             0,
             cached_tokens,
-            0,
-            0,
+            cache_creation_tokens,
+            tool_prompt_tokens,
             parse_modality_breakdown_from_detail_object(prompt_details),
         ),
         output_details: make_output_details(
@@ -349,11 +427,26 @@ pub(super) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
                 .get("input_tokens_details")
                 .and_then(|v| v.get("cache_write_tokens"))
         })
+        .or_else(|| {
+            usage
+                .get("prompt_tokens_details")
+                .and_then(|v| v.get("cache_creation_tokens"))
+        })
+        .or_else(|| {
+            usage
+                .get("prompt_tokens_details")
+                .and_then(|v| v.get("cache_write_tokens"))
+        })
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let tool_prompt_tokens = usage
         .get("input_tokens_details")
         .and_then(|v| v.get("tool_prompt_tokens"))
+        .or_else(|| {
+            usage
+                .get("prompt_tokens_details")
+                .and_then(|v| v.get("tool_prompt_tokens"))
+        })
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let accepted_prediction_tokens = usage
@@ -366,22 +459,10 @@ pub(super) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
         .and_then(|v| v.get("rejected_prediction_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let mut extra_body = HashMap::new();
-    if let Some(v) = usage.get("input_tokens_details") {
-        extra_body.insert("input_tokens_details".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("output_tokens_details") {
-        extra_body.insert("output_tokens_details".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("prompt_tokens_details") {
-        extra_body.insert("prompt_tokens_details".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("completion_tokens_details") {
-        extra_body.insert("completion_tokens_details".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("total_tokens") {
-        extra_body.insert("total_tokens".to_string(), v.clone());
-    }
+    let extra_body = split_usage_extra(
+        usage.as_object()?,
+        &["input_tokens", "output_tokens", "prompt_tokens", "completion_tokens"],
+    );
     Some(urp::Usage {
         input_tokens,
         output_tokens,
@@ -412,24 +493,50 @@ pub(super) fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage
     let output_tokens = usage.get("output_tokens")?.as_u64()?;
     let cache_read_tokens = usage
         .get("cache_read_input_tokens")
+        .or_else(|| usage.get("cache_read_tokens"))
+        .or_else(|| usage.get("cached_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let cache_creation_tokens = usage
         .get("cache_creation_input_tokens")
+        .or_else(|| usage.get("cache_creation_tokens"))
+        .or_else(|| usage.get("cache_write_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let mut extra_body = HashMap::new();
-    if let Some(v) = usage.get("cache_creation_input_tokens") {
-        extra_body.insert("cache_creation_input_tokens".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("cache_read_input_tokens") {
-        extra_body.insert("cache_read_input_tokens".to_string(), v.clone());
-    }
+    let tool_prompt_tokens = usage
+        .get("tool_prompt_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let reasoning_tokens = usage
+        .get("reasoning_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let accepted_prediction_tokens = usage
+        .get("accepted_prediction_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rejected_prediction_tokens = usage
+        .get("rejected_prediction_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let extra_body = split_usage_extra(usage, &["input_tokens", "output_tokens"]);
     Some(urp::Usage {
         input_tokens,
         output_tokens,
-        input_details: make_input_details(0, cache_read_tokens, cache_creation_tokens, 0, None),
-        output_details: None,
+        input_details: make_input_details(
+            0,
+            cache_read_tokens,
+            cache_creation_tokens,
+            tool_prompt_tokens,
+            None,
+        ),
+        output_details: make_output_details(
+            0,
+            reasoning_tokens,
+            accepted_prediction_tokens,
+            rejected_prediction_tokens,
+            None,
+        ),
         extra_body,
     })
 }
@@ -447,37 +554,69 @@ pub(super) fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> 
     let cache_read_tokens = usage
         .get("cachedContentTokenCount")
         .or_else(|| usage.get("cached_content_token_count"))
+        .or_else(|| usage.get("cached_tokens"))
+        .or_else(|| usage.get("cache_read_tokens"))
+        .or_else(|| usage.get("cache_read_input_tokens"))
+        .or_else(|| usage.get("cacheReadInputTokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation_tokens = usage
+        .get("cacheCreationInputTokens")
+        .or_else(|| usage.get("cache_creation_input_tokens"))
+        .or_else(|| usage.get("cache_creation_tokens"))
+        .or_else(|| usage.get("cache_write_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let tool_prompt_tokens = usage
+        .get("toolPromptTokenCount")
+        .or_else(|| usage.get("tool_prompt_token_count"))
+        .or_else(|| usage.get("tool_prompt_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let reasoning_tokens = usage
         .get("thoughtsTokenCount")
         .or_else(|| usage.get("thoughts_token_count"))
+        .or_else(|| usage.get("reasoning_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let mut extra_body = HashMap::new();
-    if let Some(v) = usage.get("cachedContentTokenCount") {
-        extra_body.insert("cachedContentTokenCount".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("cached_content_token_count") {
-        extra_body.insert("cached_content_token_count".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("thoughtsTokenCount") {
-        extra_body.insert("thoughtsTokenCount".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("thoughts_token_count") {
-        extra_body.insert("thoughts_token_count".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("totalTokenCount") {
-        extra_body.insert("totalTokenCount".to_string(), v.clone());
-    }
-    if let Some(v) = usage.get("total_token_count") {
-        extra_body.insert("total_token_count".to_string(), v.clone());
-    }
+    let accepted_prediction_tokens = usage
+        .get("acceptedPredictionTokenCount")
+        .or_else(|| usage.get("accepted_prediction_token_count"))
+        .or_else(|| usage.get("accepted_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let rejected_prediction_tokens = usage
+        .get("rejectedPredictionTokenCount")
+        .or_else(|| usage.get("rejected_prediction_token_count"))
+        .or_else(|| usage.get("rejected_prediction_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let extra_body = split_usage_extra(
+        usage,
+        &[
+            "promptTokenCount",
+            "prompt_token_count",
+            "candidatesTokenCount",
+            "candidates_token_count",
+        ],
+    );
     Some(urp::Usage {
         input_tokens,
         output_tokens,
-        input_details: make_input_details(0, cache_read_tokens, 0, 0, None),
-        output_details: make_output_details(0, reasoning_tokens, 0, 0, None),
+        input_details: make_input_details(
+            0,
+            cache_read_tokens,
+            cache_creation_tokens,
+            tool_prompt_tokens,
+            None,
+        ),
+        output_details: make_output_details(
+            0,
+            reasoning_tokens,
+            accepted_prediction_tokens,
+            rejected_prediction_tokens,
+            None,
+        ),
         extra_body,
     })
 }

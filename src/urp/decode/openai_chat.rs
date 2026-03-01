@@ -564,38 +564,44 @@ fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
         .get("completion_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let reasoning_tokens = obj
+    let prompt_details = obj
+        .get("prompt_tokens_details")
+        .or_else(|| obj.get("input_tokens_details"));
+    let completion_details = obj
         .get("completion_tokens_details")
+        .or_else(|| obj.get("output_tokens_details"));
+    let reasoning_tokens = completion_details
         .and_then(|v| v.get("reasoning_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let cached_tokens = obj
-        .get("prompt_tokens_details")
+    let cached_tokens = prompt_details
         .and_then(|v| v.get("cached_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let cache_write_tokens = obj
-        .get("prompt_tokens_details")
+    let cache_write_tokens = prompt_details
         .and_then(|v| v.get("cache_write_tokens"))
+        .or_else(|| prompt_details.and_then(|v| v.get("cache_creation_tokens")))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let accepted_prediction_tokens = obj
-        .get("completion_tokens_details")
+    let tool_prompt_tokens = prompt_details
+        .and_then(|v| v.get("tool_prompt_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let accepted_prediction_tokens = completion_details
         .and_then(|v| v.get("accepted_prediction_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let rejected_prediction_tokens = obj
-        .get("completion_tokens_details")
+    let rejected_prediction_tokens = completion_details
         .and_then(|v| v.get("rejected_prediction_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
-    let input_details = if cached_tokens > 0 || cache_write_tokens > 0 {
+    let input_details = if cached_tokens > 0 || cache_write_tokens > 0 || tool_prompt_tokens > 0 {
         Some(InputDetails {
             standard_tokens: 0,
             cache_read_tokens: cached_tokens,
             cache_creation_tokens: cache_write_tokens,
-            tool_prompt_tokens: 0,
+            tool_prompt_tokens,
             modality_breakdown: None,
         })
     } else {

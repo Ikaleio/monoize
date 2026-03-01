@@ -264,8 +264,14 @@ pub(super) fn random_u64(bound: u64) -> u64 {
     if bound <= 1 {
         return 0;
     }
-    let seed = uuid::Uuid::new_v4().as_u128() as u64;
-    seed % bound
+    // Rejection sampling to avoid modulo bias
+    let limit = u64::MAX - (u64::MAX % bound);
+    loop {
+        let sample = uuid::Uuid::new_v4().as_u128() as u64;
+        if sample < limit {
+            return sample % bound;
+        }
+    }
 }
 
 pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> ProviderConfig {

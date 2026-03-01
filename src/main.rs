@@ -20,6 +20,17 @@ async fn run() -> Result<(), AppError> {
     let state = monoize::app::load_state().await?;
     state.user_store.spawn_background_tasks();
 
+    // Periodic rate limiter cleanup to bound memory growth
+    {
+        let limiter = state.auth_rate_limiter.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                limiter.cleanup();
+            }
+        });
+    }
+
     match state.user_store.cleanup_pending_request_logs().await {
         Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up stale pending request logs"),
         Ok(_) => {}

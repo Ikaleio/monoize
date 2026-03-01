@@ -68,8 +68,18 @@ pub struct UpdateMeRequest {
 
 pub async fn register(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<RegisterRequest>,
 ) -> AppResult<impl IntoResponse> {
+    let client_ip = extract_client_ip(&headers).unwrap_or_else(|| "unknown".to_string());
+    if !state.auth_rate_limiter.check(&client_ip) {
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests, please try again later",
+        ));
+    }
+
     let user_store = &state.user_store;
     let settings_store = &state.settings_store;
 
@@ -152,18 +162,32 @@ pub async fn register(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    Ok(Json(AuthResponse {
+    let cookie = build_session_cookie(&session.token, session_ttl_days);
+    let body = Json(AuthResponse {
         token: session.token,
         user: user.into(),
-    }))
+    });
+    Ok((
+        [(axum::http::header::SET_COOKIE, cookie)],
+        body,
+    ).into_response())
 }
 
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> AppResult<impl IntoResponse> {
-    let user_store = &state.user_store;
+    let client_ip = extract_client_ip(&headers).unwrap_or_else(|| "unknown".to_string());
+    if !state.auth_rate_limiter.check(&client_ip) {
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests, please try again later",
+        ));
+    }
 
+    let user_store = &state.user_store;
     if is_reserved_internal_username(&body.username) {
         return Err(AppError::new(
             StatusCode::FORBIDDEN,
@@ -214,10 +238,15 @@ pub async fn login(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    Ok(Json(AuthResponse {
+    let cookie = build_session_cookie(&session.token, session_ttl_days);
+    let body = Json(AuthResponse {
         token: session.token,
         user: user.into(),
-    }))
+    });
+    Ok((
+        [(axum::http::header::SET_COOKIE, cookie)],
+        body,
+    ).into_response())
 }
 
 pub async fn logout(
@@ -237,9 +266,12 @@ pub async fn logout(
 
     user_store.delete_session(&token).await.ok();
 
-    Ok(Json(json!({ "success": true })))
+    let clear_cookie = clear_session_cookie();
+    Ok((
+        [(axum::http::header::SET_COOKIE, clear_cookie)],
+        Json(json!({ "success": true })),
+    ).into_response())
 }
-
 pub async fn get_me(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -278,4 +310,29 @@ pub async fn update_me(
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "user not found"))?;
 
     Ok(Json(UserResponse::from(updated_user)))
+}
+
+fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+        })
+}
+
+fn build_session_cookie(token: &str, ttl_days: i64) -> String {
+    let max_age = ttl_days.max(0) * 86400;
+    format!(
+        "monoize_session={token}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age}"
+    )
+}
+
+fn clear_session_cookie() -> String {
+    "monoize_session=; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=0".to_string()
 }

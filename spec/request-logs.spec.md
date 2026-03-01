@@ -292,11 +292,11 @@ FL25. The `charge_nano_usd` (Cost) column displayed value MUST use regular USD c
 
 FL25a. The Cost column MUST NOT truncate visible cell text. The table layout MUST allow this column to expand with content when needed (while preserving horizontal overflow/scroll behavior for narrow viewports).
 
-FL26. Hovering the `charge_nano_usd` (Cost) cell MUST show billing breakdown details sourced from `billing_breakdown_json`, including per-class expression `unit_price × token_count` and subtotal, plus multiplier/base/final charge.
+FL26. Hovering the `charge_nano_usd` (Cost) cell MUST show billing breakdown details sourced from `billing_breakdown_json`, including per-class expression `unit_price × token_count` and subtotal, plus multiplier and base charge. The "final cost" line MUST NOT be rendered; the total cost line at the bottom already displays the definitive charge.
 
 FL26a. In the cost breakdown tooltip, any per-class line item whose computed charge is zero (i.e. `charge_nano = "0"` or token count is `0`) MUST be hidden from the rendered tooltip. The backend MUST continue to include all fields in `billing_breakdown_json` regardless of value; this is a frontend-only rendering filter.
 
-FL26b. In the cost breakdown tooltip, the "final cost" (`finalCharge`) line MUST be hidden when its value equals the total cost (`charge_nano_usd`). This avoids visual duplication when the multiplier is 1.0× and base charge equals total charge.
+FL26b. *(Removed — "final cost" line is unconditionally removed from the tooltip. See FL26.)*
 
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 

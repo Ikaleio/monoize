@@ -14,6 +14,7 @@ pub mod model_registry_store;
 pub mod monoize_routing;
 pub mod presets;
 pub mod providers;
+pub mod rate_limit;
 pub mod settings;
 pub mod transforms;
 pub mod upstream;

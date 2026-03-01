@@ -211,12 +211,20 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         ),
         None => (0, 0, 0, 0),
     };
-    body["usage"] = json!({
+    let mut usage_value = json!({
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cache_read_input_tokens": cache_read,
         "cache_creation_input_tokens": cache_creation
     });
+    if let Some(usage) = &resp.usage {
+        if let Some(obj) = usage_value.as_object_mut() {
+            for (k, v) in &usage.extra_body {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    body["usage"] = usage_value;
     if let Some(obj) = body.as_object_mut() {
         merge_extra(obj, &resp.extra_body);
     }
