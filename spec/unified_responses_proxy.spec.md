@@ -97,6 +97,8 @@ C3. Monoize MUST resolve listen address from `MONOIZE_LISTEN`, default `0.0.0.0:
 
 C4. Monoize MUST resolve metrics endpoint path from `MONOIZE_METRICS_PATH`, default `/metrics`.
 
+C5. Monoize MUST accept downstream request bodies up to 50 MiB on forwarding endpoints (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`). Any framework-default extractor limit smaller than 50 MiB MUST be disabled so that the effective limit remains 50 MiB.
+
 ## 5. Forwarding pipeline (normative)
 
 For each downstream request to any forwarding endpoint in §2.2, Monoize MUST execute the following pipeline:

@@ -12,6 +12,7 @@ use crate::providers::ProviderStore;
 use crate::settings::SettingsStore;
 use crate::transforms::TransformRegistry;
 use crate::users::{InsertRequestLog, UserRole, UserStore};
+use axum::extract::DefaultBodyLimit;
 use axum::Router;
 use axum::routing::{get, post, put};
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -720,6 +721,7 @@ pub fn build_app(state: AppState) -> Router {
         .nest("/api", api_router)
         .fallback(crate::frontend::frontend_fallback)
         .with_state(state)
+        .layer(DefaultBodyLimit::disable())
         .layer(SetRequestIdLayer::new(
             axum::http::header::HeaderName::from_static("x-request-id"),
             MakeRequestUuid,
