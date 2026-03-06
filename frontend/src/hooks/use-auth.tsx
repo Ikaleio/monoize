@@ -33,13 +33,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (username: string, password: string) => {
     const response = await api.login(username, password);
-    setUser(response.user);
+    api.setToken(response.token);
     setUser(response.user);
   };
 
   const register = async (username: string, password: string) => {
     const response = await api.register(username, password);
-    setUser(response.user);
+    api.setToken(response.token);
     setUser(response.user);
   };
 
@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await api.logout();
     } finally {
+      api.setToken(null);
       setUser(null);
     }
   };

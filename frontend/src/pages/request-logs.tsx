@@ -383,7 +383,18 @@ export function RequestLogsPage() {
 	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters)
 
 	const matchesActiveFilters = useCallback((log: RequestLog) => {
-		if (activeFilters.model && log.model !== activeFilters.model) return false
+		if (activeFilters.model) {
+			const requestedModels = activeFilters.model
+				.split(',')
+				.map(part => part.trim().toLowerCase())
+				.filter(Boolean)
+			if (
+				requestedModels.length > 0 &&
+				!requestedModels.some(part => log.model.toLowerCase().includes(part))
+			) {
+				return false
+			}
+		}
 		if (activeFilters.status && log.status !== activeFilters.status) return false
 		if (activeFilters.api_key_id && log.api_key.id !== activeFilters.api_key_id) return false
 
@@ -439,36 +450,36 @@ export function RequestLogsPage() {
 		if (logs.length === 0) return
 
 		setLoadedLogs(prev => {
+			const next = [...prev]
 			const existingIds = new Set(prev.map(log => log.id))
-			const existingRequestIds = new Set(
-				prev
-					.map(log => log.request_id)
-					.filter((requestId): requestId is string => typeof requestId === 'string')
-			)
 			const incomingIds = new Set<string>()
-			const incomingRequestIds = new Set<string>()
-			const accepted: RequestLog[] = []
+			const handledRequestIds = new Set<string>()
 
 			for (const log of logs) {
 				if (!matchesActiveFilters(log)) continue
-				if (existingIds.has(log.id) || incomingIds.has(log.id)) continue
+				if (incomingIds.has(log.id)) continue
+				incomingIds.add(log.id)
 
 				if (log.request_id) {
-					if (
-						existingRequestIds.has(log.request_id) ||
-						incomingRequestIds.has(log.request_id)
-					) {
+					if (handledRequestIds.has(log.request_id)) {
+						const duplicateIndex = next.findIndex(item => item.request_id === log.request_id)
+						if (duplicateIndex >= 0) next[duplicateIndex] = log
 						continue
 					}
-					incomingRequestIds.add(log.request_id)
+					handledRequestIds.add(log.request_id)
+					const existingIndex = next.findIndex(item => item.request_id === log.request_id)
+					if (existingIndex >= 0) {
+						next.splice(existingIndex, 1)
+						next.unshift(log)
+						continue
+					}
 				}
 
-				incomingIds.add(log.id)
-				accepted.push(log)
+				if (existingIds.has(log.id)) continue
+				next.unshift(log)
 			}
 
-			if (accepted.length === 0) return prev
-			return [...accepted, ...prev]
+			return next
 		})
 	}, [matchesActiveFilters])
 
