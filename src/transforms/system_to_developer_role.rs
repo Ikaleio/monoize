@@ -1,7 +1,8 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
-    UrpData, move_system_to_developer,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState, UrpData, move_system_to_developer,
 };
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -17,6 +18,7 @@ impl TransformConfig for Config {
 
 pub struct SystemToDeveloperRoleTransform;
 
+#[async_trait]
 impl Transform for SystemToDeveloperRoleTransform {
     fn type_id(&self) -> &'static str {
         "system_to_developer_role"
@@ -44,10 +46,11 @@ impl Transform for SystemToDeveloperRoleTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         _config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {

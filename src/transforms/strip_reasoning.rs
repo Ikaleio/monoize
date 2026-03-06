@@ -1,7 +1,8 @@
 use crate::transforms::{
-    Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState, UrpData,
-    strip_reasoning_parts,
+    Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
+    TransformState, UrpData, strip_reasoning_parts,
 };
+use async_trait::async_trait;
 use crate::urp::{PartDelta, PartHeader, UrpStreamEvent};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -30,6 +31,7 @@ impl TransformState for StripState {
     }
 }
 
+#[async_trait]
 impl Transform for StripReasoningTransform {
     fn type_id(&self) -> &'static str {
         "strip_reasoning"
@@ -57,10 +59,11 @@ impl Transform for StripReasoningTransform {
         Box::new(StripState::default())
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         _config: &dyn TransformConfig,
         state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {

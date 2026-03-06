@@ -1,7 +1,8 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
-    UrpData, remove_extra_path,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState, UrpData, remove_extra_path,
 };
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -19,6 +20,7 @@ impl TransformConfig for Config {
 
 pub struct RemoveFieldTransform;
 
+#[async_trait]
 impl Transform for RemoveFieldTransform {
     fn type_id(&self) -> &'static str {
         "remove_field"
@@ -47,10 +49,11 @@ impl Transform for RemoveFieldTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
