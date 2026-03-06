@@ -714,8 +714,8 @@ pub fn build_app(state: AppState) -> Router {
             axum::http::header::HeaderName::from_static("x-request-id"),
         ))
         .layer(TraceLayer::new_for_http())
-        // 10 MiB body size limit
-        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
+        // 50 MiB body size limit
+        .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024))
         // Security headers
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::HeaderName::from_static("x-content-type-options"),
