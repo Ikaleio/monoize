@@ -69,6 +69,8 @@ TF-1. A transform MUST implement:
 - `init_state()`
 - `apply()`
 
+TF-1a. Request-phase and response-phase transform execution MUST support asynchronous work. The runtime MAY await file I/O, network-free background work, or other asynchronous operations performed by `apply()` before continuing to the next rule.
+
 TF-2. `TransformRuleConfig` persisted form MUST include: `transform`, `enabled`, `models`, `phase`, `config`.
 
 TF-3. Transform rule execution MUST be ordered; output of rule `i` is input to rule `i+1`.
@@ -99,6 +101,7 @@ TF-7. Built-ins that MUST exist:
 - `auto_cache_user_id`
 - `auto_cache_system`
 - `auto_cache_tool_use`
+- `compress_user_message_images`
 
 ### 4.2 `append_empty_user_message`
 
@@ -110,6 +113,47 @@ AEUM-3. On apply:
 1. Inspect the last element of `req.messages`.
 2. If the last message has `role == assistant`, append a new `Message { role: user, parts: [Text { content: config.content }] }` to `req.messages`.
 3. If the last message is not `assistant`, or `messages` is empty, no-op.
+
+### 4.3 `compress_user_message_images`
+
+CUMI-1. Phase: `request` only.
+
+CUMI-2. Config MAY contain:
+- `max_edge_px` (integer, optional): maximum allowed width or height of a compressed image. Defaults to `1568`.
+- `jpeg_quality` (integer, optional): JPEG quality used when the output image has no alpha channel. Defaults to `80`.
+- `skip_if_smaller` (boolean, optional): if `true`, the transform MUST keep the original image when the compressed payload is not smaller than the original payload. Defaults to `true`.
+
+CUMI-3. Input eligibility:
+1. The transform MUST inspect only messages with `role == user`.
+2. Within those messages, the transform MUST inspect only `Part::Image` parts whose `source` is `ImageSource::Base64`.
+3. Parts whose source is `ImageSource::Url` MUST be left unchanged.
+4. Parts whose media type is not decodable by the image codec stack MUST be left unchanged.
+
+CUMI-4. Compression behavior:
+1. The transform MUST base64-decode the input bytes.
+2. If either image dimension exceeds `max_edge_px`, the transform MUST resize the image so that `max(width, height) == max_edge_px` and the original aspect ratio is preserved.
+3. If the decoded image has no alpha channel, the transform MUST encode the output as JPEG using a JPEG optimization crate and `jpeg_quality`.
+4. If the decoded image has an alpha channel, the transform MUST encode the output as PNG and MAY run an additional lossless PNG optimization pass before persistence.
+5. If `skip_if_smaller == true` and the transformed byte length is greater than or equal to the original byte length, the transform MUST keep the original part unchanged.
+6. On successful replacement, the transform MUST update the part to `ImageSource::Base64 { media_type, data }` using the transformed media type and transformed base64 payload.
+
+CUMI-5. Cache key and persistence:
+1. Successful transformed outputs MUST be persisted on local disk.
+2. The cache key MUST be a deterministic hash of: transform version identifier, input media type, compression config, and original decoded bytes.
+3. Cache lookup MUST occur before recompression.
+4. Cache hits MUST return the persisted transformed payload without recomputing the image.
+5. Cache entries that cannot be decoded from disk MUST be treated as misses and MAY be deleted eagerly.
+
+CUMI-6. Cache directory and eviction:
+1. Cache files MUST be stored under a dedicated image-transform cache directory.
+2. Each cache file MUST correspond to exactly one hash key.
+3. The runtime MUST run a periodic cleanup task that deletes cache files whose last-modified time is older than the cache TTL.
+4. Cache reads MUST treat expired files as misses even if the periodic cleanup task has not removed them yet.
+
+CUMI-7. Failure handling:
+1. Invalid base64 image payloads MUST leave the original part unchanged.
+2. Unsupported or undecodable image payloads MUST leave the original part unchanged.
+3. Cache write failures or cache cleanup failures MUST NOT mutate the request incorrectly; if compression succeeds but cache persistence fails, the runtime MAY still use the in-memory transformed payload for the current request.
 
 ### 4.1 `reasoning_effort_to_model_suffix`
 
