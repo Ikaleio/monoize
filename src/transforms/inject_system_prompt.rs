@@ -1,7 +1,8 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
-    UrpData, text_part,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState, UrpData, text_part,
 };
+use async_trait::async_trait;
 use crate::urp::{Message, Part, Role};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,6 +29,7 @@ impl TransformConfig for Config {
 
 pub struct InjectSystemPromptTransform;
 
+#[async_trait]
 impl Transform for InjectSystemPromptTransform {
     fn type_id(&self) -> &'static str {
         "inject_system_prompt"
@@ -59,10 +61,11 @@ impl Transform for InjectSystemPromptTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {

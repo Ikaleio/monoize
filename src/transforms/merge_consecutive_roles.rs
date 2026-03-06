@@ -1,7 +1,8 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
-    UrpData, merge_same_role_messages,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState, UrpData, merge_same_role_messages,
 };
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -17,6 +18,7 @@ impl TransformConfig for Config {
 
 pub struct MergeConsecutiveRolesTransform;
 
+#[async_trait]
 impl Transform for MergeConsecutiveRolesTransform {
     fn type_id(&self) -> &'static str {
         "merge_consecutive_roles"
@@ -44,10 +46,11 @@ impl Transform for MergeConsecutiveRolesTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         _config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
