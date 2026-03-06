@@ -1,13 +1,21 @@
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
-use chrono::Utc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive};
+use axum::response::{IntoResponse, Sse};
+use chrono::Utc;
+use futures_util::stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+use dashmap::DashMap;
+use tokio::sync::broadcast::error::RecvError;
 
 #[derive(Debug, Deserialize)]
 pub struct RequestLogsQuery {
@@ -43,7 +51,7 @@ pub async fn list_my_request_logs(
     let user = get_current_user(&headers, &state).await?;
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
-    let (logs, total, total_charge_nano_usd) = if user.role.can_manage_users() {
+    let (mut logs, total, total_charge_nano_usd) = if user.role.can_manage_users() {
         state
             .user_store
             .list_all_request_logs(
@@ -75,6 +83,20 @@ pub async fn list_my_request_logs(
             .await
     }
     .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    for log in &mut logs {
+        if let Some(ref id) = log.provider.id {
+            log.provider.name = state.name_caches.get_provider_name(id);
+        }
+        if let Some(ref id) = log.channel.id {
+            log.channel.name = state.name_caches.get_channel_name(id);
+        }
+        log.user.username = state.name_caches.get_username(&log.user.id);
+        if let Some(ref id) = log.api_key.id {
+            log.api_key.name = state.name_caches.get_api_key_name(id);
+        }
+    }
+
     Ok(Json(json!({
         "data": logs,
         "total": total,
@@ -215,4 +237,108 @@ pub async fn get_dashboard_analytics(
         "today_cost_nano_usd": raw.today_cost_nano_usd,
         "today_calls": raw.today_calls,
     })))
+}
+
+/// Guard that decrements the per-user SSE connection counter on drop,
+/// ensuring no counter leaks even if the stream is abruptly cancelled.
+struct SseConnectionGuard {
+    user_id: String,
+    connections: Arc<DashMap<String, AtomicUsize>>,
+}
+
+impl Drop for SseConnectionGuard {
+    fn drop(&mut self) {
+        if let Some(entry) = self.connections.get(&self.user_id) {
+            let prev = entry.value().fetch_sub(1, Ordering::Relaxed);
+            if prev <= 1 {
+                drop(entry);
+                self.connections.remove(&self.user_id);
+            }
+        }
+    }
+}
+
+const MAX_SSE_CONNECTIONS_PER_USER: usize = 5;
+
+pub async fn stream_request_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let is_admin = user.role.can_manage_users();
+    let user_id = user.id;
+
+    // Enforce per-user SSE connection limit
+    let entry = state
+        .sse_connections
+        .entry(user_id.clone())
+        .or_insert_with(|| AtomicUsize::new(0));
+    let current = entry.value().fetch_add(1, Ordering::Relaxed);
+    drop(entry);
+    if current >= MAX_SSE_CONNECTIONS_PER_USER {
+        // Undo the speculative increment
+        if let Some(e) = state.sse_connections.get(&user_id) {
+            e.value().fetch_sub(1, Ordering::Relaxed);
+        }
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_sse_connections",
+            "Too many concurrent SSE connections",
+        ));
+    }
+
+    let guard = SseConnectionGuard {
+        user_id: user_id.clone(),
+        connections: state.sse_connections.clone(),
+    };
+
+    let name_caches = state.name_caches.clone();
+    let api_key_cache = state.user_store.api_key_cache.clone();
+    let receiver = state.log_broadcast.subscribe();
+    let stream = stream::unfold(
+        (receiver, name_caches, api_key_cache, is_admin, user_id, guard),
+        |(mut receiver, name_caches, api_key_cache, is_admin, user_id, guard)| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(batch) => {
+                        let filtered: Vec<_> = if is_admin {
+                            batch
+                        } else {
+                            batch
+                                .into_iter()
+                                .filter(|log| log.user_id == user_id)
+                                .collect()
+                        };
+                        if filtered.is_empty() {
+                            continue;
+                        }
+                        let enriched_batch: Vec<_> = filtered
+                            .iter()
+                            .map(|log| name_caches.enrich_log(log, &api_key_cache))
+                            .collect();
+                        let event = match serde_json::to_string(&enriched_batch) {
+                            Ok(payload) => Event::default().event("log_batch").data(payload),
+                            Err(_) => Event::default().event("resync").data("{}"),
+                        };
+                        return Some((
+                            Ok::<Event, Infallible>(event),
+                            (receiver, name_caches, api_key_cache, is_admin, user_id, guard),
+                        ));
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        let event = Event::default().event("resync").data("{}");
+                        return Some((
+                            Ok::<Event, Infallible>(event),
+                            (receiver, name_caches, api_key_cache, is_admin, user_id, guard),
+                        ));
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response())
 }

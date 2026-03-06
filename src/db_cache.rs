@@ -74,13 +74,15 @@ impl LastUsedBatcher {
 pub struct RequestLogBatcher {
     buffer: Arc<Mutex<Vec<InsertRequestLog>>>,
     capacity_hint: usize,
+    broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
 }
 
 impl RequestLogBatcher {
-    pub fn new(capacity_hint: usize) -> Self {
+    pub fn new(capacity_hint: usize, broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>) -> Self {
         Self {
             buffer: Arc::new(Mutex::new(Vec::with_capacity(capacity_hint))),
             capacity_hint,
+            broadcast,
         }
     }
 
@@ -232,7 +234,9 @@ impl RequestLogBatcher {
 
         if let Err(e) = tx.commit().await {
             tracing::warn!("request_log_batcher commit error: {e}");
+            return;
         }
+        let _ = self.broadcast.send(entries);
     }
 
     /// Spawn background task that flushes every `interval`.

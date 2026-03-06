@@ -1,4 +1,5 @@
 use crate::auth::AuthState;
+use crate::name_cache::NameCaches;
 use crate::error::{AppError, AppResult};
 use crate::model_registry::ModelRegistry;
 use crate::model_registry_store::ModelRegistryStore;
@@ -17,6 +18,8 @@ use serde_json::{Value, json};
 use crate::db::DbPool;
 use std::collections::HashMap;
 use std::sync::{Arc, Once, OnceLock};
+use std::sync::atomic::AtomicUsize;
+use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -33,6 +36,7 @@ pub struct AppState {
     pub metrics: PrometheusHandle,
     pub group_counters: Arc<Mutex<HashMap<String, u64>>>,
     pub user_store: UserStore,
+    pub name_caches: NameCaches,
     pub settings_store: SettingsStore,
     pub provider_store: ProviderStore,
     pub monoize_store: MonoizeRoutingStore,
@@ -41,6 +45,8 @@ pub struct AppState {
     pub model_registry_store: ModelRegistryStore,
     pub transform_registry: Arc<TransformRegistry>,
     pub auth_rate_limiter: RateLimiter,
+    pub log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
+    pub sse_connections: Arc<DashMap<String, AtomicUsize>>,
 }
 
 const ACTIVE_PROBE_CONNECTIVITY_KIND: &str = "active_probe_connectivity";
@@ -116,10 +122,19 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         })?;
     }
 
-    let user_store = UserStore::new(db.clone()).await.map_err(|err| {
+    let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(64);
+
+    let user_store = UserStore::new(db.clone(), log_broadcast.clone()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "user_store_init_failed",
+            err,
+        )
+    })?;
+    let name_caches = NameCaches::init(db.read()).await.map_err(|err| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "name_cache_init_failed",
             err,
         )
     })?;
@@ -333,6 +348,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         }
     });
 
+
+
     Ok(AppState {
         runtime: Arc::new(runtime),
         auth,
@@ -341,6 +358,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         metrics,
         group_counters: Arc::new(Mutex::new(HashMap::new())),
         user_store,
+        name_caches,
         settings_store,
         provider_store,
         monoize_store,
@@ -349,6 +367,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         model_registry_store,
         transform_registry,
         auth_rate_limiter: RateLimiter::new(10, std::time::Duration::from_secs(60)),
+        log_broadcast,
+        sse_connections: Arc::new(DashMap::new()),
     })
 }
 
@@ -889,6 +909,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/fetch-channel-models",
             post(crate::dashboard_handlers::fetch_channel_models),
+        )
+        .route(
+            "/dashboard/request-logs/stream",
+            get(crate::dashboard_handlers::stream_request_logs),
         )
         .route(
             "/dashboard/request-logs",

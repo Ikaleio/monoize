@@ -184,6 +184,7 @@ pub async fn create_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    state.name_caches.api_keys.insert(api_key.id.clone(), api_key.name.clone());
     Ok((
         StatusCode::CREATED,
         Json(ApiKeyCreatedResponse {
@@ -232,6 +233,7 @@ pub async fn delete_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    state.name_caches.api_keys.remove(&key_id);
     Ok(Json(json!({ "success": true })))
 }
 
@@ -323,6 +325,7 @@ pub async fn update_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    state.name_caches.api_keys.insert(updated_key.id.clone(), updated_key.name.clone());
     Ok(Json(ApiKeyResponse {
         id: updated_key.id,
         name: updated_key.name,
@@ -370,6 +373,9 @@ pub async fn batch_delete_api_keys(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    for id in &ids_to_delete {
+        state.name_caches.api_keys.remove(id);
+    }
     Ok(Json(
         json!({ "success": true, "deleted_count": deleted_count }),
     ))

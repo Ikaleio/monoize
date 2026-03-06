@@ -12,6 +12,7 @@ mod tests;
 
 pub use analytics_request_logs::{
     AnalyticsQuery, RequestLogsQuery, get_dashboard_analytics, list_my_request_logs,
+    stream_request_logs,
 };
 pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,

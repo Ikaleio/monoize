@@ -128,7 +128,7 @@ fn append_request_log_filters(
         *idx += 1;
     }
     if let Some(username) = username {
-        sql.push_str(&format!(" AND (u.username = ${} OR rl.request_kind = 'active_probe_connectivity')", *idx));
+        sql.push_str(&format!(" AND (rl.user_id IN (SELECT id FROM users WHERE username = ${}) OR rl.request_kind = 'active_probe_connectivity')", *idx));
         values.push(username.into());
         *idx += 1;
     }
@@ -421,14 +421,8 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd{charge_decimal_col}, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at{created_at_ts_col},
-                      u.username, ak.name AS api_key_name, ch.name AS channel_name,
-                      mp.name AS provider_name
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at{created_at_ts_col}
                FROM request_logs rl
-               LEFT JOIN users u ON rl.user_id = u.id
-               LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
-               LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
-               LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
                WHERE rl.user_id = $1"#);
         let mut rows_values: Vec<SeaValue> = vec![user_id.into()];
         let mut rows_idx = 2usize;
@@ -493,7 +487,6 @@ impl UserStore {
 
         // Count query
         let mut count_sql = r#"SELECT COUNT(*) as cnt FROM request_logs rl
-               LEFT JOIN users u ON rl.user_id = u.id
                WHERE 1 = 1"#.to_string();
         let mut count_values: Vec<SeaValue> = Vec::new();
         let mut count_idx = 1usize;
@@ -522,11 +515,9 @@ impl UserStore {
         // Sum query
         let mut sum_sql = if is_postgres {
             r#"SELECT COALESCE(SUM(COALESCE(rl.charge_nano_usd_decimal, CASE WHEN rl.charge_nano_usd ~ '^-?[0-9]+$' THEN CAST(rl.charge_nano_usd AS NUMERIC(39,0)) ELSE NULL END)), 0) as total_charge FROM request_logs rl
-               LEFT JOIN users u ON rl.user_id = u.id
                WHERE 1 = 1"#.to_string()
         } else {
             r#"SELECT CAST(COALESCE(SUM(CAST(rl.charge_nano_usd AS BIGINT)), 0) AS BIGINT) as total_charge FROM request_logs rl
-               LEFT JOIN users u ON rl.user_id = u.id
                WHERE 1 = 1"#.to_string()
         };
         let mut sum_values: Vec<SeaValue> = Vec::new();
@@ -580,14 +571,8 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd{charge_decimal_col}, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at{created_at_ts_col},
-                      u.username, ak.name AS api_key_name, ch.name AS channel_name,
-                      mp.name AS provider_name
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at{created_at_ts_col}
                FROM request_logs rl
-               LEFT JOIN users u ON rl.user_id = u.id
-               LEFT JOIN api_keys ak ON rl.api_key_id = ak.id
-               LEFT JOIN monoize_channels ch ON rl.channel_id = ch.id
-               LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
                WHERE 1 = 1"#);
         let mut rows_values: Vec<SeaValue> = Vec::new();
         let mut rows_idx = 1usize;

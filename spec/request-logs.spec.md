@@ -298,6 +298,8 @@ FL26a. In the cost breakdown tooltip, any per-class line item whose computed cha
 
 FL26b. *(Removed — "final cost" line is unconditionally removed from the tooltip. See FL26.)*
 
+FL26c. If the cost breakdown tooltip would contain no visible line items (all per-class charges are zero per FL26a, no base charge, no multiplier, and billing snapshot is present), the Cost cell MUST render as plain text without a tooltip wrapper. The displayed cost value remains unchanged.
+
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 
 FL27a. In the request-logs table, the visible Input and Output token cell values MUST prefer `usage_breakdown_json.input.total_tokens` and `usage_breakdown_json.output.total_tokens` when those fields are present. If those fields are absent, the UI MUST fall back to scalar columns `input_tokens` and `output_tokens`. If neither source is available, the UI MUST display `0`.
@@ -324,7 +326,7 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 - `success`: green lamp,
 - `error`: red lamp.
 
-FL37. The logs page MUST auto-refresh the newest page periodically so that `pending` rows can transition to terminal status without manual refresh.
+FL37. The logs page MUST auto-refresh the newest page periodically so that `pending` rows can transition to terminal status without manual refresh. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
 
 FL38. While any tooltip-detail overlay in the request-logs table is open (request-id, model, token, channel, duration, input/output, cost):
 
@@ -347,3 +349,84 @@ FL43. Time-range selection MUST be bidirectionally synchronized:
 - selecting calendar range or committing manual inputs MUST activate the matching fixed preset (`today`, `yesterday`, `this_month`, `last_month`) when and only when the selected range matches that preset, otherwise no preset is active.
 
 FL44. Active preset buttons (including `All Time`) MUST use a high-contrast foreground/background pair so text remains legible in both light and dark themes.
+
+## 6. SSE Real-Time Updates
+
+### 6.1 SSE endpoint contract
+
+FL45. The server MUST expose a streaming endpoint at `GET /api/dashboard/request-logs/stream`.
+
+- Content-Type of the response MUST be `text/event-stream`.
+- Authentication MUST use the `Authorization: Bearer <token>` header, validated by the same `get_current_user()` mechanism as all other dashboard endpoints.
+- If the token is missing or invalid, the server MUST respond with HTTP 401 before entering streaming mode.
+
+### 6.2 SSE event types
+
+FL46. The endpoint MUST emit exactly two event types:
+
+1. **`log_batch`**: Carries an array of one or more complete `RequestLog` objects (same shape as items in the REST response `data[]` from section 3.1).
+   Wire format:
+   ```
+   event: log_batch
+   data: [{RequestLog}, ...]
+
+   ```
+   Each object in the array MUST contain all fields defined in the `RequestLog` interface (section 1.1 + enriched fields from 1.2). The array MUST contain at least one element per emission.
+
+2. **`resync`**: Signals the client to discard SSE-delivered incremental state and perform a full SWR refetch.
+   Wire format:
+   ```
+   event: resync
+   data: {}
+
+   ```
+   The server MUST emit `resync` when the internal broadcast channel enters a `Lagged` state (i.e., a slow consumer missed messages). The client MUST respond by calling `mutate()` on the request-logs SWR key to trigger a full REST refetch.
+
+### 6.3 Permission model
+
+FL47. SSE event visibility MUST obey the same permission rules as the REST endpoint (RL-API1):
+
+- If the authenticated user has role `super_admin` or `admin`, the server MUST push ALL newly created log entries.
+- Otherwise, the server MUST push only log entries where `user_id` matches the authenticated user's ID.
+- The server MUST NOT accept filter query parameters on the SSE endpoint (see FL53). Client-side code MUST filter SSE-delivered logs locally against the active UI filter state before displaying them.
+
+### 6.4 Connection lifecycle
+
+FL48. The SSE connection lifecycle MUST follow these phases:
+
+1. **Connect**: The client MUST open the SSE stream using a `fetch()`-based reader (NOT the native `EventSource` API, because `EventSource` cannot send custom `Authorization` headers).
+2. **Receive**: On each `log_batch` event, the client MUST prepend the received `RequestLog` objects to the beginning of the existing table data array (newest first).
+3. **Disconnect**: On network error, HTTP error, or stream close, the client MUST fall back to SWR polling (see FL50).
+4. **Reconnect**: The client MUST automatically attempt reconnection using exponential backoff: initial delay 1s, doubling on each consecutive failure (1s, 2s, 4s, 8s, 16s), capped at 30s maximum delay. On successful reconnection, the backoff counter MUST reset to 1s.
+
+### 6.5 SSE as primary real-time mechanism
+
+FL49. When an SSE connection is active and receiving events, SSE replaces the periodic SWR polling defined in FL37 as the primary real-time data delivery mechanism. The SWR auto-refresh interval defined in FL37 MUST be paused while SSE is connected. Polling MUST resume only when SSE is disconnected (see FL50).
+
+### 6.6 Polling fallback on SSE disconnect
+
+FL50. When the SSE connection is lost (network failure, server restart, or stream termination), the client MUST immediately activate SWR polling at an interval of approximately 3 seconds. This polling MUST continue until the SSE connection is re-established, at which point polling MUST be paused again per FL49.
+
+### 6.7 Aggregate values remain on separate SWR poll
+
+FL51. The aggregate fields `total` and `total_charge_nano_usd` (as defined in section 3.1 response schema) MUST NOT be delivered via SSE events. These values MUST be fetched via a separate SWR poll at an interval of approximately 10 seconds, independent of SSE connection state.
+
+### 6.8 Name-cache enrichment model
+
+FL52. Both SSE events and REST responses MUST use in-memory ID-to-name caches for the enriched fields: `provider_name`, `channel_name`, `username`, and `api_key_name`. The server MUST NOT perform database JOINs at SSE event delivery time. If a cache miss occurs for a given ID, the enriched field MUST be null (not omitted), and the client MUST render the raw ID as fallback display text where applicable (per FL9 for channel, analogous for others).
+
+### 6.9 No server-side filtering on SSE
+
+FL53. The SSE endpoint `GET /api/dashboard/request-logs/stream` MUST NOT accept any filter query parameters (`model`, `status`, `api_key_id`, `username`, `search`, `time_from`, `time_to`). The server pushes all user-visible logs (per FL47 permission rules). The client MUST apply active UI filters locally to determine which SSE-delivered rows to display.
+
+### 6.10 Keep-alive
+
+FL54. The server MUST emit SSE comment lines (lines beginning with `:`) at regular intervals of approximately 15 seconds when no data events have been sent. This prevents intermediate proxies and load balancers from closing idle connections due to inactivity timeouts.
+
+### 6.11 Concurrent connection policy
+
+FL55. The endpoint `GET /api/dashboard/request-logs/stream` MUST enforce a per-user concurrent SSE connection cap of 5. When a user already has 5 active SSE connections open on this endpoint, any additional connection attempt by that user MUST be rejected with HTTP 429 Too Many Requests. The active connection count MUST be tracked per authenticated user ID and MUST be decremented atomically when a connection closes (via a Drop guard or equivalent RAII mechanism), ensuring the count remains accurate under concurrent open and close operations.
+
+### 6.12 Tooltip-pause interaction with SSE
+
+FL56. While any tooltip-detail overlay in the request-logs table is open (as defined in FL38), SSE-delivered `log_batch` data MUST be buffered in memory and MUST NOT cause the table row list to re-render. When all tooltip overlays close, all buffered SSE data MUST be flushed: buffered rows MUST be prepended to the table data array and the table MUST re-render with the combined dataset. This behavior is analogous to the polling-pause guarantee in FL38 and MUST hold on both fine-pointer and coarse-pointer devices.

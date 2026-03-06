@@ -23,6 +23,7 @@ import {
 	TooltipTrigger
 } from '@/components/ui/tooltip'
 import { useRequestLogs, useApiKeys } from '@/lib/swr'
+import { useRequestLogSSE } from '@/lib/sse'
 import { useAuth } from '@/hooks/use-auth'
 import { ModelBadge } from '@/components/ModelBadge'
 import { cn } from '@/lib/utils'
@@ -337,6 +338,7 @@ export function RequestLogsPage() {
 	const tooltipOpenCountRef = useRef(0)
 	const pendingPageDataRef = useRef<import('@/lib/api').RequestLogsResponse | null>(null)
 	const pendingNewestDataRef = useRef<import('@/lib/api').RequestLogsResponse | null>(null)
+	const pendingSSERef = useRef<RequestLog[]>([])
 	const [flushSignal, setFlushSignal] = useState(0)
 
 	const onTooltipOpenChange = useCallback((open: boolean) => {
@@ -379,12 +381,125 @@ export function RequestLogsPage() {
 		isValidating,
 		mutate
 	} = useRequestLogs(REQUEST_LOGS_PAGE_SIZE, requestOffset, activeFilters)
+
+	const matchesActiveFilters = useCallback((log: RequestLog) => {
+		if (activeFilters.model && log.model !== activeFilters.model) return false
+		if (activeFilters.status && log.status !== activeFilters.status) return false
+		if (activeFilters.api_key_id && log.api_key.id !== activeFilters.api_key_id) return false
+
+		const userObj = asObject(log.user)
+		const userName =
+			(typeof userObj?.username === 'string' ? userObj.username : undefined) ||
+			(typeof userObj?.name === 'string' ? userObj.name : undefined)
+		if (activeFilters.username && userName !== activeFilters.username) return false
+
+		if (activeFilters.time_from || activeFilters.time_to) {
+			const createdAtMs = Date.parse(log.created_at)
+			if (!Number.isFinite(createdAtMs)) return false
+			if (activeFilters.time_from) {
+				const fromMs = Date.parse(activeFilters.time_from)
+				if (Number.isFinite(fromMs) && createdAtMs < fromMs) return false
+			}
+			if (activeFilters.time_to) {
+				const toMs = Date.parse(activeFilters.time_to)
+				if (Number.isFinite(toMs) && createdAtMs > toMs) return false
+			}
+		}
+
+		if (activeFilters.search) {
+			const q = activeFilters.search.toLowerCase()
+			const providerObj = asObject(log.provider)
+			const channelObj = asObject(log.channel)
+			const apiKeyObj = asObject(log.api_key)
+			const searchFields = [
+				log.id,
+				log.request_id,
+				log.model,
+				log.upstream_model,
+				log.request_ip,
+				log.status,
+				typeof providerObj?.id === 'string' ? providerObj.id : undefined,
+				typeof providerObj?.name === 'string' ? providerObj.name : undefined,
+				typeof channelObj?.id === 'string' ? channelObj.id : undefined,
+				typeof channelObj?.name === 'string' ? channelObj.name : undefined,
+				typeof apiKeyObj?.id === 'string' ? apiKeyObj.id : undefined,
+				typeof apiKeyObj?.name === 'string' ? apiKeyObj.name : undefined,
+				userName
+			]
+			const matchesSearch = searchFields.some(value =>
+				typeof value === 'string' && value.toLowerCase().includes(q)
+			)
+			if (!matchesSearch) return false
+		}
+
+		return true
+	}, [activeFilters])
+
+	const prependSSELogs = useCallback((logs: RequestLog[]) => {
+		if (logs.length === 0) return
+
+		setLoadedLogs(prev => {
+			const existingIds = new Set(prev.map(log => log.id))
+			const existingRequestIds = new Set(
+				prev
+					.map(log => log.request_id)
+					.filter((requestId): requestId is string => typeof requestId === 'string')
+			)
+			const incomingIds = new Set<string>()
+			const incomingRequestIds = new Set<string>()
+			const accepted: RequestLog[] = []
+
+			for (const log of logs) {
+				if (!matchesActiveFilters(log)) continue
+				if (existingIds.has(log.id) || incomingIds.has(log.id)) continue
+
+				if (log.request_id) {
+					if (
+						existingRequestIds.has(log.request_id) ||
+						incomingRequestIds.has(log.request_id)
+					) {
+						continue
+					}
+					incomingRequestIds.add(log.request_id)
+				}
+
+				incomingIds.add(log.id)
+				accepted.push(log)
+			}
+
+			if (accepted.length === 0) return prev
+			return [...accepted, ...prev]
+		})
+	}, [matchesActiveFilters])
+
+	const { connected: sseConnected } = useRequestLogSSE({
+		enabled: !isLoading,
+		onLogBatch: logs => {
+			if (tooltipOpenCountRef.current > 0) {
+				pendingSSERef.current = [...logs, ...pendingSSERef.current]
+				return
+			}
+			prependSSELogs(logs)
+		},
+		onResync: () => {
+			void mutate()
+		}
+	})
+
+	const prevConnectedRef = useRef(false)
+	useEffect(() => {
+		if (sseConnected && !prevConnectedRef.current) {
+			void mutate()
+		}
+		prevConnectedRef.current = sseConnected
+	}, [sseConnected, mutate])
+
 	const { data: newestPageData } = useRequestLogs(
 		REQUEST_LOGS_PAGE_SIZE,
 		0,
 		activeFilters,
 		{
-			refreshInterval: 2000,
+			refreshInterval: sseConnected ? 10000 : 3000,
 			isPaused: () => tooltipOpenCountRef.current > 0
 		}
 	)
@@ -471,6 +586,12 @@ export function RequestLogsPage() {
 				if (appended.length === 0) return prev
 				return [...prev, ...appended]
 			})
+		}
+
+		if (pendingSSERef.current.length > 0) {
+			const bufferedSSE = pendingSSERef.current
+			pendingSSERef.current = []
+			prependSSELogs(bufferedSSE)
 		}
 	}, [flushSignal, requestOffset])
 
@@ -716,6 +837,25 @@ export function RequestLogsPage() {
 											className={cn('h-4 w-4', isValidating && 'animate-spin')}
 										/>
 									</Button>
+									<TooltipProvider>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<span
+													className={cn(
+														'inline-block h-2 w-2 rounded-full transition-colors duration-300',
+														sseConnected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
+													)}
+												/>
+											</TooltipTrigger>
+											<TooltipContent side='bottom'>
+												<p className='text-xs'>
+													{sseConnected
+														? 'Real-time updates active'
+														: 'Real-time updates disconnected, polling...'}
+												</p>
+											</TooltipContent>
+										</Tooltip>
+									</TooltipProvider>
 									<Button
 										type='button'
 										variant='outline'
@@ -1032,6 +1172,7 @@ function LogRowCells({
 		: log.status === 'error' ? 'bg-red-500'
 		: 'bg-zinc-400'
 	const baseCharge = readNanoString(billingSnapshot, 'base_charge_nano')
+	const hasBreakdownContent = !!(inputUncachedCostDetail || inputCachedCostDetail || inputCacheCreationCostDetail || outputTextCostDetail || outputReasoningCostDetail || baseCharge || multiplier != null || !billingSnapshot)
 
 	return (
 		<>
@@ -1337,88 +1478,97 @@ function LogRowCells({
 			</td>
 
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono align-middle'>
-				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={onTooltipOpenChange}>
-						<TooltipTrigger asChild>
-							<span
-								className='inline-flex items-center whitespace-nowrap align-bottom cursor-default'
-								title={costDisplay}
-							>
-								{costDisplay}
-							</span>
-						</TooltipTrigger>
-						<TooltipContent>
-							<div className='text-xs space-y-0.5 min-w-[300px]'>
-								{inputUncachedCostDetail && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.input')}{inputCachedCostDetail ? ` (${t('requestLogs.uncachedTokens')})` : ''}</span>
-										<span className='font-mono'>{inputUncachedCostDetail}</span>
-									</div>
-								)}
-								{inputCachedCostDetail && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>
-											{t('requestLogs.input')} ({t('requestLogs.cachedTokens')})
-										</span>
-										<span className='font-mono'>{inputCachedCostDetail}</span>
-									</div>
-								)}
-								{inputCacheCreationCostDetail && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>
-											{t('requestLogs.input')} ({t('requestLogs.cacheCreationTokens')})
-										</span>
-										<span className='font-mono'>{inputCacheCreationCostDetail}</span>
-									</div>
-								)}
-								{outputTextCostDetail && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>
-											{t('requestLogs.output')}{outputReasoningCostDetail ? ` (${t('requestLogs.nonReasoningTokens')})` : ''}
-										</span>
-										<span className='font-mono'>{outputTextCostDetail}</span>
-									</div>
-								)}
-								{outputReasoningCostDetail && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>
-											{t('requestLogs.output')} (
-											{t('requestLogs.reasoningTokens')})
-										</span>
-										<span className='font-mono'>
-											{outputReasoningCostDetail}
-										</span>
-									</div>
-								)}
-								{baseCharge && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.baseCost')}</span>
-										<span className='font-mono'>{formatCost(baseCharge)}</span>
-									</div>
-								)}
-								{multiplier != null && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.multiplier')}</span>
-										<span className='font-mono'>{multiplier.toFixed(6)}x</span>
-									</div>
-								)}
-								{!billingSnapshot && (
-									<div className='text-muted-foreground'>
-										{t('requestLogs.detailsUnavailable')}
-									</div>
-								)}
-								<div className='border-t border-muted pt-2 mt-2'>
-									<div className='flex items-center justify-between gap-3'>
-										<span className='text-xs text-muted-foreground'>{t('requestLogs.totalCost')}</span>
-										<span className='font-mono text-xs'>
-														{formatCostFullPrecision(log.billing.charge_nano_usd)}
-										</span>
+				{hasBreakdownContent ? (
+					<TooltipProvider delayDuration={200}>
+						<Tooltip onOpenChange={onTooltipOpenChange}>
+							<TooltipTrigger asChild>
+								<span
+									className='inline-flex items-center whitespace-nowrap align-bottom cursor-default'
+									title={costDisplay}
+								>
+									{costDisplay}
+								</span>
+							</TooltipTrigger>
+							<TooltipContent>
+								<div className='text-xs space-y-0.5 min-w-[300px]'>
+									{inputUncachedCostDetail && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.input')}{inputCachedCostDetail ? ` (${t('requestLogs.uncachedTokens')})` : ''}</span>
+											<span className='font-mono'>{inputUncachedCostDetail}</span>
+										</div>
+									)}
+									{inputCachedCostDetail && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>
+												{t('requestLogs.input')} ({t('requestLogs.cachedTokens')})
+											</span>
+											<span className='font-mono'>{inputCachedCostDetail}</span>
+										</div>
+									)}
+									{inputCacheCreationCostDetail && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>
+												{t('requestLogs.input')} ({t('requestLogs.cacheCreationTokens')})
+											</span>
+											<span className='font-mono'>{inputCacheCreationCostDetail}</span>
+										</div>
+									)}
+									{outputTextCostDetail && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>
+												{t('requestLogs.output')}{outputReasoningCostDetail ? ` (${t('requestLogs.nonReasoningTokens')})` : ''}
+											</span>
+											<span className='font-mono'>{outputTextCostDetail}</span>
+										</div>
+									)}
+									{outputReasoningCostDetail && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>
+												{t('requestLogs.output')} (
+												{t('requestLogs.reasoningTokens')})
+											</span>
+											<span className='font-mono'>
+												{outputReasoningCostDetail}
+											</span>
+										</div>
+									)}
+									{baseCharge && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.baseCost')}</span>
+											<span className='font-mono'>{formatCost(baseCharge)}</span>
+										</div>
+									)}
+									{multiplier != null && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.multiplier')}</span>
+											<span className='font-mono'>{multiplier.toFixed(6)}x</span>
+										</div>
+									)}
+									{!billingSnapshot && (
+										<div className='text-muted-foreground'>
+											{t('requestLogs.detailsUnavailable')}
+										</div>
+									)}
+									<div className='border-t border-muted pt-2 mt-2'>
+										<div className='flex items-center justify-between gap-3'>
+											<span className='text-xs text-muted-foreground'>{t('requestLogs.totalCost')}</span>
+											<span className='font-mono text-xs'>
+												{formatCostFullPrecision(log.billing.charge_nano_usd)}
+											</span>
+										</div>
 									</div>
 								</div>
-							</div>
-						</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
+							</TooltipContent>
+						</Tooltip>
+					</TooltipProvider>
+				) : (
+					<span
+						className='inline-flex items-center whitespace-nowrap align-bottom'
+						title={costDisplay}
+					>
+						{costDisplay}
+					</span>
+				)}
 			</td>
 
 			<td className='pl-2 pr-2 py-1 whitespace-nowrap font-mono text-muted-foreground text-[11px] align-middle'>

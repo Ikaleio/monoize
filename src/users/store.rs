@@ -21,12 +21,12 @@ impl UserStore {
             .starts_with(RESERVED_INTERNAL_USER_PREFIX)
     }
 
-    pub async fn new(db: crate::db::DbPool) -> Result<Self, String> {
+    pub async fn new(db: crate::db::DbPool, log_broadcast: tokio::sync::broadcast::Sender<Vec<super::InsertRequestLog>>) -> Result<Self, String> {
         use std::time::Duration;
         Ok(Self {
             db,
             last_used_batcher: crate::db_cache::LastUsedBatcher::new(),
-            request_log_batcher: crate::db_cache::RequestLogBatcher::new(128),
+            request_log_batcher: crate::db_cache::RequestLogBatcher::new(128, log_broadcast),
             api_key_cache: crate::db_cache::ApiKeyCache::new(Duration::from_secs(60)),
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
         })

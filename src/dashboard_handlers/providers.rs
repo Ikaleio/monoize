@@ -130,6 +130,11 @@ pub async fn create_provider(
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
+    state.name_caches.providers.insert(provider.id.clone(), provider.name.clone());
+    for ch in &provider.channels {
+        state.name_caches.channels.insert(ch.id.clone(), ch.name.clone());
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(provider_with_runtime(&state, provider).await),
@@ -163,6 +168,11 @@ pub async fn update_provider(
             }
         })?;
 
+    state.name_caches.providers.insert(provider.id.clone(), provider.name.clone());
+    for ch in &provider.channels {
+        state.name_caches.channels.insert(ch.id.clone(), ch.name.clone());
+    }
+
     let next_channel_ids: std::collections::HashSet<&str> =
         provider.channels.iter().map(|ch| ch.id.as_str()).collect();
     let removed_channel_ids: Vec<String> = prev_provider
@@ -172,6 +182,9 @@ pub async fn update_provider(
         .map(|ch| ch.id.clone())
         .collect();
     prune_provider_channel_health(&state, &removed_channel_ids).await;
+    for id in &removed_channel_ids {
+        state.name_caches.channels.remove(id);
+    }
 
     Ok(Json(provider_with_runtime(&state, provider).await))
 }
@@ -202,12 +215,17 @@ pub async fn delete_provider(
             }
         })?;
 
+    state.name_caches.providers.remove(&provider_id);
+
     let removed_channel_ids: Vec<String> = existing_provider
         .channels
         .iter()
         .map(|ch| ch.id.clone())
         .collect();
     prune_provider_channel_health(&state, &removed_channel_ids).await;
+    for id in &removed_channel_ids {
+        state.name_caches.channels.remove(id);
+    }
 
     Ok(Json(json!({ "success": true })))
 }
