@@ -159,3 +159,5 @@ DB20. All SQL statements MUST be compatible with both SQLite and PostgreSQL. Spe
 - Store i128 nano-USD values as TEXT strings.
 - Store booleans as INTEGER `0/1`.
 - Use `TEXT`, `INTEGER`, `REAL`, `BLOB` logical types only.
+
+DB21. Request-log storage MUST use a single canonical table schema across SQLite and PostgreSQL. PostgreSQL-specific shadow columns for type-specialized mirrors are forbidden. If an older PostgreSQL database still contains such shadow columns, migrations MUST remove them while preserving canonical data.

@@ -58,6 +58,10 @@ RL1. For every API-key-authenticated proxy request (`user_id` is present), the s
 
 RL1a. The lifecycle row MUST be accumulated in memory during request processing. No database row is written until terminal state. The row MUST be submitted as a single INSERT with all fields (status, usage, billing, provider metadata) populated at terminal state. The INSERT is submitted to a write batcher (see `db-performance-tuning.spec.md` §2 RequestLogBatcher) and is NOT guaranteed to be persisted synchronously.
 
+RL1a-1. The server MUST broadcast an in-memory request-log snapshot with `status = "pending"` to the request-log SSE stream as soon as request processing begins. This SSE-only snapshot MUST NOT create or update any database row.
+
+RL1a-2. When provider/channel metadata for an in-flight request becomes known, the server SHOULD broadcast an updated in-memory `pending` snapshot for the same `request_id`. When the terminal `success` or `error` row is later broadcast, clients MUST treat it as replacing any earlier `pending` snapshot with the same `request_id`.
+
 RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal status:
 
 - `"success"` when the downstream client received a normal API response payload (including truncated/cutoff completion cases such as `finish_reason = "length"`, and including cases where the downstream client disconnected mid-stream after partial delivery),
@@ -189,12 +193,13 @@ RL-S1. Request logs MUST be stored in table `request_logs`.
 
 RL-S2. The table MUST have a composite index on `(user_id, created_at DESC)` for efficient pagination.
 
-RL-S2a. For PostgreSQL backends, request-log reads MUST use native shadow columns and indexes:
-- `created_at_ts TIMESTAMPTZ` for time filters/order,
-- `is_stream_bool BOOLEAN` for stream flag reads,
-- `charge_nano_usd_decimal NUMERIC(39,0)` for charge aggregation.
+RL-S2a. Request-log reads MUST use backend-native compatibility expressions over the canonical columns defined in RL-S1:
+- SQLite time filters/order operate on RFC3339 `created_at` text directly.
+- PostgreSQL time filters/order MUST cast valid RFC3339 `created_at` text to `TIMESTAMPTZ` at query time.
+- SQLite charge aggregation MUST cast `charge_nano_usd` text to `BIGINT`.
+- PostgreSQL charge aggregation MUST cast syntactically valid integer `charge_nano_usd` text to `NUMERIC(39,0)` at query time.
 
-RL-S2b. For PostgreSQL backends, the table MUST additionally have indexes on `(user_id, created_at_ts DESC)` and `(created_at_ts DESC)`.
+RL-S2b. The composite index `(user_id, created_at DESC)` defined in RL-S2 MUST remain the only required request-log time index across both SQLite and PostgreSQL backends.
 
 RL-S3. The `user_id` foreign key MUST cascade on delete.
 
@@ -204,9 +209,9 @@ RL-S6. The migration from `prompt_tokens`/`completion_tokens` to `input_tokens`/
 
 RL-S5. `request_kind` MUST be added as a nullable `TEXT` column via migration logic, with null as backward-compatible default for existing rows.
 
-RL-S7. PostgreSQL shadow columns (`created_at_ts`, `is_stream_bool`, `charge_nano_usd_decimal`) MUST be backfilled from legacy columns (`created_at`, `is_stream`, `charge_nano_usd`) during migration. Invalid legacy values MUST map to `NULL` in shadow columns rather than aborting migration.
+RL-S7. If a PostgreSQL database still contains legacy shadow columns (`created_at_ts`, `is_stream_bool`, `charge_nano_usd_decimal`) from an older Monoize version, startup migration MUST drop those columns and their associated indexes without touching the canonical columns (`created_at`, `is_stream`, `charge_nano_usd`).
 
-RL-S8. While SQLite and PostgreSQL both remain supported, write paths MUST continue writing legacy columns. PostgreSQL read/aggregation paths SHOULD prefer shadow columns and fall back to legacy columns only when shadow values are null.
+RL-S8. While SQLite and PostgreSQL both remain supported, request-log writes MUST target only the canonical columns present in RL-S1. The application MUST NOT create, backfill, or write PostgreSQL-only shadow columns.
 
 ## 5. Frontend display
 
@@ -326,7 +331,7 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 - `success`: green lamp,
 - `error`: red lamp.
 
-FL37. The logs page MUST auto-refresh the newest page periodically so that `pending` rows can transition to terminal status without manual refresh. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
+FL37. The logs page MUST auto-refresh the newest page periodically so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
 
 FL38. While any tooltip-detail overlay in the request-logs table is open (request-id, model, token, channel, duration, input/output, cost):
 
@@ -395,7 +400,7 @@ FL47. SSE event visibility MUST obey the same permission rules as the REST endpo
 FL48. The SSE connection lifecycle MUST follow these phases:
 
 1. **Connect**: The client MUST open the SSE stream using a `fetch()`-based reader (NOT the native `EventSource` API, because `EventSource` cannot send custom `Authorization` headers).
-2. **Receive**: On each `log_batch` event, the client MUST prepend the received `RequestLog` objects to the beginning of the existing table data array (newest first).
+2. **Receive**: On each `log_batch` event, the client MUST merge the received `RequestLog` objects into the existing table data array (newest first). If an incoming row has the same `request_id` as an existing row, the incoming row MUST replace the existing row instead of creating a duplicate. This replacement rule is required for the `pending -> success/error` SSE-only lifecycle defined in RL1a-1 and RL1a-2.
 3. **Disconnect**: On network error, HTTP error, or stream close, the client MUST fall back to SWR polling (see FL50).
 4. **Reconnect**: The client MUST automatically attempt reconnection using exponential backoff: initial delay 1s, doubling on each consecutive failure (1s, 2s, 4s, 8s, 16s), capped at 30s maximum delay. On successful reconnection, the backoff counter MUST reset to 1s.
 
