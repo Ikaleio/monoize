@@ -1,4 +1,5 @@
 use crate::urp::{Message, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent};
+use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -22,6 +23,7 @@ pub mod think_xml_to_reasoning;
 pub mod auto_cache_system;
 pub mod auto_cache_tool_use;
 pub mod auto_cache_user_id;
+pub mod compress_user_message_images;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,16 +80,23 @@ impl TransformState for NoState {
     }
 }
 
+#[derive(Clone)]
+pub struct TransformRuntimeContext {
+    pub image_transform_cache: Arc<crate::image_transform_cache::ImageTransformCache>,
+}
+
+#[async_trait]
 pub trait Transform: Send + Sync + 'static {
     fn type_id(&self) -> &'static str;
     fn supported_phases(&self) -> &'static [Phase];
     fn config_schema(&self) -> Value;
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError>;
     fn init_state(&self) -> Box<dyn TransformState>;
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         phase: Phase,
+        context: &TransformRuntimeContext,
         config: &dyn TransformConfig,
         state: &mut dyn TransformState,
     ) -> Result<(), TransformError>;
@@ -136,12 +145,13 @@ pub fn build_states_for_rules(
     Ok(out)
 }
 
-pub fn apply_transforms(
+pub async fn apply_transforms(
     mut data: UrpData<'_>,
     rules: &[TransformRuleConfig],
     states: &mut [Box<dyn TransformState>],
     current_model: &str,
     phase: Phase,
+    context: &TransformRuntimeContext,
     registry: &TransformRegistry,
 ) -> Result<(), TransformError> {
     if rules.len() != states.len() {
@@ -165,7 +175,9 @@ pub fn apply_transforms(
             .get(rule.transform.as_str())
             .ok_or_else(|| TransformError::NotFound(rule.transform.clone()))?;
         let config = transform.parse_config(rule.config.clone())?;
-        transform.apply(data.reborrow(), phase, config.as_ref(), states[i].as_mut())?;
+        transform
+            .apply(data.reborrow(), phase, context, config.as_ref(), states[i].as_mut())
+            .await?;
     }
     Ok(())
 }

@@ -10,7 +10,7 @@ pub(super) async fn execute_nonstream_typed(
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = std::time::Instant::now();
     inject_monoize_context(auth, &mut req);
-    apply_transform_rules_request(state, &mut req, &auth.transforms)?;
+    apply_transform_rules_request(state, &mut req, &auth.transforms).await?;
     strip_monoize_context(&mut req);
     resolve_model_suffix(state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
@@ -29,7 +29,7 @@ pub(super) async fn execute_nonstream_typed(
     for attempt in attempts {
         let mut req_attempt = req.clone();
         req_attempt.model = attempt.upstream_model.clone();
-        apply_transform_rules_request(state, &mut req_attempt, &attempt.provider_transforms)?;
+        apply_transform_rules_request(state, &mut req_attempt, &attempt.provider_transforms).await?;
 
         let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
         let provider = build_channel_provider_config(&attempt);
@@ -58,8 +58,10 @@ pub(super) async fn execute_nonstream_typed(
                     &mut resp,
                     &attempt.provider_transforms,
                     &req.model,
-                )?;
-                apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)?;
+                )
+                .await?;
+                apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
+                    .await?;
                 let charge =
                     maybe_charge_response(state, auth, &attempt, &req.model, &resp).await?;
                 spawn_request_log(

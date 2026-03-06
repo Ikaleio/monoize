@@ -15,7 +15,7 @@ pub(super) async fn forward_stream_typed(
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
     inject_monoize_context(&auth, &mut req);
-    apply_transform_rules_request(&state, &mut req, &auth.transforms)?;
+    apply_transform_rules_request(&state, &mut req, &auth.transforms).await?;
     strip_monoize_context(&mut req);
     resolve_model_suffix(&state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
@@ -34,7 +34,8 @@ pub(super) async fn forward_stream_typed(
         let mut req_attempt = req.clone();
         let logical_model = req.model.clone();
         req_attempt.model = attempt.upstream_model.clone();
-        apply_transform_rules_request(&state, &mut req_attempt, &attempt.provider_transforms)?;
+        apply_transform_rules_request(&state, &mut req_attempt, &attempt.provider_transforms)
+            .await?;
         ensure_stream_usage_requested(&mut req_attempt, attempt.provider_type);
         let need_response_transform_stream =
             has_enabled_response_rules(&attempt.provider_transforms, &logical_model)
@@ -67,13 +68,15 @@ pub(super) async fn forward_stream_typed(
                         &mut resp,
                         &attempt.provider_transforms,
                         &logical_model,
-                    )?;
+                    )
+                    .await?;
                     apply_transform_rules_response(
                         &state,
                         &mut resp,
                         &auth.transforms,
                         &logical_model,
-                    )?;
+                    )
+                    .await?;
                     let charge =
                         maybe_charge_response(&state, &auth, &attempt, &logical_model, &resp)
                             .await?;

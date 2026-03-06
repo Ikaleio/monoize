@@ -102,7 +102,7 @@ pub(super) fn strip_monoize_context(req: &mut urp::UrpRequest) {
     req.extra_body.remove("__monoize_username");
 }
 
-pub(super) fn apply_transform_rules_request(
+pub(super) async fn apply_transform_rules_request(
     state: &AppState,
     req: &mut urp::UrpRequest,
     rules: &[TransformRuleConfig],
@@ -119,14 +119,19 @@ pub(super) fn apply_transform_rules_request(
         )
     })?;
     let model = req.model.clone();
+    let context = transforms::TransformRuntimeContext {
+        image_transform_cache: state.image_transform_cache.clone(),
+    };
     transforms::apply_transforms(
         transforms::UrpData::Request(req),
         rules,
         &mut states,
         &model,
         Phase::Request,
+        &context,
         state.transform_registry.as_ref(),
     )
+    .await
     .map_err(|e| {
         AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -136,7 +141,7 @@ pub(super) fn apply_transform_rules_request(
     })
 }
 
-pub(super) fn apply_transform_rules_response(
+pub(super) async fn apply_transform_rules_response(
     state: &AppState,
     resp: &mut urp::UrpResponse,
     rules: &[TransformRuleConfig],
@@ -153,14 +158,19 @@ pub(super) fn apply_transform_rules_response(
             e.to_string(),
         )
     })?;
+    let context = transforms::TransformRuntimeContext {
+        image_transform_cache: state.image_transform_cache.clone(),
+    };
     transforms::apply_transforms(
         transforms::UrpData::Response(resp),
         rules,
         &mut states,
         model,
         Phase::Response,
+        &context,
         state.transform_registry.as_ref(),
     )
+    .await
     .map_err(|e| {
         AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
