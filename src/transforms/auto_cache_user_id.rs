@@ -1,7 +1,9 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState,
     UrpData,
 };
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::any::Any;
@@ -20,6 +22,7 @@ pub struct AutoCacheUserIdTransform;
 /// When cache fields exist in the request but no user_id is set,
 /// auto-fill metadata.user_id (Anthropic) and req.user (OpenAI)
 /// with the Monoize username injected via __monoize_username.
+#[async_trait]
 impl Transform for AutoCacheUserIdTransform {
     fn type_id(&self) -> &'static str {
         "auto_cache_user_id"
@@ -47,10 +50,11 @@ impl Transform for AutoCacheUserIdTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         _config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {

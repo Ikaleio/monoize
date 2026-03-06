@@ -1,7 +1,9 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState,
     UrpData,
 };
+use async_trait::async_trait;
 use crate::urp::{Part, Role};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -22,6 +24,7 @@ pub struct AutoCacheToolUseTransform;
 /// the Assistant's ToolCall and add cache_control to its last part.
 /// This makes long tool-call chains benefit from caching.
 /// Respects the max-4 cache breakpoint limit.
+#[async_trait]
 impl Transform for AutoCacheToolUseTransform {
     fn type_id(&self) -> &'static str {
         "auto_cache_tool_use"
@@ -49,10 +52,11 @@ impl Transform for AutoCacheToolUseTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         _config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {

@@ -1,7 +1,9 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState,
     UrpData,
 };
+use async_trait::async_trait;
 use crate::urp::{Message, Role};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -25,6 +27,7 @@ impl TransformConfig for Config {
 
 pub struct AppendEmptyUserMessageTransform;
 
+#[async_trait]
 impl Transform for AppendEmptyUserMessageTransform {
     fn type_id(&self) -> &'static str {
         "append_empty_user_message"
@@ -54,10 +57,11 @@ impl Transform for AppendEmptyUserMessageTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {

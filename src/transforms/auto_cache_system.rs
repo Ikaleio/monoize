@@ -1,7 +1,9 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState,
     UrpData,
 };
+use async_trait::async_trait;
 use crate::urp::Role;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -21,6 +23,7 @@ pub struct AutoCacheSystemTransform;
 /// If the system prompt has no cache_control on any of its parts,
 /// add cache_control: {type: "ephemeral"} to its last part.
 /// Respects the max-4 cache breakpoint limit.
+#[async_trait]
 impl Transform for AutoCacheSystemTransform {
     fn type_id(&self) -> &'static str {
         "auto_cache_system"
@@ -48,10 +51,11 @@ impl Transform for AutoCacheSystemTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         _config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
