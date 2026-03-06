@@ -1,6 +1,7 @@
 use crate::auth::AuthState;
 use crate::name_cache::NameCaches;
 use crate::error::{AppError, AppResult};
+use crate::image_transform_cache::ImageTransformCache;
 use crate::model_registry::ModelRegistry;
 use crate::model_registry_store::ModelRegistryStore;
 use crate::rate_limit::RateLimiter;
@@ -47,6 +48,7 @@ pub struct AppState {
     pub auth_rate_limiter: RateLimiter,
     pub log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
     pub sse_connections: Arc<DashMap<String, AtomicUsize>>,
+    pub image_transform_cache: Arc<ImageTransformCache>,
 }
 
 const ACTIVE_PROBE_CONNECTIVITY_KIND: &str = "active_probe_connectivity";
@@ -215,6 +217,17 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     monoize_runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
     let channel_health = Arc::new(Mutex::new(HashMap::new()));
     let transform_registry = Arc::new(crate::transforms::registry());
+    let image_transform_cache = Arc::new(ImageTransformCache::from_env().await.map_err(|err| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "image_transform_cache_init_failed",
+            err,
+        )
+    })?);
+    image_transform_cache
+        .as_ref()
+        .clone()
+        .spawn_cleanup_task(ImageTransformCache::default_cleanup_interval());
     let _ = ensure_active_probe_system_user(&user_store).await;
 
     let probe_store = monoize_store.clone();
@@ -369,6 +382,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         auth_rate_limiter: RateLimiter::new(10, std::time::Duration::from_secs(60)),
         log_broadcast,
         sse_connections: Arc::new(DashMap::new()),
+        image_transform_cache,
     })
 }
 

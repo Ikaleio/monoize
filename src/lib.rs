@@ -9,6 +9,7 @@ pub mod dashboard_handlers;
 pub mod error;
 pub mod frontend;
 pub mod handlers;
+pub mod image_transform_cache;
 pub mod name_cache;
 pub mod model_registry;
 pub mod model_registry_store;
