@@ -38,6 +38,16 @@ pub(super) async fn execute_nonstream_typed(
             &req_attempt.model,
             req_attempt.stream.unwrap_or(false),
         );
+        log_outgoing_request_shape(
+            request_id.as_deref(),
+            &req.model,
+            &req_attempt.model,
+            attempt.provider_type,
+            req_attempt.stream.unwrap_or(false),
+            &path,
+            &upstream_body,
+            &req_attempt,
+        );
         let call = upstream::call_upstream_with_timeout_and_headers(
             client_http(state),
             &provider,
@@ -50,7 +60,16 @@ pub(super) async fn execute_nonstream_typed(
         .await;
         match call {
             Ok(value) => {
-                update_pending_channel_info(state, auth, &attempt, request_id.as_deref()).await;
+                update_pending_channel_info(
+                    state,
+                    auth,
+                    &attempt,
+                    &req.model,
+                    false,
+                    request_id.as_deref(),
+                    request_ip.as_deref(),
+                )
+                .await;
                 mark_channel_success(state, &attempt).await;
                 let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
                 apply_transform_rules_response(

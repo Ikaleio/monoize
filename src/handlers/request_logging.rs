@@ -1,6 +1,59 @@
 use super::*;
 use chrono::Utc;
 
+fn broadcast_pending_snapshot(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    request_id: &str,
+    model: &str,
+    is_stream: bool,
+    request_ip: Option<&str>,
+    provider_id: Option<&str>,
+    channel_id: Option<&str>,
+    upstream_model: Option<&str>,
+    provider_multiplier: Option<f64>,
+) {
+    let Some(user_id) = auth.user_id.as_deref() else {
+        return;
+    };
+
+    let pending_log = InsertRequestLog {
+        request_id: Some(request_id.to_string()),
+        user_id: user_id.to_string(),
+        api_key_id: auth.api_key_id.clone(),
+        model: model.to_string(),
+        provider_id: provider_id.map(ToOwned::to_owned),
+        upstream_model: upstream_model.map(ToOwned::to_owned),
+        channel_id: channel_id.map(ToOwned::to_owned),
+        is_stream,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        tool_prompt_tokens: None,
+        reasoning_tokens: None,
+        accepted_prediction_tokens: None,
+        rejected_prediction_tokens: None,
+        provider_multiplier,
+        charge_nano_usd: None,
+        status: crate::users::REQUEST_LOG_STATUS_PENDING.to_string(),
+        usage_breakdown_json: None,
+        billing_breakdown_json: None,
+        error_code: None,
+        error_message: None,
+        error_http_status: None,
+        duration_ms: None,
+        ttfb_ms: None,
+        request_ip: request_ip.map(ToOwned::to_owned),
+        reasoning_effort: None,
+        tried_providers_json: None,
+        request_kind: None,
+        created_at: Utc::now(),
+    };
+
+    let _ = state.log_broadcast.send(vec![pending_log]);
+}
+
 pub(super) async fn insert_pending_request_log(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -15,6 +68,19 @@ pub(super) async fn insert_pending_request_log(
     let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
         return;
     };
+
+    broadcast_pending_snapshot(
+        state,
+        auth,
+        request_id,
+        model,
+        is_stream,
+        request_ip,
+        None,
+        None,
+        None,
+        None,
+    );
 
     if let Err(e) = state
         .user_store
@@ -36,7 +102,10 @@ pub(super) async fn update_pending_channel_info(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     attempt: &MonoizeAttempt,
+    model: &str,
+    is_stream: bool,
     request_id: Option<&str>,
+    request_ip: Option<&str>,
 ) {
     let Some(user_id) = auth.user_id.as_deref() else {
         return;
@@ -44,6 +113,19 @@ pub(super) async fn update_pending_channel_info(
     let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
         return;
     };
+
+    broadcast_pending_snapshot(
+        state,
+        auth,
+        request_id,
+        model,
+        is_stream,
+        request_ip,
+        Some(&attempt.provider_id),
+        Some(&attempt.channel_id),
+        Some(&attempt.upstream_model),
+        Some(attempt.model_multiplier),
+    );
 
     if let Err(e) = state
         .user_store

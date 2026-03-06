@@ -319,7 +319,16 @@ pub async fn create_embeddings(
 
         match result {
             Ok(mut value) => {
-                update_pending_channel_info(&state, &auth, &attempt, request_id.as_deref()).await;
+                update_pending_channel_info(
+                    &state,
+                    &auth,
+                    &attempt,
+                    &logical_model,
+                    false,
+                    request_id.as_deref(),
+                    request_ip.as_deref(),
+                )
+                .await;
                 mark_channel_success(&state, &attempt).await;
                 let usage = parse_usage_from_embeddings_object(&value);
                 let charge = match usage.as_ref() {

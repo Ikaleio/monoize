@@ -47,6 +47,16 @@ pub(super) async fn forward_stream_typed(
             let upstream_body = encode_request_for_provider(&nonstream_req, &attempt)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
+            log_outgoing_request_shape(
+                request_id.as_deref(),
+                &logical_model,
+                &nonstream_req.model,
+                attempt.provider_type,
+                false,
+                &path,
+                &upstream_body,
+                &nonstream_req,
+            );
             let call = upstream::call_upstream_with_timeout_and_headers(
                 client_http(&state),
                 &provider,
@@ -59,8 +69,16 @@ pub(super) async fn forward_stream_typed(
             .await;
             match call {
                 Ok(value) => {
-                    update_pending_channel_info(&state, &auth, &attempt, request_id.as_deref())
-                        .await;
+                    update_pending_channel_info(
+                        &state,
+                        &auth,
+                        &attempt,
+                        &logical_model,
+                        true,
+                        request_id.as_deref(),
+                        request_ip.as_deref(),
+                    )
+                    .await;
                     mark_channel_success(&state, &attempt).await;
                     let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
                     apply_transform_rules_response(
@@ -168,6 +186,16 @@ pub(super) async fn forward_stream_typed(
         let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
         let provider = build_channel_provider_config(&attempt);
         let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
+        log_outgoing_request_shape(
+            request_id.as_deref(),
+            &logical_model,
+            &req_attempt.model,
+            attempt.provider_type,
+            true,
+            &path,
+            &upstream_body,
+            &req_attempt,
+        );
         let call = upstream::call_upstream_raw_with_timeout_and_headers(
             client_http(&state),
             &provider,
@@ -180,7 +208,16 @@ pub(super) async fn forward_stream_typed(
         .await;
         match call {
             Ok(upstream_resp) => {
-                update_pending_channel_info(&state, &auth, &attempt, request_id.as_deref()).await;
+                update_pending_channel_info(
+                    &state,
+                    &auth,
+                    &attempt,
+                    &logical_model,
+                    true,
+                    request_id.as_deref(),
+                    request_ip.as_deref(),
+                )
+                .await;
                 mark_channel_success(&state, &attempt).await;
                 let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
                 let provider_type = attempt.provider_type;
@@ -1309,7 +1346,13 @@ pub(super) async fn stream_responses_sse_as_responses(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
@@ -1607,7 +1650,13 @@ pub(super) async fn stream_chat_sse_as_responses(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
@@ -1866,7 +1915,13 @@ pub(super) async fn stream_messages_sse_as_responses(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
@@ -2103,7 +2158,13 @@ pub(super) async fn stream_gemini_sse_as_responses(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
@@ -2301,7 +2362,13 @@ pub(super) async fn stream_gemini_sse_as_chat(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
@@ -2458,7 +2525,13 @@ pub(super) async fn stream_gemini_sse_as_messages(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
@@ -2611,7 +2684,13 @@ pub(super) async fn stream_any_sse_as_chat(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
@@ -3636,7 +3715,13 @@ pub(super) async fn stream_any_sse_as_messages(
     if provider_type == ProviderType::Messages {
         let mut stream = upstream_resp.bytes_stream().eventsource();
         while let Some(ev) = stream.next().await {
-            let Ok(ev) = ev else { continue };
+            let ev = ev.map_err(|err| {
+                AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_stream_decode_failed",
+                    err.to_string(),
+                )
+            })?;
             if tx.is_closed() {
                 break;
             }
@@ -3686,7 +3771,13 @@ pub(super) async fn stream_any_sse_as_messages(
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
-        let Ok(ev) = ev else { continue };
+        let ev = ev.map_err(|err| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                err.to_string(),
+            )
+        })?;
         if tx.is_closed() {
             break;
         }
