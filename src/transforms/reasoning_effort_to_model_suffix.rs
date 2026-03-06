@@ -1,7 +1,8 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
-    UrpData, model_glob_match,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState, UrpData, model_glob_match,
 };
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -25,6 +26,7 @@ impl TransformConfig for Config {
 
 pub struct ReasoningEffortToModelSuffixTransform;
 
+#[async_trait]
 impl Transform for ReasoningEffortToModelSuffixTransform {
     fn type_id(&self) -> &'static str {
         "reasoning_effort_to_model_suffix"
@@ -72,10 +74,11 @@ impl Transform for ReasoningEffortToModelSuffixTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {

@@ -1,7 +1,8 @@
 use crate::transforms::{
-    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformState,
-    UrpData,
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformState, UrpData,
 };
+use async_trait::async_trait;
 use crate::urp::{Part, PartDelta, PartHeader, UrpStreamEvent};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,6 +22,7 @@ impl TransformConfig for Config {
 
 pub struct ReasoningToThinkXmlTransform;
 
+#[async_trait]
 impl Transform for ReasoningToThinkXmlTransform {
     fn type_id(&self) -> &'static str {
         "reasoning_to_think_xml"
@@ -49,10 +51,11 @@ impl Transform for ReasoningToThinkXmlTransform {
         Box::new(NoState)
     }
 
-    fn apply(
+    async fn apply(
         &self,
         data: UrpData<'_>,
         _phase: Phase,
+        _context: &TransformRuntimeContext,
         config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
