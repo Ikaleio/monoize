@@ -135,6 +135,12 @@ impl NameCaches {
             timing: RequestLogTiming {
                 duration_ms: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),
                 ttfb_ms: raw.ttfb_ms.and_then(|v| i64::try_from(v).ok()),
+                duration_ms_alias: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),
+                elapsed_ms: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),
+                latency_ms: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),
+                ttfb_ms_alias: raw.ttfb_ms.and_then(|v| i64::try_from(v).ok()),
+                first_token_ms: raw.ttfb_ms.and_then(|v| i64::try_from(v).ok()),
+                first_token_ms_alias: raw.ttfb_ms.and_then(|v| i64::try_from(v).ok()),
             },
             billing: RequestLogBilling {
                 charge_nano_usd: raw.charge_nano_usd.map(|v| v.to_string()),

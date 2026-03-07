@@ -292,6 +292,15 @@ pub struct RequestLogTokens {
 pub struct RequestLogTiming {
     pub duration_ms: Option<i64>,
     pub ttfb_ms: Option<i64>,
+    #[serde(rename = "durationMs")]
+    pub duration_ms_alias: Option<i64>,
+    pub elapsed_ms: Option<i64>,
+    pub latency_ms: Option<i64>,
+    #[serde(rename = "ttfbMs")]
+    pub ttfb_ms_alias: Option<i64>,
+    pub first_token_ms: Option<i64>,
+    #[serde(rename = "firstTokenMs")]
+    pub first_token_ms_alias: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

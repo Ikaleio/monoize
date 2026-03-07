@@ -83,6 +83,18 @@ fn parse_decimal_query_to_i64(value: Option<String>) -> i64 {
         .unwrap_or(0)
 }
 
+fn row_optional_i64(row: &sea_orm::QueryResult, col: &str) -> Option<i64> {
+    row.try_get::<Option<i64>>("", col)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            row.try_get::<Option<i32>>("", col)
+                .ok()
+                .flatten()
+                .map(i64::from)
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_request_log_filters(
     sql: &mut String,
@@ -219,18 +231,28 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
             name: row.try_get("", "api_key_name").unwrap_or(None),
         },
         tokens: RequestLogTokens {
-            input: row.try_get::<Option<i32>>("", "input_tokens").unwrap_or(None).map(|v| v as i64),
-            output: row.try_get::<Option<i32>>("", "output_tokens").unwrap_or(None).map(|v| v as i64),
-            cache_read: row.try_get::<Option<i32>>("", "cache_read_tokens").unwrap_or(None).map(|v| v as i64),
-            cache_creation: row.try_get::<Option<i32>>("", "cache_creation_tokens").unwrap_or(None).map(|v| v as i64),
-            tool_prompt: row.try_get::<Option<i32>>("", "tool_prompt_tokens").unwrap_or(None).map(|v| v as i64),
-            reasoning: row.try_get::<Option<i32>>("", "reasoning_tokens").unwrap_or(None).map(|v| v as i64),
-            accepted_prediction: row.try_get::<Option<i32>>("", "accepted_prediction_tokens").unwrap_or(None).map(|v| v as i64),
-            rejected_prediction: row.try_get::<Option<i32>>("", "rejected_prediction_tokens").unwrap_or(None).map(|v| v as i64),
+            input: row_optional_i64(row, "input_tokens"),
+            output: row_optional_i64(row, "output_tokens"),
+            cache_read: row_optional_i64(row, "cache_read_tokens"),
+            cache_creation: row_optional_i64(row, "cache_creation_tokens"),
+            tool_prompt: row_optional_i64(row, "tool_prompt_tokens"),
+            reasoning: row_optional_i64(row, "reasoning_tokens"),
+            accepted_prediction: row_optional_i64(row, "accepted_prediction_tokens"),
+            rejected_prediction: row_optional_i64(row, "rejected_prediction_tokens"),
         },
-        timing: RequestLogTiming {
-            duration_ms: row.try_get::<Option<i32>>("", "duration_ms").unwrap_or(None).map(|v| v as i64),
-            ttfb_ms: row.try_get::<Option<i32>>("", "ttfb_ms").unwrap_or(None).map(|v| v as i64),
+        timing: {
+            let duration_ms = row_optional_i64(row, "duration_ms");
+            let ttfb_ms = row_optional_i64(row, "ttfb_ms");
+            RequestLogTiming {
+                duration_ms,
+                ttfb_ms,
+                duration_ms_alias: duration_ms,
+                elapsed_ms: duration_ms,
+                latency_ms: duration_ms,
+                ttfb_ms_alias: ttfb_ms,
+                first_token_ms: ttfb_ms,
+                first_token_ms_alias: ttfb_ms,
+            }
         },
         billing: RequestLogBilling {
             charge_nano_usd,
@@ -246,7 +268,7 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
         error: RequestLogError {
             code: row.try_get("", "error_code").unwrap_or(None),
             message: row.try_get("", "error_message").unwrap_or(None),
-            http_status: row.try_get::<Option<i32>>("", "error_http_status").unwrap_or(None).map(|v| v as i64),
+            http_status: row_optional_i64(row, "error_http_status"),
         },
     }
 }
