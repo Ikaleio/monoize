@@ -9,18 +9,6 @@
       content="Monoize frontend console for routing OpenAI-compatible responses."
     />
     <title>Monoize Console</title>
-    <script>
-      (function() {
-        const STORAGE_KEY = 'monoize-theme';
-        const theme = localStorage.getItem(STORAGE_KEY) || 'system';
-        let resolved = theme;
-        if (theme === 'system') {
-          resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        }
-        document.documentElement.classList.add(resolved);
-        document.documentElement.style.colorScheme = resolved;
-      })();
-    </script>
     <style>
       /* Prevent flash of white on dark theme before CSS loads */
       html.dark { background-color: hsl(240 10% 3.9%); }
@@ -29,6 +17,7 @@
   </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="/src/theme-init.ts"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

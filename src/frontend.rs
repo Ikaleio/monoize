@@ -16,9 +16,17 @@ fn asset_response(path: &str) -> Response {
         Some(file) => {
             let mime: MimeGuess = mime_guess::from_path(path);
             let content_type = mime.first_or_octet_stream();
+            let cache_control = if path == "index.html" {
+                "no-store"
+            } else if path.starts_with("assets/") {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            };
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, content_type.as_ref())
+                .header(header::CACHE_CONTROL, cache_control)
                 .body(Body::from(file.contents()))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }

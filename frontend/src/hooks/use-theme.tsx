@@ -1,50 +1,43 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-
-type Theme = "light" | "dark" | "system";
+import {
+  applyResolvedTheme,
+  getStoredThemePreference,
+  getSystemTheme,
+  resolveThemePreference,
+  THEME_STORAGE_KEY,
+  type ResolvedTheme,
+  type ThemePreference,
+} from "@/lib/theme";
 
 interface ThemeContextType {
-  theme: Theme;
-  setTheme: (theme: Theme) => void;
-  resolvedTheme: "light" | "dark";
+  theme: ThemePreference;
+  setTheme: (theme: ThemePreference) => void;
+  resolvedTheme: ResolvedTheme;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const STORAGE_KEY = "monoize-theme";
-
-function getSystemTheme(): "light" | "dark" {
-  if (typeof window !== "undefined") {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  }
-  return "light";
-}
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
+  const [theme, setThemeState] = useState<ThemePreference>(() => {
     if (typeof window !== "undefined") {
-      return (localStorage.getItem(STORAGE_KEY) as Theme) || "system";
+      return getStoredThemePreference(window.localStorage);
     }
     return "system";
   });
 
-  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() => {
-    if (theme === "system") {
-      return getSystemTheme();
-    }
-    return theme;
-  });
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    resolveThemePreference(theme, typeof window !== "undefined" ? window : null)
+  );
 
   useEffect(() => {
     const root = document.documentElement;
 
-    const applyTheme = (newTheme: "light" | "dark") => {
-      root.classList.remove("light", "dark");
-      root.classList.add(newTheme);
-      setResolvedTheme(newTheme);
+    const applyTheme = (newTheme: ResolvedTheme) => {
+      setResolvedTheme(applyResolvedTheme(root, newTheme));
     };
 
     if (theme === "system") {
-      const systemTheme = getSystemTheme();
+      const systemTheme = getSystemTheme(window);
       applyTheme(systemTheme);
 
       const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -58,8 +51,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [theme]);
 
-  const setTheme = (newTheme: Theme) => {
-    localStorage.setItem(STORAGE_KEY, newTheme);
+  const setTheme = (newTheme: ThemePreference) => {
+    localStorage.setItem(THEME_STORAGE_KEY, newTheme);
     setThemeState(newTheme);
   };
 
