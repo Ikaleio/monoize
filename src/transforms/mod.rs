@@ -262,12 +262,16 @@ pub fn set_extra_path(extra: &mut HashMap<String, Value>, path: &str, value: Val
     if !extra.contains_key(&first) || !extra[&first].is_object() {
         extra.insert(first.clone(), Value::Object(Map::new()));
     }
-    let mut cursor = extra.get_mut(&first).expect("extra key exists");
+    let Some(mut cursor) = extra.get_mut(&first) else {
+        return;
+    };
     for key in keys.iter().skip(1).take(keys.len().saturating_sub(2)) {
         if !cursor.is_object() {
             *cursor = Value::Object(Map::new());
         }
-        let obj = cursor.as_object_mut().expect("object value");
+        let Some(obj) = cursor.as_object_mut() else {
+            return;
+        };
         let entry = obj
             .entry((*key).to_string())
             .or_insert_with(|| Value::Object(Map::new()));

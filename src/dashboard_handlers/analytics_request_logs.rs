@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Sse};
 use chrono::Utc;
+use chrono::NaiveTime;
 use futures_util::stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -136,8 +137,7 @@ pub async fn get_dashboard_analytics(
     let time_from = (now - chrono::Duration::hours(range_hours)).to_rfc3339();
     let today_start = now
         .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
+        .and_time(NaiveTime::MIN)
         .and_utc()
         .to_rfc3339();
 

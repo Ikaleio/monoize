@@ -843,7 +843,7 @@ fn pick_best_variant(variants: &[SyncProviderVariant]) -> &SyncProviderVariant {
                 .unwrap_or(0);
             cost_a.cmp(&cost_b)
         })
-        .unwrap()
+        .expect("pick_best_variant called with at least one sync variant")
 }
 
 fn has_positive_input_variant(variants: &[SyncProviderVariant]) -> bool {
