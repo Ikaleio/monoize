@@ -544,19 +544,10 @@ enum DownstreamProtocol {
     AnthropicMessages,
 }
 
-#[derive(Clone)]
-struct StreamPendingUsageLogContext {
-    user_store: crate::users::UserStore,
-    user_id: String,
-    request_id: String,
-    last_total_tokens: u64,
-}
-
 #[derive(Default)]
 struct StreamRuntimeMetrics {
     ttfb_ms: Option<u64>,
     usage: Option<urp::Usage>,
-    pending_usage_log: Option<StreamPendingUsageLogContext>,
 }
 
 async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::auth::AuthResult> {

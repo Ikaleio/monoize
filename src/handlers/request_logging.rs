@@ -70,7 +70,7 @@ pub(super) async fn insert_pending_request_log(
     request_ip: Option<&str>,
     started_at: std::time::Instant,
 ) {
-    let Some(user_id) = auth.user_id.as_deref() else {
+    let Some(_user_id) = auth.user_id.as_deref() else {
         return;
     };
     let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
@@ -91,20 +91,6 @@ pub(super) async fn insert_pending_request_log(
         request_created_at(started_at),
     );
 
-    if let Err(e) = state
-        .user_store
-        .insert_request_log_pending(
-            request_id,
-            user_id,
-            auth.api_key_id.as_deref(),
-            model,
-            is_stream,
-            request_ip,
-        )
-        .await
-    {
-        tracing::warn!("failed to insert pending request log: {e}");
-    }
 }
 
 pub(super) async fn update_pending_channel_info(
@@ -117,7 +103,7 @@ pub(super) async fn update_pending_channel_info(
     request_ip: Option<&str>,
     started_at: std::time::Instant,
 ) {
-    let Some(user_id) = auth.user_id.as_deref() else {
+    let Some(_user_id) = auth.user_id.as_deref() else {
         return;
     };
     let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
@@ -138,20 +124,6 @@ pub(super) async fn update_pending_channel_info(
         request_created_at(started_at),
     );
 
-    if let Err(e) = state
-        .user_store
-        .update_pending_request_log_channel(
-            user_id,
-            request_id,
-            &attempt.provider_id,
-            &attempt.channel_id,
-            &attempt.upstream_model,
-            attempt.model_multiplier,
-        )
-        .await
-    {
-        tracing::warn!("failed to update pending request log channel info: {e}");
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

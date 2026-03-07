@@ -40,65 +40,8 @@ pub(super) async fn record_stream_usage_if_present(
         }
         None => true,
     };
-    let mut pending_update: Option<(crate::users::UserStore, String, String, urp::Usage)> = None;
     if replace {
-        guard.usage = Some(usage.clone());
-        if let Some(ctx) = guard.pending_usage_log.as_mut() {
-            if new_total > ctx.last_total_tokens {
-                ctx.last_total_tokens = new_total;
-                pending_update = Some((
-                    ctx.user_store.clone(),
-                    ctx.user_id.clone(),
-                    ctx.request_id.clone(),
-                    usage,
-                ));
-            }
-        }
-    }
-    drop(guard);
-
-    if let Some((user_store, user_id, request_id, usage)) = pending_update {
-        let usage_breakdown = super::billing::build_usage_breakdown(&usage);
-        let cache_creation_tokens = usage
-            .input_details
-            .as_ref()
-            .map(|d| d.cache_creation_tokens)
-            .filter(|&v| v > 0);
-        let tool_prompt_tokens = usage
-            .input_details
-            .as_ref()
-            .map(|d| d.tool_prompt_tokens)
-            .filter(|&v| v > 0);
-        let accepted_prediction_tokens = usage
-            .output_details
-            .as_ref()
-            .map(|d| d.accepted_prediction_tokens)
-            .filter(|&v| v > 0);
-        let rejected_prediction_tokens = usage
-            .output_details
-            .as_ref()
-            .map(|d| d.rejected_prediction_tokens)
-            .filter(|&v| v > 0);
-        tokio::spawn(async move {
-            if let Err(e) = user_store
-                .update_pending_request_log_usage(
-                    &user_id,
-                    &request_id,
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cached_tokens(),
-                    cache_creation_tokens,
-                    tool_prompt_tokens,
-                    usage.reasoning_tokens(),
-                    accepted_prediction_tokens,
-                    rejected_prediction_tokens,
-                    Some(usage_breakdown),
-                )
-                .await
-            {
-                tracing::warn!("failed to update pending request log usage: {e}");
-            }
-        });
+        guard.usage = Some(usage);
     }
 }
 

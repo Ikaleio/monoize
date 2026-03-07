@@ -232,22 +232,9 @@ pub(super) async fn forward_stream_typed(
                 let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
                 let provider_type = attempt.provider_type;
                 let (tx, rx) = mpsc::channel::<Event>(64);
-                let pending_usage_log = auth.user_id.as_ref().and_then(|user_id| {
-                    request_id
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|v| !v.is_empty())
-                        .map(|request_id| StreamPendingUsageLogContext {
-                            user_store: state.user_store.clone(),
-                            user_id: user_id.clone(),
-                            request_id: request_id.to_string(),
-                            last_total_tokens: 0,
-                        })
-                });
                 let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                     ttfb_ms: None,
                     usage: None,
-                    pending_usage_log,
                 }));
                 let metrics_for_stream = runtime_metrics.clone();
                 let state_for_log = state.clone();
