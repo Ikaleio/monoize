@@ -44,9 +44,55 @@ pub(super) const BUILTIN_EFFORT_SUFFIXES: &[(&str, &str)] = &[
 ];
 
 pub(super) async fn resolve_model_suffix(state: &AppState, req: &mut urp::UrpRequest) {
+    let requested_model = req.model.clone();
+    let normalized = normalized_logical_model_for_matching(state, &requested_model).await;
+    if normalized == requested_model {
+        return;
+    }
+    req.model = normalized;
+
+    let settings_map = state
+        .settings_store
+        .get_reasoning_suffix_map()
+        .await
+        .unwrap_or_default();
+
+    let mut settings_entries: Vec<(&str, &str)> = settings_map
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    settings_entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+    for (suffix, effort) in settings_entries
+        .iter()
+        .chain(BUILTIN_EFFORT_SUFFIXES.iter())
+    {
+        if let Some(base) = requested_model.strip_suffix(suffix) {
+            if !base.is_empty() {
+                match req.reasoning.as_mut() {
+                    Some(r) => {
+                        r.effort = Some(effort.to_string());
+                    }
+                    None => {
+                        req.reasoning = Some(urp::ReasoningConfig {
+                            effort: Some(effort.to_string()),
+                            extra_body: std::collections::HashMap::new(),
+                        });
+                    }
+                }
+                return;
+            }
+        }
+    }
+}
+
+pub(super) async fn normalized_logical_model_for_matching(
+    state: &AppState,
+    requested_model: &str,
+) -> String {
     let providers = match state.monoize_store.list_providers().await {
         Ok(p) => p,
-        Err(_) => return,
+        Err(_) => return requested_model.to_string(),
     };
 
     let model_exists = |model: &str| -> bool {
@@ -54,8 +100,8 @@ pub(super) async fn resolve_model_suffix(state: &AppState, req: &mut urp::UrpReq
             .iter()
             .any(|p| p.enabled && p.models.contains_key(model))
     };
-    if model_exists(&req.model) {
-        return;
+    if model_exists(requested_model) {
+        return requested_model.to_string();
     }
 
     let settings_map = state
@@ -72,28 +118,18 @@ pub(super) async fn resolve_model_suffix(state: &AppState, req: &mut urp::UrpReq
         .collect();
     settings_entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
-    for (suffix, effort) in settings_entries
+    for (suffix, _effort) in settings_entries
         .iter()
         .chain(BUILTIN_EFFORT_SUFFIXES.iter())
     {
-        if let Some(base) = req.model.strip_suffix(suffix) {
+        if let Some(base) = requested_model.strip_suffix(suffix) {
             if !base.is_empty() && model_exists(base) {
-                req.model = base.to_string();
-                match req.reasoning.as_mut() {
-                    Some(r) => {
-                        r.effort = Some(effort.to_string());
-                    }
-                    None => {
-                        req.reasoning = Some(urp::ReasoningConfig {
-                            effort: Some(effort.to_string()),
-                            extra_body: std::collections::HashMap::new(),
-                        });
-                    }
-                }
-                return;
+                return base.to_string();
             }
         }
     }
+
+    requested_model.to_string()
 }
 
 pub(super) async fn build_monoize_attempts(

@@ -9,11 +9,13 @@ pub(super) async fn execute_nonstream_typed(
     request_ip: Option<String>,
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = std::time::Instant::now();
+    let requested_model = req.model.clone();
+    let transform_match_model = normalized_logical_model_for_matching(state, &requested_model).await;
     inject_monoize_context(auth, &mut req);
-    let logical_model = req.model.clone();
-    apply_transform_rules_request(state, &mut req, &auth.transforms, &logical_model).await?;
+    apply_transform_rules_request(state, &mut req, &auth.transforms, &transform_match_model).await?;
     strip_monoize_context(&mut req);
     resolve_model_suffix(state, &mut req).await;
+    let logical_model = req.model.clone();
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(state, &routing_stub).await?;
     insert_pending_request_log(
@@ -35,7 +37,7 @@ pub(super) async fn execute_nonstream_typed(
             state,
             &mut req_attempt,
             &attempt.provider_transforms,
-            &logical_model,
+            &transform_match_model,
         )
         .await?;
 

@@ -3119,16 +3119,16 @@ async fn responses_streaming_applies_response_transform_from_provider() {
 }
 
 #[tokio::test]
-async fn provider_request_transform_matches_original_model_before_redirect() {
+async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let ctx = setup().await;
     let (upstream_addr, _) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let mut models = HashMap::new();
     models.insert(
-        "gpt-5-fast".to_string(),
+        "normalized-transform-model".to_string(),
         monoize::monoize_routing::MonoizeModelEntry {
-            redirect: Some("gpt-5-mini".to_string()),
+            redirect: Some("gpt-5-target".to_string()),
             multiplier: 1.0,
         },
     );
@@ -3156,7 +3156,7 @@ async fn provider_request_transform_matches_original_model_before_redirect() {
         transforms: vec![monoize::transforms::TransformRuleConfig {
             transform: "set_field".to_string(),
             enabled: true,
-            models: Some(vec!["gpt-5-fast".to_string()]),
+            models: Some(vec!["normalized-transform-model".to_string()]),
             phase: monoize::transforms::Phase::Request,
             config: json!({
                 "path": "extra_echo",
@@ -3182,7 +3182,7 @@ async fn provider_request_transform_matches_original_model_before_redirect() {
         &ctx,
         "/v1/responses",
         json!({
-            "model": "gpt-5-fast",
+            "model": "normalized-transform-model-high",
             "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hello" }] }]
         }),
     )
@@ -3190,10 +3190,16 @@ async fn provider_request_transform_matches_original_model_before_redirect() {
 
     assert_eq!(status, StatusCode::OK);
     let v: Value = serde_json::from_str(&body).unwrap();
-    let text = v["output"][0]["content"][0]["text"].as_str().unwrap_or("");
+    let text = v["output"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["type"].as_str() == Some("message")))
+        .and_then(|item| item["content"].as_array())
+        .and_then(|content| content.first())
+        .and_then(|part| part["text"].as_str())
+        .unwrap_or("");
     assert!(
         text.contains("extra_echo=matched-original-model"),
-        "expected request transform to match original model before redirect: {text}"
+        "expected request transform to match normalized logical model before redirect: text={text}; body={body}"
     );
 }
 
