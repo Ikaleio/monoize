@@ -41,6 +41,20 @@ use routing::*;
 use streaming::*;
 use usage::*;
 
+fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {
+    if !auth.model_limits_enabled || auth.model_limits.is_empty() {
+        return Ok(());
+    }
+    if auth.model_limits.iter().any(|model| model == logical_model) {
+        return Ok(());
+    }
+    Err(AppError::new(
+        StatusCode::FORBIDDEN,
+        "model_not_allowed",
+        format!("model '{logical_model}' is not allowed for this API key"),
+    ))
+}
+
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     state.metrics.render()
 }
@@ -93,6 +107,7 @@ pub async fn create_response(
     req.extra_body.remove("previous_response_id");
     req.extra_body.remove("store");
     req.extra_body.remove("conversation");
+    ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
@@ -150,6 +165,7 @@ pub async fn create_chat_completions(
     ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
+    ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
@@ -193,6 +209,7 @@ pub async fn create_messages(
     ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
+    ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
@@ -249,6 +266,7 @@ pub async fn create_embeddings(
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing model"))?
         .to_string();
+    ensure_model_allowed(&auth, &logical_model)?;
 
     let input = obj.get("input").ok_or_else(|| {
         AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing input")
@@ -291,6 +309,7 @@ pub async fn create_embeddings(
         false,
         request_id.as_deref(),
         request_ip.as_deref(),
+        started_at,
     )
     .await;
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
@@ -327,6 +346,7 @@ pub async fn create_embeddings(
                     false,
                     request_id.as_deref(),
                     request_ip.as_deref(),
+                    started_at,
                 )
                 .await;
                 mark_channel_success(&state, &attempt).await;

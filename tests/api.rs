@@ -214,7 +214,11 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                 return Sse::new(futures_util::stream::iter(events)).into_response();
             }
 
-            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("item_done_only") {
+        if body.get("stream_mode").and_then(|v| v.as_str()) == Some("item_done_only") {
+                let message_phase = body
+                    .get("message_phase")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 let stream =
                     futures_util::stream::iter(vec![
                     Ok::<_, Infallible>(Event::default()
@@ -222,7 +226,12 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                         .data(json!({
                             "type": "response.output_item.added",
                             "output_index": 0,
-                            "item": { "type": "message", "role": "assistant", "content": [] }
+                            "item": {
+                                "type": "message",
+                                "role": "assistant",
+                                "phase": message_phase,
+                                "content": []
+                            }
                         }).to_string())),
                     Ok::<_, Infallible>(Event::default()
                         .event("response.output_item.done")
@@ -232,6 +241,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                             "item": {
                                 "type": "message",
                                 "role": "assistant",
+                                "phase": message_phase,
                                 "content": [{ "type": "output_text", "text": text }]
                             }
                         }).to_string())),
@@ -1350,6 +1360,28 @@ async fn json_get(ctx: &TestContext, path: &str) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
+async fn dashboard_session_cookie(ctx: &TestContext, username: &str, password: &str) -> String {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/dashboard/auth/login")
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "username": username,
+                "password": password,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp.headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .expect("set-cookie header")
+}
+
 #[tokio::test]
 async fn auth_required_for_forwarding_endpoints() {
     let ctx = setup().await;
@@ -1558,6 +1590,33 @@ async fn responses_streaming_reconstructs_text_from_output_item_done() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(text.contains("event: response.output_text.delta"));
+}
+
+#[tokio::test]
+async fn responses_streaming_reconstructs_phase_from_output_item_done() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":"stream",
+                "stream": true,
+                "stream_mode": "item_done_only",
+                "message_phase": "commentary"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(text.contains("event: response.output_text.delta"));
+    assert!(text.contains("\"phase\":\"commentary\""));
 }
 
 #[tokio::test]
@@ -3844,6 +3903,96 @@ async fn models_list_model_limits_disabled_shows_all() {
         .collect();
 
     assert!(ids.len() > 1, "should return all models when limits disabled");
+}
+
+#[tokio::test]
+async fn create_api_key_rejects_disallowed_transform() {
+    let ctx = setup().await;
+    let cookie = dashboard_session_cookie(&ctx, "tenant-1", "test-password").await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/dashboard/tokens")
+        .header(CONTENT_TYPE, "application/json")
+        .header("cookie", cookie)
+        .body(Body::from(
+            json!({
+                "name": "unsafe-transform-key",
+                "transforms": [
+                    {
+                        "transform": "set_field",
+                        "enabled": true,
+                        "models": ["gpt-5.4-fast"],
+                        "phase": "request",
+                        "config": {
+                            "path": "service_tier",
+                            "value": "priority"
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+}
+
+#[tokio::test]
+async fn forwarding_rejects_models_outside_api_key_model_limits() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (_, token) = ctx
+        .state
+        .user_store
+        .create_api_key_extended(
+            &user.id,
+            monoize::users::CreateApiKeyInput {
+                name: "restricted-forward-key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: true,
+                model_limits: vec!["gpt-5-mini".to_string()],
+                ip_whitelist: vec![],
+                group: "default".to_string(),
+                max_multiplier: None,
+                transforms: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            json!({
+                "model": "grok-4",
+                "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("model_not_allowed"));
 }
 
 #[tokio::test]
