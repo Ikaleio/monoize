@@ -6,6 +6,195 @@ use crate::urp::{
     UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+
+#[derive(Clone)]
+struct PendingResponsesMessageItem {
+    role: Role,
+    phase: Option<String>,
+    content: Vec<Value>,
+    extra_body: HashMap<String, Value>,
+}
+
+fn text_part_phase(part: &Part) -> Option<&str> {
+    match part {
+        Part::Text { phase, .. } => phase.as_deref(),
+        _ => None,
+    }
+}
+
+fn can_use_responses_instructions(message: &Message) -> bool {
+    matches!(message.role, Role::System | Role::Developer)
+        && !message.parts.is_empty()
+        && message.extra_body.is_empty()
+        && message.parts.iter().all(|part| {
+            matches!(
+                part,
+                Part::Text {
+                    phase: None,
+                    extra_body,
+                    ..
+                } if extra_body.is_empty()
+            )
+        })
+}
+
+fn flush_pending_message_item(
+    pending: &mut Option<PendingResponsesMessageItem>,
+    out: &mut Vec<Value>,
+) {
+    let Some(pending_item) = pending.take() else {
+        return;
+    };
+    if pending_item.content.is_empty() {
+        return;
+    }
+
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), Value::String("message".to_string()));
+    obj.insert(
+        "role".to_string(),
+        Value::String(role_to_str(pending_item.role).to_string()),
+    );
+    obj.insert("content".to_string(), Value::Array(pending_item.content));
+    if let Some(phase) = pending_item.phase {
+        obj.insert("phase".to_string(), Value::String(phase));
+    }
+    merge_extra(&mut obj, &pending_item.extra_body);
+    out.push(Value::Object(obj));
+}
+
+fn append_content_part_to_pending(
+    pending: &mut Option<PendingResponsesMessageItem>,
+    out: &mut Vec<Value>,
+    role: Role,
+    phase: Option<&str>,
+    message_extra: &HashMap<String, Value>,
+    content_part: Value,
+) {
+    let phase_owned = phase.map(str::to_string);
+    let should_flush = pending.as_ref().is_some_and(|existing| {
+        existing.role != role
+            || existing.phase != phase_owned
+            || existing.extra_body != *message_extra
+    });
+    if should_flush {
+        flush_pending_message_item(pending, out);
+    }
+
+    let entry = pending.get_or_insert_with(|| PendingResponsesMessageItem {
+        role,
+        phase: phase_owned,
+        content: Vec::new(),
+        extra_body: message_extra.clone(),
+    });
+    entry.content.push(content_part);
+}
+
+fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Value> {
+    match part {
+        Part::Text {
+            content,
+            extra_body,
+            ..
+        } => {
+            let mut obj = Map::new();
+            obj.insert(
+                "type".to_string(),
+                Value::String(
+                    if output_text_type {
+                        "output_text"
+                    } else {
+                        "input_text"
+                    }
+                    .to_string(),
+                ),
+            );
+            obj.insert("text".to_string(), Value::String(content.clone()));
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
+        }
+        Part::Image { source, extra_body } => Some(if output_text_type {
+            let mut value = encode_output_image(source, extra_body);
+            if let Some(obj) = value.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            value
+        } else {
+            encode_input_image(source, extra_body)
+        }),
+        Part::File { source, extra_body } => Some(if output_text_type {
+            let mut value = encode_output_file(source, extra_body);
+            if let Some(obj) = value.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            value
+        } else {
+            encode_input_file(source, extra_body)
+        }),
+        Part::Refusal {
+            content,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("refusal".to_string()));
+            obj.insert("refusal".to_string(), Value::String(content.clone()));
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
+        }
+        _ => None,
+    }
+}
+
+fn encode_reasoning_item(part: &Part) -> Option<Value> {
+    match part {
+        Part::Reasoning {
+            content,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("reasoning".to_string()));
+            obj.insert(
+                "summary".to_string(),
+                Value::Array(vec![json!({ "type": "summary_text", "text": content })]),
+            );
+            obj.insert("text".to_string(), Value::String(content.clone()));
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
+        }
+        Part::ReasoningEncrypted { data, extra_body } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("reasoning".to_string()));
+            obj.insert("encrypted_content".to_string(), data.clone());
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
+        }
+        _ => None,
+    }
+}
+
+fn encode_tool_call_item(part: &Part) -> Option<Value> {
+    match part {
+        Part::ToolCall {
+            call_id,
+            name,
+            arguments,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert(
+                "type".to_string(),
+                Value::String("function_call".to_string()),
+            );
+            obj.insert("call_id".to_string(), Value::String(call_id.clone()));
+            obj.insert("name".to_string(), Value::String(name.clone()));
+            obj.insert("arguments".to_string(), Value::String(arguments.clone()));
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
+        }
+        _ => None,
+    }
+}
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut input_items = Vec::new();
@@ -13,7 +202,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut consumed_instructions = false;
 
     for message in &req.messages {
-        if !consumed_instructions && matches!(message.role, Role::System | Role::Developer) {
+        if !consumed_instructions && can_use_responses_instructions(message) {
             let text = text_parts(&message.parts);
             if !text.is_empty() {
                 instructions = Some(text);
@@ -73,55 +262,33 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let mut output = Vec::new();
-    let mut message_content = Vec::new();
+    let mut pending_message: Option<PendingResponsesMessageItem> = None;
 
     for part in &resp.message.parts {
-        match part {
-            Part::Text { content, .. } => {
-                message_content.push(json!({ "type": "output_text", "text": content }));
-            }
-            Part::Refusal { content, .. } => {
-                message_content.push(json!({ "type": "refusal", "refusal": content }));
-            }
-            Part::Image { source, .. } => message_content.push(encode_output_image(source)),
-            Part::File { source, .. } => message_content.push(encode_output_file(source)),
-            Part::Reasoning { content, .. } => {
-                output.push(json!({
-                    "type": "reasoning",
-                    "summary": [{ "type": "summary_text", "text": content }],
-                    "text": content
-                }));
-            }
-            Part::ReasoningEncrypted { data, .. } => {
-                output.push(json!({
-                    "type": "reasoning",
-                    "encrypted_content": data
-                }));
-            }
-            Part::ToolCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } => {
-                output.push(json!({
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": arguments
-                }));
-            }
-            Part::Audio { .. } | Part::ToolResult { .. } => {}
+        if let Some(content_part) = encode_message_content_part(part, true) {
+            append_content_part_to_pending(
+                &mut pending_message,
+                &mut output,
+                resp.message.role,
+                text_part_phase(part),
+                &resp.message.extra_body,
+                content_part,
+            );
+            continue;
+        }
+
+        flush_pending_message_item(&mut pending_message, &mut output);
+
+        if let Some(reasoning_item) = encode_reasoning_item(part) {
+            output.push(reasoning_item);
+            continue;
+        }
+
+        if let Some(tool_call_item) = encode_tool_call_item(part) {
+            output.push(tool_call_item);
         }
     }
-
-    if !message_content.is_empty() {
-        output.push(json!({
-            "type": "message",
-            "role": "assistant",
-            "content": message_content
-        }));
-    }
+    flush_pending_message_item(&mut pending_message, &mut output);
 
     let mut body = json!({
         "id": resp.id,
@@ -168,47 +335,36 @@ fn encode_message_to_input_items(message: &Message, out: &mut Vec<Value>) {
         encode_tool_result_item(message, out);
         return;
     }
+    let encrypted_reasoning_present = has_encrypted_reasoning(&message.parts);
+    let mut pending_message: Option<PendingResponsesMessageItem> = None;
 
     for part in &message.parts {
+        if let Some(content_part) = encode_message_content_part(part, false) {
+            append_content_part_to_pending(
+                &mut pending_message,
+                out,
+                message.role,
+                text_part_phase(part),
+                &message.extra_body,
+                content_part,
+            );
+            continue;
+        }
+
+        flush_pending_message_item(&mut pending_message, out);
+
         match part {
-            Part::ToolCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } => {
-                out.push(json!({
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": arguments
-                }));
+            Part::Reasoning { .. } if encrypted_reasoning_present => {}
+            _ => {
+                if let Some(item) =
+                    encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
+                {
+                    out.push(item);
+                }
             }
-            Part::ReasoningEncrypted { data, .. } => {
-                out.push(json!({
-                    "type": "reasoning",
-                    "encrypted_content": data
-                }));
-            }
-            Part::Reasoning { content, .. } if !has_encrypted_reasoning(&message.parts) => {
-                out.push(json!({
-                    "type": "reasoning",
-                    "summary": [{ "type": "summary_text", "text": content }],
-                    "text": content
-                }));
-            }
-            _ => {}
         }
     }
-
-    let content = encode_message_content(message);
-    if !content.is_empty() {
-        out.push(json!({
-            "type": "message",
-            "role": role_to_str(message.role),
-            "content": content
-        }));
-    }
+    flush_pending_message_item(&mut pending_message, out);
 }
 
 fn encode_tool_result_item(message: &Message, out: &mut Vec<Value>) {
@@ -223,10 +379,11 @@ fn encode_tool_result_item(message: &Message, out: &mut Vec<Value>) {
     let mut tool_content = Vec::new();
     for part in &message.parts {
         match part {
-            Part::Text { content, .. } => tool_content.push(json!({
-                "type": "input_text",
-                "text": content
-            })),
+            Part::Text { .. } => {
+                if let Some(value) = encode_message_content_part(part, false) {
+                    tool_content.push(value);
+                }
+            }
             Part::Image { source, extra_body } => {
                 tool_content.push(encode_input_image(source, extra_body))
             }
@@ -257,29 +414,6 @@ fn encode_tool_result_item(message: &Message, out: &mut Vec<Value>) {
             "output": Value::Array(tool_content)
         }));
     }
-}
-
-fn encode_message_content(message: &Message) -> Vec<Value> {
-    let mut out = Vec::new();
-    for part in &message.parts {
-        match part {
-            Part::Text { content, .. } => {
-                out.push(json!({ "type": "input_text", "text": content }));
-            }
-            Part::Image { source, extra_body } => out.push(encode_input_image(source, extra_body)),
-            Part::File { source, extra_body } => out.push(encode_input_file(source, extra_body)),
-            Part::Refusal { content, .. } => out.push(json!({
-                "type": "refusal",
-                "refusal": content
-            })),
-            Part::Audio { .. }
-            | Part::Reasoning { .. }
-            | Part::ReasoningEncrypted { .. }
-            | Part::ToolCall { .. }
-            | Part::ToolResult { .. } => {}
-        }
-    }
-    out
 }
 
 fn encode_input_image(
@@ -350,43 +484,75 @@ fn encode_input_file(
     }
 }
 
-fn encode_output_image(source: &ImageSource) -> Value {
+fn encode_output_image(
+    source: &ImageSource,
+    extra_body: &std::collections::HashMap<String, Value>,
+) -> Value {
     match source {
-        ImageSource::Url { url, detail } => json!({
-            "type": "output_image",
-            "url": url,
-            "detail": detail
-        }),
-        ImageSource::Base64 { media_type, data } => json!({
-            "type": "output_image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": data
+        ImageSource::Url { url, detail } => {
+            let mut obj = Map::new();
+            obj.insert(
+                "type".to_string(),
+                Value::String("output_image".to_string()),
+            );
+            obj.insert("url".to_string(), Value::String(url.clone()));
+            if let Some(detail) = detail {
+                obj.insert("detail".to_string(), Value::String(detail.clone()));
             }
-        }),
+            merge_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        ImageSource::Base64 { media_type, data } => {
+            let mut obj = Map::new();
+            obj.insert(
+                "type".to_string(),
+                Value::String("output_image".to_string()),
+            );
+            obj.insert(
+                "source".to_string(),
+                json!({
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": data
+                }),
+            );
+            merge_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
     }
 }
 
-fn encode_output_file(source: &FileSource) -> Value {
+fn encode_output_file(
+    source: &FileSource,
+    extra_body: &std::collections::HashMap<String, Value>,
+) -> Value {
     match source {
-        FileSource::Url { url } => json!({
-            "type": "output_file",
-            "url": url
-        }),
+        FileSource::Url { url } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("output_file".to_string()));
+            obj.insert("url".to_string(), Value::String(url.clone()));
+            merge_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
         FileSource::Base64 {
             filename,
             media_type,
             data,
-        } => json!({
-            "type": "output_file",
-            "source": {
-                "type": "base64",
-                "filename": filename,
-                "media_type": media_type,
-                "data": data
-            }
-        }),
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("output_file".to_string()));
+            obj.insert(
+                "source".to_string(),
+                json!({
+                    "type": "base64",
+                    "filename": filename,
+                    "media_type": media_type,
+                    "data": data
+                }),
+            );
+            merge_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
     }
 }
 
@@ -455,5 +621,141 @@ fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str 
         Some(FinishReason::Length) => "incomplete",
         Some(FinishReason::Other) => "failed",
         _ => "completed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::urp::decode::openai_responses as decode_responses;
+    use crate::urp::{Message, Role};
+
+    fn empty_map() -> HashMap<String, Value> {
+        HashMap::new()
+    }
+
+    #[test]
+    fn encode_response_preserves_message_phase_and_order() {
+        let resp = UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-5.4".to_string(),
+            message: Message {
+                role: Role::Assistant,
+                parts: vec![
+                    Part::Text {
+                        content: "thinking".to_string(),
+                        phase: Some("commentary".to_string()),
+                        extra_body: empty_map(),
+                    },
+                    Part::ToolCall {
+                        call_id: "call_1".to_string(),
+                        name: "tool_a".to_string(),
+                        arguments: "{}".to_string(),
+                        extra_body: empty_map(),
+                    },
+                    Part::Text {
+                        content: "done".to_string(),
+                        phase: Some("final_answer".to_string()),
+                        extra_body: empty_map(),
+                    },
+                ],
+                extra_body: {
+                    let mut m = empty_map();
+                    m.insert("custom_message_field".to_string(), json!(true));
+                    m
+                },
+            },
+            finish_reason: Some(FinishReason::ToolCalls),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&resp, "gpt-5.4");
+        let output = encoded["output"].as_array().expect("output array");
+
+        assert_eq!(output.len(), 3);
+        assert_eq!(output[0]["type"], Value::String("message".to_string()));
+        assert_eq!(output[0]["phase"], Value::String("commentary".to_string()));
+        assert_eq!(output[0]["custom_message_field"], json!(true));
+        assert_eq!(
+            output[1]["type"],
+            Value::String("function_call".to_string())
+        );
+        assert_eq!(output[2]["type"], Value::String("message".to_string()));
+        assert_eq!(
+            output[2]["phase"],
+            Value::String("final_answer".to_string())
+        );
+    }
+
+    #[test]
+    fn responses_round_trip_keeps_phase_order_and_unknown_fields() {
+        let source = json!({
+            "id": "resp_1",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "custom_message_field": true,
+                    "content": [{ "type": "output_text", "text": "one" }]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "tool_a",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{ "type": "output_text", "text": "two" }]
+                }
+            ]
+        });
+
+        let decoded = decode_responses::decode_response(&source).expect("decode response");
+        let reencoded = encode_response(&decoded, "gpt-5.4");
+        let output = reencoded["output"].as_array().expect("output array");
+
+        assert_eq!(output.len(), 3);
+        assert_eq!(output[0]["phase"], json!("commentary"));
+        assert_eq!(output[0]["custom_message_field"], json!(true));
+        assert_eq!(output[1]["type"], json!("function_call"));
+        assert_eq!(output[2]["phase"], json!("final_answer"));
+    }
+
+    #[test]
+    fn encode_request_keeps_phased_developer_message_as_input_message() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            messages: vec![Message {
+                role: Role::Developer,
+                parts: vec![Part::Text {
+                    content: "preface".to_string(),
+                    phase: Some("commentary".to_string()),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        assert!(encoded.get("instructions").is_none());
+        assert_eq!(encoded["input"][0]["type"], json!("message"));
+        assert_eq!(encoded["input"][0]["phase"], json!("commentary"));
     }
 }

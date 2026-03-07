@@ -111,6 +111,23 @@ FP3. **Adapt request:** Convert the URP-Proto request into the selected provider
 
 FP4. **Call upstream:** Send the upstream request. If `stream=true`, Monoize MUST call the upstream in streaming mode.
 
+FP4a. If an upstream streaming response terminates with a transport-level decode error before a terminal chunk or protocol terminator is received, Monoize MUST treat that condition as an upstream error. Monoize MUST NOT silently ignore the decode failure and continue emitting a partial downstream stream as though the upstream stream completed successfully.
+
+FP4b. Immediately before Monoize sends an upstream forwarding request for `/v1/responses`, `/v1/chat/completions`, or `/v1/messages`, Monoize MUST emit one lightweight observability log entry that includes the effective upstream request JSON byte length and a summary of user-image payload shape. The log entry MUST NOT include raw prompt text or raw image bytes.
+
+FP4c. The request-shape observability log in FP4b MUST include at minimum:
+- request identifier when present;
+- downstream model identifier and selected upstream model identifier;
+- provider type;
+- stream flag;
+- upstream path;
+- encoded upstream JSON byte length;
+- user image part count;
+- base64 image part count, where `ImageSource::Base64` parts and `ImageSource::Url` parts carrying `data:*;base64,...` URLs both count as base64 image parts;
+- URL image part count for remaining non-`data:` image URLs;
+- total base64 character count for user-image parts;
+- estimated decoded byte count for user-image parts computed from the base64 payload length.
+
 FP5. **Adapt response:** Convert the upstream output (non-streaming or streaming chunks) into URP-Proto output.
 
 FP6. **Render downstream:** Convert URP-Proto output into the downstream endpoint’s response shape (Responses / Chat Completions / Messages), streaming or non-streaming.
@@ -188,6 +205,18 @@ RSN2. `text` MUST represent human-readable reasoning text (if available).
 
 RSN3. `signature` MUST contain an opaque provider-supplied string that can be used to correlate or verify reasoning (if available).
 
+### 7.1.2a URP-Proto text phase metadata
+
+TPH1. Every URP text part MAY carry optional field `phase`.
+
+TPH2. `phase` MUST be treated as an unconstrained string. Monoize MAY recognize known values such as `commentary` and `final_answer`, but MUST NOT reject or rewrite unknown values solely because the value is unrecognized.
+
+TPH3. `phase` MUST follow text semantics rather than tool-call semantics. Monoize MUST attach `phase` to text parts, not to tool-call parts.
+
+TPH4. When Monoize decodes a protocol object whose `phase` is defined at message-item level or text-block level, Monoize MUST copy that `phase` value onto every URP text part produced from that source object.
+
+TPH5. When Monoize re-encodes URP text parts to a protocol that supports `phase`, Monoize MUST write the text part `phase` back to the target protocol object at that protocol's supported level.
+
 ### 7.1.3 Reasoning-control normalization
 
 RC1. Monoize MUST normalize reasoning effort to one of `none`, `minimum`, `low`, `medium`, `high`, or `xhigh`. The value `max` MUST be accepted as an alias for `xhigh` at decode time. When the selected upstream provider type is `messages`, `xhigh` MUST be mapped back to `max` for encoding.
@@ -231,7 +260,12 @@ XF4. Content-block-level unknown fields:
 - When decoding a downstream request, Monoize MUST preserve unknown fields on individual content blocks (e.g. `cache_control` on a text block) into the corresponding URP part's `extra_body`.
 - When encoding an upstream request, Monoize MUST merge each URP part's `extra_body` into the generated content-block JSON object, subject to the same precedence rule as XF3 (adapter-generated keys take precedence).
 - This applies to all content-block types: `text`, `image`, `document`/`file`, `thinking`, `tool_use`, and `tool_result` blocks.
- This applies to system blocks, regular message content blocks, tool-result inner content blocks, and response content blocks.
+  This applies to system blocks, regular message content blocks, tool-result inner content blocks, and response content blocks.
+
+XF4a. Message-item-level unknown fields:
+
+- When decoding protocol objects that correspond to a URP message item (for example Responses `message` items or Chat `assistant` messages), Monoize MUST preserve unknown fields on that protocol object in the corresponding URP `Message.extra_body`.
+- When encoding protocol objects from a URP message, Monoize MUST merge `Message.extra_body` into every generated protocol object derived from that URP message, subject to the same precedence rule as XF3.
 
 XF5. Usage-level unknown fields:
 
@@ -260,9 +294,23 @@ PR1. Monoize MUST call the upstream path `POST /v1/responses`.
 
 PR2. For non-streaming, Monoize MUST parse the upstream response as a Responses response object and convert it to URP-Proto output.
 
+PR2a. Responses item order preservation:
+
+- When Monoize decodes Responses `input[]` or `output[]`, Monoize MUST process items in source order and preserve that order in the resulting URP message/part sequence.
+- When Monoize encodes URP back to Responses `input[]` or `output[]`, Monoize MUST emit items in URP order.
+- Monoize MUST NOT postpone all text emission into one final `message` item if that would reorder text relative to `function_call`, `reasoning`, or future item kinds.
+- Monoize MAY merge only contiguous message-compatible parts into one Responses `message` item.
+- Monoize MUST split Responses `message` items when the URP order crosses a non-message item boundary or when adjacent URP text parts have different `phase` values.
+
 PR3. For streaming, Monoize MUST parse upstream SSE and convert it into Monoize downstream SSE format (§8) if the downstream endpoint is `POST /v1/responses`.
 
 PR4. When constructing upstream `POST /v1/responses` requests, Monoize MUST emit `tools[]` in Responses-style function-tool shape (`type/name/parameters`) even if the downstream request used another tool schema.
+
+PR4a. Responses `phase` mapping:
+
+- When decoding Responses `message` items, Monoize MUST read `item.phase` when present and copy it onto every URP text part derived from that `message` item.
+- When encoding Responses `message` items from URP text parts, Monoize MUST write `phase` on the generated `message` item when the contiguous run of text parts shares the same non-null `phase`.
+- If a contiguous Responses `message` item contains no URP text parts, Monoize MUST NOT invent a `phase` value.
 
 PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Responses event payloads where:
 
@@ -271,6 +319,14 @@ PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Respons
 - argument deltas identify the call via `output_index` (not necessarily `call_id`) for `response.function_call_arguments.delta`.
 
 PR6. If upstream Responses streaming does not emit `response.output_text.delta` but emits assistant message text inside `response.output_item.added` and/or `response.output_item.done`, Monoize MUST reconstruct semantically equivalent downstream text streaming from those message items.
+
+PR6b. Responses streaming phase preservation:
+
+- When parsing upstream Responses SSE, Monoize MUST track the active output item context by `output_index` or equivalent synthetic index.
+- If the active output item is a `message` item with field `phase`, Monoize MUST associate subsequent text deltas for that item with the same `phase` value.
+- When Monoize emits Responses-style downstream SSE, it MUST NOT merge text across distinct `phase` values or across tool-call boundaries.
+- When Monoize synthesizes missing downstream events from `response.completed.output[]`, it MUST preserve both item order and `phase` metadata from the completed payload.
+- Unknown SSE event names, unknown item types, and unknown fields MUST NOT terminate streaming adaptation solely because they are unknown.
 
 PR6a. For streaming translation from upstream `type=responses` (or `type=grok`, which uses Responses event shape) to downstream `POST /v1/chat/completions` or `POST /v1/messages`, Monoize MUST support completion-only fallback:
 
@@ -303,6 +359,13 @@ PC2. Monoize MUST convert URP-Proto `input` items into chat `messages[]` as desc
 - URP `message` items become chat messages with the same `role` and text content.
 - URP `function_call` items become assistant `tool_calls[]` entries (grouping consecutive items to preserve parallel calls).
 - URP `function_call_output` items become chat `role="tool"` messages.
+
+PC2a. Chat `phase` mapping:
+
+- Monoize MUST accept optional extension field `phase` on chat assistant messages.
+- When decoding a chat assistant message, Monoize MUST copy `phase` onto every URP text part derived from that assistant message.
+- When encoding URP assistant text parts back to chat messages, Monoize MUST split assistant messages whenever flattening would combine text with different `phase` values or combine text across tool-call boundaries.
+- Monoize MUST merge `Message.extra_body` into every emitted chat message segment created from one URP message.
 
 PC2.1. Input coercion for chat adapter:
 
@@ -363,6 +426,12 @@ PC9. For upstream `type=chat_completion` requests with `stream=true`, Monoize MU
 PM1. Monoize MUST call the upstream path `POST /v1/messages`.
 
 PM2. Monoize MUST convert URP-Proto `input` items into Messages `messages[]` (role + text blocks).
+
+PM2a. Messages `phase` mapping:
+
+- Monoize MUST accept optional extension field `phase` on Anthropic `text` blocks.
+- When decoding an Anthropic `text` block, Monoize MUST copy `phase` onto the URP text part derived from that block.
+- When encoding a URP text part to an Anthropic `text` block, Monoize MUST write `phase` on that block when the URP text part carries non-null `phase`.
 
 PM2.1. Input coercion for Messages adapter:
 
