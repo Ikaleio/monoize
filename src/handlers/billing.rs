@@ -52,13 +52,19 @@ pub(super) fn calculate_charge_components(
     usage: &urp::Usage,
     pricing: &ModelPricing,
     provider_multiplier: f64,
+    provider_type: crate::config::ProviderType,
 ) -> Option<ChargeComponents> {
     let prompt_tokens = i128::from(usage.input_tokens);
     let completion_tokens = i128::from(usage.output_tokens);
     let cached_tokens = i128::from(usage.cached_tokens().unwrap_or(0));
+    let cache_creation_tokens =
+        i128::from(usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0));
     let reasoning_tokens = i128::from(usage.reasoning_tokens().unwrap_or(0));
 
-    let uncached_prompt_tokens = (prompt_tokens - cached_tokens).max(0);
+    let uncached_prompt_tokens = match provider_type {
+        ProviderType::Messages => prompt_tokens.max(0),
+        _ => (prompt_tokens - cached_tokens - cache_creation_tokens).max(0),
+    };
     let non_reasoning_completion_tokens = (completion_tokens - reasoning_tokens).max(0);
 
     let (
@@ -86,8 +92,6 @@ pub(super) fn calculate_charge_components(
     };
     let prompt_charge = uncached_prompt_charge.checked_add(cached_prompt_charge)?;
 
-    let cache_creation_tokens =
-        i128::from(usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0));
     let (billed_cache_creation_tokens, cache_creation_charge) =
         if let Some(cache_creation_rate) = pricing.cache_creation_input_cost_per_token_nano {
             let tokens = cache_creation_tokens.max(0);
@@ -156,8 +160,10 @@ pub(super) fn calculate_charge_nano(
     usage: &urp::Usage,
     pricing: &ModelPricing,
     provider_multiplier: f64,
+    provider_type: crate::config::ProviderType,
 ) -> Option<i128> {
-    calculate_charge_components(usage, pricing, provider_multiplier).map(|parts| parts.final_charge)
+    calculate_charge_components(usage, pricing, provider_multiplier, provider_type)
+        .map(|parts| parts.final_charge)
 }
 
 pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
@@ -348,7 +354,12 @@ pub(super) async fn maybe_charge_usage(
         }
     };
 
-    let Some(components) = calculate_charge_components(usage, &pricing, attempt.model_multiplier)
+    let Some(components) = calculate_charge_components(
+        usage,
+        &pricing,
+        attempt.model_multiplier,
+        attempt.provider_type,
+    )
     else {
         tracing::error!(
             "billing error: charge overflow for model={}",

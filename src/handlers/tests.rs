@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ProviderType;
 use crate::model_registry_store::ModelPricing;
 use crate::monoize_routing::MonoizeModelEntry;
 use crate::urp;
@@ -21,7 +22,7 @@ fn calculate_charge_nano_uses_model_price_and_multiplier() {
         output_cost_per_reasoning_token_nano: None,
     };
 
-    let charged = calculate_charge_nano(&usage, &pricing, 1.234_567_891);
+    let charged = calculate_charge_nano(&usage, &pricing, 1.234_567_891, ProviderType::Responses);
 
     assert_eq!(charged, Some(108_024));
 }
@@ -55,9 +56,94 @@ fn calculate_charge_nano_handles_cached_and_reasoning_tokens() {
         output_cost_per_reasoning_token_nano: Some(3000),
     };
 
-    let charged = calculate_charge_nano(&usage, &pricing, 1.0);
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Responses);
 
     assert_eq!(charged, Some(236_000));
+}
+
+#[test]
+fn calculate_charge_nano_messages_treats_cache_creation_as_disjoint_bucket() {
+    let usage = urp::Usage {
+        input_tokens: 100,
+        output_tokens: 20,
+        input_details: Some(urp::InputDetails {
+            standard_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 40,
+            tool_prompt_tokens: 0,
+            modality_breakdown: None,
+        }),
+        output_details: None,
+        extra_body: HashMap::new(),
+    };
+    let pricing = ModelPricing {
+        input_cost_per_token_nano: 1000,
+        output_cost_per_token_nano: 2000,
+        cache_read_input_cost_per_token_nano: None,
+        cache_creation_input_cost_per_token_nano: Some(250),
+        output_cost_per_reasoning_token_nano: None,
+    };
+
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Messages);
+
+    assert_eq!(charged, Some(150_000));
+}
+
+#[test]
+fn calculate_charge_nano_responses_excludes_cache_creation_from_inclusive_input_total() {
+    let usage = urp::Usage {
+        input_tokens: 100,
+        output_tokens: 20,
+        input_details: Some(urp::InputDetails {
+            standard_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 40,
+            tool_prompt_tokens: 0,
+            modality_breakdown: None,
+        }),
+        output_details: None,
+        extra_body: HashMap::new(),
+    };
+    let pricing = ModelPricing {
+        input_cost_per_token_nano: 1000,
+        output_cost_per_token_nano: 2000,
+        cache_read_input_cost_per_token_nano: Some(100),
+        cache_creation_input_cost_per_token_nano: Some(250),
+        output_cost_per_reasoning_token_nano: None,
+    };
+
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Responses);
+
+    assert_eq!(charged, Some(110_000));
+}
+
+#[test]
+fn calculate_charge_nano_responses_avoids_double_count_when_cache_read_and_creation_are_both_present(
+) {
+    let usage = urp::Usage {
+        input_tokens: 100,
+        output_tokens: 10,
+        input_details: Some(urp::InputDetails {
+            standard_tokens: 0,
+            cache_read_tokens: 30,
+            cache_creation_tokens: 20,
+            tool_prompt_tokens: 0,
+            modality_breakdown: None,
+        }),
+        output_details: None,
+        extra_body: HashMap::new(),
+    };
+    let pricing = ModelPricing {
+        input_cost_per_token_nano: 1000,
+        output_cost_per_token_nano: 2000,
+        cache_read_input_cost_per_token_nano: Some(100),
+        cache_creation_input_cost_per_token_nano: Some(250),
+        output_cost_per_reasoning_token_nano: None,
+    };
+
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Responses);
+
+    assert_eq!(charged, Some(78_000));
 }
 
 #[test]

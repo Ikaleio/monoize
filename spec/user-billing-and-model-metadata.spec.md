@@ -107,13 +107,39 @@ input_charge =
   + cache_read_tokens * cache_read_input_cost_per_token_nano
 ```
 
+`input_tokens` in C2/C3 MUST be interpreted according to upstream provider usage semantics:
+
+- For providers whose usage field is aggregate/inclusive (for example OpenAI Chat / Responses style totals), `input_tokens` is the full prompt total and cache-class counters are refinements of that total.
+- For Anthropic Messages upstreams, `input_tokens` is the provider-reported non-cached remainder after cache buckets are separated. In that case `cache_read_input_tokens` and `cache_creation_input_tokens` are disjoint additive buckets outside `input_tokens`.
+
 C3a. If `usage.input_details.cache_creation_tokens` is present and metadata provides `cache_creation_input_cost_per_token_nano`, an additional charge MUST be added:
 
 ```
 cache_creation_charge = cache_creation_tokens * cache_creation_input_cost_per_token_nano
 ```
 
-This charge is additive to the input charge computed in C2/C3.
+When C3a applies for an aggregate/inclusive provider, the input charge computed in C2/C3 MUST first exclude `cache_creation_tokens` from the base-rate input bucket before adding `cache_creation_charge`. Formally:
+
+``` 
+base_rate_input_tokens = input_tokens - cache_read_tokens - cache_creation_tokens
+input_charge =
+  base_rate_input_tokens * input_cost_per_token_nano
+  + cache_read_tokens * cache_read_input_cost_per_token_nano
+  + cache_creation_tokens * cache_creation_input_cost_per_token_nano
+```
+
+The implementation MUST clamp each billable bucket at zero after subtraction. Monoize MUST NOT charge the same input token once at the base input rate and again at the cache-creation rate.
+
+For Anthropic Messages upstreams, Monoize MUST instead treat the three input-side buckets as already disjoint:
+
+```
+input_charge =
+  input_tokens * input_cost_per_token_nano
+  + cache_read_tokens * cache_read_input_cost_per_token_nano
+  + cache_creation_tokens * cache_creation_input_cost_per_token_nano
+```
+
+Monoize MUST NOT subtract `cache_read_tokens` or `cache_creation_tokens` from Anthropic `input_tokens` during billing, because Anthropic defines `input_tokens` as excluding those cache buckets.
 
 C4. If `usage.output_details.reasoning_tokens` is present and metadata provides `output_cost_per_reasoning_token_nano`, output charge MUST be:
 
@@ -122,6 +148,8 @@ output_charge =
   (output_tokens - reasoning_tokens) * output_cost_per_token_nano
   + reasoning_tokens * output_cost_per_reasoning_token_nano
 ```
+
+`output_tokens` in C4 MUST likewise be treated according to provider semantics. If a provider defines reasoning tokens as a subtype of the reported output total, Monoize MUST subtract them before applying the base output rate and then add the reasoning-rate subtotal. Monoize MUST NOT bill the same output token once at the base output rate and again at the reasoning rate.
 
 C5. Final charge MUST multiply by provider model multiplier and truncate toward zero:
 
