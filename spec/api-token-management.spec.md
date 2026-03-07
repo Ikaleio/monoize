@@ -91,6 +91,42 @@ TM-CREATE-4. After successful key creation, there is no required cache invalidat
 
 TM-UPD-1. A successful API key update MUST invalidate in-memory API key cache entries for the updated key id before returning the response.
 
+### 2.4a API-key transform safety boundary
+
+TM-TF-1. API key `transforms` are user-scoped request/response shaping rules. They MUST NOT act as routing, pricing, or upstream service-tier controls.
+
+TM-TF-2. The server MUST reject API key create/update requests whose `transforms` array contains any rule outside the allowed API-key transform subset defined by TM-TF-3 and TM-TF-4.
+
+TM-TF-3. Allowed API-key request-phase transforms are exactly:
+
+- `inject_system_prompt`
+- `system_to_developer_role`
+- `merge_consecutive_roles`
+- `append_empty_user_message`
+- `compress_user_message_images`
+
+TM-TF-4. Allowed API-key response-phase transforms are exactly:
+
+- `strip_reasoning`
+- `reasoning_to_think_xml`
+- `think_xml_to_reasoning`
+
+TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routing, upstream model selection, upstream pricing tier, cache billing behavior, request execution mode, output token ceiling, or arbitrary provider passthrough fields. This forbidden set includes at minimum:
+
+- `set_field`
+- `remove_field`
+- `force_stream`
+- `override_max_tokens`
+- `reasoning_effort_to_budget`
+- `reasoning_effort_to_model_suffix`
+- `auto_cache_user_id`
+- `auto_cache_system`
+- `auto_cache_tool_use`
+
+TM-TF-6. Requests rejected by TM-TF-2 through TM-TF-5 MUST return HTTP `400` with code `invalid_request`.
+
+TM-TF-7. Runtime enforcement MUST be defensive: when an API key row is loaded from storage, the server MUST discard any transform rules that are not permitted by TM-TF-3 and TM-TF-4 before attaching them to the authenticated context.
+
 ### 2.5 Delete API key
 
 - **Endpoint:** `DELETE /api/dashboard/tokens/{key_id}`

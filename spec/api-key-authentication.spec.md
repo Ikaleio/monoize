@@ -44,6 +44,7 @@ AKP2. If AKP1 holds, Monoize MUST:
    - Monoize MUST update `last_used_at` to the current time.
    - Monoize MUST authenticate the request with `tenant_id = user.id`.
    - Monoize MUST attach API key routing policy (`max_multiplier`, ordered `transforms`) to the authenticated context.
+   - The attached `transforms` value MUST already satisfy the API-key transform safety boundary in `api-token-management.spec.md` §2.4a. Stored disallowed transform rules MUST be discarded before request processing continues.
 
 AKP3. If database validation fails or is skipped, Monoize MUST return:
 
@@ -71,3 +72,11 @@ AKM1. The effective `max_multiplier` for a request is resolved as follows:
 AKM2. Consequence: a per-request `requested` value can only lower the effective multiplier below the API key ceiling, never raise it above.
 
 AKM3. During provider selection, if `effective` is not null, providers whose model entry `multiplier` exceeds `effective` MUST be excluded from the candidate set.
+
+## 6. Model allowlist enforcement
+
+AKL1. If `model_limits_enabled = true` and `model_limits` is non-empty on the authenticated API key, every forwarding request MUST be rejected unless the logical model requested by the client is an exact member of `model_limits`.
+
+AKL2. AKL1 enforcement MUST occur on forwarding endpoints themselves, not only on `/v1/models` listing responses.
+
+AKL3. Requests rejected by AKL1 MUST return HTTP `403` with code `model_not_allowed`.
