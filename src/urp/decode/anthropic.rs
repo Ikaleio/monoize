@@ -9,6 +9,18 @@ use crate::urp::{
 use serde_json::Value;
 use std::collections::HashMap;
 
+fn text_part_with_phase(
+    content: impl Into<String>,
+    phase: Option<&str>,
+    extra_body: HashMap<String, Value>,
+) -> Part {
+    Part::Text {
+        content: content.into(),
+        phase: phase.map(str::to_string),
+        extra_body,
+    }
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -67,10 +79,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
         if let Some(s) = content.as_str() {
             if !s.is_empty() {
-                msg.parts.push(Part::Text {
-                    content: s.to_string(),
-                    extra_body: HashMap::new(),
-                });
+                msg.parts
+                    .push(text_part_with_phase(s, None, HashMap::new()));
             }
         } else if let Some(blocks) = content.as_array() {
             for block in blocks {
@@ -81,10 +91,11 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 match btype {
                     "text" => {
                         if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
-                            msg.parts.push(Part::Text {
-                                content: text.to_string(),
-                                extra_body: split_extra(bobj, &["type", "text"]),
-                            });
+                            msg.parts.push(text_part_with_phase(
+                                text,
+                                bobj.get("phase").and_then(|v| v.as_str()),
+                                split_extra(bobj, &["type", "text", "phase"]),
+                            ));
                         }
                     }
                     "thinking" => {
@@ -147,10 +158,11 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                         tool_messages.push(tool_msg);
                     }
                     _ => {
-                        msg.parts.push(Part::Text {
-                            content: serde_json::to_string(block).unwrap_or_default(),
-                            extra_body: HashMap::new(),
-                        });
+                        msg.parts.push(text_part_with_phase(
+                            serde_json::to_string(block).unwrap_or_default(),
+                            None,
+                            HashMap::new(),
+                        ));
                     }
                 }
             }
@@ -274,10 +286,11 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             match btype {
                 "text" => {
                     if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
-                        message.parts.push(Part::Text {
-                            content: text.to_string(),
-                            extra_body: split_extra(bobj, &["type", "text"]),
-                        });
+                        message.parts.push(text_part_with_phase(
+                            text,
+                            bobj.get("phase").and_then(|v| v.as_str()),
+                            split_extra(bobj, &["type", "text", "phase"]),
+                        ));
                     }
                 }
                 "thinking" => {
@@ -328,10 +341,11 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     }
                 }
                 _ => {
-                    message.parts.push(Part::Text {
-                        content: serde_json::to_string(block).unwrap_or_default(),
-                        extra_body: HashMap::new(),
-                    });
+                    message.parts.push(text_part_with_phase(
+                        serde_json::to_string(block).unwrap_or_default(),
+                        None,
+                        HashMap::new(),
+                    ));
                 }
             }
         }
@@ -479,10 +493,7 @@ fn decode_tool_result_content(content: Option<&Value>, parts: &mut Vec<Part>) {
     };
     if let Some(text) = content.as_str() {
         if !text.is_empty() {
-            parts.push(Part::Text {
-                content: text.to_string(),
-                extra_body: HashMap::new(),
-            });
+            parts.push(text_part_with_phase(text, None, HashMap::new()));
         }
         return;
     }
@@ -501,30 +512,21 @@ fn decode_tool_result_content(content: Option<&Value>, parts: &mut Vec<Part>) {
 
     let text = value_to_text(content);
     if !text.is_empty() {
-        parts.push(Part::Text {
-            content: text,
-            extra_body: HashMap::new(),
-        });
+        parts.push(text_part_with_phase(text, None, HashMap::new()));
     }
 }
 
 fn decode_tool_result_content_block(block: &Value, parts: &mut Vec<Part>) {
     if let Some(text) = block.as_str() {
         if !text.is_empty() {
-            parts.push(Part::Text {
-                content: text.to_string(),
-                extra_body: HashMap::new(),
-            });
+            parts.push(text_part_with_phase(text, None, HashMap::new()));
         }
         return;
     }
     let Some(obj) = block.as_object() else {
         let text = value_to_text(block);
         if !text.is_empty() {
-            parts.push(Part::Text {
-                content: text,
-                extra_body: HashMap::new(),
-            });
+            parts.push(text_part_with_phase(text, None, HashMap::new()));
         }
         return;
     };
@@ -532,10 +534,11 @@ fn decode_tool_result_content_block(block: &Value, parts: &mut Vec<Part>) {
     match obj.get("type").and_then(|v| v.as_str()).unwrap_or("") {
         "text" => {
             if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
-                parts.push(Part::Text {
-                    content: text.to_string(),
-                    extra_body: split_extra(obj, &["type", "text"]),
-                });
+                parts.push(text_part_with_phase(
+                    text,
+                    obj.get("phase").and_then(|v| v.as_str()),
+                    split_extra(obj, &["type", "text", "phase"]),
+                ));
             }
         }
         _ => {
@@ -549,10 +552,7 @@ fn decode_tool_result_content_block(block: &Value, parts: &mut Vec<Part>) {
             }
             let text = value_to_text(block);
             if !text.is_empty() {
-                parts.push(Part::Text {
-                    content: text,
-                    extra_body: HashMap::new(),
-                });
+                parts.push(text_part_with_phase(text, None, HashMap::new()));
             }
         }
     }

@@ -9,6 +9,18 @@ use crate::urp::{
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+fn text_part_with_phase(
+    content: impl Into<String>,
+    phase: Option<&str>,
+    extra_body: HashMap<String, Value>,
+) -> Part {
+    Part::Text {
+        content: content.into(),
+        phase: phase.map(str::to_string),
+        extra_body,
+    }
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -63,15 +75,15 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
             let text = value_to_text(&content);
             if !text.is_empty() {
-                tool_msg.parts.push(Part::Text {
-                    content: text,
-                    extra_body: HashMap::new(),
-                });
+                tool_msg
+                    .parts
+                    .push(text_part_with_phase(text, None, HashMap::new()));
             }
             messages.push(tool_msg);
             continue;
         }
 
+        let message_phase = msg_obj.get("phase").and_then(|v| v.as_str());
         let mut msg = Message {
             role,
             parts: Vec::new(),
@@ -86,6 +98,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     "reasoning_content",
                     "reasoning_opaque",
                     "refusal",
+                    "phase",
                 ],
             ),
         };
@@ -95,20 +108,19 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         if let Some(content) = msg_obj.get("content") {
             if let Some(s) = content.as_str() {
                 if !s.is_empty() {
-                    msg.parts.push(Part::Text {
-                        content: s.to_string(),
-                        extra_body: HashMap::new(),
-                    });
+                    msg.parts
+                        .push(text_part_with_phase(s, message_phase, HashMap::new()));
                 }
             } else if let Some(arr) = content.as_array() {
                 for item in arr {
                     if let Some(item_obj) = item.as_object() {
                         if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
                             if !text.is_empty() {
-                                msg.parts.push(Part::Text {
-                                    content: text.to_string(),
-                                    extra_body: split_extra(item_obj, &["type", "text"]),
-                                });
+                                msg.parts.push(text_part_with_phase(
+                                    text,
+                                    message_phase,
+                                    split_extra(item_obj, &["type", "text"]),
+                                ));
                             }
                         }
                         if let Some(image_part) = parse_image_part_from_obj(item_obj) {
@@ -252,29 +264,31 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                 "reasoning_opaque",
                 "tool_calls",
                 "refusal",
+                "phase",
             ],
         ),
     };
+    let message_phase = msg_obj.get("phase").and_then(|v| v.as_str());
 
     parse_chat_reasoning_fields(msg_obj, &mut message.parts);
 
     if let Some(content) = msg_obj.get("content") {
         if let Some(s) = content.as_str() {
             if !s.is_empty() {
-                message.parts.push(Part::Text {
-                    content: s.to_string(),
-                    extra_body: HashMap::new(),
-                });
+                message
+                    .parts
+                    .push(text_part_with_phase(s, message_phase, HashMap::new()));
             }
         } else if let Some(arr) = content.as_array() {
             for item in arr {
                 if let Some(item_obj) = item.as_object() {
                     if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
                         if !text.is_empty() {
-                            message.parts.push(Part::Text {
-                                content: text.to_string(),
-                                extra_body: split_extra(item_obj, &["type", "text"]),
-                            });
+                            message.parts.push(text_part_with_phase(
+                                text,
+                                message_phase,
+                                split_extra(item_obj, &["type", "text"]),
+                            ));
                         }
                     }
                     if let Some(image) = parse_image_part_from_obj(item_obj) {

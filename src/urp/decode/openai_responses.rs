@@ -9,6 +9,18 @@ use crate::urp::{
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+fn text_part_with_phase(
+    content: impl Into<String>,
+    phase: Option<&str>,
+    extra_body: HashMap<String, Value>,
+) -> Part {
+    Part::Text {
+        content: content.into(),
+        phase: phase.map(str::to_string),
+        extra_body,
+    }
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -172,19 +184,18 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                 "tool" => Role::Tool,
                 _ => Role::User,
             };
+            let message_phase = obj.get("phase").and_then(|v| v.as_str());
             let mut msg = Message {
                 role,
                 parts: Vec::new(),
-                extra_body: split_extra(obj, &["type", "role", "content"]),
+                extra_body: split_extra(obj, &["type", "role", "content", "phase"]),
             };
 
             if let Some(content) = obj.get("content") {
                 if let Some(s) = content.as_str() {
                     if !s.is_empty() {
-                        msg.parts.push(Part::Text {
-                            content: s.to_string(),
-                            extra_body: HashMap::new(),
-                        });
+                        msg.parts
+                            .push(text_part_with_phase(s, message_phase, HashMap::new()));
                     }
                 } else if let Some(content_arr) = content.as_array() {
                     for p in content_arr {
@@ -197,10 +208,11 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                                     .and_then(|v| v.as_str())
                                     .or_else(|| pobj.get("content").and_then(|v| v.as_str()))
                                 {
-                                    msg.parts.push(Part::Text {
-                                        content: text.to_string(),
-                                        extra_body: split_extra(pobj, &["type", "text", "content"]),
-                                    });
+                                    msg.parts.push(text_part_with_phase(
+                                        text,
+                                        message_phase,
+                                        split_extra(pobj, &["type", "text", "content"]),
+                                    ));
                                 }
                             }
                             "refusal" => {
@@ -228,10 +240,11 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
         }
         _ => {
             let mut msg = Message::new(Role::User);
-            msg.parts.push(Part::Text {
-                content: serde_json::to_string(obj).unwrap_or_default(),
-                extra_body: HashMap::new(),
-            });
+            msg.parts.push(text_part_with_phase(
+                serde_json::to_string(obj).unwrap_or_default(),
+                None,
+                HashMap::new(),
+            ));
             out.push(msg);
         }
     }
@@ -241,10 +254,7 @@ fn decode_tool_output_parts(output: &Value, parts: &mut Vec<Part>) {
     match output {
         Value::String(text) => {
             if !text.is_empty() {
-                parts.push(Part::Text {
-                    content: text.to_string(),
-                    extra_body: HashMap::new(),
-                });
+                parts.push(text_part_with_phase(text, None, HashMap::new()));
             }
         }
         Value::Array(items) => {
@@ -256,10 +266,7 @@ fn decode_tool_output_parts(output: &Value, parts: &mut Vec<Part>) {
         other => {
             let text = value_to_text(other);
             if !text.is_empty() {
-                parts.push(Part::Text {
-                    content: text,
-                    extra_body: HashMap::new(),
-                });
+                parts.push(text_part_with_phase(text, None, HashMap::new()));
             }
         }
     }
@@ -268,20 +275,14 @@ fn decode_tool_output_parts(output: &Value, parts: &mut Vec<Part>) {
 fn decode_tool_output_part(value: &Value, parts: &mut Vec<Part>) {
     if let Some(text) = value.as_str() {
         if !text.is_empty() {
-            parts.push(Part::Text {
-                content: text.to_string(),
-                extra_body: HashMap::new(),
-            });
+            parts.push(text_part_with_phase(text, None, HashMap::new()));
         }
         return;
     }
     let Some(obj) = value.as_object() else {
         let text = value_to_text(value);
         if !text.is_empty() {
-            parts.push(Part::Text {
-                content: text,
-                extra_body: HashMap::new(),
-            });
+            parts.push(text_part_with_phase(text, None, HashMap::new()));
         }
         return;
     };
@@ -294,10 +295,11 @@ fn decode_tool_output_part(value: &Value, parts: &mut Vec<Part>) {
                 .and_then(|v| v.as_str())
                 .or_else(|| obj.get("content").and_then(|v| v.as_str()))
             {
-                parts.push(Part::Text {
-                    content: text.to_string(),
-                    extra_body: split_extra(obj, &["type", "text", "content"]),
-                });
+                parts.push(text_part_with_phase(
+                    text,
+                    None,
+                    split_extra(obj, &["type", "text", "content"]),
+                ));
             }
         }
         _ => {
@@ -311,10 +313,7 @@ fn decode_tool_output_part(value: &Value, parts: &mut Vec<Part>) {
             }
             let text = value_to_text(value);
             if !text.is_empty() {
-                parts.push(Part::Text {
-                    content: text,
-                    extra_body: HashMap::new(),
-                });
+                parts.push(text_part_with_phase(text, None, HashMap::new()));
             }
         }
     }
@@ -335,6 +334,10 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             let item_type = item_obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
             match item_type {
                 "message" => {
+                    let message_phase = item_obj.get("phase").and_then(|v| v.as_str());
+                    for (k, v) in split_extra(item_obj, &["type", "role", "content", "phase"]) {
+                        message.extra_body.entry(k).or_insert(v);
+                    }
                     if let Some(content_arr) = item_obj.get("content").and_then(|v| v.as_array()) {
                         for p in content_arr {
                             let Some(pobj) = p.as_object() else { continue };
@@ -342,10 +345,11 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                             match ptype {
                                 "output_text" | "text" => {
                                     if let Some(text) = pobj.get("text").and_then(|v| v.as_str()) {
-                                        message.parts.push(Part::Text {
-                                            content: text.to_string(),
-                                            extra_body: split_extra(pobj, &["type", "text"]),
-                                        });
+                                        message.parts.push(text_part_with_phase(
+                                            text,
+                                            message_phase,
+                                            split_extra(pobj, &["type", "text"]),
+                                        ));
                                     }
                                 }
                                 "refusal" => {

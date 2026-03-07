@@ -279,6 +279,7 @@ fn decode_part(part: &Value, out: &mut Vec<Part>) {
             } else {
                 out.push(Part::Text {
                     content: text.to_string(),
+                    phase: None,
                     extra_body: split_extra(obj, &["text", "thought", "thoughtSignature"]),
                 });
             }
@@ -345,6 +346,7 @@ fn decode_part(part: &Value, out: &mut Vec<Part>) {
         if !text.is_empty() {
             msg.parts.push(Part::Text {
                 content: text,
+                phase: None,
                 extra_body: HashMap::new(),
             });
         }
