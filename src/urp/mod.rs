@@ -54,6 +54,8 @@ pub enum Role {
 pub enum Part {
     Text {
         content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -373,6 +375,7 @@ impl Message {
         let mut msg = Self::new(role);
         msg.parts.push(Part::Text {
             content: content.into(),
+            phase: None,
             extra_body: HashMap::new(),
         });
         msg

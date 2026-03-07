@@ -112,6 +112,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
             if !rest.is_empty() {
                 parts.push(Part::Text {
                     content: rest.to_string(),
+                    phase: None,
                     extra_body: HashMap::new(),
                 });
             }
@@ -121,6 +122,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
         if !before.is_empty() {
             parts.push(Part::Text {
                 content: before.to_string(),
+                phase: None,
                 extra_body: HashMap::new(),
             });
         }

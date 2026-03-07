@@ -100,6 +100,7 @@ impl Transform for InjectSystemPromptTransform {
         if let Some(idx) = target_index {
             req.messages[idx].parts.push(Part::Text {
                 content: cfg.content.clone(),
+                phase: None,
                 extra_body: std::collections::HashMap::new(),
             });
         } else {

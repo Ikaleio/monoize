@@ -203,6 +203,7 @@ pub fn model_glob_match(pattern: &str, model: &str) -> bool {
 pub fn text_part(content: impl Into<String>) -> Part {
     Part::Text {
         content: content.into(),
+        phase: None,
         extra_body: HashMap::new(),
     }
 }

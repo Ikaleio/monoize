@@ -71,6 +71,7 @@ impl Transform for ReasoningToThinkXmlTransform {
                         Part::Reasoning { content, .. } => {
                             next_parts.push(Part::Text {
                                 content: format!("<{0}>{1}</{0}>", cfg.tag, content),
+                                phase: None,
                                 extra_body: HashMap::new(),
                             });
                         }
