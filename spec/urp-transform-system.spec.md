@@ -78,7 +78,7 @@ TF-3. Transform rule execution MUST be ordered; output of rule `i` is input to r
 TF-4. Rules MUST be filtered by:
 - `enabled=true`
 - matching phase
-- model glob match when `models` is present
+- model glob match against the original requested logical model when `models` is present
 
 TF-5. Transform registry MUST be auto-discovered using `inventory`.
 
@@ -125,8 +125,10 @@ CUMI-2. Config MAY contain:
 
 CUMI-3. Input eligibility:
 1. The transform MUST inspect only messages with `role == user`.
-2. Within those messages, the transform MUST inspect only `Part::Image` parts whose `source` is `ImageSource::Base64`.
-3. Parts whose source is `ImageSource::Url` MUST be left unchanged.
+2. Within those messages, the transform MUST inspect `Part::Image` parts whose `source` is either:
+   - `ImageSource::Base64`; or
+   - `ImageSource::Url` whose `url` field is a `data:<image-media-type>;base64,<payload>` URL.
+3. `ImageSource::Url` parts that refer to non-`data:` URLs MUST be left unchanged.
 4. Parts whose media type is not decodable by the image codec stack MUST be left unchanged.
 
 CUMI-4. Compression behavior:
@@ -135,7 +137,10 @@ CUMI-4. Compression behavior:
 3. If the decoded image has no alpha channel, the transform MUST encode the output as JPEG using a JPEG optimization crate and `jpeg_quality`.
 4. If the decoded image has an alpha channel, the transform MUST encode the output as PNG and MAY run an additional lossless PNG optimization pass before persistence.
 5. If `skip_if_smaller == true` and the transformed byte length is greater than or equal to the original byte length, the transform MUST keep the original part unchanged.
-6. On successful replacement, the transform MUST update the part to `ImageSource::Base64 { media_type, data }` using the transformed media type and transformed base64 payload.
+6. On successful replacement:
+   - if the original source was `ImageSource::Base64`, the transform MUST update the part to `ImageSource::Base64 { media_type, data }` using the transformed media type and transformed base64 payload;
+   - if the original source was a `data:` URL in `ImageSource::Url`, the transform MUST keep the source variant as `ImageSource::Url` and replace `url` with a transformed `data:<media-type>;base64,<payload>` URL.
+7. When the original source is `ImageSource::Url` and carries provider-specific fields such as `detail`, the transform MUST preserve those fields unchanged.
 
 CUMI-5. Cache key and persistence:
 1. Successful transformed outputs MUST be persisted on local disk.
@@ -188,7 +193,12 @@ PIPE-1. Non-stream and stream request lifecycle MUST execute as:
 
 PIPE-1b. Model identity split:
 - The upstream model name sent to the provider is `urp.model` after step 6 (post-transform).
-- Billing, logging, response-phase transform matching, and downstream response `model` field MUST use the original requested model name (pre-step-5).
+- Billing, logging, request-phase transform matching, response-phase transform matching, and downstream response `model` field MUST use the original requested model name (pre-step-5).
+
+PIPE-1c. Transform rule model matching:
+- API-key request-phase transform rules with `models` filters MUST match against the original requested logical model.
+- Provider request-phase transform rules with `models` filters MUST match against the original requested logical model, even though `urp.model` may already hold the redirected upstream model at execution time.
+- Response-phase transform rules with `models` filters MUST match against the original requested logical model.
 
 ### 5.1 Model Suffix Resolution
 
