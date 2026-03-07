@@ -346,11 +346,11 @@ pub(super) async fn maybe_charge_usage(
     {
         Some(v) => v,
         None => {
-            tracing::warn!(
-                "billing skipped: no model pricing for upstream_model={}",
-                attempt.upstream_model
-            );
-            return Ok(ChargeComputation::default());
+            return Err(AppError::new(
+                StatusCode::FORBIDDEN,
+                "model_pricing_required",
+                format!("pricing metadata required for model: {}", attempt.upstream_model),
+            ));
         }
     };
 

@@ -2008,6 +2008,7 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
 #[tokio::test]
 async fn channel_passive_override_threshold_takes_precedence_over_global_defaults() {
     let ctx = setup().await;
+    seed_test_model_pricing(&ctx.state, &["override-threshold-model"]).await;
 
     let providers = ctx
         .state
@@ -3121,6 +3122,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
 #[tokio::test]
 async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let ctx = setup().await;
+    seed_test_model_pricing(&ctx.state, &["gpt-5-target"]).await;
     let (upstream_addr, _) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 

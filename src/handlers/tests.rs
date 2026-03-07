@@ -1,8 +1,10 @@
 use super::*;
+use crate::app::{RuntimeConfig, load_state_with_runtime};
 use crate::config::ProviderType;
 use crate::model_registry_store::ModelPricing;
-use crate::monoize_routing::MonoizeModelEntry;
+use crate::monoize_routing::{CreateMonoizeChannelInput, CreateMonoizeProviderInput, MonoizeModelEntry, MonoizeProviderType};
 use crate::urp;
+use axum::http::StatusCode;
 use std::collections::HashMap;
 
 #[test]
@@ -175,4 +177,64 @@ fn resolve_upstream_model_falls_back_to_requested_when_redirect_blank() {
         resolve_upstream_model("gpt-5-logical", &entry),
         "gpt-5-logical".to_string()
     );
+}
+
+#[tokio::test]
+async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+
+    state
+        .monoize_store
+        .create_provider(CreateMonoizeProviderInput {
+            name: "OpenAI".to_string(),
+            provider_type: MonoizeProviderType::Responses,
+            max_retries: 0,
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(0),
+            models: std::collections::HashMap::from([(
+                "gpt-unpriced".to_string(),
+                MonoizeModelEntry {
+                    redirect: Some("gpt-unpriced-upstream".to_string()),
+                    multiplier: 1.0,
+                },
+            )]),
+            channels: vec![CreateMonoizeChannelInput {
+                id: None,
+                name: "primary".to_string(),
+                base_url: "https://example.com".to_string(),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                weight: 1,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+        })
+        .await
+        .expect("provider created");
+
+    let req = UrpRequest {
+        model: "gpt-unpriced".to_string(),
+        max_multiplier: None,
+    };
+    let err = build_monoize_attempts(&state, &req).await.expect_err("must reject unpriced model");
+
+    assert_eq!(err.status, StatusCode::FORBIDDEN);
+    assert_eq!(err.code, "model_pricing_required");
+    assert!(err.message.contains("gpt-unpriced-upstream"));
 }

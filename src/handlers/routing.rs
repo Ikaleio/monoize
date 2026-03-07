@@ -144,7 +144,44 @@ pub(super) async fn build_monoize_attempts(
     for provider in providers {
         collect_provider_attempts(state, urp, &provider, &mut attempts).await;
     }
-    Ok(attempts)
+    if attempts.is_empty() {
+        return Ok(attempts);
+    }
+
+    let mut pricing_cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut priced_attempts = Vec::with_capacity(attempts.len());
+
+    for attempt in attempts {
+        let has_pricing = if let Some(cached) = pricing_cache.get(&attempt.upstream_model) {
+            *cached
+        } else {
+            let priced = state
+                .model_registry_store
+                .get_model_pricing(&attempt.upstream_model)
+                .await
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+                .is_some();
+            pricing_cache.insert(attempt.upstream_model.clone(), priced);
+            priced
+        };
+
+        if has_pricing {
+            priced_attempts.push(attempt);
+        } else {
+            blocked_models.insert(attempt.upstream_model);
+        }
+    }
+
+    if priced_attempts.is_empty() && !blocked_models.is_empty() {
+        let blocked_list = blocked_models.into_iter().collect::<Vec<_>>().join(", ");
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "model_pricing_required",
+            format!("pricing metadata required for model(s): {blocked_list}"),
+        ));
+    }
+    Ok(priced_attempts)
 }
 
 pub(super) async fn collect_provider_attempts(
