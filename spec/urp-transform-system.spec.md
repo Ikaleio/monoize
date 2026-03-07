@@ -78,7 +78,7 @@ TF-3. Transform rule execution MUST be ordered; output of rule `i` is input to r
 TF-4. Rules MUST be filtered by:
 - `enabled=true`
 - matching phase
-- model glob match against the original requested logical model when `models` is present
+- model glob match against the normalized logical model when `models` is present
 
 TF-5. Transform registry MUST be auto-discovered using `inventory`.
 
@@ -193,12 +193,16 @@ PIPE-1. Non-stream and stream request lifecycle MUST execute as:
 
 PIPE-1b. Model identity split:
 - The upstream model name sent to the provider is `urp.model` after step 6 (post-transform).
-- Billing, logging, request-phase transform matching, response-phase transform matching, and downstream response `model` field MUST use the original requested model name (pre-step-5).
+- Billing, logging, and downstream response `model` field MUST use the original requested model name (pre-step-5).
 
 PIPE-1c. Transform rule model matching:
-- API-key request-phase transform rules with `models` filters MUST match against the original requested logical model.
-- Provider request-phase transform rules with `models` filters MUST match against the original requested logical model, even though `urp.model` may already hold the redirected upstream model at execution time.
-- Response-phase transform rules with `models` filters MUST match against the original requested logical model.
+- Define the normalized logical model as follows:
+  1. Start from the original requested model name from downstream.
+  2. If that requested model matches a configured reasoning suffix under §5.1 and stripping the suffix yields an existing provider model, use the stripped base model.
+  3. Otherwise use the original requested model name unchanged.
+- API-key request-phase transform rules with `models` filters MUST match against the normalized logical model.
+- Provider request-phase transform rules with `models` filters MUST match against the normalized logical model, even though `urp.model` may already hold the redirected upstream model at execution time.
+- Response-phase transform rules with `models` filters MUST match against the normalized logical model.
 
 ### 5.1 Model Suffix Resolution
 
