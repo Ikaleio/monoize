@@ -1,13 +1,136 @@
 use crate::urp::decode::{
-    parse_file_part_from_obj, parse_image_part_from_obj, parse_tool_definition, split_extra,
-    value_to_text,
+    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
+    parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
     FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     UrpRequest, UrpResponse, Usage,
 };
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiChatUsage {
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    prompt_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    completion_tokens: u64,
+    #[serde(default)]
+    #[serde(alias = "input_tokens_details")]
+    prompt_tokens_details: Option<OpenAiChatInputDetails>,
+    #[serde(default)]
+    #[serde(alias = "output_tokens_details")]
+    completion_tokens_details: Option<OpenAiChatOutputDetails>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiChatInputDetails {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "cache_read_tokens"
+    )]
+    cached_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    cache_write_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    cache_creation_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "tool_prompt_input_tokens"
+    )]
+    tool_prompt_tokens: u64,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiChatOutputDetails {
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    reasoning_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "accepted_prediction_output_tokens"
+    )]
+    accepted_prediction_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "rejected_prediction_output_tokens"
+    )]
+    rejected_prediction_tokens: u64,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl From<OpenAiChatUsage> for Usage {
+    fn from(value: OpenAiChatUsage) -> Self {
+        let OpenAiChatUsage {
+            prompt_tokens,
+            completion_tokens,
+            prompt_tokens_details,
+            completion_tokens_details,
+            mut extra,
+        } = value;
+
+        let input_details = prompt_tokens_details.clone().and_then(|details| {
+            let cache_creation_tokens = details
+                .cache_creation_tokens
+                .max(details.cache_write_tokens);
+            if details.cached_tokens > 0
+                || cache_creation_tokens > 0
+                || details.tool_prompt_tokens > 0
+            {
+                Some(InputDetails {
+                    standard_tokens: 0,
+                    cache_read_tokens: details.cached_tokens,
+                    cache_creation_tokens,
+                    tool_prompt_tokens: details.tool_prompt_tokens,
+                    modality_breakdown: None,
+                })
+            } else {
+                None
+            }
+        });
+
+        let output_details = completion_tokens_details.clone().and_then(|details| {
+            if details.reasoning_tokens > 0
+                || details.accepted_prediction_tokens > 0
+                || details.rejected_prediction_tokens > 0
+            {
+                Some(OutputDetails {
+                    standard_tokens: 0,
+                    reasoning_tokens: details.reasoning_tokens,
+                    accepted_prediction_tokens: details.accepted_prediction_tokens,
+                    rejected_prediction_tokens: details.rejected_prediction_tokens,
+                    modality_breakdown: None,
+                })
+            } else {
+                None
+            }
+        });
+
+        if let Some(details) = prompt_tokens_details {
+            extra.extend(details.extra);
+        }
+        if let Some(details) = completion_tokens_details {
+            extra.extend(details.extra);
+        }
+
+        Usage {
+            input_tokens: prompt_tokens,
+            output_tokens: completion_tokens,
+            input_details,
+            output_details,
+            extra_body: extra,
+        }
+    }
+}
 
 fn text_part_with_phase(
     content: impl Into<String>,
@@ -570,79 +693,15 @@ fn parse_finish_reason(s: &str) -> FinishReason {
 }
 
 fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
-    let input_tokens = obj
-        .get("prompt_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let output_tokens = obj
-        .get("completion_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let prompt_details = obj
-        .get("prompt_tokens_details")
-        .or_else(|| obj.get("input_tokens_details"));
-    let completion_details = obj
-        .get("completion_tokens_details")
-        .or_else(|| obj.get("output_tokens_details"));
-    let reasoning_tokens = completion_details
-        .and_then(|v| v.get("reasoning_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cached_tokens = prompt_details
-        .and_then(|v| v.get("cached_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_write_tokens = prompt_details
-        .and_then(|v| v.get("cache_write_tokens"))
-        .or_else(|| prompt_details.and_then(|v| v.get("cache_creation_tokens")))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let tool_prompt_tokens = prompt_details
-        .and_then(|v| v.get("tool_prompt_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let accepted_prediction_tokens = completion_details
-        .and_then(|v| v.get("accepted_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let rejected_prediction_tokens = completion_details
-        .and_then(|v| v.get("rejected_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let input_details = if cached_tokens > 0 || cache_write_tokens > 0 || tool_prompt_tokens > 0 {
-        Some(InputDetails {
-            standard_tokens: 0,
-            cache_read_tokens: cached_tokens,
-            cache_creation_tokens: cache_write_tokens,
-            tool_prompt_tokens,
-            modality_breakdown: None,
+    serde_json::from_value::<OpenAiChatUsage>(Value::Object(obj.clone()))
+        .map(Usage::from)
+        .unwrap_or_else(|_| Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+            input_details: None,
+            output_details: None,
+            extra_body: obj.clone().into_iter().collect(),
         })
-    } else {
-        None
-    };
-
-    let output_details =
-        if reasoning_tokens > 0 || accepted_prediction_tokens > 0 || rejected_prediction_tokens > 0
-        {
-            Some(OutputDetails {
-                standard_tokens: 0,
-                reasoning_tokens,
-                accepted_prediction_tokens,
-                rejected_prediction_tokens,
-                modality_breakdown: None,
-            })
-        } else {
-            None
-        };
-
-    Usage {
-        input_tokens,
-        output_tokens,
-        input_details,
-        output_details,
-        extra_body: split_extra(obj, &["prompt_tokens", "completion_tokens", "total_tokens"]),
-    }
 }
 
 #[cfg(test)]

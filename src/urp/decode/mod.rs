@@ -5,6 +5,7 @@ pub mod openai_chat;
 pub mod openai_responses;
 
 use crate::urp::{FileSource, FunctionDefinition, ImageSource, Part, ToolDefinition};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -16,6 +17,22 @@ pub fn split_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, 
         }
     }
     extra
+}
+
+pub fn deserialize_u64ish_default<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| value_to_u64(&v)).unwrap_or(0))
+}
+
+pub fn value_to_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => s.parse::<u64>().ok(),
+        _ => None,
+    }
 }
 
 pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {

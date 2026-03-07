@@ -1,4 +1,6 @@
-use crate::urp::encode::{merge_extra, tool_choice_to_value};
+use crate::urp::encode::{
+    merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
+};
 use crate::urp::{
     FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat, Role, ToolDefinition,
     UrpRequest, UrpResponse,
@@ -204,29 +206,49 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         "stop_reason": finish_reason_to_stop_reason(resp.finish_reason),
     });
 
-    let (input_tokens, output_tokens, cache_read, cache_creation) = match &resp.usage {
-        Some(u) => (
-            u.input_tokens,
-            u.output_tokens,
-            u.input_details
-                .as_ref()
-                .map(|d| d.cache_read_tokens)
-                .unwrap_or(0),
-            u.input_details
-                .as_ref()
-                .map(|d| d.cache_creation_tokens)
-                .unwrap_or(0),
-        ),
-        None => (0, 0, 0, 0),
-    };
     let mut usage_value = json!({
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cache_read_input_tokens": cache_read,
-        "cache_creation_input_tokens": cache_creation
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "tool_prompt_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "accepted_prediction_output_tokens": 0,
+        "rejected_prediction_output_tokens": 0
     });
     if let Some(usage) = &resp.usage {
         if let Some(obj) = usage_value.as_object_mut() {
+            let input_details = usage_input_details(usage);
+            let output_details = usage_output_details(usage);
+            obj.insert("input_tokens".to_string(), Value::from(usage.input_tokens));
+            obj.insert(
+                "output_tokens".to_string(),
+                Value::from(usage.output_tokens),
+            );
+            obj.insert(
+                "cache_read_input_tokens".to_string(),
+                Value::from(input_details.cache_read_tokens),
+            );
+            obj.insert(
+                "cache_creation_input_tokens".to_string(),
+                Value::from(input_details.cache_creation_tokens),
+            );
+            obj.insert(
+                "tool_prompt_input_tokens".to_string(),
+                Value::from(input_details.tool_prompt_tokens),
+            );
+            obj.insert(
+                "reasoning_output_tokens".to_string(),
+                Value::from(output_details.reasoning_tokens),
+            );
+            obj.insert(
+                "accepted_prediction_output_tokens".to_string(),
+                Value::from(output_details.accepted_prediction_tokens),
+            );
+            obj.insert(
+                "rejected_prediction_output_tokens".to_string(),
+                Value::from(output_details.rejected_prediction_tokens),
+            );
             for (k, v) in &usage.extra_body {
                 obj.insert(k.clone(), v.clone());
             }
@@ -524,6 +546,12 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
 mod tests {
     use super::*;
     use crate::urp::decode::anthropic as decode_anthropic;
+    use crate::urp::{Message, OutputDetails, UrpResponse, Usage};
+    use std::collections::HashMap;
+
+    fn empty_map() -> HashMap<String, Value> {
+        HashMap::new()
+    }
 
     #[test]
     fn anthropic_text_block_phase_round_trips_to_responses_compatible_urp() {
@@ -547,5 +575,77 @@ mod tests {
         assert_eq!(content[0]["phase"], json!("commentary"));
         assert_eq!(content[1]["type"], json!("tool_use"));
         assert_eq!(content[2]["phase"], json!("final_answer"));
+    }
+
+    #[test]
+    fn anthropic_usage_round_trips_extension_fields_without_leaking_nested_aliases() {
+        let mut usage_extra = HashMap::new();
+        usage_extra.insert("native_counter".to_string(), json!(7));
+        let response = UrpResponse {
+            id: "msg_usage".to_string(),
+            model: "claude".to_string(),
+            message: Message::new(Role::Assistant),
+            finish_reason: Some(FinishReason::Stop),
+            usage: Some(Usage {
+                input_tokens: 11,
+                output_tokens: 5,
+                input_details: Some(crate::urp::InputDetails {
+                    standard_tokens: 0,
+                    cache_read_tokens: 2,
+                    cache_creation_tokens: 3,
+                    tool_prompt_tokens: 4,
+                    modality_breakdown: None,
+                }),
+                output_details: Some(OutputDetails {
+                    standard_tokens: 0,
+                    reasoning_tokens: 6,
+                    accepted_prediction_tokens: 7,
+                    rejected_prediction_tokens: 8,
+                    modality_breakdown: None,
+                }),
+                extra_body: usage_extra,
+            }),
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "claude");
+        let usage = encoded["usage"].as_object().expect("usage object");
+        assert_eq!(usage.get("tool_prompt_input_tokens"), Some(&json!(4)));
+        assert_eq!(usage.get("reasoning_output_tokens"), Some(&json!(6)));
+        assert_eq!(
+            usage.get("accepted_prediction_output_tokens"),
+            Some(&json!(7))
+        );
+        assert_eq!(
+            usage.get("rejected_prediction_output_tokens"),
+            Some(&json!(8))
+        );
+        assert_eq!(usage.get("native_counter"), Some(&json!(7)));
+
+        let decoded = decode_anthropic::decode_response(&encoded).expect("decode response");
+        let decoded_usage = decoded.usage.expect("usage should decode");
+        assert_eq!(
+            decoded_usage
+                .input_details
+                .expect("input details")
+                .tool_prompt_tokens,
+            4
+        );
+        let decoded_output = decoded_usage.output_details.expect("output details");
+        assert_eq!(decoded_output.reasoning_tokens, 6);
+        assert_eq!(decoded_output.accepted_prediction_tokens, 7);
+        assert_eq!(decoded_output.rejected_prediction_tokens, 8);
+        assert!(decoded_usage
+            .extra_body
+            .get("tool_prompt_input_tokens")
+            .is_none());
+        assert!(decoded_usage
+            .extra_body
+            .get("reasoning_output_tokens")
+            .is_none());
+        assert_eq!(
+            decoded_usage.extra_body.get("native_counter"),
+            Some(&json!(7))
+        );
     }
 }

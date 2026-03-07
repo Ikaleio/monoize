@@ -1,13 +1,112 @@
 use crate::urp::decode::{
-    parse_file_part_from_obj, parse_image_part_from_obj, parse_tool_definition, split_extra,
-    value_to_text,
+    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
+    parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
     FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     UrpRequest, UrpResponse, Usage,
 };
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+
+#[derive(Debug, Deserialize)]
+struct AnthropicUsage {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "prompt_tokens"
+    )]
+    input_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "completion_tokens"
+    )]
+    output_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "cache_read_tokens",
+        alias = "cached_tokens"
+    )]
+    cache_read_input_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "cache_creation_tokens",
+        alias = "cache_write_tokens"
+    )]
+    cache_creation_input_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "tool_prompt_input_tokens"
+    )]
+    tool_prompt_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "reasoning_output_tokens"
+    )]
+    reasoning_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "accepted_prediction_output_tokens"
+    )]
+    accepted_prediction_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "rejected_prediction_output_tokens"
+    )]
+    rejected_prediction_tokens: u64,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl From<AnthropicUsage> for Usage {
+    fn from(value: AnthropicUsage) -> Self {
+        let input_details = if value.cache_read_input_tokens > 0
+            || value.cache_creation_input_tokens > 0
+            || value.tool_prompt_tokens > 0
+        {
+            Some(InputDetails {
+                standard_tokens: 0,
+                cache_read_tokens: value.cache_read_input_tokens,
+                cache_creation_tokens: value.cache_creation_input_tokens,
+                tool_prompt_tokens: value.tool_prompt_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
+
+        let output_details = if value.reasoning_tokens > 0
+            || value.accepted_prediction_tokens > 0
+            || value.rejected_prediction_tokens > 0
+        {
+            Some(OutputDetails {
+                standard_tokens: 0,
+                reasoning_tokens: value.reasoning_tokens,
+                accepted_prediction_tokens: value.accepted_prediction_tokens,
+                rejected_prediction_tokens: value.rejected_prediction_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
+
+        Usage {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            input_details,
+            output_details,
+            extra_body: value.extra,
+        }
+    }
+}
 
 fn text_part_with_phase(
     content: impl Into<String>,
@@ -358,82 +457,11 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         _ => Some(FinishReason::Other),
     };
 
-    let usage = obj.get("usage").and_then(|v| v.as_object()).map(|u| {
-        let input_tokens = u
-            .get("input_tokens")
-            .or_else(|| u.get("prompt_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let output_tokens = u
-            .get("output_tokens")
-            .or_else(|| u.get("completion_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let cache_read_tokens = u
-            .get("cache_read_input_tokens")
-            .or_else(|| u.get("cache_read_tokens"))
-            .or_else(|| u.get("cached_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let cache_creation_tokens = u
-            .get("cache_creation_input_tokens")
-            .or_else(|| u.get("cache_creation_tokens"))
-            .or_else(|| u.get("cache_write_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let tool_prompt_tokens = u
-            .get("tool_prompt_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let reasoning_tokens = u
-            .get("reasoning_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let accepted_prediction_tokens = u
-            .get("accepted_prediction_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let rejected_prediction_tokens = u
-            .get("rejected_prediction_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let input_details =
-            if cache_read_tokens > 0 || cache_creation_tokens > 0 || tool_prompt_tokens > 0 {
-                Some(InputDetails {
-                    standard_tokens: 0,
-                    cache_read_tokens,
-                    cache_creation_tokens,
-                    tool_prompt_tokens,
-                    modality_breakdown: None,
-                })
-            } else {
-                None
-            };
-
-        let output_details = if reasoning_tokens > 0
-            || accepted_prediction_tokens > 0
-            || rejected_prediction_tokens > 0
-        {
-            Some(OutputDetails {
-                standard_tokens: 0,
-                reasoning_tokens,
-                accepted_prediction_tokens,
-                rejected_prediction_tokens,
-                modality_breakdown: None,
-            })
-        } else {
-            None
-        };
-
-        Usage {
-            input_tokens,
-            output_tokens,
-            input_details,
-            output_details,
-            extra_body: split_extra(u, &["input_tokens", "output_tokens"]),
-        }
-    });
+    let usage = obj
+        .get("usage")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<AnthropicUsage>(v).ok())
+        .map(Usage::from);
 
     Ok(UrpResponse {
         id: obj

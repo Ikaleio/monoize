@@ -1,10 +1,124 @@
-use crate::urp::decode::{parse_file_part_from_obj, parse_image_part_from_obj, split_extra};
+use crate::urp::decode::{
+    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj, split_extra,
+};
 use crate::urp::{
     FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     UrpRequest, UrpResponse, Usage,
 };
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiUsage {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "prompt_token_count"
+    )]
+    prompt_token_count: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "candidates_token_count"
+    )]
+    candidates_token_count: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "thoughts_token_count",
+        alias = "reasoning_tokens",
+        alias = "reasoning_output_token_count"
+    )]
+    thoughts_token_count: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "cached_content_token_count",
+        alias = "cached_tokens",
+        alias = "cache_read_tokens",
+        alias = "cache_read_input_tokens"
+    )]
+    cached_content_token_count: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "cache_creation_input_tokens",
+        alias = "cache_write_tokens",
+        alias = "cacheCreationTokenCount",
+        alias = "cache_creation_token_count"
+    )]
+    cache_creation_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "toolPromptInputTokenCount",
+        alias = "tool_prompt_input_token_count",
+        alias = "tool_prompt_tokens"
+    )]
+    tool_prompt_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "accepted_prediction_token_count",
+        alias = "accepted_prediction_tokens",
+        alias = "acceptedPredictionOutputTokenCount"
+    )]
+    accepted_prediction_token_count: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "rejected_prediction_token_count",
+        alias = "rejected_prediction_tokens",
+        alias = "rejectedPredictionOutputTokenCount"
+    )]
+    rejected_prediction_token_count: u64,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl From<GeminiUsage> for Usage {
+    fn from(value: GeminiUsage) -> Self {
+        let input_details = if value.cached_content_token_count > 0
+            || value.cache_creation_tokens > 0
+            || value.tool_prompt_tokens > 0
+        {
+            Some(InputDetails {
+                standard_tokens: 0,
+                cache_read_tokens: value.cached_content_token_count,
+                cache_creation_tokens: value.cache_creation_tokens,
+                tool_prompt_tokens: value.tool_prompt_tokens,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
+
+        let output_details = if value.thoughts_token_count > 0
+            || value.accepted_prediction_token_count > 0
+            || value.rejected_prediction_token_count > 0
+        {
+            Some(OutputDetails {
+                standard_tokens: 0,
+                reasoning_tokens: value.thoughts_token_count,
+                accepted_prediction_tokens: value.accepted_prediction_token_count,
+                rejected_prediction_tokens: value.rejected_prediction_token_count,
+                modality_breakdown: None,
+            })
+        } else {
+            None
+        };
+
+        Usage {
+            input_tokens: value.prompt_token_count,
+            output_tokens: value.candidates_token_count,
+            input_details,
+            output_details,
+            extra_body: value.extra,
+        }
+    }
+}
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
@@ -428,104 +542,15 @@ fn parse_finish_reason(reason: &str) -> FinishReason {
 }
 
 fn parse_usage(obj: &Map<String, Value>) -> Usage {
-    let input_tokens = obj
-        .get("promptTokenCount")
-        .or_else(|| obj.get("prompt_token_count"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let output_tokens = obj
-        .get("candidatesTokenCount")
-        .or_else(|| obj.get("candidates_token_count"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let reasoning_tokens = obj
-        .get("thoughtsTokenCount")
-        .or_else(|| obj.get("thoughts_token_count"))
-        .or_else(|| obj.get("reasoning_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_read_tokens = obj
-        .get("cachedContentTokenCount")
-        .or_else(|| obj.get("cached_content_token_count"))
-        .or_else(|| obj.get("cached_tokens"))
-        .or_else(|| obj.get("cache_read_tokens"))
-        .or_else(|| obj.get("cache_read_input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_creation_tokens = obj
-        .get("cache_creation_tokens")
-        .or_else(|| obj.get("cache_creation_input_tokens"))
-        .or_else(|| obj.get("cache_write_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let tool_prompt_tokens = obj
-        .get("tool_prompt_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let accepted_prediction_tokens = obj
-        .get("acceptedPredictionTokenCount")
-        .or_else(|| obj.get("accepted_prediction_token_count"))
-        .or_else(|| obj.get("accepted_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let rejected_prediction_tokens = obj
-        .get("rejectedPredictionTokenCount")
-        .or_else(|| obj.get("rejected_prediction_token_count"))
-        .or_else(|| obj.get("rejected_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let input_details =
-        if cache_read_tokens > 0 || cache_creation_tokens > 0 || tool_prompt_tokens > 0 {
-            Some(InputDetails {
-                standard_tokens: 0,
-                cache_read_tokens,
-                cache_creation_tokens,
-                tool_prompt_tokens,
-                modality_breakdown: None,
-            })
-        } else {
-            None
-        };
-    let output_details =
-        if reasoning_tokens > 0 || accepted_prediction_tokens > 0 || rejected_prediction_tokens > 0
-        {
-            Some(OutputDetails {
-                standard_tokens: 0,
-                reasoning_tokens,
-                accepted_prediction_tokens,
-                rejected_prediction_tokens,
-                modality_breakdown: None,
-            })
-        } else {
-            None
-        };
-
-    Usage {
-        input_tokens,
-        output_tokens,
-        input_details,
-        output_details,
-        extra_body: split_extra(
-            obj,
-            &[
-                "promptTokenCount",
-                "candidatesTokenCount",
-                "totalTokenCount",
-                "thoughtsTokenCount",
-                "thoughts_token_count",
-                "cachedContentTokenCount",
-                "cached_content_token_count",
-                "prompt_token_count",
-                "candidates_token_count",
-                "acceptedPredictionTokenCount",
-                "accepted_prediction_token_count",
-                "accepted_prediction_tokens",
-                "rejectedPredictionTokenCount",
-                "rejected_prediction_token_count",
-                "rejected_prediction_tokens",
-            ],
-        ),
-    }
+    serde_json::from_value::<GeminiUsage>(Value::Object(obj.clone()))
+        .map(Usage::from)
+        .unwrap_or_else(|_| Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+            input_details: None,
+            output_details: None,
+            extra_body: obj.clone().into_iter().collect(),
+        })
 }
 
 fn collect_content_text(value: &Value) -> String {

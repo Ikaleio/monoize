@@ -1,13 +1,144 @@
 use crate::urp::decode::{
-    parse_file_part_from_obj, parse_image_part_from_obj, parse_tool_definition, split_extra,
-    value_to_text,
+    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
+    parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
     FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     UrpRequest, UrpResponse, Usage,
 };
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiResponsesUsage {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "prompt_tokens"
+    )]
+    input_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "completion_tokens"
+    )]
+    output_tokens: u64,
+    #[serde(default)]
+    #[serde(alias = "prompt_tokens_details")]
+    input_tokens_details: Option<OpenAiResponsesInputDetails>,
+    #[serde(default)]
+    #[serde(alias = "completion_tokens_details")]
+    output_tokens_details: Option<OpenAiResponsesOutputDetails>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiResponsesInputDetails {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "cache_read_tokens"
+    )]
+    cached_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    cache_creation_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    cache_write_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "tool_prompt_input_tokens"
+    )]
+    tool_prompt_tokens: u64,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenAiResponsesOutputDetails {
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    reasoning_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "accepted_prediction_output_tokens"
+    )]
+    accepted_prediction_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u64ish_default",
+        alias = "rejected_prediction_output_tokens"
+    )]
+    rejected_prediction_tokens: u64,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl From<OpenAiResponsesUsage> for Usage {
+    fn from(value: OpenAiResponsesUsage) -> Self {
+        let OpenAiResponsesUsage {
+            input_tokens,
+            output_tokens,
+            input_tokens_details,
+            output_tokens_details,
+            mut extra,
+        } = value;
+
+        let input_details = input_tokens_details.clone().and_then(|details| {
+            let cache_creation_tokens = details
+                .cache_creation_tokens
+                .max(details.cache_write_tokens);
+            if details.cached_tokens > 0
+                || cache_creation_tokens > 0
+                || details.tool_prompt_tokens > 0
+            {
+                Some(InputDetails {
+                    standard_tokens: 0,
+                    cache_read_tokens: details.cached_tokens,
+                    cache_creation_tokens,
+                    tool_prompt_tokens: details.tool_prompt_tokens,
+                    modality_breakdown: None,
+                })
+            } else {
+                None
+            }
+        });
+
+        let output_details = output_tokens_details.clone().and_then(|details| {
+            if details.reasoning_tokens > 0
+                || details.accepted_prediction_tokens > 0
+                || details.rejected_prediction_tokens > 0
+            {
+                Some(OutputDetails {
+                    standard_tokens: 0,
+                    reasoning_tokens: details.reasoning_tokens,
+                    accepted_prediction_tokens: details.accepted_prediction_tokens,
+                    rejected_prediction_tokens: details.rejected_prediction_tokens,
+                    modality_breakdown: None,
+                })
+            } else {
+                None
+            }
+        });
+
+        if let Some(details) = input_tokens_details {
+            extra.extend(details.extra);
+        }
+        if let Some(details) = output_tokens_details {
+            extra.extend(details.extra);
+        }
+
+        Usage {
+            input_tokens,
+            output_tokens,
+            input_details,
+            output_details,
+            extra_body: extra,
+        }
+    }
+}
 
 fn text_part_with_phase(
     content: impl Into<String>,
@@ -497,89 +628,15 @@ fn summary_to_text(item_obj: &Map<String, Value>) -> Option<String> {
 }
 
 fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
-    let input_tokens = obj
-        .get("input_tokens")
-        .and_then(|v| v.as_u64())
-        .or_else(|| obj.get("prompt_tokens").and_then(|v| v.as_u64()))
-        .unwrap_or(0);
-    let output_tokens = obj
-        .get("output_tokens")
-        .and_then(|v| v.as_u64())
-        .or_else(|| obj.get("completion_tokens").and_then(|v| v.as_u64()))
-        .unwrap_or(0);
-    let input_details_obj = obj
-        .get("input_tokens_details")
-        .or_else(|| obj.get("prompt_tokens_details"));
-    let output_details_obj = obj
-        .get("output_tokens_details")
-        .or_else(|| obj.get("completion_tokens_details"));
-    let cache_read_tokens = input_details_obj
-        .and_then(|v| v.get("cached_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_creation_tokens = input_details_obj
-        .and_then(|v| v.get("cache_creation_tokens"))
-        .or_else(|| input_details_obj.and_then(|v| v.get("cache_write_tokens")))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let tool_prompt_tokens = input_details_obj
-        .and_then(|v| v.get("tool_prompt_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let reasoning_tokens = output_details_obj
-        .and_then(|v| v.get("reasoning_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let accepted_prediction_tokens = output_details_obj
-        .and_then(|v| v.get("accepted_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let rejected_prediction_tokens = output_details_obj
-        .and_then(|v| v.get("rejected_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let input_details =
-        if cache_read_tokens > 0 || cache_creation_tokens > 0 || tool_prompt_tokens > 0 {
-            Some(InputDetails {
-                standard_tokens: 0,
-                cache_read_tokens,
-                cache_creation_tokens,
-                tool_prompt_tokens,
-                modality_breakdown: None,
-            })
-        } else {
-            None
-        };
-    let output_details =
-        if reasoning_tokens > 0 || accepted_prediction_tokens > 0 || rejected_prediction_tokens > 0
-        {
-            Some(OutputDetails {
-                standard_tokens: 0,
-                reasoning_tokens,
-                accepted_prediction_tokens,
-                rejected_prediction_tokens,
-                modality_breakdown: None,
-            })
-        } else {
-            None
-        };
-
-    Usage {
-        input_tokens,
-        output_tokens,
-        input_details,
-        output_details,
-        extra_body: split_extra(
-            obj,
-            &[
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "prompt_tokens",
-                "completion_tokens",
-            ],
-        ),
-    }
+    serde_json::from_value::<OpenAiResponsesUsage>(Value::Object(obj.clone()))
+        .map(Usage::from)
+        .unwrap_or_else(|_| Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+            input_details: None,
+            output_details: None,
+            extra_body: obj.clone().into_iter().collect(),
+        })
 }
 
 #[cfg(test)]

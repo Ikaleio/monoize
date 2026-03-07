@@ -288,6 +288,32 @@ XF5c. Usage round-trip preservation:
 - For adapters that support opaque usage fields, decode→encode through Monoize MUST preserve unknown usage fields and values in downstream usage payloads.
 - If an adapter cannot represent a preserved field due to protocol limits, this loss MUST be adapter-specific and explicitly documented in the adapter section.
 
+XF5d. Monoize usage extension field registry:
+
+- When Monoize must encode a URP usage concept into a provider format that lacks a native field for that concept, Monoize MUST emit a Monoize extension field name for that provider format.
+- Every Monoize usage extension field name emitted by an encoder MUST be accepted by the corresponding decoder as a recognized alias and MUST therefore NOT remain inside `Usage.extra_body` after decode.
+- The following extension field names are reserved for Monoize usage encoding:
+  - Messages / Anthropic usage object extensions:
+    - `tool_prompt_input_tokens`
+    - `reasoning_output_tokens`
+    - `accepted_prediction_output_tokens`
+    - `rejected_prediction_output_tokens`
+  - Gemini `usageMetadata` extensions:
+    - `cacheCreationTokenCount`
+    - `toolPromptInputTokenCount`
+    - `acceptedPredictionOutputTokenCount`
+    - `rejectedPredictionOutputTokenCount`
+    - `reasoningOutputTokenCount`
+  - Chat Completions usage detail aliases accepted for symmetry:
+    - `tool_prompt_input_tokens` inside `prompt_tokens_details` / `input_tokens_details`
+    - `accepted_prediction_output_tokens` inside `completion_tokens_details` / `output_tokens_details`
+    - `rejected_prediction_output_tokens` inside `completion_tokens_details` / `output_tokens_details`
+  - Responses usage detail aliases accepted for symmetry:
+    - `tool_prompt_input_tokens` inside `input_tokens_details` / `prompt_tokens_details`
+    - `accepted_prediction_output_tokens` inside `output_tokens_details` / `completion_tokens_details`
+    - `rejected_prediction_output_tokens` inside `output_tokens_details` / `completion_tokens_details`
+- These names are Monoize-defined extensions, not claims about native upstream contracts. If an upstream provider later adopts one of these names with incompatible semantics, Monoize MUST treat that as a spec-level conflict requiring explicit review.
+
 ### 7.2 Provider adapter: `type=responses`
 
 PR1. Monoize MUST call the upstream path `POST /v1/responses`.
@@ -531,6 +557,10 @@ PG6. Monoize MUST map Gemini usage metadata to URP usage fields using:
 - `candidatesTokenCount -> output_tokens`
 - `thoughtsTokenCount -> output_details.reasoning_tokens` when present.
 - `cachedContentTokenCount -> input_details.cache_read_tokens` when present.
+- `cacheCreationTokenCount -> input_details.cache_creation_tokens` when present.
+- `toolPromptInputTokenCount -> input_details.tool_prompt_tokens` when present.
+- `acceptedPredictionOutputTokenCount -> output_details.accepted_prediction_tokens` when present.
+- `rejectedPredictionOutputTokenCount -> output_details.rejected_prediction_tokens` when present.
 
 PG7. Monoize MUST preserve unknown Gemini request/response fields in URP `extra_body` according to §3 and §7.7.
 

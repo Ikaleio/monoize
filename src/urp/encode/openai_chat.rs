@@ -1,5 +1,6 @@
 use crate::urp::encode::{
     extract_reasoning_plain, merge_extra, role_to_str, text_parts, tool_choice_to_value,
+    usage_input_details, usage_output_details,
 };
 use crate::urp::{
     FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat, Role, ToolDefinition,
@@ -305,20 +306,22 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     });
 
     if let Some(usage) = &resp.usage {
+        let input_details = usage_input_details(usage);
+        let output_details = usage_output_details(usage);
         let mut usage_value = json!({
             "prompt_tokens": usage.input_tokens,
             "completion_tokens": usage.output_tokens,
             "total_tokens": usage.total_tokens(),
             "completion_tokens_details": {
-                "reasoning_tokens": usage.output_details.as_ref().map(|d| d.reasoning_tokens).unwrap_or(0),
-                "accepted_prediction_tokens": usage.output_details.as_ref().map(|d| d.accepted_prediction_tokens).unwrap_or(0),
-                "rejected_prediction_tokens": usage.output_details.as_ref().map(|d| d.rejected_prediction_tokens).unwrap_or(0)
+                "reasoning_tokens": output_details.reasoning_tokens,
+                "accepted_prediction_tokens": output_details.accepted_prediction_tokens,
+                "rejected_prediction_tokens": output_details.rejected_prediction_tokens
             },
             "prompt_tokens_details": {
-                "cached_tokens": usage.input_details.as_ref().map(|d| d.cache_read_tokens).unwrap_or(0),
-                "cache_write_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
-                "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
-                "tool_prompt_tokens": usage.input_details.as_ref().map(|d| d.tool_prompt_tokens).unwrap_or(0)
+                "cached_tokens": input_details.cache_read_tokens,
+                "cache_write_tokens": input_details.cache_creation_tokens,
+                "cache_creation_tokens": input_details.cache_creation_tokens,
+                "tool_prompt_tokens": input_details.tool_prompt_tokens
             }
         });
         if let Some(obj) = usage_value.as_object_mut() {
@@ -487,6 +490,8 @@ fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::decode::openai_chat as decode_chat;
+    use crate::urp::{InputDetails, OutputDetails, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
@@ -599,5 +604,86 @@ mod tests {
         );
         assert_eq!(messages[2]["phase"], json!("final_answer"));
         assert_eq!(messages[2]["content"], json!("answer"));
+    }
+
+    #[test]
+    fn chat_usage_round_trips_all_typed_usage_fields_without_extra_leakage() {
+        let mut usage_extra = HashMap::new();
+        usage_extra.insert("provider_specific".to_string(), json!(true));
+        let response = UrpResponse {
+            id: "chatcmpl_usage".to_string(),
+            model: "gpt-5.4".to_string(),
+            message: Message::new(Role::Assistant),
+            finish_reason: Some(FinishReason::Stop),
+            usage: Some(Usage {
+                input_tokens: 20,
+                output_tokens: 10,
+                input_details: Some(InputDetails {
+                    standard_tokens: 0,
+                    cache_read_tokens: 1,
+                    cache_creation_tokens: 2,
+                    tool_prompt_tokens: 3,
+                    modality_breakdown: None,
+                }),
+                output_details: Some(OutputDetails {
+                    standard_tokens: 0,
+                    reasoning_tokens: 4,
+                    accepted_prediction_tokens: 5,
+                    rejected_prediction_tokens: 6,
+                    modality_breakdown: None,
+                }),
+                extra_body: usage_extra,
+            }),
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        assert_eq!(
+            encoded["usage"]["prompt_tokens_details"]["cached_tokens"],
+            json!(1)
+        );
+        assert_eq!(
+            encoded["usage"]["prompt_tokens_details"]["cache_creation_tokens"],
+            json!(2)
+        );
+        assert_eq!(
+            encoded["usage"]["prompt_tokens_details"]["tool_prompt_tokens"],
+            json!(3)
+        );
+        assert_eq!(
+            encoded["usage"]["completion_tokens_details"]["reasoning_tokens"],
+            json!(4)
+        );
+        assert_eq!(
+            encoded["usage"]["completion_tokens_details"]["accepted_prediction_tokens"],
+            json!(5)
+        );
+        assert_eq!(
+            encoded["usage"]["completion_tokens_details"]["rejected_prediction_tokens"],
+            json!(6)
+        );
+
+        let decoded = decode_chat::decode_response(&encoded).expect("decode response");
+        let decoded_usage = decoded.usage.expect("usage should decode");
+        let input = decoded_usage.input_details.expect("input details");
+        let output = decoded_usage.output_details.expect("output details");
+        assert_eq!(input.cache_read_tokens, 1);
+        assert_eq!(input.cache_creation_tokens, 2);
+        assert_eq!(input.tool_prompt_tokens, 3);
+        assert_eq!(output.reasoning_tokens, 4);
+        assert_eq!(output.accepted_prediction_tokens, 5);
+        assert_eq!(output.rejected_prediction_tokens, 6);
+        assert!(decoded_usage
+            .extra_body
+            .get("prompt_tokens_details")
+            .is_none());
+        assert!(decoded_usage
+            .extra_body
+            .get("completion_tokens_details")
+            .is_none());
+        assert_eq!(
+            decoded_usage.extra_body.get("provider_specific"),
+            Some(&json!(true))
+        );
     }
 }

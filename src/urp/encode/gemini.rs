@@ -1,4 +1,4 @@
-use crate::urp::encode::{merge_extra, text_parts};
+use crate::urp::encode::{merge_extra, text_parts, usage_input_details, usage_output_details};
 use crate::urp::{
     AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Part, Role, ToolChoice,
     ToolDefinition, UrpRequest, UrpResponse,
@@ -131,18 +131,56 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     }
 
     let mut usage_metadata = json!({
-        "promptTokenCount": resp.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
-        "candidatesTokenCount": resp.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
-        "totalTokenCount": resp
-            .usage
-            .as_ref()
-            .map(|u| u.input_tokens + u.output_tokens)
-            .unwrap_or(0),
-        "thoughtsTokenCount": resp.usage.as_ref().and_then(|u| u.reasoning_tokens()).unwrap_or(0),
-        "cachedContentTokenCount": resp.usage.as_ref().and_then(|u| u.cached_tokens()).unwrap_or(0)
+        "promptTokenCount": 0,
+        "candidatesTokenCount": 0,
+        "totalTokenCount": 0,
+        "thoughtsTokenCount": 0,
+        "cachedContentTokenCount": 0,
+        "cacheCreationTokenCount": 0,
+        "toolPromptInputTokenCount": 0,
+        "acceptedPredictionOutputTokenCount": 0,
+        "rejectedPredictionOutputTokenCount": 0
     });
     if let Some(usage) = &resp.usage {
         if let Some(obj) = usage_metadata.as_object_mut() {
+            let input_details = usage_input_details(usage);
+            let output_details = usage_output_details(usage);
+            obj.insert(
+                "promptTokenCount".to_string(),
+                Value::from(usage.input_tokens),
+            );
+            obj.insert(
+                "candidatesTokenCount".to_string(),
+                Value::from(usage.output_tokens),
+            );
+            obj.insert(
+                "totalTokenCount".to_string(),
+                Value::from(usage.total_tokens()),
+            );
+            obj.insert(
+                "thoughtsTokenCount".to_string(),
+                Value::from(output_details.reasoning_tokens),
+            );
+            obj.insert(
+                "cachedContentTokenCount".to_string(),
+                Value::from(input_details.cache_read_tokens),
+            );
+            obj.insert(
+                "cacheCreationTokenCount".to_string(),
+                Value::from(input_details.cache_creation_tokens),
+            );
+            obj.insert(
+                "toolPromptInputTokenCount".to_string(),
+                Value::from(input_details.tool_prompt_tokens),
+            );
+            obj.insert(
+                "acceptedPredictionOutputTokenCount".to_string(),
+                Value::from(output_details.accepted_prediction_tokens),
+            );
+            obj.insert(
+                "rejectedPredictionOutputTokenCount".to_string(),
+                Value::from(output_details.rejected_prediction_tokens),
+            );
             for (k, v) in &usage.extra_body {
                 obj.insert(k.clone(), v.clone());
             }
@@ -310,5 +348,92 @@ fn finish_reason_to_gemini(finish_reason: Option<FinishReason>) -> &'static str 
         Some(FinishReason::ContentFilter) => "SAFETY",
         Some(FinishReason::Stop) => "STOP",
         _ => "OTHER",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::urp::decode::gemini as decode_gemini;
+    use crate::urp::{InputDetails, Message, OutputDetails, Role, UrpResponse, Usage};
+    use std::collections::HashMap;
+
+    fn empty_map() -> HashMap<String, Value> {
+        HashMap::new()
+    }
+
+    #[test]
+    fn gemini_usage_round_trips_extension_fields_without_extra_leakage() {
+        let mut usage_extra = HashMap::new();
+        usage_extra.insert("providerCounter".to_string(), json!(9));
+        let response = UrpResponse {
+            id: "gem_resp".to_string(),
+            model: "gemini-2.5-pro".to_string(),
+            message: Message::new(Role::Assistant),
+            finish_reason: Some(FinishReason::Stop),
+            usage: Some(Usage {
+                input_tokens: 14,
+                output_tokens: 9,
+                input_details: Some(InputDetails {
+                    standard_tokens: 0,
+                    cache_read_tokens: 2,
+                    cache_creation_tokens: 3,
+                    tool_prompt_tokens: 4,
+                    modality_breakdown: None,
+                }),
+                output_details: Some(OutputDetails {
+                    standard_tokens: 0,
+                    reasoning_tokens: 5,
+                    accepted_prediction_tokens: 6,
+                    rejected_prediction_tokens: 7,
+                    modality_breakdown: None,
+                }),
+                extra_body: usage_extra,
+            }),
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gemini-2.5-pro");
+        assert_eq!(
+            encoded["usageMetadata"]["cachedContentTokenCount"],
+            json!(2)
+        );
+        assert_eq!(
+            encoded["usageMetadata"]["cacheCreationTokenCount"],
+            json!(3)
+        );
+        assert_eq!(
+            encoded["usageMetadata"]["toolPromptInputTokenCount"],
+            json!(4)
+        );
+        assert_eq!(encoded["usageMetadata"]["thoughtsTokenCount"], json!(5));
+        assert_eq!(
+            encoded["usageMetadata"]["acceptedPredictionOutputTokenCount"],
+            json!(6)
+        );
+        assert_eq!(
+            encoded["usageMetadata"]["rejectedPredictionOutputTokenCount"],
+            json!(7)
+        );
+
+        let decoded = decode_gemini::decode_response(&encoded).expect("decode response");
+        let decoded_usage = decoded.usage.expect("usage should decode");
+        let input = decoded_usage.input_details.expect("input details");
+        let output = decoded_usage.output_details.expect("output details");
+        assert_eq!(input.cache_read_tokens, 2);
+        assert_eq!(input.cache_creation_tokens, 3);
+        assert_eq!(input.tool_prompt_tokens, 4);
+        assert_eq!(output.reasoning_tokens, 5);
+        assert_eq!(output.accepted_prediction_tokens, 6);
+        assert_eq!(output.rejected_prediction_tokens, 7);
+        assert!(decoded_usage
+            .extra_body
+            .get("cachedContentTokenCount")
+            .is_none());
+        assert!(decoded_usage.extra_body.get("thoughtsTokenCount").is_none());
+        assert_eq!(
+            decoded_usage.extra_body.get("providerCounter"),
+            Some(&json!(9))
+        );
     }
 }

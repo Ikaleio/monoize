@@ -4,7 +4,7 @@ pub mod grok;
 pub mod openai_chat;
 pub mod openai_responses;
 
-use crate::urp::{Part, Role, ToolChoice};
+use crate::urp::{InputDetails, OutputDetails, Part, Role, ToolChoice, Usage};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
@@ -87,4 +87,12 @@ pub fn extract_tool_calls(parts: &[Part]) -> Vec<Value> {
         }
     }
     out
+}
+
+pub fn usage_input_details(usage: &Usage) -> InputDetails {
+    usage.input_details.clone().unwrap_or_default()
+}
+
+pub fn usage_output_details(usage: &Usage) -> OutputDetails {
+    usage.output_details.clone().unwrap_or_default()
 }
