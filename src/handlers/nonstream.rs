@@ -10,7 +10,8 @@ pub(super) async fn execute_nonstream_typed(
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = std::time::Instant::now();
     inject_monoize_context(auth, &mut req);
-    apply_transform_rules_request(state, &mut req, &auth.transforms).await?;
+    let logical_model = req.model.clone();
+    apply_transform_rules_request(state, &mut req, &auth.transforms, &logical_model).await?;
     strip_monoize_context(&mut req);
     resolve_model_suffix(state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
@@ -30,7 +31,13 @@ pub(super) async fn execute_nonstream_typed(
     for attempt in attempts {
         let mut req_attempt = req.clone();
         req_attempt.model = attempt.upstream_model.clone();
-        apply_transform_rules_request(state, &mut req_attempt, &attempt.provider_transforms).await?;
+        apply_transform_rules_request(
+            state,
+            &mut req_attempt,
+            &attempt.provider_transforms,
+            &logical_model,
+        )
+        .await?;
 
         let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
         let provider = build_channel_provider_config(&attempt);
@@ -41,7 +48,7 @@ pub(super) async fn execute_nonstream_typed(
         );
         log_outgoing_request_shape(
             request_id.as_deref(),
-            &req.model,
+            &logical_model,
             &req_attempt.model,
             attempt.provider_type,
             req_attempt.stream.unwrap_or(false),
@@ -65,7 +72,7 @@ pub(super) async fn execute_nonstream_typed(
                     state,
                     auth,
                     &attempt,
-                    &req.model,
+                    &logical_model,
                     false,
                     request_id.as_deref(),
                     request_ip.as_deref(),
@@ -84,12 +91,12 @@ pub(super) async fn execute_nonstream_typed(
                 apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
                     .await?;
                 let charge =
-                    maybe_charge_response(state, auth, &attempt, &req.model, &resp).await?;
+                    maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;
                 spawn_request_log(
                     state,
                     auth,
                     &attempt,
-                    &req.model,
+                    &logical_model,
                     resp.usage.clone(),
                     charge.charge_nano_usd,
                     charge.billing_breakdown,
@@ -102,7 +109,7 @@ pub(super) async fn execute_nonstream_typed(
                     req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                     tried_providers,
                 );
-                return Ok((resp, req.model.clone()));
+                return Ok((resp, logical_model.clone()));
             }
             Err(err) => {
                 let non_retryable = is_non_retryable_client_error(&err);
@@ -114,7 +121,7 @@ pub(super) async fn execute_nonstream_typed(
                         state,
                         auth,
                         &attempt,
-                        &req.model,
+                        &logical_model,
                         false,
                         started_at,
                         request_id.clone(),
@@ -139,7 +146,7 @@ pub(super) async fn execute_nonstream_typed(
                     state,
                     auth,
                     &attempt,
-                    &req.model,
+                    &logical_model,
                     false,
                     started_at,
                     request_id.clone(),
@@ -155,14 +162,14 @@ pub(super) async fn execute_nonstream_typed(
     let final_err = AppError::new(
         StatusCode::BAD_GATEWAY,
         "upstream_error",
-        build_exhausted_error_message(&req.model, &tried_providers),
+        build_exhausted_error_message(&logical_model, &tried_providers),
     );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
             state,
             auth,
             &attempt,
-            &req.model,
+            &logical_model,
             false,
             started_at,
             request_id,
@@ -175,7 +182,7 @@ pub(super) async fn execute_nonstream_typed(
         spawn_request_log_error_no_attempt(
             state,
             auth,
-            &req.model,
+            &logical_model,
             false,
             started_at,
             request_id,

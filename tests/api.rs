@@ -3119,6 +3119,85 @@ async fn responses_streaming_applies_response_transform_from_provider() {
 }
 
 #[tokio::test]
+async fn provider_request_transform_matches_original_model_before_redirect() {
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-fast".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: Some("gpt-5-mini".to_string()),
+            multiplier: 1.0,
+        },
+    );
+
+    let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        name: "mono-transform-original-model-match".to_string(),
+        provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+        models,
+        api_type_overrides: Vec::new(),
+        channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            id: Some("mono-transform-original-model-match-ch1".to_string()),
+            name: "mono-transform-original-model-match-ch1".to_string(),
+            base_url,
+            api_key: Some("upstream-key".to_string()),
+            weight: 1,
+            enabled: true,
+            passive_failure_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_min_samples_override: None,
+            passive_failure_rate_threshold_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
+        }],
+        max_retries: -1,
+        transforms: vec![monoize::transforms::TransformRuleConfig {
+            transform: "set_field".to_string(),
+            enabled: true,
+            models: Some(vec!["gpt-5-fast".to_string()]),
+            phase: monoize::transforms::Phase::Request,
+            config: json!({
+                "path": "extra_echo",
+                "value": "matched-original-model"
+            }),
+        }],
+        active_probe_enabled_override: None,
+        active_probe_interval_seconds_override: None,
+        active_probe_success_threshold_override: None,
+        active_probe_model_override: None,
+        request_timeout_ms_override: None,
+        enabled: true,
+        priority: Some(-1),
+    };
+
+    ctx.state
+        .monoize_store
+        .create_provider(create_input)
+        .await
+        .unwrap();
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-fast",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hello" }] }]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let text = v["output"][0]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("extra_echo=matched-original-model"),
+        "expected request transform to match original model before redirect: {text}"
+    );
+}
+
+#[tokio::test]
 async fn messages_nonstream_from_responses_upstream_text() {
     let ctx = setup().await;
     let (status, body) = json_post(

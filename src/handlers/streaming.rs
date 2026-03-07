@@ -14,8 +14,9 @@ pub(super) async fn forward_stream_typed(
     let started_at = std::time::Instant::now();
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
+    let logical_model = req.model.clone();
     inject_monoize_context(&auth, &mut req);
-    apply_transform_rules_request(&state, &mut req, &auth.transforms).await?;
+    apply_transform_rules_request(&state, &mut req, &auth.transforms, &logical_model).await?;
     strip_monoize_context(&mut req);
     resolve_model_suffix(&state, &mut req).await;
     let routing_stub = build_routing_stub(&req, max_multiplier);
@@ -27,15 +28,20 @@ pub(super) async fn forward_stream_typed(
         true,
         request_id.as_deref(),
         request_ip.as_deref(),
+        started_at,
     )
     .await;
 
     for attempt in attempts {
         let mut req_attempt = req.clone();
-        let logical_model = req.model.clone();
         req_attempt.model = attempt.upstream_model.clone();
-        apply_transform_rules_request(&state, &mut req_attempt, &attempt.provider_transforms)
-            .await?;
+        apply_transform_rules_request(
+            &state,
+            &mut req_attempt,
+            &attempt.provider_transforms,
+            &logical_model,
+        )
+        .await?;
         ensure_stream_usage_requested(&mut req_attempt, attempt.provider_type);
         let need_response_transform_stream =
             has_enabled_response_rules(&attempt.provider_transforms, &logical_model)
@@ -77,6 +83,7 @@ pub(super) async fn forward_stream_typed(
                         true,
                         request_id.as_deref(),
                         request_ip.as_deref(),
+                        started_at,
                     )
                     .await;
                     mark_channel_success(&state, &attempt).await;
@@ -216,6 +223,7 @@ pub(super) async fn forward_stream_typed(
                     true,
                     request_id.as_deref(),
                     request_ip.as_deref(),
+                    started_at,
                 )
                 .await;
                 mark_channel_success(&state, &attempt).await;
@@ -551,6 +559,11 @@ pub(super) async fn emit_synthetic_responses_stream(
 ) -> AppResult<()> {
     let mut seq = 1u64;
     let encoded = urp::encode::openai_responses::encode_response(resp, logical_model);
+    let encoded_output = encoded
+        .get("output")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let response_id = encoded
         .get("id")
         .and_then(|v| v.as_str())
@@ -583,27 +596,33 @@ pub(super) async fn emit_synthetic_responses_stream(
     .await
     .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
 
-    let mut text = String::new();
-    for part in &resp.message.parts {
-        match part {
-            urp::Part::Reasoning { content, .. } => {
-                if !content.is_empty() {
+    for (output_index, item) in encoded_output.iter().enumerate() {
+        let item_payload = json!({
+            "output_index": output_index,
+            "item": item.clone()
+        });
+        tx.send(wrap_responses_event(
+            &mut seq,
+            "response.output_item.added",
+            item_payload,
+        ))
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+
+        match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "reasoning" => {
+                let (text, sig) = extract_reasoning_text_and_signature(item);
+                if !text.is_empty() {
                     tx.send(wrap_responses_event(
                         &mut seq,
                         "response.reasoning_text.delta",
-                        json!({ "delta": content }),
+                        json!({ "delta": text }),
                     ))
                     .await
                     .map_err(|e| {
                         AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
                     })?;
                 }
-            }
-            urp::Part::ReasoningEncrypted { data, .. } => {
-                let sig = data
-                    .as_str()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| data.to_string());
                 if !sig.is_empty() {
                     tx.send(wrap_responses_event(
                         &mut seq,
@@ -616,59 +635,54 @@ pub(super) async fn emit_synthetic_responses_stream(
                     })?;
                 }
             }
-            urp::Part::Text { content, .. } | urp::Part::Refusal { content, .. } => {
-                text.push_str(content);
-            }
-            urp::Part::ToolCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } => {
-                let item = json!({
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": arguments
-                });
-                tx.send(wrap_responses_event(
-                    &mut seq,
-                    "response.output_item.added",
-                    item.clone(),
-                ))
-                .await
-                .map_err(|e| {
-                    AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                })?;
+            "function_call" => {
+                let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let arguments = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
                 if !arguments.is_empty() {
                     tx.send(wrap_responses_event(
                         &mut seq,
                         "response.function_call_arguments.delta",
-                        json!({ "call_id": call_id, "name": name, "delta": arguments }),
+                        json!({
+                            "output_index": output_index,
+                            "call_id": call_id,
+                            "name": name,
+                            "delta": arguments
+                        }),
                     ))
                     .await
                     .map_err(|e| {
                         AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
                     })?;
                 }
-                tx.send(wrap_responses_event(
-                    &mut seq,
-                    "response.output_item.done",
-                    item,
-                ))
-                .await
-                .map_err(|e| {
-                    AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                })?;
+            }
+            "message" => {
+                let text = extract_responses_message_text(item);
+                if !text.is_empty() {
+                    tx.send(wrap_responses_event(
+                        &mut seq,
+                        "response.output_text.delta",
+                        responses_text_delta_payload(
+                            &text,
+                            extract_responses_message_phase(item).as_deref(),
+                        ),
+                    ))
+                    .await
+                    .map_err(|e| {
+                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
+                    })?;
+                }
             }
             _ => {}
         }
-    }
-    if !text.is_empty() {
+
         tx.send(wrap_responses_event(
             &mut seq,
-            "response.output_text.delta",
-            json!({ "text": text }),
+            "response.output_item.done",
+            json!({
+                "output_index": output_index,
+                "item": item.clone()
+            }),
         ))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
@@ -679,11 +693,11 @@ pub(super) async fn emit_synthetic_responses_stream(
         json!({}),
     ))
     .await
-    .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
     tx.send(wrap_responses_event(
         &mut seq,
         "response.completed",
-        encoded,
+        json!({ "response": encoded }),
     ))
     .await
     .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
@@ -1221,6 +1235,28 @@ pub(super) fn extract_responses_message_text(item: &Value) -> String {
     out
 }
 
+pub(super) fn extract_responses_message_phase(item: &Value) -> Option<String> {
+    if item.get("type").and_then(|v| v.as_str()) != Some("message") {
+        return None;
+    }
+    item.get("phase")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn insert_phase_if_present(obj: &mut Map<String, Value>, phase: Option<&str>) {
+    if let Some(phase) = phase {
+        obj.insert("phase".to_string(), Value::String(phase.to_string()));
+    }
+}
+
+fn responses_text_delta_payload(text: &str, phase: Option<&str>) -> Value {
+    let mut obj = Map::new();
+    obj.insert("text".to_string(), Value::String(text.to_string()));
+    insert_phase_if_present(&mut obj, phase);
+    Value::Object(obj)
+}
+
 
 pub(super) async fn ensure_anthropic_text_block(
     tx: &mpsc::Sender<Event>,
@@ -1314,6 +1350,7 @@ pub(super) async fn stream_responses_sse_as_responses(
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let created = now_ts();
     let mut output_text = String::new();
+    let mut message_phases_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut reasoning_text = String::new();
     let mut reasoning_sig = String::new();
     let mut call_order: Vec<String> = Vec::new();
@@ -1416,6 +1453,12 @@ pub(super) async fn stream_responses_sse_as_responses(
                         call_ids_by_output_index.insert(idx, call_id.to_string());
                     }
                 }
+            } else if item.get("type").and_then(|v| v.as_str()) == Some("message") {
+                if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                    if let Some(phase) = extract_responses_message_phase(item) {
+                        message_phases_by_output_index.insert(idx, phase);
+                    }
+                }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
                 let (text, sig) = extract_reasoning_text_and_signature(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
@@ -1507,8 +1550,27 @@ pub(super) async fn stream_responses_sse_as_responses(
             } else if item.get("type").and_then(|v| v.as_str()) == Some("message")
                 && !saw_text_delta {
                     output_text.push_str(&extract_responses_message_text(item));
+                    if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                        if let Some(phase) = extract_responses_message_phase(item) {
+                            message_phases_by_output_index.insert(idx, phase);
+                        }
+                    }
                 }
         }
+        let data_val = if ev.event == "response.output_text.delta" {
+            let mut payload = data_val;
+            if let Some(idx) = payload.get("output_index").and_then(|v| v.as_u64()) {
+                if let Some(phase) = message_phases_by_output_index.get(&idx) {
+                    if let Some(obj) = payload.as_object_mut() {
+                        obj.entry("phase".to_string())
+                            .or_insert_with(|| Value::String(phase.clone()));
+                    }
+                }
+            }
+            payload
+        } else {
+            data_val
+        };
         let name = if ev.event.is_empty() {
             "message"
         } else {
@@ -1536,11 +1598,20 @@ pub(super) async fn stream_responses_sse_as_responses(
             }));
         }
     }
-    let output_item = json!({
-        "type": "message",
-        "role": "assistant",
-        "content": [{ "type": "output_text", "text": output_text }]
-    });
+    let output_item = if let Some((_, phase)) = message_phases_by_output_index.iter().min_by_key(|(idx, _)| *idx) {
+        json!({
+            "type": "message",
+            "role": "assistant",
+            "phase": phase,
+            "content": [{ "type": "output_text", "text": output_text }]
+        })
+    } else {
+        json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": output_text }]
+        })
+    };
     output_items.push(output_item.clone());
     let mut final_response = json!({
         "id": response_id,
@@ -1557,7 +1628,7 @@ pub(super) async fn stream_responses_sse_as_responses(
         .send(wrap_responses_event(
             &mut seq,
             "response.output_item.added",
-            output_item.clone(),
+            json!({ "output_index": output_items.len() - 1, "item": output_item.clone() }),
         ))
         .await;
     if !saw_text_delta {
@@ -1572,7 +1643,10 @@ pub(super) async fn stream_responses_sse_as_responses(
                 .send(wrap_responses_event(
                     &mut seq,
                     "response.output_text.delta",
-                    json!({ "text": text }),
+                    responses_text_delta_payload(
+                        text,
+                        extract_responses_message_phase(&output_item).as_deref(),
+                    ),
                 ))
                 .await;
         }
@@ -1581,7 +1655,7 @@ pub(super) async fn stream_responses_sse_as_responses(
         .send(wrap_responses_event(
             &mut seq,
             "response.output_item.done",
-            output_item,
+            json!({ "output_index": output_items.len() - 1, "item": output_item }),
         ))
         .await;
     let _ = tx
@@ -1612,6 +1686,7 @@ pub(super) async fn stream_chat_sse_as_responses(
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let created = now_ts();
     let mut output_text = String::new();
+    let mut assistant_message_phase: Option<String> = None;
     let mut reasoning_text = String::new();
     let mut reasoning_sig = String::new();
     let mut call_order: Vec<String> = Vec::new();
@@ -1644,7 +1719,10 @@ pub(super) async fn stream_chat_sse_as_responses(
         .send(wrap_responses_event(
             &mut seq,
             "response.output_item.added",
-            json!({"type":"message","role":"assistant","content":[]}),
+            json!({
+                "output_index": 0,
+                "item": {"type":"message","role":"assistant","content":[]}
+            }),
         ))
         .await;
 
@@ -1675,6 +1753,23 @@ pub(super) async fn stream_chat_sse_as_responses(
             .cloned()
             .unwrap_or(Value::Null);
 
+        if assistant_message_phase.is_none() {
+            assistant_message_phase = delta
+                .get("phase")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    data_val
+                        .get("choices")
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|choice| choice.get("delta"))
+                        .and_then(|delta| delta.get("phase"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+        }
+
         if let Some(t) = delta.get("content").and_then(|v| v.as_str()) {
             if !t.is_empty() {
                 output_text.push_str(t);
@@ -1682,7 +1777,7 @@ pub(super) async fn stream_chat_sse_as_responses(
                     .send(wrap_responses_event(
                         &mut seq,
                         "response.output_text.delta",
-                        json!({ "text": t }),
+                        responses_text_delta_payload(t, assistant_message_phase.as_deref()),
                     ))
                     .await;
             }
@@ -1772,7 +1867,10 @@ pub(super) async fn stream_chat_sse_as_responses(
                         .send(wrap_responses_event(
                             &mut seq,
                             "response.output_item.added",
-                            item,
+                            json!({
+                                "output_index": call_order.len(),
+                                "item": item
+                            }),
                         ))
                         .await;
                 }
@@ -1818,18 +1916,30 @@ pub(super) async fn stream_chat_sse_as_responses(
                 .send(wrap_responses_event(
                     &mut seq,
                     "response.output_item.done",
-                    item.clone(),
+                    json!({
+                        "output_index": output_items.len(),
+                        "item": item.clone()
+                    }),
                 ))
                 .await;
             output_items.push(item);
         }
     }
 
-    let output_item = json!({
-        "type": "message",
-        "role": "assistant",
-        "content": [{ "type": "output_text", "text": output_text }]
-    });
+    let output_item = if let Some(phase) = assistant_message_phase.as_deref() {
+        json!({
+            "type": "message",
+            "role": "assistant",
+            "phase": phase,
+            "content": [{ "type": "output_text", "text": output_text }]
+        })
+    } else {
+        json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": output_text }]
+        })
+    };
     output_items.push(output_item.clone());
     let mut final_response = json!({
         "id": response_id,
@@ -1846,7 +1956,10 @@ pub(super) async fn stream_chat_sse_as_responses(
         .send(wrap_responses_event(
             &mut seq,
             "response.output_item.done",
-            output_item,
+            json!({
+                "output_index": output_items.len() - 1,
+                "item": output_item
+            }),
         ))
         .await;
     let _ = tx

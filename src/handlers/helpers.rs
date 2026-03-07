@@ -79,6 +79,98 @@ pub(super) fn extract_request_id(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct UserImageRequestMetrics {
+    pub image_parts: usize,
+    pub base64_parts: usize,
+    pub url_parts: usize,
+    pub base64_chars: usize,
+    pub estimated_decoded_bytes: usize,
+}
+
+pub(super) fn summarize_user_image_request_metrics(req: &urp::UrpRequest) -> UserImageRequestMetrics {
+    let mut metrics = UserImageRequestMetrics::default();
+    for message in &req.messages {
+        if message.role != urp::Role::User {
+            continue;
+        }
+        for part in &message.parts {
+            let urp::Part::Image { source, .. } = part else {
+                continue;
+            };
+            metrics.image_parts += 1;
+            match source {
+                urp::ImageSource::Base64 { data, .. } => {
+                    metrics.base64_parts += 1;
+                    metrics.base64_chars += data.len();
+                    metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
+                }
+                urp::ImageSource::Url { url, .. } => {
+                    if let Some(data) = extract_base64_data_url_payload(url) {
+                        metrics.base64_parts += 1;
+                        metrics.base64_chars += data.len();
+                        metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
+                    } else {
+                        metrics.url_parts += 1;
+                    }
+                }
+            }
+        }
+    }
+    metrics
+}
+
+pub(super) fn encoded_json_size_bytes(value: &Value) -> usize {
+    serde_json::to_vec(value).map(|bytes| bytes.len()).unwrap_or_default()
+}
+
+pub(super) fn log_outgoing_request_shape(
+    request_id: Option<&str>,
+    downstream_model: &str,
+    upstream_model: &str,
+    provider_type: ProviderType,
+    stream: bool,
+    upstream_path: &str,
+    upstream_body: &Value,
+    req: &urp::UrpRequest,
+) {
+    let image_metrics = summarize_user_image_request_metrics(req);
+    tracing::info!(
+        request_id = request_id.unwrap_or(""),
+        downstream_model = %downstream_model,
+        upstream_model = %upstream_model,
+        provider_type = ?provider_type,
+        stream,
+        upstream_path = %upstream_path,
+        upstream_json_bytes = encoded_json_size_bytes(upstream_body),
+        user_image_parts = image_metrics.image_parts,
+        user_image_base64_parts = image_metrics.base64_parts,
+        user_image_url_parts = image_metrics.url_parts,
+        user_image_base64_chars = image_metrics.base64_chars,
+        user_image_estimated_decoded_bytes = image_metrics.estimated_decoded_bytes,
+        "forwarding request shape"
+    );
+}
+
+fn estimate_base64_decoded_bytes(data: &str) -> usize {
+    let trimmed = data.trim_end_matches('=');
+    (trimmed.len() / 4) * 3
+        + match trimmed.len() % 4 {
+            2 => 1,
+            3 => 2,
+            _ => 0,
+        }
+}
+
+fn extract_base64_data_url_payload(url: &str) -> Option<&str> {
+    let payload = url.strip_prefix("data:")?;
+    let (meta, data) = payload.split_once(',')?;
+    if !meta.ends_with(";base64") || data.is_empty() {
+        return None;
+    }
+    Some(data)
+}
+
 pub(super) fn read_max_multiplier_from_extra(req: &urp::UrpRequest) -> Option<f64> {
     req.extra_body
         .get("max_multiplier")
@@ -106,6 +198,7 @@ pub(super) async fn apply_transform_rules_request(
     state: &AppState,
     req: &mut urp::UrpRequest,
     rules: &[TransformRuleConfig],
+    match_model: &str,
 ) -> AppResult<()> {
     if rules.is_empty() {
         return Ok(());
@@ -118,7 +211,6 @@ pub(super) async fn apply_transform_rules_request(
             e.to_string(),
         )
     })?;
-    let model = req.model.clone();
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
     };
@@ -126,7 +218,7 @@ pub(super) async fn apply_transform_rules_request(
         transforms::UrpData::Request(req),
         rules,
         &mut states,
-        &model,
+        match_model,
         Phase::Request,
         &context,
         state.transform_registry.as_ref(),
