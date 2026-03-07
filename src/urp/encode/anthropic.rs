@@ -16,12 +16,16 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 for part in &message.parts {
                     if let Part::Text {
                         content: text,
+                        phase,
                         extra_body,
                     } = part
                     {
                         if !text.is_empty() {
                             let mut block = json!({ "type": "text", "text": text });
                             if let Some(obj) = block.as_object_mut() {
+                                if let Some(phase) = phase {
+                                    obj.insert("phase".to_string(), Value::String(phase.clone()));
+                                }
                                 merge_extra(obj, extra_body);
                             }
                             system_blocks.push(block);
@@ -119,10 +123,14 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             }
             Part::Text {
                 content: text,
+                phase,
                 extra_body,
             } => {
                 let mut block = json!({ "type": "text", "text": text });
                 if let Some(obj) = block.as_object_mut() {
+                    if let Some(phase) = phase {
+                        obj.insert("phase".to_string(), Value::String(phase.clone()));
+                    }
                     merge_extra(obj, extra_body);
                 }
                 content.push(block);
@@ -246,10 +254,14 @@ fn encode_regular_message(message: &Message) -> Value {
         match part {
             Part::Text {
                 content: text,
+                phase,
                 extra_body,
             } => {
                 let mut block = json!({ "type": "text", "text": text });
                 if let Some(obj) = block.as_object_mut() {
+                    if let Some(phase) = phase {
+                        obj.insert("phase".to_string(), Value::String(phase.clone()));
+                    }
                     merge_extra(obj, extra_body);
                 }
                 content.push(block);
@@ -335,6 +347,7 @@ fn encode_tool_result_message(message: &Message) -> Option<Value> {
             Part::Text {
                 content: text,
                 extra_body,
+                ..
             } => {
                 let mut block = json!({ "type": "text", "text": text });
                 if let Some(obj) = block.as_object_mut() {
@@ -504,5 +517,35 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
         Some(FinishReason::Length) => "max_tokens",
         Some(FinishReason::ToolCalls) => "tool_use",
         _ => "end_turn",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::urp::decode::anthropic as decode_anthropic;
+
+    #[test]
+    fn anthropic_text_block_phase_round_trips_to_responses_compatible_urp() {
+        let source = json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude",
+            "content": [
+                { "type": "text", "text": "prep", "phase": "commentary" },
+                { "type": "tool_use", "id": "call_1", "name": "tool", "input": {} },
+                { "type": "text", "text": "done", "phase": "final_answer" }
+            ],
+            "stop_reason": "tool_use"
+        });
+
+        let decoded = decode_anthropic::decode_response(&source).expect("decode response");
+        let encoded = encode_response(&decoded, "claude");
+        let content = encoded["content"].as_array().expect("content array");
+
+        assert_eq!(content[0]["phase"], json!("commentary"));
+        assert_eq!(content[1]["type"], json!("tool_use"));
+        assert_eq!(content[2]["phase"], json!("final_answer"));
     }
 }
