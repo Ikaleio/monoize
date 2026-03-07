@@ -1923,6 +1923,76 @@ async fn request_logs_pending_usage_can_be_updated_incrementally() {
 }
 
 #[tokio::test]
+async fn request_log_batcher_broadcasts_immediately_before_flush() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    let mut receiver = ctx.state.log_broadcast.subscribe();
+    let log = monoize::users::InsertRequestLog {
+        request_id: Some("immediate-broadcast-request".to_string()),
+        user_id: user.id.clone(),
+        api_key_id: None,
+        model: "gpt-5-mini-chat".to_string(),
+        provider_id: None,
+        upstream_model: None,
+        channel_id: None,
+        is_stream: false,
+        input_tokens: Some(12),
+        output_tokens: Some(8),
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        tool_prompt_tokens: None,
+        reasoning_tokens: None,
+        accepted_prediction_tokens: None,
+        rejected_prediction_tokens: None,
+        provider_multiplier: None,
+        charge_nano_usd: Some(1234),
+        status: monoize::users::REQUEST_LOG_STATUS_SUCCESS.to_string(),
+        usage_breakdown_json: None,
+        billing_breakdown_json: None,
+        error_code: None,
+        error_message: None,
+        error_http_status: None,
+        duration_ms: Some(50),
+        ttfb_ms: None,
+        request_ip: Some("127.0.0.1".to_string()),
+        reasoning_effort: None,
+        tried_providers_json: None,
+        request_kind: None,
+        created_at: chrono::Utc::now(),
+    };
+
+    ctx.state
+        .user_store
+        .finalize_request_log(log.clone())
+        .await
+        .expect("enqueue request log");
+
+    let batch = tokio::time::timeout(Duration::from_millis(200), receiver.recv())
+        .await
+        .expect("broadcast should not wait for batch flush")
+        .expect("broadcast channel should deliver batch");
+
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0].request_id.as_deref(), Some("immediate-broadcast-request"));
+    assert_eq!(batch[0].status, monoize::users::REQUEST_LOG_STATUS_SUCCESS);
+
+    ctx.state.user_store.flush_all_batchers().await;
+
+    let duplicate = tokio::time::timeout(Duration::from_millis(150), receiver.recv()).await;
+    assert!(
+        duplicate.is_err(),
+        "flushing persisted request logs should not rebroadcast duplicate terminal events"
+    );
+}
+
+#[tokio::test]
 async fn chat_upstream_error_is_logged_and_not_billed() {
     let ctx = setup().await;
 

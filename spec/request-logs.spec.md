@@ -67,7 +67,9 @@ RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal
 - `"success"` when the downstream client received a normal API response payload (including truncated/cutoff completion cases such as `finish_reason = "length"`, and including cases where the downstream client disconnected mid-stream after partial delivery),
 - `"error"` only when the request ends with an API error response.
 
-RL1c. Terminal logging MUST insert a new row with all fields populated (including terminal status, usage, billing, and provider metadata). There is no preceding pending row to update. If the write batcher has not yet flushed when the process terminates, unflushed rows are lost (acceptable trade-off for write throughput).
+RL1c. Terminal logging MUST enqueue exactly one new row with all fields populated (including terminal status, usage, billing, and provider metadata) into the request-log write batcher. There is no preceding pending row to update. If the write batcher has not yet flushed when the process terminates, unflushed rows are lost (acceptable trade-off for write throughput).
+
+RL1c-0. Enqueuing a terminal row into the request-log write batcher MUST immediately broadcast that terminal row to the request-log SSE stream. SSE visibility of terminal lifecycle transitions MUST NOT wait for the later batch-flush tick, database transaction begin, database commit, or any other write-behind persistence step.
 
 RL1c-1. The `created_at` value persisted for a terminal row MUST equal the wall-clock time at which request processing began, not the later terminal-finalization time and not the later write-batcher flush time.
 
@@ -100,6 +102,8 @@ RL6a. For pass-through streaming requests where usage cannot be extracted from s
 RL6b. For pass-through streaming requests, usage fields (`input_tokens`, `output_tokens`, `cached_tokens`, `reasoning_tokens`, `cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`, `usage_breakdown_json`) MUST be accumulated in memory via `StreamRuntimeMetrics` during streaming. No incremental database updates are performed. The final cumulative usage snapshot is included in the terminal INSERT (see RL1a).
 
 RL6c. *(Removed — no incremental pending updates exist. Usage is written once at terminal state per RL6b.)*
+
+RL6d. For pass-through streaming requests that finalize successfully without a usage snapshot, Monoize MUST emit an observability warning containing the request identifier plus the in-memory terminal-stream diagnostics collected during adaptation. The warning payload MUST include whether a literal upstream `[DONE]` sentinel was observed, the last terminal event classification seen by the adapter, the terminal finish reason when the upstream protocol exposes one, and whether Monoize synthesized its own terminal chunk before closing the downstream stream.
 
 RL7. The `duration_ms` field MUST measure wall-clock time from the start of request processing (after auth) to the point where the upstream response is received.
 
@@ -309,7 +313,11 @@ FL26c. If the cost breakdown tooltip would contain no visible line items (all pe
 
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 
-FL27a. In the request-logs table, the visible Input and Output token cell values MUST prefer `usage_breakdown_json.input.total_tokens` and `usage_breakdown_json.output.total_tokens` when those fields are present. If those fields are absent, the UI MUST fall back to scalar columns `input_tokens` and `output_tokens`. If neither source is available, the UI MUST display `0`.
+FL27a. In the request-logs table, the visible Input and Output token cell values MUST prefer `usage_breakdown_json.input.total_tokens` and `usage_breakdown_json.output.total_tokens` when those fields are present. If those fields are absent, the UI MUST fall back to scalar columns `input_tokens` and `output_tokens`.
+
+FL27b. If neither the usage-breakdown totals nor the scalar token columns are available for a row, the UI MUST render a localized unavailable placeholder (`-`) in the visible Input and Output cells instead of `0`. This placeholder state represents "usage unavailable", not zero token consumption.
+
+FL27c. When FL27b applies, hovering the Input or Output cell MUST show the standard token-detail tooltip shell with a localized unavailable message rather than an empty numeric breakdown.
 
 FL28. For rows with `status = "error"`, hovering the request-id/status indicator MUST show error details from `error_code`, `error_message`, and `error_http_status` when present.
 
@@ -379,6 +387,7 @@ FL46. The endpoint MUST emit exactly two event types:
 
    ```
    Each object in the array MUST contain all fields defined in the `RequestLog` interface (section 1.1 + enriched fields from 1.2). The array MUST contain at least one element per emission.
+   For terminal `success` / `error` rows, the server MUST enqueue the SSE-visible event at terminalization time, before the later write-batcher flush persists the row to the database. Batch persistence MAY still occur asynchronously, but SSE delivery latency MUST be bounded by request finalization rather than by the write-batcher interval.
 
 2. **`resync`**: Signals the client to discard SSE-delivered incremental state and perform a full SWR refetch.
    Wire format:

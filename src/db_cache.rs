@@ -87,6 +87,7 @@ impl RequestLogBatcher {
     }
 
     pub async fn push(&self, log: InsertRequestLog) {
+        let _ = self.broadcast.send(vec![log.clone()]);
         let mut buf = self.buffer.lock().await;
         buf.push(log);
     }
@@ -217,7 +218,6 @@ impl RequestLogBatcher {
             tracing::warn!("request_log_batcher commit error: {e}");
             return;
         }
-        let _ = self.broadcast.send(entries);
     }
 
     /// Spawn background task that flushes every `interval`.
