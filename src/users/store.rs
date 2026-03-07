@@ -13,6 +13,91 @@ use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryResult, TransactionTrai
 use sea_orm::Value as SeaValue;
 use serde_json::Value;
 
+const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
+    "inject_system_prompt",
+    "system_to_developer_role",
+    "merge_consecutive_roles",
+    "append_empty_user_message",
+    "compress_user_message_images",
+];
+
+const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
+    "strip_reasoning",
+    "reasoning_to_think_xml",
+    "think_xml_to_reasoning",
+];
+
+pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
+    match rule.phase {
+        crate::transforms::Phase::Request => ALLOWED_API_KEY_REQUEST_TRANSFORMS
+            .contains(&rule.transform.as_str()),
+        crate::transforms::Phase::Response => ALLOWED_API_KEY_RESPONSE_TRANSFORMS
+            .contains(&rule.transform.as_str()),
+    }
+}
+
+pub(crate) fn sanitize_api_key_transforms(
+    transforms: Vec<TransformRuleConfig>,
+) -> Vec<TransformRuleConfig> {
+    transforms
+        .into_iter()
+        .filter(is_allowed_api_key_transform)
+        .collect()
+}
+
+pub(crate) fn validate_api_key_transforms(transforms: &[TransformRuleConfig]) -> Result<(), String> {
+    for rule in transforms {
+        if !is_allowed_api_key_transform(rule) {
+            return Err(format!(
+                "transform '{}' is not allowed for API keys",
+                rule.transform
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sanitize_api_key_transforms, validate_api_key_transforms};
+    use crate::transforms::{Phase, TransformRuleConfig};
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_api_key_transforms_drops_disallowed_rules() {
+        let transforms = vec![TransformRuleConfig {
+            transform: "set_field".to_string(),
+            enabled: true,
+            models: Some(vec!["gpt-5.4-fast".to_string()]),
+            phase: Phase::Request,
+            config: json!({
+                "path": "service_tier",
+                "value": "priority"
+            }),
+        }];
+
+        let sanitized = sanitize_api_key_transforms(transforms);
+        assert!(sanitized.is_empty());
+    }
+
+    #[test]
+    fn validate_api_key_transforms_allows_image_compression() {
+        let transforms = vec![TransformRuleConfig {
+            transform: "compress_user_message_images".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Request,
+            config: json!({
+                "max_edge_px": 1024,
+                "jpeg_quality": 80,
+                "skip_if_smaller": true
+            }),
+        }];
+
+        assert!(validate_api_key_transforms(&transforms).is_ok());
+    }
+}
+
 impl UserStore {
     pub fn is_reserved_internal_username(username: &str) -> bool {
         username
@@ -381,6 +466,7 @@ impl UserStore {
         user_id: &str,
         input: CreateApiKeyInput,
     ) -> Result<(ApiKey, String), String> {
+        validate_api_key_transforms(&input.transforms)?;
         let id = uuid::Uuid::new_v4().to_string();
         let key = format!("sk-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let key_prefix = key[..12].to_string();
@@ -639,7 +725,7 @@ impl UserStore {
             .try_get("", "transforms")
             .unwrap_or_else(|_| "[]".to_string());
         let transforms: Vec<TransformRuleConfig> =
-            serde_json::from_str(&transforms_str).unwrap_or_default();
+            sanitize_api_key_transforms(serde_json::from_str(&transforms_str).unwrap_or_default());
 
         Ok(ApiKey {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -677,6 +763,9 @@ impl UserStore {
         key_id: &str,
         input: UpdateApiKeyInput,
     ) -> Result<ApiKey, String> {
+        if let Some(transforms) = &input.transforms {
+            validate_api_key_transforms(transforms)?;
+        }
         let mut set_clauses = Vec::new();
         let mut values: Vec<SeaValue> = Vec::new();
         let mut idx = 1usize;

@@ -182,7 +182,7 @@ pub async fn create_api_key(
     let (api_key, key) = user_store
         .create_api_key_extended(&user.id, input)
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
     state.name_caches.api_keys.insert(api_key.id.clone(), api_key.name.clone());
     Ok((
@@ -323,7 +323,7 @@ pub async fn update_api_key(
     let updated_key = user_store
         .update_api_key(&key_id, input)
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
     state.name_caches.api_keys.insert(updated_key.id.clone(), updated_key.name.clone());
     Ok(Json(ApiKeyResponse {
