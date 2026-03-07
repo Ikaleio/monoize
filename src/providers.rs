@@ -778,7 +778,8 @@ impl ProviderStore {
         let groups_json: String = row
             .try_get("", "groups_json")
             .map_err(|e| e.to_string())?;
-        let groups: Vec<String> = serde_json::from_str(&groups_json).unwrap_or_default();
+        let groups: Vec<String> = serde_json::from_str(&groups_json)
+            .map_err(|e| format!("invalid groups_json for provider {}: {e}", row.try_get::<String>("", "id").unwrap_or_default()))?;
 
         Ok(Provider {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
