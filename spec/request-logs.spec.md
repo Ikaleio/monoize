@@ -69,7 +69,7 @@ RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal
 
 RL1c. Terminal logging MUST insert a new row with all fields populated (including terminal status, usage, billing, and provider metadata). There is no preceding pending row to update. If the write batcher has not yet flushed when the process terminates, unflushed rows are lost (acceptable trade-off for write throughput).
 
-RL1c-1. The `created_at` value persisted for a terminal row MUST equal the wall-clock time at which the terminal log entry was created in application memory, not the later write-batcher flush time.
+RL1c-1. The `created_at` value persisted for a terminal row MUST equal the wall-clock time at which request processing began, not the later terminal-finalization time and not the later write-batcher flush time.
 
 RL1d. Creating or updating `pending` status MUST NOT trigger any extra billing call. Request billing execution count MUST remain identical to pre-pending behavior (at most once per billable request outcome).
 
@@ -220,6 +220,8 @@ RL-S8. While SQLite and PostgreSQL both remain supported, request-log writes MUS
 FL1. The logs page MUST use a compact list format (dense table rows) with horizontal scrolling for overflow.
 
 FL2. The `created_at` field MUST be displayed as a localized timestamp in format `YYYY-MM-DD HH:mm:ss` using the browser's local timezone.
+
+FL2a. The `created_at` value displayed for a request row MUST remain stable across in-memory `pending` snapshots and the later terminal `success` or `error` row for the same `request_id`. Transitioning from `pending` to terminal state MUST NOT cause the displayed timestamp to jump forward.
 
 FL3. The model column MUST use the `ModelBadge` component (same as Provider page).
 
@@ -400,6 +402,8 @@ FL47. SSE event visibility MUST obey the same permission rules as the REST endpo
 FL48. The SSE connection lifecycle MUST follow these phases:
 
 1. **Connect**: The client MUST open the SSE stream using a `fetch()`-based reader (NOT the native `EventSource` API, because `EventSource` cannot send custom `Authorization` headers).
+   The frontend integration layer for this stream MUST be implemented through SWR subscription state, so stream lifecycle and event delivery are owned by the SWR data layer rather than a page-local ad hoc subscription mechanism.
+   The client MUST begin attempting this SSE connection as soon as the logs page mounts; it MUST NOT gate connection startup on completion of the initial REST page fetch.
 2. **Receive**: On each `log_batch` event, the client MUST merge the received `RequestLog` objects into the existing table data array (newest first). If an incoming row has the same `request_id` as an existing row, the incoming row MUST replace the existing row instead of creating a duplicate. This replacement rule is required for the `pending -> success/error` SSE-only lifecycle defined in RL1a-1 and RL1a-2.
 3. **Disconnect**: On network error, HTTP error, or stream close, the client MUST fall back to SWR polling (see FL50).
 4. **Reconnect**: The client MUST automatically attempt reconnection using exponential backoff: initial delay 1s, doubling on each consecutive failure (1s, 2s, 4s, 8s, 16s), capped at 30s maximum delay. On successful reconnection, the backoff counter MUST reset to 1s.
@@ -412,9 +416,9 @@ FL49. When an SSE connection is active and receiving events, SSE replaces the pe
 
 FL50. When the SSE connection is lost (network failure, server restart, or stream termination), the client MUST immediately activate SWR polling at an interval of approximately 3 seconds. This polling MUST continue until the SSE connection is re-established, at which point polling MUST be paused again per FL49.
 
-### 6.7 Aggregate values remain on separate SWR poll
+### 6.7 Aggregate values remain REST-derived
 
-FL51. The aggregate fields `total` and `total_charge_nano_usd` (as defined in section 3.1 response schema) MUST NOT be delivered via SSE events. These values MUST be fetched via a separate SWR poll at an interval of approximately 10 seconds, independent of SSE connection state.
+FL51. The aggregate fields `total` and `total_charge_nano_usd` (as defined in section 3.1 response schema) MUST NOT be delivered via SSE events. These values MUST remain REST-derived and MUST refresh on the initial page fetch, on explicit manual refresh, on SSE-triggered resync/reconnect revalidation, and during the polling fallback defined in FL50. While SSE is connected, the client MUST NOT keep a periodic `request-logs` polling loop alive solely to refresh these aggregate values.
 
 ### 6.8 Name-cache enrichment model
 

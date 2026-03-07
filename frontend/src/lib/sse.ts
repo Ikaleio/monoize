@@ -1,36 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import useSWRSubscription from "swr/subscription";
+import type { SWRSubscriptionOptions } from "swr/subscription";
 import { api } from "./api";
 import type { RequestLog } from "./api";
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
-interface UseRequestLogSSEParams {
-  enabled: boolean;
-  onLogBatch: (logs: RequestLog[]) => void;
-  onResync: () => void;
-}
+export type RequestLogStreamEvent =
+  | { type: "log_batch"; logs: RequestLog[] }
+  | { type: "resync" };
 
-export function useRequestLogSSE({ enabled, onLogBatch, onResync }: UseRequestLogSSEParams) {
+const REQUEST_LOG_STREAM_KEY = "/dashboard/request-logs/stream-subscription";
+
+export function useRequestLogSSE(enabled: boolean) {
   const [connected, setConnected] = useState(false);
 
-  const onLogBatchRef = useRef(onLogBatch);
-  const onResyncRef = useRef(onResync);
-
-  useEffect(() => {
-    onLogBatchRef.current = onLogBatch;
-  }, [onLogBatch]);
-
-  useEffect(() => {
-    onResyncRef.current = onResync;
-  }, [onResync]);
-
-  useEffect(() => {
-    if (!enabled) {
-      setConnected(false);
-      return;
-    }
-
+  const subscribe = (
+    _key: string,
+    { next }: SWRSubscriptionOptions<RequestLogStreamEvent, Error>,
+  ) => {
     let cancelled = false;
     let reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -40,6 +29,7 @@ export function useRequestLogSSE({ enabled, onLogBatch, onResync }: UseRequestLo
       if (!reconnectTimer) {
         return;
       }
+
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     };
@@ -56,10 +46,12 @@ export function useRequestLogSSE({ enabled, onLogBatch, onResync }: UseRequestLo
         if (line.startsWith(":")) {
           continue;
         }
+
         if (line.startsWith("event:")) {
           eventName = line.slice("event:".length).trim();
           continue;
         }
+
         if (line.startsWith("data:")) {
           dataLines.push(line.slice("data:".length).trimStart());
         }
@@ -74,17 +66,19 @@ export function useRequestLogSSE({ enabled, onLogBatch, onResync }: UseRequestLo
         if (!payload) {
           return;
         }
+
         try {
           const logs = JSON.parse(payload) as RequestLog[];
-          onLogBatchRef.current(logs);
+          next(null, { type: "log_batch", logs });
         } catch {
           return;
         }
+
         return;
       }
 
       if (eventName === "resync") {
-        onResyncRef.current();
+        next(null, { type: "resync" });
       }
     };
 
@@ -92,6 +86,7 @@ export function useRequestLogSSE({ enabled, onLogBatch, onResync }: UseRequestLo
       if (cancelled) {
         return;
       }
+
       setConnected(false);
       const delay = reconnectDelayMs;
       reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
@@ -159,13 +154,16 @@ export function useRequestLogSSE({ enabled, onLogBatch, onResync }: UseRequestLo
           parseEventBlock(rawEvent);
           eventBoundary = buffer.indexOf("\n\n");
         }
-      } catch (error) {
+      } catch (streamError) {
         if (cancelled) {
           return;
         }
-        if (error instanceof DOMException && error.name === "AbortError") {
+
+        if (streamError instanceof DOMException && streamError.name === "AbortError") {
           return;
         }
+
+        next(streamError instanceof Error ? streamError : new Error("SSE stream failed"));
       } finally {
         if (!cancelled) {
           scheduleReconnect();
@@ -181,7 +179,12 @@ export function useRequestLogSSE({ enabled, onLogBatch, onResync }: UseRequestLo
       clearReconnectTimer();
       controller?.abort();
     };
-  }, [enabled]);
+  };
 
-  return { connected };
+  const { data: event, error } = useSWRSubscription<RequestLogStreamEvent, Error>(
+    enabled ? REQUEST_LOG_STREAM_KEY : null,
+    subscribe,
+  );
+
+  return { connected, event, error };
 }

@@ -483,19 +483,23 @@ export function RequestLogsPage() {
 		})
 	}, [matchesActiveFilters])
 
-	const { connected: sseConnected } = useRequestLogSSE({
-		enabled: !isLoading,
-		onLogBatch: logs => {
-			if (tooltipOpenCountRef.current > 0) {
-				pendingSSERef.current = [...logs, ...pendingSSERef.current]
-				return
-			}
-			prependSSELogs(logs)
-		},
-		onResync: () => {
+	const { connected: sseConnected, event: sseEvent } = useRequestLogSSE(true)
+
+	useEffect(() => {
+		if (!sseEvent) return
+
+		if (sseEvent.type === 'resync') {
 			void mutate()
+			return
 		}
-	})
+
+		if (tooltipOpenCountRef.current > 0) {
+			pendingSSERef.current = [...sseEvent.logs, ...pendingSSERef.current]
+			return
+		}
+
+		prependSSELogs(sseEvent.logs)
+	}, [sseEvent, mutate, prependSSELogs])
 
 	const prevConnectedRef = useRef(false)
 	useEffect(() => {
@@ -510,7 +514,7 @@ export function RequestLogsPage() {
 		0,
 		activeFilters,
 		{
-			refreshInterval: sseConnected ? 10000 : 3000,
+			refreshInterval: sseConnected ? 0 : 3000,
 			isPaused: () => tooltipOpenCountRef.current > 0
 		}
 	)
@@ -827,17 +831,36 @@ export function RequestLogsPage() {
 										<SelectItem value='error'>{t('requestLogs.error')}</SelectItem>
 									</SelectContent>
 								</Select>
-								<DateRangePicker
-									from={timeFrom}
-									to={timeTo}
-									onChange={handleTimeRangeChange}
-									t={t}
-								/>
-								<div className='ml-auto flex items-center gap-1'>
-									<Button
-										type='button'
-										variant='outline'
-										size='icon'
+							<DateRangePicker
+								from={timeFrom}
+								to={timeTo}
+								onChange={handleTimeRangeChange}
+								t={t}
+							/>
+							<div className='ml-auto flex items-center gap-1'>
+								<TooltipProvider>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<span
+												className={cn(
+													'inline-block h-2 w-2 rounded-full transition-colors duration-300',
+													sseConnected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
+												)}
+											/>
+										</TooltipTrigger>
+										<TooltipContent side='bottom'>
+											<p className='text-xs'>
+												{sseConnected
+													? 'Real-time updates active'
+													: 'Real-time updates disconnected, polling...'}
+											</p>
+										</TooltipContent>
+									</Tooltip>
+								</TooltipProvider>
+								<Button
+									type='button'
+									variant='outline'
+									size='icon'
 										className='h-9 w-9'
 										onClick={() => mutate()}
 										disabled={isValidating}
@@ -847,30 +870,11 @@ export function RequestLogsPage() {
 										<RefreshCw
 											className={cn('h-4 w-4', isValidating && 'animate-spin')}
 										/>
-									</Button>
-									<TooltipProvider>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<span
-													className={cn(
-														'inline-block h-2 w-2 rounded-full transition-colors duration-300',
-														sseConnected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
-													)}
-												/>
-											</TooltipTrigger>
-											<TooltipContent side='bottom'>
-												<p className='text-xs'>
-													{sseConnected
-														? 'Real-time updates active'
-														: 'Real-time updates disconnected, polling...'}
-												</p>
-											</TooltipContent>
-										</Tooltip>
-									</TooltipProvider>
-									<Button
-										type='button'
-										variant='outline'
-										size='icon'
+								</Button>
+								<Button
+									type='button'
+									variant='outline'
+									size='icon'
 										className='h-9 w-9'
 										onClick={() => setShowIp(prev => !prev)}
 										title={showIp ? t('requestLogs.hideIp') : t('requestLogs.showIp')}
