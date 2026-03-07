@@ -27,6 +27,7 @@ pub(super) async fn forward_stream_typed(
         true,
         request_id.as_deref(),
         request_ip.as_deref(),
+        started_at,
     )
     .await;
 
@@ -77,6 +78,7 @@ pub(super) async fn forward_stream_typed(
                         true,
                         request_id.as_deref(),
                         request_ip.as_deref(),
+                        started_at,
                     )
                     .await;
                     mark_channel_success(&state, &attempt).await;
@@ -216,6 +218,7 @@ pub(super) async fn forward_stream_typed(
                     true,
                     request_id.as_deref(),
                     request_ip.as_deref(),
+                    started_at,
                 )
                 .await;
                 mark_channel_success(&state, &attempt).await;

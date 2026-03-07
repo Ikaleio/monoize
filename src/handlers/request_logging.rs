@@ -1,5 +1,10 @@
 use super::*;
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
+
+fn request_created_at(started_at: std::time::Instant) -> chrono::DateTime<Utc> {
+    let elapsed = ChronoDuration::from_std(started_at.elapsed()).unwrap_or(ChronoDuration::MAX);
+    Utc::now() - elapsed
+}
 
 fn broadcast_pending_snapshot(
     state: &AppState,
@@ -12,6 +17,7 @@ fn broadcast_pending_snapshot(
     channel_id: Option<&str>,
     upstream_model: Option<&str>,
     provider_multiplier: Option<f64>,
+    created_at: chrono::DateTime<Utc>,
 ) {
     let Some(user_id) = auth.user_id.as_deref() else {
         return;
@@ -48,7 +54,7 @@ fn broadcast_pending_snapshot(
         reasoning_effort: None,
         tried_providers_json: None,
         request_kind: None,
-        created_at: Utc::now(),
+        created_at,
     };
 
     let _ = state.log_broadcast.send(vec![pending_log]);
@@ -61,6 +67,7 @@ pub(super) async fn insert_pending_request_log(
     is_stream: bool,
     request_id: Option<&str>,
     request_ip: Option<&str>,
+    started_at: std::time::Instant,
 ) {
     let Some(user_id) = auth.user_id.as_deref() else {
         return;
@@ -80,6 +87,7 @@ pub(super) async fn insert_pending_request_log(
         None,
         None,
         None,
+        request_created_at(started_at),
     );
 
     if let Err(e) = state
@@ -106,6 +114,7 @@ pub(super) async fn update_pending_channel_info(
     is_stream: bool,
     request_id: Option<&str>,
     request_ip: Option<&str>,
+    started_at: std::time::Instant,
 ) {
     let Some(user_id) = auth.user_id.as_deref() else {
         return;
@@ -125,6 +134,7 @@ pub(super) async fn update_pending_channel_info(
         Some(&attempt.channel_id),
         Some(&attempt.upstream_model),
         Some(attempt.model_multiplier),
+        request_created_at(started_at),
     );
 
     if let Err(e) = state
@@ -172,7 +182,7 @@ pub(super) fn spawn_request_log(
     let model_multiplier = attempt.model_multiplier;
     let model = model.to_string();
     let duration_ms = started_at.elapsed().as_millis() as u64;
-    let created_at = Utc::now();
+    let created_at = request_created_at(started_at);
     let user_store = state.user_store.clone();
     let usage_breakdown_json = usage.as_ref().map(build_usage_breakdown);
     let tried_providers_json = if tried_providers.is_empty() {
@@ -272,7 +282,7 @@ pub(super) fn spawn_request_log_error(
     let model_multiplier = attempt.model_multiplier;
     let channel_id = attempt.channel_id.clone();
     let duration_ms = started_at.elapsed().as_millis() as u64;
-    let created_at = Utc::now();
+    let created_at = request_created_at(started_at);
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
     let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));
@@ -342,7 +352,7 @@ pub(super) fn spawn_request_log_error_no_attempt(
     let api_key_id = auth.api_key_id.clone();
     let model = model.to_string();
     let duration_ms = started_at.elapsed().as_millis() as u64;
-    let created_at = Utc::now();
+    let created_at = request_created_at(started_at);
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
     let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));

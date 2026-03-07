@@ -69,7 +69,7 @@ RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal
 
 RL1c. Terminal logging MUST insert a new row with all fields populated (including terminal status, usage, billing, and provider metadata). There is no preceding pending row to update. If the write batcher has not yet flushed when the process terminates, unflushed rows are lost (acceptable trade-off for write throughput).
 
-RL1c-1. The `created_at` value persisted for a terminal row MUST equal the wall-clock time at which the terminal log entry was created in application memory, not the later write-batcher flush time.
+RL1c-1. The `created_at` value persisted for a terminal row MUST equal the wall-clock time at which request processing began, not the later terminal-finalization time and not the later write-batcher flush time.
 
 RL1d. Creating or updating `pending` status MUST NOT trigger any extra billing call. Request billing execution count MUST remain identical to pre-pending behavior (at most once per billable request outcome).
 
@@ -220,6 +220,8 @@ RL-S8. While SQLite and PostgreSQL both remain supported, request-log writes MUS
 FL1. The logs page MUST use a compact list format (dense table rows) with horizontal scrolling for overflow.
 
 FL2. The `created_at` field MUST be displayed as a localized timestamp in format `YYYY-MM-DD HH:mm:ss` using the browser's local timezone.
+
+FL2a. The `created_at` value displayed for a request row MUST remain stable across in-memory `pending` snapshots and the later terminal `success` or `error` row for the same `request_id`. Transitioning from `pending` to terminal state MUST NOT cause the displayed timestamp to jump forward.
 
 FL3. The model column MUST use the `ModelBadge` component (same as Provider page).
 

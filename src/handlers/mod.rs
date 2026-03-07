@@ -291,6 +291,7 @@ pub async fn create_embeddings(
         false,
         request_id.as_deref(),
         request_ip.as_deref(),
+        started_at,
     )
     .await;
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
@@ -327,6 +328,7 @@ pub async fn create_embeddings(
                     false,
                     request_id.as_deref(),
                     request_ip.as_deref(),
+                    started_at,
                 )
                 .await;
                 mark_channel_success(&state, &attempt).await;
