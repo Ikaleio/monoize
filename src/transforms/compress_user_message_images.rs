@@ -127,24 +127,67 @@ impl Transform for CompressUserMessageImagesTransform {
                 let Part::Image { source, .. } = part else {
                     continue;
                 };
-                let ImageSource::Base64 { media_type, data } = source else {
-                    continue;
-                };
-                let Some(next_source) = compress_base64_image(
-                    context,
-                    cfg.clone(),
-                    media_type.clone(),
-                    data.clone(),
-                )
-                .await?
-                else {
-                    continue;
-                };
-                *source = next_source;
+                match source {
+                    ImageSource::Base64 { media_type, data } => {
+                        let Some(next_source) = compress_base64_image(
+                            context,
+                            cfg.clone(),
+                            media_type.clone(),
+                            data.clone(),
+                        )
+                        .await?
+                        else {
+                            continue;
+                        };
+                        *source = next_source;
+                    }
+                    ImageSource::Url { url, detail } => {
+                        let Some((media_type, data)) = split_image_data_url(url) else {
+                            continue;
+                        };
+                        let Some(next_source) = compress_base64_image(
+                            context,
+                            cfg.clone(),
+                            media_type,
+                            data,
+                        )
+                        .await?
+                        else {
+                            continue;
+                        };
+                        *source = preserve_url_detail(next_source, detail.clone());
+                    }
+                }
             }
         }
 
         Ok(())
+    }
+}
+
+fn split_image_data_url(url: &str) -> Option<(String, String)> {
+    let payload = url.strip_prefix("data:")?;
+    let (meta, data) = payload.split_once(',')?;
+    if !meta.ends_with(";base64") {
+        return None;
+    }
+    let media_type = meta.trim_end_matches(";base64");
+    if !media_type.starts_with("image/") || media_type.is_empty() || data.is_empty() {
+        return None;
+    }
+    Some((media_type.to_string(), data.to_string()))
+}
+
+fn preserve_url_detail(source: ImageSource, detail: Option<String>) -> ImageSource {
+    match source {
+        ImageSource::Base64 { media_type, data } => ImageSource::Url {
+            url: format!("data:{};base64,{}", media_type, data),
+            detail,
+        },
+        ImageSource::Url { url, detail: next_detail } => ImageSource::Url {
+            url,
+            detail: next_detail.or(detail),
+        },
     }
 }
 
@@ -393,6 +436,82 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("cache dir read");
         assert_eq!(entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn compresses_user_message_data_url_images_and_preserves_detail() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cache = ImageTransformCache::new(
+            temp_dir.path().join("cache"),
+            std::time::Duration::from_secs(3600),
+        )
+        .await
+        .expect("cache");
+        let context = TransformRuntimeContext {
+            image_transform_cache: std::sync::Arc::new(cache),
+        };
+        let input_png = build_png_data_url_source();
+        let input_data_url = format!("data:image/png;base64,{input_png}");
+        let mut req = UrpRequest {
+            model: "gpt-test".to_string(),
+            messages: vec![Message {
+                role: Role::User,
+                parts: vec![Part::Image {
+                    source: ImageSource::Url {
+                        url: input_data_url,
+                        detail: Some("high".to_string()),
+                    },
+                    extra_body: HashMap::new(),
+                }],
+                extra_body: HashMap::new(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::new(),
+        };
+        let rules = vec![crate::transforms::TransformRuleConfig {
+            transform: "compress_user_message_images".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Request,
+            config: json!({"max_edge_px": 256, "jpeg_quality": 65}),
+        }];
+        let registry = registry();
+        let mut states = build_states_for_rules(&rules, &registry).expect("states");
+
+        crate::transforms::apply_transforms(
+            UrpData::Request(&mut req),
+            &rules,
+            &mut states,
+            "gpt-test",
+            Phase::Request,
+            &context,
+            &registry,
+        )
+        .await
+        .expect("apply transforms");
+
+        let Part::Image { source, .. } = &req.messages[0].parts[0] else {
+            panic!("expected image part");
+        };
+        let ImageSource::Url { url, detail } = source else {
+            panic!("expected data-url image source");
+        };
+        assert_eq!(detail.as_deref(), Some("high"));
+        let Some((media_type, data)) = split_image_data_url(url) else {
+            panic!("expected transformed data url");
+        };
+        assert_eq!(media_type, "image/jpeg");
+        let compressed = STANDARD.decode(data.as_bytes()).expect("decode transformed image");
+        let original = STANDARD.decode(input_png.as_bytes()).expect("decode original image");
+        assert!(compressed.len() < original.len());
     }
 
     fn build_png_data_url_source() -> String {
