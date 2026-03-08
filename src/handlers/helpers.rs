@@ -1,4 +1,5 @@
 use super::*;
+use crate::transforms::split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
 
 pub(super) fn decode_urp_request(
     protocol: DownstreamProtocol,
@@ -346,6 +347,40 @@ pub(super) fn has_enabled_response_rules(rules: &[TransformRuleConfig], model: &
             Some(patterns) => patterns
                 .iter()
                 .any(|pattern| model_glob_match(pattern, model)),
+        })
+}
+
+pub(super) fn effective_sse_max_frame_length(
+    provider_rules: &[TransformRuleConfig],
+    auth_rules: &[TransformRuleConfig],
+    model: &str,
+) -> Option<usize> {
+    resolve_sse_max_frame_length_from_rules(provider_rules, model)
+        .or_else(|| resolve_sse_max_frame_length_from_rules(auth_rules, model))
+}
+
+fn resolve_sse_max_frame_length_from_rules(
+    rules: &[TransformRuleConfig],
+    model: &str,
+) -> Option<usize> {
+    rules
+        .iter()
+        .find(|rule| {
+            rule.enabled
+                && rule.phase == Phase::Response
+                && rule.transform == "split_sse_frames"
+                && match &rule.models {
+                    None => true,
+                    Some(patterns) => patterns.iter().any(|pattern| model_glob_match(pattern, model)),
+                }
+        })
+        .map(|rule| {
+            rule.config
+                .get("max_frame_length")
+                .and_then(|v| v.as_u64())
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(DEFAULT_MAX_FRAME_LENGTH)
         })
 }
 

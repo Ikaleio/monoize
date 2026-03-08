@@ -17,6 +17,7 @@ pub mod reasoning_effort_to_model_suffix;
 pub mod reasoning_to_think_xml;
 pub mod remove_field;
 pub mod set_field;
+pub mod split_sse_frames;
 pub mod strip_reasoning;
 pub mod system_to_developer_role;
 pub mod think_xml_to_reasoning;

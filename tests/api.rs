@@ -3190,6 +3190,116 @@ async fn responses_streaming_applies_response_transform_from_provider() {
 }
 
 #[tokio::test]
+async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
+    let max_frame_length = 220usize;
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        name: "mono-transform-sse-split".to_string(),
+        provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+        models,
+        api_type_overrides: Vec::new(),
+        channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            id: Some("mono-transform-sse-split-ch1".to_string()),
+            name: "mono-transform-sse-split-ch1".to_string(),
+            base_url,
+            api_key: Some("upstream-key".to_string()),
+            weight: 1,
+            enabled: true,
+            passive_failure_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_min_samples_override: None,
+            passive_failure_rate_threshold_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
+        }],
+        max_retries: -1,
+        transforms: vec![monoize::transforms::TransformRuleConfig {
+            transform: "split_sse_frames".to_string(),
+            enabled: true,
+            models: None,
+            phase: monoize::transforms::Phase::Response,
+            config: json!({ "max_frame_length": max_frame_length }),
+        }],
+        active_probe_enabled_override: None,
+        active_probe_interval_seconds_override: None,
+        active_probe_success_threshold_override: None,
+        active_probe_model_override: None,
+        request_timeout_ms_override: None,
+        enabled: true,
+        priority: Some(-1),
+    };
+    ctx.state
+        .monoize_store
+        .create_provider(create_input)
+        .await
+        .unwrap();
+
+    let long_input = "abcdefghij".repeat(80);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text": long_input}]}],
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let delta_events = text.matches("event: response.output_text.delta").count();
+    assert!(
+        delta_events >= 2,
+        "expected split_sse_frames to emit multiple delta events, body={text}"
+    );
+    assert!(text.contains("event: response.completed"));
+
+    let mut reconstructed = String::new();
+    let mut current_event = String::new();
+    for line in text.lines() {
+        if let Some(event) = line.strip_prefix("event: ") {
+            current_event = event.to_string();
+            continue;
+        }
+        if let Some(payload) = line.strip_prefix("data: ") {
+            if current_event == "response.output_text.delta" {
+                assert!(
+                    payload.len() <= max_frame_length,
+                    "expected split output_text delta payloads to respect max_frame_length, len={}, payload={payload}",
+                    payload.len()
+                );
+                let value: Value = serde_json::from_str(payload).expect("delta payload json");
+                let piece = value
+                    .get("data")
+                    .and_then(|v| v.get("delta"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                reconstructed.push_str(piece);
+            }
+        }
+    }
+    assert_eq!(reconstructed, "abcdefghij".repeat(80));
+}
+
+#[tokio::test]
 async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let ctx = setup().await;
     seed_test_model_pricing(&ctx.state, &["gpt-5-target"]).await;

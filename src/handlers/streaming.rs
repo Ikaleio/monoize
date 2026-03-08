@@ -48,6 +48,11 @@ pub(super) async fn forward_stream_typed(
         let need_response_transform_stream =
             has_enabled_response_rules(&attempt.provider_transforms, &logical_model)
                 || has_enabled_response_rules(&auth.transforms, &logical_model);
+        let sse_max_frame_length = effective_sse_max_frame_length(
+            &attempt.provider_transforms,
+            &auth.transforms,
+            &logical_model,
+        );
 
         if need_response_transform_stream {
             let mut nonstream_req = req_attempt.clone();
@@ -121,6 +126,7 @@ pub(super) async fn forward_stream_typed(
                         request_ip.clone(),
                         attempt.channel_id.clone(),
                         Some(started_at.elapsed().as_millis() as u64),
+                        None,
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                     );
@@ -132,6 +138,7 @@ pub(super) async fn forward_stream_typed(
                             downstream,
                             &logical_model_for_stream,
                             &resp,
+                            sse_max_frame_length,
                             tx,
                         )
                         .await
@@ -235,6 +242,7 @@ pub(super) async fn forward_stream_typed(
                 let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                     ttfb_ms: None,
                     usage: None,
+                    terminal: StreamTerminalDiagnostics::default(),
                 }));
                 let metrics_for_stream = runtime_metrics.clone();
                 let state_for_log = state.clone();
@@ -355,9 +363,9 @@ pub(super) async fn forward_stream_typed(
                         },
                     };
 
-                    let (ttfb_ms, usage) = {
+                    let (ttfb_ms, usage, terminal_diagnostics) = {
                         let guard = runtime_metrics.lock().await;
-                        (guard.ttfb_ms, guard.usage.clone())
+                        (guard.ttfb_ms, guard.usage.clone(), guard.terminal.clone())
                     };
 
                     let charge = match usage.as_ref() {
@@ -396,6 +404,7 @@ pub(super) async fn forward_stream_typed(
                         request_ip_for_log,
                         channel_id_for_log,
                         ttfb_ms,
+                        Some(terminal_diagnostics),
                         reasoning_effort_for_log,
                         tried_providers_for_log,
                     );
@@ -526,17 +535,18 @@ pub(super) async fn emit_synthetic_stream_from_urp_response(
     downstream: DownstreamProtocol,
     logical_model: &str,
     resp: &urp::UrpResponse,
+    sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
     match downstream {
         DownstreamProtocol::Responses => {
-            emit_synthetic_responses_stream(logical_model, resp, tx).await
+            emit_synthetic_responses_stream(logical_model, resp, sse_max_frame_length, tx).await
         }
         DownstreamProtocol::ChatCompletions => {
-            emit_synthetic_chat_stream(logical_model, resp, tx).await
+            emit_synthetic_chat_stream(logical_model, resp, sse_max_frame_length, tx).await
         }
         DownstreamProtocol::AnthropicMessages => {
-            emit_synthetic_messages_stream(logical_model, resp, tx).await
+            emit_synthetic_messages_stream(logical_model, resp, sse_max_frame_length, tx).await
         }
     }
 }
@@ -544,6 +554,7 @@ pub(super) async fn emit_synthetic_stream_from_urp_response(
 pub(super) async fn emit_synthetic_responses_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
+    sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
     let mut seq = 1u64;
@@ -570,58 +581,42 @@ pub(super) async fn emit_synthetic_responses_stream(
         "status": "in_progress",
         "output": []
     });
-    tx.send(wrap_responses_event(
-        &mut seq,
-        "response.created",
-        base_response.clone(),
-    ))
-    .await
-    .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
-    tx.send(wrap_responses_event(
-        &mut seq,
-        "response.in_progress",
-        base_response,
-    ))
-    .await
-    .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+    send_responses_event(&tx, &mut seq, "response.created", base_response.clone()).await?;
+    send_responses_event(&tx, &mut seq, "response.in_progress", base_response).await?;
 
     for (output_index, item) in encoded_output.iter().enumerate() {
         let item_payload = json!({
             "output_index": output_index,
             "item": item.clone()
         });
-        tx.send(wrap_responses_event(
-            &mut seq,
-            "response.output_item.added",
-            item_payload,
-        ))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+        send_responses_event(&tx, &mut seq, "response.output_item.added", item_payload).await?;
 
         match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
             "reasoning" => {
                 let (text, sig) = extract_reasoning_text_and_signature(item);
                 if !text.is_empty() {
-                    tx.send(wrap_responses_event(
+                    send_responses_delta_string(
+                        &tx,
                         &mut seq,
                         "response.reasoning_text.delta",
-                        json!({ "delta": text }),
-                    ))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                        json!({}),
+                        "delta",
+                        &text,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
                 if !sig.is_empty() {
-                    tx.send(wrap_responses_event(
+                    send_responses_delta_string(
+                        &tx,
                         &mut seq,
                         "response.reasoning_signature.delta",
-                        json!({ "delta": sig }),
-                    ))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                        json!({}),
+                        "delta",
+                        &sig,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
             }
             "function_call" => {
@@ -629,73 +624,69 @@ pub(super) async fn emit_synthetic_responses_stream(
                 let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let arguments = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
                 if !arguments.is_empty() {
-                    tx.send(wrap_responses_event(
+                    send_responses_delta_string(
+                        &tx,
                         &mut seq,
                         "response.function_call_arguments.delta",
                         json!({
                             "output_index": output_index,
                             "call_id": call_id,
-                            "name": name,
-                            "delta": arguments
+                            "name": name
                         }),
-                    ))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                        "delta",
+                        arguments,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
             }
             "message" => {
                 let text = extract_responses_message_text(item);
                 if !text.is_empty() {
-                    tx.send(wrap_responses_event(
+                    let phase = extract_responses_message_phase(item);
+                    send_responses_delta_string(
+                        &tx,
                         &mut seq,
                         "response.output_text.delta",
-                        responses_text_delta_payload(
-                            &text,
-                            extract_responses_message_phase(item).as_deref(),
-                        ),
-                    ))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                        responses_text_delta_payload("", phase.as_deref()),
+                        "delta",
+                        &text,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
             }
             _ => {}
         }
 
-        tx.send(wrap_responses_event(
+        let done_item = sanitize_responses_output_item_for_frame_limit(item, sse_max_frame_length);
+        send_responses_event(
+            &tx,
             &mut seq,
             "response.output_item.done",
             json!({
                 "output_index": output_index,
-                "item": item.clone()
+                "item": done_item
             }),
-        ))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+        )
+        .await?;
     }
-    tx.send(wrap_responses_event(
-        &mut seq,
-        "response.output_text.done",
-        json!({}),
-    ))
-    .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
-    tx.send(wrap_responses_event(
+    send_responses_event(&tx, &mut seq, "response.output_text.done", json!({})).await?;
+    let completed_response = sanitize_responses_completed_for_frame_limit(&encoded, sse_max_frame_length);
+    send_responses_event(
+        &tx,
         &mut seq,
         "response.completed",
-        json!({ "response": encoded }),
-    ))
-    .await
-    .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+        json!({ "response": completed_response }),
+    )
+    .await?;
     Ok(())
 }
 
 pub(super) async fn emit_synthetic_chat_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
+    sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
     let id = format!("chatcmpl_{}", uuid::Uuid::new_v4());
@@ -707,22 +698,17 @@ pub(super) async fn emit_synthetic_chat_stream(
         match part {
             urp::Part::Reasoning { content, .. } => {
                 if !content.is_empty() {
-                    let chunk = json!({
-                        "id": id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": logical_model,
-                        "choices": [{ "index": 0, "delta": chat_reasoning_delta_from_text(content), "finish_reason": Value::Null }]
-                    });
-                    tx.send(Event::default().data(chunk.to_string()))
-                        .await
-                        .map_err(|e| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                e.to_string(),
-                            )
-                        })?;
+                    send_chat_chunk_string(
+                        &tx,
+                        &id,
+                        created,
+                        logical_model,
+                        chat_reasoning_delta_from_text(""),
+                        content,
+                        chat_delta_path_reasoning_text,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
             }
             urp::Part::ReasoningEncrypted { data, .. } => {
@@ -731,22 +717,17 @@ pub(super) async fn emit_synthetic_chat_stream(
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| data.to_string());
                 if !sig.is_empty() {
-                    let chunk = json!({
-                        "id": id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": logical_model,
-                        "choices": [{ "index": 0, "delta": chat_reasoning_delta_from_signature(&sig), "finish_reason": Value::Null }]
-                    });
-                    tx.send(Event::default().data(chunk.to_string()))
-                        .await
-                        .map_err(|e| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                e.to_string(),
-                            )
-                        })?;
+                    send_chat_chunk_string(
+                        &tx,
+                        &id,
+                        created,
+                        logical_model,
+                        chat_reasoning_delta_from_signature(""),
+                        &sig,
+                        chat_delta_path_reasoning_signature,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
             }
             urp::Part::ToolCall {
@@ -768,37 +749,38 @@ pub(super) async fn emit_synthetic_chat_stream(
                                 "index": tool_idx,
                                 "id": call_id,
                                 "type": "function",
-                                "function": { "name": name, "arguments": arguments }
+                                "function": { "name": name, "arguments": "" }
                             }]
                         },
                         "finish_reason": Value::Null
                     }]
                 });
                 tool_idx += 1;
-                tx.send(Event::default().data(chunk.to_string()))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                send_chat_chunk_string(
+                    &tx,
+                    &id,
+                    created,
+                    logical_model,
+                    chunk["choices"][0]["delta"].clone(),
+                    arguments,
+                    chat_delta_path_tool_arguments,
+                    sse_max_frame_length,
+                )
+                .await?;
             }
             urp::Part::Text { content, .. } | urp::Part::Refusal { content, .. } => {
                 if !content.is_empty() {
-                    let chunk = json!({
-                        "id": id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": logical_model,
-                        "choices": [{ "index": 0, "delta": { "content": content }, "finish_reason": Value::Null }]
-                    });
-                    tx.send(Event::default().data(chunk.to_string()))
-                        .await
-                        .map_err(|e| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                e.to_string(),
-                            )
-                        })?;
+                    send_chat_chunk_string(
+                        &tx,
+                        &id,
+                        created,
+                        logical_model,
+                        json!({ "content": "" }),
+                        content,
+                        chat_delta_path_content,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
             }
             _ => {}
@@ -820,12 +802,8 @@ pub(super) async fn emit_synthetic_chat_stream(
     if let Some(usage) = resp.usage.as_ref() {
         done["usage"] = usage_to_chat_usage_json(usage);
     }
-    tx.send(Event::default().data(done.to_string()))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
-    tx.send(Event::default().data("[DONE]"))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+    send_plain_sse_data(&tx, done.to_string()).await?;
+    send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
     Ok(())
 }
 
@@ -842,6 +820,7 @@ pub(super) fn finish_reason_to_chat(reason: urp::FinishReason) -> &'static str {
 pub(super) async fn emit_synthetic_messages_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
+    sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
     let message_id = format!("msg_{}", uuid::Uuid::new_v4());
@@ -869,42 +848,26 @@ pub(super) async fn emit_synthetic_messages_stream(
             }
         }
     });
-    tx.send(Event::default().data(start.to_string()))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+    send_plain_sse_data(&tx, start.to_string()).await?;
 
     let mut index = 0u32;
     for part in &resp.message.parts {
         match part {
             urp::Part::Reasoning { content, .. } => {
                 let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": "" } });
-                tx.send(Event::default().data(s.to_string()))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                send_plain_sse_data(&tx, s.to_string()).await?;
                 if !content.is_empty() {
-                    let d = json!({ "type": "content_block_delta", "index": index, "delta": { "type": "thinking_delta", "thinking": content } });
-                    tx.send(Event::default().data(d.to_string()))
-                        .await
-                        .map_err(|e| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                e.to_string(),
-                            )
-                        })?;
+                    send_messages_delta_string(
+                        &tx,
+                        json!({ "type": "content_block_delta", "index": index, "delta": { "type": "thinking_delta", "thinking": "" } }),
+                        messages_delta_path_thinking,
+                        content,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
                 let e = json!({ "type": "content_block_stop", "index": index });
-                tx.send(Event::default().data(e.to_string()))
-                    .await
-                    .map_err(|er| {
-                        AppError::new(
-                            StatusCode::BAD_GATEWAY,
-                            "stream_send_failed",
-                            er.to_string(),
-                        )
-                    })?;
+                send_plain_sse_data(&tx, e.to_string()).await?;
                 index += 1;
             }
             urp::Part::ReasoningEncrypted { data, .. } => {
@@ -914,35 +877,17 @@ pub(super) async fn emit_synthetic_messages_stream(
                     .unwrap_or_else(|| data.to_string());
                 if !sig.is_empty() {
                     let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": "" } });
-                    tx.send(Event::default().data(s.to_string()))
-                        .await
-                        .map_err(|e| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                e.to_string(),
-                            )
-                        })?;
-                    let d = json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": sig } });
-                    tx.send(Event::default().data(d.to_string()))
-                        .await
-                        .map_err(|e| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                e.to_string(),
-                            )
-                        })?;
+                    send_plain_sse_data(&tx, s.to_string()).await?;
+                    send_messages_delta_string(
+                        &tx,
+                        json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": "" } }),
+                        messages_delta_path_signature,
+                        &sig,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                     let e = json!({ "type": "content_block_stop", "index": index });
-                    tx.send(Event::default().data(e.to_string()))
-                        .await
-                        .map_err(|er| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                er.to_string(),
-                            )
-                        })?;
+                    send_plain_sse_data(&tx, e.to_string()).await?;
                     index += 1;
                 }
             }
@@ -958,33 +903,23 @@ pub(super) async fn emit_synthetic_messages_stream(
                     "index": index,
                     "content_block": { "type": "tool_use", "id": call_id, "name": name, "input": {} }
                 });
-                tx.send(Event::default().data(start_tool.to_string()))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                send_plain_sse_data(&tx, start_tool.to_string()).await?;
                 if !arguments.is_empty() {
-                    let d = json!({
-                        "type": "content_block_delta",
-                        "index": index,
-                        "delta": { "type": "input_json_delta", "partial_json": arguments }
-                    });
-                    tx.send(Event::default().data(d.to_string()))
-                        .await
-                        .map_err(|e| {
-                            AppError::new(
-                                StatusCode::BAD_GATEWAY,
-                                "stream_send_failed",
-                                e.to_string(),
-                            )
-                        })?;
+                    send_messages_delta_string(
+                        &tx,
+                        json!({
+                            "type": "content_block_delta",
+                            "index": index,
+                            "delta": { "type": "input_json_delta", "partial_json": "" }
+                        }),
+                        messages_delta_path_partial_json,
+                        arguments,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
                 let stop_tool = json!({ "type": "content_block_stop", "index": index });
-                tx.send(Event::default().data(stop_tool.to_string()))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                send_plain_sse_data(&tx, stop_tool.to_string()).await?;
                 index += 1;
             }
             urp::Part::Text { content, .. } | urp::Part::Refusal { content, .. } => {
@@ -992,27 +927,17 @@ pub(super) async fn emit_synthetic_messages_stream(
                     continue;
                 }
                 let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "text", "text": "" } });
-                tx.send(Event::default().data(s.to_string()))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
-                let d = json!({ "type": "content_block_delta", "index": index, "delta": { "type": "text_delta", "text": content } });
-                tx.send(Event::default().data(d.to_string()))
-                    .await
-                    .map_err(|e| {
-                        AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string())
-                    })?;
+                send_plain_sse_data(&tx, s.to_string()).await?;
+                send_messages_delta_string(
+                    &tx,
+                    json!({ "type": "content_block_delta", "index": index, "delta": { "type": "text_delta", "text": "" } }),
+                    messages_delta_path_text,
+                    content,
+                    sse_max_frame_length,
+                )
+                .await?;
                 let e = json!({ "type": "content_block_stop", "index": index });
-                tx.send(Event::default().data(e.to_string()))
-                    .await
-                    .map_err(|er| {
-                        AppError::new(
-                            StatusCode::BAD_GATEWAY,
-                            "stream_send_failed",
-                            er.to_string(),
-                        )
-                    })?;
+                send_plain_sse_data(&tx, e.to_string()).await?;
                 index += 1;
             }
             _ => {}
@@ -1030,14 +955,335 @@ pub(super) async fn emit_synthetic_messages_stream(
             "output_tokens": usage.output_tokens
         }
     });
-    tx.send(Event::default().data(message_delta.to_string()))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
-
-    tx.send(Event::default().data(json!({ "type": "message_stop" }).to_string()))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
+    send_plain_sse_data(&tx, message_delta.to_string()).await?;
+    send_plain_sse_data(&tx, json!({ "type": "message_stop" }).to_string()).await?;
     Ok(())
+}
+
+async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: String) -> AppResult<()> {
+    tx.send(Event::default().data(data))
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
+}
+
+async fn send_responses_event(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    name: &str,
+    data: Value,
+) -> AppResult<()> {
+    tx.send(wrap_responses_event(seq, name, data))
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
+}
+
+async fn send_responses_delta_string(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    name: &str,
+    template: Value,
+    field: &str,
+    content: &str,
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    for part in split_wrapped_responses_json_string_field(*seq, template, field, content, max_frame_length) {
+        send_responses_event(tx, seq, name, part).await?;
+    }
+    Ok(())
+}
+
+async fn send_chat_chunk_string(
+    tx: &mpsc::Sender<Event>,
+    id: &str,
+    created: i64,
+    logical_model: &str,
+    delta_template: Value,
+    content: &str,
+    patch: fn(&mut Value, &str),
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let base = json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": logical_model,
+        "choices": [{ "index": 0, "delta": delta_template, "finish_reason": Value::Null }]
+    });
+    for chunk in split_json_value_by_string_patch(base, content, patch, max_frame_length) {
+        send_plain_sse_data(tx, chunk.to_string()).await?;
+    }
+    Ok(())
+}
+
+async fn send_messages_delta_string(
+    tx: &mpsc::Sender<Event>,
+    template: Value,
+    patch: fn(&mut Value, &str),
+    content: &str,
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    for chunk in split_json_value_by_string_patch(template, content, patch, max_frame_length) {
+        send_plain_sse_data(tx, chunk.to_string()).await?;
+    }
+    Ok(())
+}
+
+fn split_wrapped_responses_json_string_field(
+    seq: u64,
+    mut template: Value,
+    field: &str,
+    content: &str,
+    max_frame_length: Option<usize>,
+) -> Vec<Value> {
+    if let Some(obj) = template.as_object_mut() {
+        obj.insert(field.to_string(), Value::String(String::new()));
+    }
+    let wrapped_template_len = responses_wrapped_payload_length(seq, &template);
+    split_json_by_estimated_limit(template, content, max_frame_length, wrapped_template_len, move |value, part| {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(field.to_string(), Value::String(part.to_string()));
+        }
+    })
+}
+
+fn split_json_value_by_string_patch(
+    template: Value,
+    content: &str,
+    patch: fn(&mut Value, &str),
+    max_frame_length: Option<usize>,
+) -> Vec<Value> {
+    let mut empty_template = template.clone();
+    patch(&mut empty_template, "");
+    let template_len = empty_template.to_string().len();
+    split_json_by_estimated_limit(template, content, max_frame_length, template_len, patch)
+}
+
+fn split_json_by_estimated_limit(
+    template: Value,
+    content: &str,
+    max_frame_length: Option<usize>,
+    template_len: usize,
+    patch: impl Fn(&mut Value, &str),
+) -> Vec<Value> {
+    const ESTIMATED_ESCAPE_RESERVE_BYTES: usize = 128;
+
+    let Some(max_len) = max_frame_length else {
+        let mut value = template;
+        patch(&mut value, content);
+        return vec![value];
+    };
+
+    let mut empty_value = template.clone();
+    patch(&mut empty_value, "");
+    if template_len > max_len {
+        return vec![empty_value];
+    }
+    if content.is_empty() {
+        return vec![empty_value];
+    }
+
+    let chunk_size = max_len
+        .saturating_sub(template_len)
+        .saturating_sub(ESTIMATED_ESCAPE_RESERVE_BYTES)
+        .max(1);
+
+    split_string_by_bytes(content, chunk_size)
+        .into_iter()
+        .map(|part| {
+            let mut value = template.clone();
+            patch(&mut value, &part);
+            value
+        })
+        .collect()
+}
+
+fn responses_wrapped_payload_length(seq: u64, data: &Value) -> usize {
+    json!({ "sequence_number": seq, "data": data })
+        .to_string()
+        .len()
+}
+
+fn split_string_by_bytes(content: &str, max_bytes: usize) -> Vec<String> {
+    if content.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut current_bytes = 0usize;
+    for ch in content.chars() {
+        let ch_len = ch.len_utf8();
+        if !current.is_empty() && current_bytes + ch_len > max_bytes {
+            parts.push(current);
+            current = String::new();
+            current_bytes = 0;
+        }
+        current.push(ch);
+        current_bytes += ch_len;
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    if parts.is_empty() {
+        parts.push(String::new());
+    }
+    parts
+}
+
+fn chat_delta_path_content(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert("content".to_string(), Value::String(content.to_string()));
+    }
+}
+
+fn chat_delta_path_reasoning_text(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert(
+            "reasoning_details".to_string(),
+            json!([{ "type": "reasoning.text", "text": content, "signature": Value::Null, "format": "unknown" }]),
+        );
+    }
+}
+
+fn chat_delta_path_reasoning_signature(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert(
+            "reasoning_details".to_string(),
+            json!([{ "type": "reasoning.text", "text": "", "signature": content, "format": "unknown" }]),
+        );
+    }
+}
+
+fn chat_delta_path_tool_arguments(value: &mut Value, content: &str) {
+    if let Some(function) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+        .and_then(|delta| delta.get_mut("tool_calls"))
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|tool| tool.get_mut("function"))
+        .and_then(Value::as_object_mut)
+    {
+        function.insert("arguments".to_string(), Value::String(content.to_string()));
+    }
+}
+
+fn messages_delta_path_text(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("delta")
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert("text".to_string(), Value::String(content.to_string()));
+    }
+}
+
+fn messages_delta_path_thinking(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("delta")
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert("thinking".to_string(), Value::String(content.to_string()));
+    }
+}
+
+fn messages_delta_path_signature(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("delta")
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert("signature".to_string(), Value::String(content.to_string()));
+    }
+}
+
+fn messages_delta_path_partial_json(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("delta")
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert("partial_json".to_string(), Value::String(content.to_string()));
+    }
+}
+
+fn sanitize_responses_output_item_for_frame_limit(item: &Value, max_frame_length: Option<usize>) -> Value {
+    let Some(max_len) = max_frame_length else {
+        return item.clone();
+    };
+    if item.to_string().len() <= max_len {
+        return item.clone();
+    }
+    let mut sanitized = item.clone();
+    if let Some(obj) = sanitized.as_object_mut() {
+        match obj.get("type").and_then(|v| v.as_str()) {
+            Some("message") => {
+                if let Some(content) = obj.get_mut("content").and_then(Value::as_array_mut) {
+                    for part in content {
+                        if let Some(part_obj) = part.as_object_mut() {
+                            if part_obj.get("type").and_then(|v| v.as_str()) == Some("output_text") {
+                                part_obj.insert("text".to_string(), Value::String(String::new()));
+                            }
+                        }
+                    }
+                }
+            }
+            Some("reasoning") => {
+                obj.insert("text".to_string(), Value::String(String::new()));
+                if let Some(summary) = obj.get_mut("summary").and_then(Value::as_array_mut) {
+                    for part in summary {
+                        if let Some(part_obj) = part.as_object_mut() {
+                            part_obj.insert("text".to_string(), Value::String(String::new()));
+                        }
+                    }
+                }
+            }
+            Some("function_call") => {
+                obj.insert("arguments".to_string(), Value::String(String::new()));
+            }
+            _ => {}
+        }
+    }
+    sanitized
+}
+
+fn sanitize_responses_completed_for_frame_limit(encoded: &Value, max_frame_length: Option<usize>) -> Value {
+    let Some(max_len) = max_frame_length else {
+        return encoded.clone();
+    };
+    if encoded.to_string().len() <= max_len {
+        return encoded.clone();
+    }
+    let mut sanitized = encoded.clone();
+    if let Some(output) = sanitized.get_mut("output").and_then(Value::as_array_mut) {
+        for item in output.iter_mut() {
+            *item = sanitize_responses_output_item_for_frame_limit(item, Some(max_len));
+        }
+    }
+    sanitized
 }
 
 pub(super) fn extract_reasoning_text_and_signature(item: &Value) -> (String, String) {
@@ -1384,6 +1630,7 @@ pub(super) async fn stream_responses_sse_as_responses(
         }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
+            record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
         // For responses upstream, we forward event names and data into our wrapper.
@@ -1661,6 +1908,7 @@ pub(super) async fn stream_responses_sse_as_responses(
             final_response,
         ))
         .await;
+    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
 
@@ -1729,11 +1977,23 @@ pub(super) async fn stream_chat_sse_as_responses(
         }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
+            record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
         let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
         record_stream_usage_if_present(&runtime_metrics, parse_usage_from_chat_object(&data_val))
             .await;
+        if let Some(reason) = data_val
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|choice| choice.get("finish_reason"))
+            .and_then(|v| v.as_str())
+            .filter(|reason| !reason.is_empty())
+        {
+            record_stream_terminal_event(&runtime_metrics, "chat.completion.chunk", Some(reason))
+                .await;
+        }
         let delta = data_val
             .get("choices")
             .and_then(|v| v.as_array())
@@ -1965,6 +2225,7 @@ pub(super) async fn stream_chat_sse_as_responses(
             final_response,
         ))
         .await;
+    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
 
@@ -2029,6 +2290,7 @@ pub(super) async fn stream_messages_sse_as_responses(
         }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
+            record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
         let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
@@ -2148,7 +2410,10 @@ pub(super) async fn stream_messages_sse_as_responses(
             "content_block_stop" => {
                 current_tool_call_id = None;
             }
-            "message_stop" => break,
+            "message_stop" => {
+                record_stream_terminal_event(&runtime_metrics, "message_stop", None).await;
+                break;
+            }
             _ => {}
         }
     }
@@ -2216,6 +2481,7 @@ pub(super) async fn stream_messages_sse_as_responses(
             final_response,
         ))
         .await;
+    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
 
@@ -2272,6 +2538,7 @@ pub(super) async fn stream_gemini_sse_as_responses(
         }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
+            record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
         let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
@@ -2448,6 +2715,7 @@ pub(super) async fn stream_gemini_sse_as_responses(
             final_response,
         ))
         .await;
+    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
 
@@ -2476,6 +2744,7 @@ pub(super) async fn stream_gemini_sse_as_chat(
         }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
+            record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
         let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
@@ -2586,7 +2855,10 @@ pub(super) async fn stream_gemini_sse_as_chat(
     if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
         done["usage"] = usage_to_chat_usage_json(&usage);
     }
+    record_stream_synthetic_terminal_emitted(&runtime_metrics).await;
     let _ = tx.send(Event::default().data(done.to_string())).await;
+    record_stream_terminal_event(&runtime_metrics, "chat.completion.chunk", Some(finish_reason))
+        .await;
     let _ = tx.send(Event::default().data("[DONE]")).await;
     Ok(())
 }
@@ -2639,6 +2911,7 @@ pub(super) async fn stream_gemini_sse_as_messages(
         }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
+            record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
         let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
@@ -2867,6 +3140,12 @@ pub(super) async fn stream_any_sse_as_chat(
                     if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
                         if !reason.is_empty() {
                             saw_upstream_terminal_finish = true;
+                            record_stream_terminal_event(
+                                &runtime_metrics,
+                                "chat.completion.chunk",
+                                Some(reason),
+                            )
+                            .await;
                             if reason == "tool_calls" {
                                 saw_tool_call = true;
                             }
@@ -3146,6 +3425,8 @@ pub(super) async fn stream_any_sse_as_chat(
                         }
                     }
                     "response.completed" => {
+                        record_stream_terminal_event(&runtime_metrics, "response.completed", None)
+                            .await;
                         let completed = data_val.get("response").unwrap_or(&data_val);
                         let Some(output) = completed.get("output").and_then(|v| v.as_array())
                         else {
@@ -3798,7 +4079,10 @@ pub(super) async fn stream_any_sse_as_chat(
         if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
             done["usage"] = usage_to_chat_usage_json(&usage);
         }
+        record_stream_synthetic_terminal_emitted(&runtime_metrics).await;
         let _ = tx.send(Event::default().data(done.to_string())).await;
+        record_stream_terminal_event(&runtime_metrics, "chat.completion.chunk", Some(finish_reason))
+            .await;
     }
     let _ = tx.send(Event::default().data("[DONE]")).await;
     Ok(())
@@ -3829,6 +4113,7 @@ pub(super) async fn stream_any_sse_as_messages(
             }
             mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
             if ev.data.trim() == "[DONE]" {
+                record_stream_done_sentinel(&runtime_metrics).await;
                 break;
             }
             let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
@@ -3837,6 +4122,9 @@ pub(super) async fn stream_any_sse_as_messages(
                 parse_usage_from_messages_object(&data_val),
             )
             .await;
+            if data_val.get("type").and_then(|v| v.as_str()) == Some("message_stop") {
+                record_stream_terminal_event(&runtime_metrics, "message_stop", None).await;
+            }
             let _ = tx.send(Event::default().data(ev.data)).await;
         }
         return Ok(());
@@ -3885,6 +4173,7 @@ pub(super) async fn stream_any_sse_as_messages(
         }
         mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
         if ev.data.trim() == "[DONE]" {
+            record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
 
@@ -4347,5 +4636,15 @@ pub(super) async fn stream_any_sse_as_messages(
         .await;
     let stop = json!({ "type": "message_stop" });
     let _ = tx.send(Event::default().data(stop.to_string())).await;
+    record_stream_terminal_event(
+        &runtime_metrics,
+        "message_stop",
+        Some(if tool_indices.is_empty() {
+            "end_turn"
+        } else {
+            "tool_use"
+        }),
+    )
+    .await;
     Ok(())
 }
