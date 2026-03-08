@@ -335,16 +335,20 @@ export function RequestLogsPage() {
 	const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined)
 	const [timeTo, setTimeTo] = useState<Date | undefined>(undefined)
 	const [filtersExpanded, setFiltersExpanded] = useState(true)
-	const tooltipOpenCountRef = useRef(0)
+	const openTooltipIdsRef = useRef<Set<string>>(new Set())
 	const pendingPageDataRef = useRef<import('@/lib/api').RequestLogsResponse | null>(null)
 	const pendingNewestDataRef = useRef<import('@/lib/api').RequestLogsResponse | null>(null)
 	const pendingSSERef = useRef<RequestLog[]>([])
 	const [flushSignal, setFlushSignal] = useState(0)
 
-	const onTooltipOpenChange = useCallback((open: boolean) => {
-		tooltipOpenCountRef.current += open ? 1 : -1
-		if (tooltipOpenCountRef.current <= 0) {
-			tooltipOpenCountRef.current = 0
+	const onTooltipOpenChange = useCallback((tooltipId: string, open: boolean) => {
+		if (open) {
+			openTooltipIdsRef.current.add(tooltipId)
+			return
+		}
+
+		openTooltipIdsRef.current.delete(tooltipId)
+		if (openTooltipIdsRef.current.size === 0) {
 			setFlushSignal(c => c + 1)
 		}
 	}, [])
@@ -491,7 +495,7 @@ export function RequestLogsPage() {
 		activeFilters,
 		{
 			refreshInterval: sseConnected ? 0 : 3000,
-			isPaused: () => tooltipOpenCountRef.current > 0
+			isPaused: () => openTooltipIdsRef.current.size > 0
 		}
 	)
 
@@ -504,7 +508,7 @@ export function RequestLogsPage() {
 			return
 		}
 
-		if (tooltipOpenCountRef.current > 0) {
+		if (openTooltipIdsRef.current.size > 0) {
 			pendingSSERef.current = [...pendingSSERef.current, ...sseEvent.logs]
 			return
 		}
@@ -525,7 +529,7 @@ export function RequestLogsPage() {
 	useEffect(() => {
 		if (!pageData) return
 
-		if (tooltipOpenCountRef.current > 0) {
+		if (openTooltipIdsRef.current.size > 0) {
 			pendingPageDataRef.current = pageData
 			return
 		}
@@ -548,7 +552,7 @@ export function RequestLogsPage() {
 	useEffect(() => {
 		if (!newestPageData) return
 
-		if (tooltipOpenCountRef.current > 0) {
+		if (openTooltipIdsRef.current.size > 0) {
 			pendingNewestDataRef.current = newestPageData
 			return
 		}
@@ -571,7 +575,7 @@ export function RequestLogsPage() {
 	// Flush buffered data when all tooltips close
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
-		if (tooltipOpenCountRef.current > 0) return
+		if (openTooltipIdsRef.current.size > 0) return
 
 		const bufferedPage = pendingPageDataRef.current
 		const bufferedNewest = pendingNewestDataRef.current
@@ -1017,8 +1021,41 @@ function LogRowCells({
 	formatDuration: (v: number | null | undefined) => string | null
 	formatTime: (v: string) => string
 	t: (key: string) => string
-	onTooltipOpenChange: (open: boolean) => void
+	onTooltipOpenChange: (tooltipId: string, open: boolean) => void
 }) {
+	const rowTooltipIdsRef = useRef<Set<string>>(new Set())
+	const tooltipPrefix = log.request_id || log.id
+
+	const bindTooltipOpenChange = useCallback(
+		(suffix: string) => {
+			const tooltipId = `${tooltipPrefix}:${suffix}`
+			return (open: boolean) => {
+				if (open) rowTooltipIdsRef.current.add(tooltipId)
+				else rowTooltipIdsRef.current.delete(tooltipId)
+				onTooltipOpenChange(tooltipId, open)
+			}
+		},
+		[onTooltipOpenChange, tooltipPrefix]
+	)
+
+	useEffect(() => {
+		return () => {
+			for (const tooltipId of rowTooltipIdsRef.current) {
+				onTooltipOpenChange(tooltipId, false)
+			}
+			rowTooltipIdsRef.current.clear()
+		}
+	}, [onTooltipOpenChange])
+
+	const requestTooltipOpenChange = bindTooltipOpenChange('request')
+	const modelTooltipOpenChange = bindTooltipOpenChange('model')
+	const tokenTooltipOpenChange = bindTooltipOpenChange('token')
+	const channelTooltipOpenChange = bindTooltipOpenChange('channel')
+	const durationTooltipOpenChange = bindTooltipOpenChange('duration')
+	const inputTooltipOpenChange = bindTooltipOpenChange('input')
+	const outputTooltipOpenChange = bindTooltipOpenChange('output')
+	const costTooltipOpenChange = bindTooltipOpenChange('cost')
+
 	const isConnectivityTest =
 		log.request_kind === 'active_probe_connectivity' && !log.api_key.name
 	const durationMs = getDurationMs(log)
@@ -1201,7 +1238,7 @@ function LogRowCells({
 			<td className='px-2 py-1 whitespace-nowrap align-middle'>
 				{log.request_id ?
 					<TooltipProvider delayDuration={200}>
-						<Tooltip onOpenChange={onTooltipOpenChange}>
+						<Tooltip onOpenChange={requestTooltipOpenChange}>
 							<TooltipTrigger asChild>
 								<span className='inline-flex items-center gap-1 font-mono text-muted-foreground cursor-default'>
 									<span>{log.request_id.substring(0, 8)}</span>
@@ -1270,7 +1307,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 align-middle whitespace-nowrap'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={onTooltipOpenChange}>
+					<Tooltip onOpenChange={modelTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>
 								<ModelBadge
@@ -1323,7 +1360,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={onTooltipOpenChange}>
+					<Tooltip onOpenChange={tokenTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
 								{isConnectivityTest ?
@@ -1354,7 +1391,7 @@ function LogRowCells({
 				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
 					{providerDisplay ?
 						<TooltipProvider delayDuration={200}>
-							<Tooltip onOpenChange={onTooltipOpenChange}>
+							<Tooltip onOpenChange={channelTooltipOpenChange}>
 								<TooltipTrigger asChild>
 									<span className='inline-flex h-4 items-center cursor-default max-w-[80px] truncate'>
 										{providerDisplay}
@@ -1381,7 +1418,7 @@ function LogRowCells({
 				<div className='flex items-center gap-px'>
 					{duration && (
 						<TooltipProvider delayDuration={200}>
-							<Tooltip onOpenChange={onTooltipOpenChange}>
+							<Tooltip onOpenChange={durationTooltipOpenChange}>
 								<TooltipTrigger asChild>
 									<Badge
 										variant='secondary'
@@ -1450,7 +1487,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={onTooltipOpenChange}>
+					<Tooltip onOpenChange={inputTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>{formatTokenCount(inputTokensForDisplay)}</span>
 						</TooltipTrigger>
@@ -1479,7 +1516,7 @@ function LogRowCells({
 
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={onTooltipOpenChange}>
+					<Tooltip onOpenChange={outputTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>
 								{formatTokenCount(outputTokensForDisplay)}
@@ -1511,7 +1548,7 @@ function LogRowCells({
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono align-middle'>
 				{hasBreakdownContent ? (
 					<TooltipProvider delayDuration={200}>
-						<Tooltip onOpenChange={onTooltipOpenChange}>
+						<Tooltip onOpenChange={costTooltipOpenChange}>
 							<TooltipTrigger asChild>
 								<span
 									className='inline-flex items-center whitespace-nowrap align-bottom cursor-default'
