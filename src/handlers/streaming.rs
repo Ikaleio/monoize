@@ -143,9 +143,12 @@ pub(super) async fn forward_stream_typed(
                         )
                         .await
                         {
-                            let _ = tx_err.send(Event::default().data("[DONE]")).await;
                             tracing::warn!("synthetic stream failed: {}", err.message);
                         }
+                        // Always terminate the SSE stream.  emit_synthetic_chat_stream
+                        // already sends [DONE], but the responses and messages variants
+                        // do not — the duplicate is harmless.
+                        let _ = tx_err.send(Event::default().data("[DONE]")).await;
                     });
                     return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
                 }
@@ -421,13 +424,11 @@ pub(super) async fn forward_stream_typed(
                         });
                         match downstream {
                             DownstreamProtocol::Responses => {
-                                let _ = tx_err
-                                    .send(
+                                let _ = tx_err.send(
                                         Event::default()
                                             .event("error")
                                             .data(error_json.to_string()),
-                                    )
-                                    .await;
+                                ).await;
                             }
                             DownstreamProtocol::ChatCompletions => {
                                 let _ = tx_err
@@ -442,8 +443,12 @@ pub(super) async fn forward_stream_typed(
                                 ).await;
                             }
                         }
-                        let _ = tx_err.send(Event::default().data("[DONE]")).await;
                     }
+                    // Always send [DONE] to terminate the SSE stream, whether the
+                    // adapter succeeded or failed.  Several adapter functions
+                    // (all *_as_responses and *_as_messages variants) do not emit
+                    // [DONE] themselves; the duplicate is harmless for those that do.
+                    let _ = tx_err.send(Event::default().data("[DONE]")).await;
                 });
                 return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
             }
