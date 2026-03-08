@@ -110,8 +110,8 @@ export function ApiKeysPage() {
       setCreatedKey(key);
       resetCreateForm();
       setCreateOpen(false);
-    } catch {
-      // Error handled by optimistic update
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("apiKeys.failedCreate"));
     } finally {
       setCreating(false);
     }
@@ -149,8 +149,8 @@ export function ApiKeysPage() {
       );
       setEditKey(null);
       resetCreateForm();
-    } catch {
-      // Error handled by optimistic update
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("apiKeys.failedUpdate"));
     } finally {
       setUpdating(false);
     }

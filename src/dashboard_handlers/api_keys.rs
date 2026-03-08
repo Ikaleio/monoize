@@ -179,8 +179,10 @@ pub async fn create_api_key(
         transforms: body.transforms,
     };
 
+    let is_admin = user.role.can_manage_system();
+
     let (api_key, key) = user_store
-        .create_api_key_extended(&user.id, input)
+        .create_api_key_extended(&user.id, input, is_admin)
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
@@ -320,8 +322,10 @@ pub async fn update_api_key(
         expires_at: body.expires_at,
     };
 
+    let is_admin = user.role.can_manage_system();
+
     let updated_key = user_store
-        .update_api_key(&key_id, input)
+        .update_api_key(&key_id, input, is_admin)
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 

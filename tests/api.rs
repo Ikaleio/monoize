@@ -4096,6 +4096,7 @@ async fn models_list_respects_api_key_model_limits() {
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
+            false,
         )
         .await
         .expect("create restricted api key");
@@ -4148,6 +4149,7 @@ async fn models_list_model_limits_disabled_shows_all() {
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
+            false,
         )
         .await
         .expect("create api key with disabled limits");
@@ -4237,6 +4239,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
                 max_multiplier: None,
                 transforms: vec![],
             },
+            false,
         )
         .await
         .unwrap();
@@ -4922,6 +4925,7 @@ async fn quota_exhausted_returns_429() {
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
+            false,
         )
         .await
         .expect("create quota api key");
@@ -5054,6 +5058,7 @@ async fn ip_whitelist_blocks_non_whitelisted() {
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
+            false,
         )
         .await
         .expect("create ip restricted api key");

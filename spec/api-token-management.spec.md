@@ -104,6 +104,9 @@ TM-TF-3. Allowed API-key request-phase transforms are exactly:
 - `merge_consecutive_roles`
 - `append_empty_user_message`
 - `compress_user_message_images`
+- `auto_cache_system`
+- `auto_cache_tool_use`
+- `auto_cache_user_id`
 
 TM-TF-4. Allowed API-key response-phase transforms are exactly:
 
@@ -111,7 +114,7 @@ TM-TF-4. Allowed API-key response-phase transforms are exactly:
 - `reasoning_to_think_xml`
 - `think_xml_to_reasoning`
 
-TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routing, upstream model selection, upstream pricing tier, cache billing behavior, request execution mode, output token ceiling, or arbitrary provider passthrough fields. This forbidden set includes at minimum:
+TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routing, upstream model selection, upstream pricing tier, request execution mode, output token ceiling, or arbitrary provider passthrough fields. This forbidden set includes at minimum:
 
 - `set_field`
 - `remove_field`
@@ -119,13 +122,14 @@ TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routin
 - `override_max_tokens`
 - `reasoning_effort_to_budget`
 - `reasoning_effort_to_model_suffix`
-- `auto_cache_user_id`
-- `auto_cache_system`
-- `auto_cache_tool_use`
 
-TM-TF-6. Requests rejected by TM-TF-2 through TM-TF-5 MUST return HTTP `400` with code `invalid_request`.
+TM-TF-6. Requests rejected by TM-TF-2 through TM-TF-5 MUST return HTTP `400` with code `invalid_request`. The error response body MUST include a human-readable message identifying the disallowed transform name.
 
 TM-TF-7. Runtime enforcement MUST be defensive: when an API key row is loaded from storage, the server MUST discard any transform rules that are not permitted by TM-TF-3 and TM-TF-4 before attaching them to the authenticated context.
+
+TM-TF-8. Admin bypass: Users with role `super_admin` or `admin` (as determined by `UserRole::can_manage_system()`) are exempt from TM-TF-2 through TM-TF-5. For admin users, `validate_api_key_transforms` MUST accept any transform, and `sanitize_api_key_transforms` MUST preserve all transforms without filtering.
+
+TM-TF-9. When an API key create or update request is rejected by the server (including but not limited to transform validation failures), the frontend MUST display the server error message to the user via a toast notification. Silent failure is not acceptable.
 
 ### 2.5 Delete API key
 

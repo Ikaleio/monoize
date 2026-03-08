@@ -19,6 +19,9 @@ const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
     "merge_consecutive_roles",
     "append_empty_user_message",
     "compress_user_message_images",
+    "auto_cache_system",
+    "auto_cache_tool_use",
+    "auto_cache_user_id",
 ];
 
 const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
@@ -38,14 +41,21 @@ pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
 
 pub(crate) fn sanitize_api_key_transforms(
     transforms: Vec<TransformRuleConfig>,
+    is_admin: bool,
 ) -> Vec<TransformRuleConfig> {
+    if is_admin {
+        return transforms;
+    }
     transforms
         .into_iter()
         .filter(is_allowed_api_key_transform)
         .collect()
 }
 
-pub(crate) fn validate_api_key_transforms(transforms: &[TransformRuleConfig]) -> Result<(), String> {
+pub(crate) fn validate_api_key_transforms(transforms: &[TransformRuleConfig], is_admin: bool) -> Result<(), String> {
+    if is_admin {
+        return Ok(());
+    }
     for rule in transforms {
         if !is_allowed_api_key_transform(rule) {
             return Err(format!(
@@ -76,7 +86,7 @@ mod tests {
             }),
         }];
 
-        let sanitized = sanitize_api_key_transforms(transforms);
+        let sanitized = sanitize_api_key_transforms(transforms, false);
         assert!(sanitized.is_empty());
     }
 
@@ -94,7 +104,7 @@ mod tests {
             }),
         }];
 
-        assert!(validate_api_key_transforms(&transforms).is_ok());
+        assert!(validate_api_key_transforms(&transforms, false).is_ok());
     }
 }
 
@@ -457,6 +467,7 @@ impl UserStore {
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
+            false,
         )
         .await
     }
@@ -465,8 +476,9 @@ impl UserStore {
         &self,
         user_id: &str,
         input: CreateApiKeyInput,
+        is_admin: bool,
     ) -> Result<(ApiKey, String), String> {
-        validate_api_key_transforms(&input.transforms)?;
+        validate_api_key_transforms(&input.transforms, is_admin)?;
         let id = uuid::Uuid::new_v4().to_string();
         let key = format!("sk-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let key_prefix = key[..12].to_string();
@@ -725,7 +737,7 @@ impl UserStore {
             .try_get("", "transforms")
             .unwrap_or_else(|_| "[]".to_string());
         let transforms: Vec<TransformRuleConfig> =
-            sanitize_api_key_transforms(serde_json::from_str(&transforms_str).unwrap_or_default());
+            sanitize_api_key_transforms(serde_json::from_str(&transforms_str).unwrap_or_default(), false);
 
         Ok(ApiKey {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -762,9 +774,10 @@ impl UserStore {
         &self,
         key_id: &str,
         input: UpdateApiKeyInput,
+        is_admin: bool,
     ) -> Result<ApiKey, String> {
         if let Some(transforms) = &input.transforms {
-            validate_api_key_transforms(transforms)?;
+            validate_api_key_transforms(transforms, is_admin)?;
         }
         let mut set_clauses = Vec::new();
         let mut values: Vec<SeaValue> = Vec::new();
