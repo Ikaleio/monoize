@@ -128,6 +128,8 @@ FP4c. The request-shape observability log in FP4b MUST include at minimum:
 - total base64 character count for user-image parts;
 - estimated decoded byte count for user-image parts computed from the base64 payload length.
 
+FP4d. For streaming upstream calls, Monoize MUST track terminal-stream evidence in memory during adaptation. At minimum the tracked evidence consists of: whether a literal `[DONE]` sentinel was received, which terminal protocol event was last observed, the terminal finish reason when present, and whether Monoize emitted a synthetic terminal chunk. This evidence is observability-only and MUST NOT change downstream response semantics by itself.
+
 FP5. **Adapt response:** Convert the upstream output (non-streaming or streaming chunks) into URP-Proto output.
 
 FP6. **Render downstream:** Convert URP-Proto output into the downstream endpoint’s response shape (Responses / Chat Completions / Messages), streaming or non-streaming.

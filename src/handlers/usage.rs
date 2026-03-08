@@ -53,6 +53,41 @@ pub(super) async fn latest_stream_usage_snapshot(
     guard.usage.clone()
 }
 
+pub(super) async fn record_stream_done_sentinel(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+) {
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    let mut guard = runtime_metrics.lock().await;
+    guard.terminal.saw_done_sentinel = true;
+}
+
+pub(super) async fn record_stream_terminal_event(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    event: &str,
+    finish_reason: Option<&str>,
+) {
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    let mut guard = runtime_metrics.lock().await;
+    guard.terminal.terminal_event = Some(event.to_string());
+    if let Some(reason) = finish_reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        guard.terminal.terminal_finish_reason = Some(reason.to_string());
+    }
+}
+
+pub(super) async fn record_stream_synthetic_terminal_emitted(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+) {
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    let mut guard = runtime_metrics.lock().await;
+    guard.terminal.synthetic_terminal_emitted = true;
+}
+
 pub(super) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
         "prompt_tokens": usage.input_tokens,

@@ -141,6 +141,7 @@ pub(super) fn spawn_request_log(
     request_ip: Option<String>,
     channel_id: String,
     ttfb_ms: Option<u64>,
+    stream_terminal_diagnostics: Option<StreamTerminalDiagnostics>,
     reasoning_effort: Option<String>,
     tried_providers: Vec<TriedProvider>,
 ) {
@@ -165,6 +166,28 @@ pub(super) fn spawn_request_log(
     };
 
     tokio::spawn(async move {
+        if is_stream && usage.is_none() {
+            tracing::warn!(
+                request_id = request_id.as_deref().unwrap_or(""),
+                provider_id = %provider_id,
+                channel_id = %channel_id,
+                model = %model,
+                upstream_model = %upstream_model,
+                stream_saw_done_sentinel = stream_terminal_diagnostics
+                    .as_ref()
+                    .map(|diagnostics| diagnostics.saw_done_sentinel),
+                stream_terminal_event = stream_terminal_diagnostics
+                    .as_ref()
+                    .and_then(|diagnostics| diagnostics.terminal_event.as_deref()),
+                stream_terminal_finish_reason = stream_terminal_diagnostics
+                    .as_ref()
+                    .and_then(|diagnostics| diagnostics.terminal_finish_reason.as_deref()),
+                stream_synthetic_terminal_emitted = stream_terminal_diagnostics
+                    .as_ref()
+                    .map(|diagnostics| diagnostics.synthetic_terminal_emitted),
+                "stream request completed without usage snapshot"
+            );
+        }
         let log = InsertRequestLog {
             request_id,
             user_id,

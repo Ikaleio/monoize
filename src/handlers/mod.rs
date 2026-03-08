@@ -378,6 +378,7 @@ pub async fn create_embeddings(
                     attempt.channel_id.clone(),
                     None,
                     None,
+                    None,
                     tried_providers,
                 );
 
@@ -544,10 +545,19 @@ enum DownstreamProtocol {
     AnthropicMessages,
 }
 
+#[derive(Clone, Debug, Default, serde::Serialize)]
+struct StreamTerminalDiagnostics {
+    saw_done_sentinel: bool,
+    terminal_event: Option<String>,
+    terminal_finish_reason: Option<String>,
+    synthetic_terminal_emitted: bool,
+}
+
 #[derive(Default)]
 struct StreamRuntimeMetrics {
     ttfb_ms: Option<u64>,
     usage: Option<urp::Usage>,
+    terminal: StreamTerminalDiagnostics,
 }
 
 async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::auth::AuthResult> {
