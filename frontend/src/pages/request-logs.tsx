@@ -485,31 +485,7 @@ export function RequestLogsPage() {
 
 	const { connected: sseConnected, event: sseEvent } = useRequestLogSSE(true)
 
-	useEffect(() => {
-		if (!sseEvent) return
-
-		if (sseEvent.type === 'resync') {
-			void mutate()
-			return
-		}
-
-		if (tooltipOpenCountRef.current > 0) {
-			pendingSSERef.current = [...sseEvent.logs, ...pendingSSERef.current]
-			return
-		}
-
-		prependSSELogs(sseEvent.logs)
-	}, [sseEvent, mutate, prependSSELogs])
-
-	const prevConnectedRef = useRef(false)
-	useEffect(() => {
-		if (sseConnected && !prevConnectedRef.current) {
-			void mutate()
-		}
-		prevConnectedRef.current = sseConnected
-	}, [sseConnected, mutate])
-
-	const { data: newestPageData } = useRequestLogs(
+	const { data: newestPageData, mutate: mutateNewest } = useRequestLogs(
 		REQUEST_LOGS_PAGE_SIZE,
 		0,
 		activeFilters,
@@ -518,6 +494,33 @@ export function RequestLogsPage() {
 			isPaused: () => tooltipOpenCountRef.current > 0
 		}
 	)
+
+	useEffect(() => {
+		if (!sseEvent) return
+
+		if (sseEvent.type === 'resync') {
+			void mutate()
+			void mutateNewest()
+			return
+		}
+
+		if (tooltipOpenCountRef.current > 0) {
+			pendingSSERef.current = [...pendingSSERef.current, ...sseEvent.logs]
+			return
+		}
+
+		prependSSELogs(sseEvent.logs)
+	}, [sseEvent, mutate, mutateNewest, prependSSELogs])
+
+	const prevConnectedRef = useRef(false)
+	useEffect(() => {
+		if (sseConnected && !prevConnectedRef.current) {
+			void mutate()
+			void mutateNewest()
+		}
+		prevConnectedRef.current = sseConnected
+	}, [sseConnected, mutate, mutateNewest])
+
 
 	useEffect(() => {
 		if (!pageData) return
@@ -625,17 +628,6 @@ export function RequestLogsPage() {
 		}).format(cost)
 	}
 
-	const formatCostFullPrecision = (nanoUsd: string | undefined) => {
-		if (nanoUsd == null) return '-'
-		const cost = Number(nanoUsd) / 1e9
-		if (!Number.isFinite(cost)) return '-'
-		return new Intl.NumberFormat('en-US', {
-			style: 'currency',
-			currency: 'USD',
-			minimumFractionDigits: 6,
-			maximumFractionDigits: 9
-		}).format(cost)
-	}
 
 	const formatDuration = (ms: number | null | undefined) => {
 		if (ms == null) return null
@@ -750,7 +742,7 @@ export function RequestLogsPage() {
 					<div className='ml-auto flex items-center gap-3 text-xs text-muted-foreground'>
 						{showingSummary && (
 							<span className='font-medium text-foreground'>
-								{t('requestLogs.totalCost')}: {formatCostFullPrecision(totalCharge)}
+							{t('requestLogs.totalCost')}: {formatCost(totalCharge)}
 							</span>
 						)}
 						{showingSummary ?
@@ -983,7 +975,6 @@ export function RequestLogsPage() {
 							isAdmin={isAdmin}
 							showIp={showIp}
 							formatCost={formatCost}
-							formatCostFullPrecision={formatCostFullPrecision}
 							formatDuration={formatDuration}
 							formatTime={formatTime}
 							t={t}
@@ -1002,7 +993,6 @@ function LogRowCells({
 	isAdmin,
 	showIp,
 	formatCost,
-	formatCostFullPrecision,
 	formatDuration,
 	formatTime,
 	t,
@@ -1012,7 +1002,6 @@ function LogRowCells({
 	isAdmin: boolean
 	showIp: boolean
 	formatCost: (v: string | undefined) => string
-	formatCostFullPrecision: (v: string | undefined) => string
 	formatDuration: (v: number | null | undefined) => string | null
 	formatTime: (v: string) => string
 	t: (key: string) => string
@@ -1026,7 +1015,7 @@ function LogRowCells({
 	const ttfb = formatDuration(ttfbMs)
 	const channelDisplay = log.channel.name?.trim() || log.channel.id || null
 	const providerDisplay = log.provider.name?.trim() || log.provider.id || null
-	const costDisplay = formatCostFullPrecision(log.billing.charge_nano_usd)
+	const costDisplay = formatCost(log.billing.charge_nano_usd)
 	const usageSnapshot = asObject(log.usage)
 	const usageInput = asObject(usageSnapshot?.input)
 	const usageOutput = asObject(usageSnapshot?.output)
@@ -1583,7 +1572,7 @@ function LogRowCells({
 										<div className='flex items-center justify-between gap-3'>
 											<span className='text-xs text-muted-foreground'>{t('requestLogs.totalCost')}</span>
 											<span className='font-mono text-xs'>
-												{formatCostFullPrecision(log.billing.charge_nano_usd)}
+										{formatCost(log.billing.charge_nano_usd)}
 											</span>
 										</div>
 									</div>
