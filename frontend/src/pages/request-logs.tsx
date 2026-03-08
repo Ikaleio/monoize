@@ -616,6 +616,18 @@ export function RequestLogsPage() {
 	const isInitialLoading = isLoading && loadedLogs.length === 0
 	const hasMore = loadedLogs.length < totalCount
 
+	// Guarantee chronological order (newest first) regardless of SSE insertion order
+	const sortedLogs = useMemo(() => {
+		const sorted = [...loadedLogs]
+		sorted.sort((a, b) => {
+			const ta = Date.parse(a.created_at)
+			const tb = Date.parse(b.created_at)
+			if (ta !== tb) return tb - ta
+			return b.id.localeCompare(a.id)
+		})
+		return sorted
+	}, [loadedLogs])
+
 	const formatCost = (nanoUsd: string | undefined) => {
 		if (nanoUsd == null) return '-'
 		const cost = Number(nanoUsd) / 1e9
@@ -904,7 +916,7 @@ export function RequestLogsPage() {
 					</div>
 				:	<TableVirtuoso
 						style={{ height: '100%', overflowX: 'auto' }}
-						data={loadedLogs}
+					data={sortedLogs}
 						overscan={480}
 						endReached={handleLoadMore}
 						components={{
