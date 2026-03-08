@@ -555,6 +555,7 @@
 		"input": "输入",
 		"output": "输出",
 		"detailsUnavailable": "暂无明细快照",
+		"usageUnavailable": "用量不可用",
 		"totalTokens": "总 Token",
 		"uncachedTokens": "非缓存 Token",
 		"cacheCreationTokens": "缓存写入 Token",

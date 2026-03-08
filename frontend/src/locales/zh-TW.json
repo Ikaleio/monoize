@@ -555,6 +555,7 @@
 		"input": "輸入",
 		"output": "輸出",
 		"detailsUnavailable": "暫無明細快照",
+		"usageUnavailable": "用量不可用",
 		"totalTokens": "總 Token",
 		"uncachedTokens": "非快取 Token",
 		"cacheCreationTokens": "快取寫入 Token",

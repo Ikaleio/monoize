@@ -1060,6 +1060,7 @@ function LogRowCells({
 
 	const inputTotal =
 		readTokenCount(usageInput, 'total_tokens') ?? log.tokens.input ?? null
+	const inputUsageUnavailable = inputTotal == null
 	const inputUncached =
 		readTokenCount(usageInput, 'uncached_tokens') ??
 		Math.max((log.tokens.input ?? 0) - (log.tokens.cache_read ?? 0), 0)
@@ -1110,6 +1111,7 @@ function LogRowCells({
 
 	const outputTotal =
 		readTokenCount(usageOutput, 'total_tokens') ?? log.tokens.output ?? null
+	const outputUsageUnavailable = outputTotal == null
 	const outputNonReasoning =
 		readTokenCount(usageOutput, 'non_reasoning_tokens') ??
 		Math.max((log.tokens.output ?? 0) - (log.tokens.reasoning ?? 0), 0)
@@ -1118,8 +1120,8 @@ function LogRowCells({
 		readTokenCount(usageOutput, 'reasoning_tokens') ??
 		log.tokens.reasoning ??
 		null
-	const inputTokensForDisplay = inputTotal ?? 0
-	const outputTokensForDisplay = outputTotal ?? 0
+	const inputTokensForDisplay = inputTotal ?? null
+	const outputTokensForDisplay = outputTotal ?? null
 	const outputAudio = readTokenCount(usageOutput, 'audio_tokens')
 	const outputImage = readTokenCount(usageOutput, 'image_tokens')
 
@@ -1398,13 +1400,14 @@ function LogRowCells({
 										</div>
 										{durationMs != null &&
 											durationMs > 0 &&
-											outputTokensForDisplay > 0 && (() => {
+											outputTotal != null &&
+											outputTotal > 0 && (() => {
 												// When ttfb ≈ duration (no visible streaming output,
 												// e.g. pure reasoning then tool_call), use total time
 												const generationMs = (ttfbMs != null && durationMs > ttfbMs)
 													? durationMs - ttfbMs
 													: durationMs
-												const tpsValue = outputTokensForDisplay / (generationMs / 1000);
+												const tpsValue = outputTotal / (generationMs / 1000);
 												return (
 													<div className='flex items-center justify-between gap-3'>
 														<span>{t('requestLogs.avgTps')}</span>
@@ -1448,19 +1451,25 @@ function LogRowCells({
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='cursor-default'>{new Intl.NumberFormat('en-US').format(inputTokensForDisplay)}</span>
+							<span className='cursor-default'>{formatTokenCount(inputTokensForDisplay)}</span>
 						</TooltipTrigger>
 						<TooltipContent>
 							<div className='text-xs space-y-0.5 min-w-[220px]'>
-								{inputDetailRows.map(([label, value]) => (
-									<div
-										key={label}
-										className='flex items-center justify-between gap-3'
-									>
-										<span>{label}</span>
-										<span className='font-mono'>{value}</span>
+								{inputUsageUnavailable ? (
+									<div className='text-muted-foreground'>
+										{t('requestLogs.usageUnavailable')}
 									</div>
-								))}
+								) : (
+									inputDetailRows.map(([label, value]) => (
+										<div
+											key={label}
+											className='flex items-center justify-between gap-3'
+										>
+											<span>{label}</span>
+											<span className='font-mono'>{value}</span>
+										</div>
+									))
+								)}
 							</div>
 						</TooltipContent>
 					</Tooltip>
@@ -1472,20 +1481,26 @@ function LogRowCells({
 					<Tooltip onOpenChange={onTooltipOpenChange}>
 						<TooltipTrigger asChild>
 							<span className='cursor-default'>
-								{new Intl.NumberFormat('en-US').format(outputTokensForDisplay)}
+								{formatTokenCount(outputTokensForDisplay)}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>
 							<div className='text-xs space-y-0.5 min-w-[220px]'>
-								{outputDetailRows.map(([label, value]) => (
-									<div
-										key={label}
-										className='flex items-center justify-between gap-3'
-									>
-										<span>{label}</span>
-										<span className='font-mono'>{value}</span>
+								{outputUsageUnavailable ? (
+									<div className='text-muted-foreground'>
+										{t('requestLogs.usageUnavailable')}
 									</div>
-								))}
+								) : (
+									outputDetailRows.map(([label, value]) => (
+										<div
+											key={label}
+											className='flex items-center justify-between gap-3'
+										>
+											<span>{label}</span>
+											<span className='font-mono'>{value}</span>
+										</div>
+									))
+								)}
 							</div>
 						</TooltipContent>
 					</Tooltip>

@@ -554,6 +554,7 @@
 		"input": "入力",
 		"output": "出力",
 		"detailsUnavailable": "詳細スナップショットがありません",
+		"usageUnavailable": "使用量を取得できません",
 		"totalTokens": "総トークン",
 		"uncachedTokens": "非キャッシュトークン",
 		"cacheCreationTokens": "キャッシュ書込トークン",

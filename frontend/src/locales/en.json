@@ -555,6 +555,7 @@
 		"input": "In",
 		"output": "Out",
 		"detailsUnavailable": "No snapshot details",
+		"usageUnavailable": "Usage unavailable",
 		"totalTokens": "Total Tokens",
 		"uncachedTokens": "Uncached Tokens",
 		"cacheCreationTokens": "Cache Creation Tokens",
