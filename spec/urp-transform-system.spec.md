@@ -98,6 +98,7 @@ TF-7. Built-ins that MUST exist:
 - `remove_field`
 - `force_stream`
 - `append_empty_user_message`
+- `split_sse_frames`
 - `auto_cache_user_id`
 - `auto_cache_system`
 - `auto_cache_tool_use`
@@ -159,6 +160,38 @@ CUMI-7. Failure handling:
 1. Invalid base64 image payloads MUST leave the original part unchanged.
 2. Unsupported or undecodable image payloads MUST leave the original part unchanged.
 3. Cache write failures or cache cleanup failures MUST NOT mutate the request incorrectly; if compression succeeds but cache persistence fails, the runtime MAY still use the in-memory transformed payload for the current request.
+
+### 4.4 `split_sse_frames`
+
+SSF-1. Phase: `response` only.
+
+SSF-2. Config MAY contain:
+- `max_frame_length` (integer, optional): maximum allowed byte length of any emitted downstream SSE frame payload produced by this transform. Defaults to `131072`.
+
+SSF-3. Default rationale:
+1. The default value `131072` MUST match the effective default aiohttp `StreamReader.readline()` high-water limit for SSE body lines when aiohttp client settings are left at defaults.
+2. The runtime MUST NOT use aiohttp HTTP-header parser limits such as `8190` as the default for this transform, because those limits apply to header parsing rather than SSE body payload lines.
+
+SSF-4. Activation and scope:
+1. If a streaming request matches at least one enabled `split_sse_frames` response-phase rule, the runtime MUST execute the request through the existing response-transform synthetic-stream path defined in PIPE-1a.
+2. The transform MUST affect only downstream SSE emitted by Monoize.
+3. Non-stream requests MUST remain semantically unchanged.
+
+SSF-5. Splitting behavior:
+1. The runtime MUST preserve downstream protocol correctness for Responses, Chat Completions, and Anthropic Messages SSE output.
+2. The runtime MUST split oversized string-bearing delta payloads into multiple smaller downstream SSE events of the same protocol/event kind, in original order, such that concatenating the payload fragments according to the downstream protocol reconstructs the original content.
+3. Eligible split targets include text deltas, reasoning deltas, reasoning signature deltas, and tool-argument deltas.
+4. The runtime MUST NOT split inside a JSON string literal by inserting raw SSE line breaks into serialized JSON text.
+
+SSF-6. Snapshot event handling:
+1. If a Responses synthetic stream event contains a full snapshot object whose serialized payload would exceed `max_frame_length` because it duplicates content already emitted in delta events, the runtime MAY replace large text-bearing fields in that snapshot with protocol-valid empty values.
+2. When such sanitization occurs, the downstream stream MUST remain reconstructable from the emitted delta events and terminal events.
+3. Lifecycle events that are already within `max_frame_length` MUST be emitted unchanged.
+
+SSF-7. Failure handling:
+1. If `max_frame_length` is too small to encode even the minimal protocol wrapper for a required event, the runtime MAY emit the minimal unsplit event for that wrapper rather than fail the entire request.
+2. The transform MUST preserve event order.
+3. The transform MUST NOT change `usage`, `finish_reason`, `call_id`, `name`, `phase`, or role metadata except for emptying duplicated large snapshot strings under SSF-6.
 
 ### 4.1 `reasoning_effort_to_model_suffix`
 
