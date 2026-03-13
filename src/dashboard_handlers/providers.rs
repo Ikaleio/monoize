@@ -504,6 +504,11 @@ pub async fn get_transform_registry(State(state): State<AppState>) -> AppResult<
                     .iter()
                     .map(|p| serde_json::to_value(p).unwrap_or(Value::String("request".to_string())))
                     .collect::<Vec<_>>(),
+                "supported_scopes": transform
+                    .supported_scopes()
+                    .iter()
+                    .map(|scope| serde_json::to_value(scope).unwrap_or(Value::String("provider".to_string())))
+                    .collect::<Vec<_>>(),
                 "config_schema": transform.config_schema(),
             })
         })

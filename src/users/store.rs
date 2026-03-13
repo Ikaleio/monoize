@@ -28,6 +28,7 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
     "strip_reasoning",
     "reasoning_to_think_xml",
     "think_xml_to_reasoning",
+    "split_sse_frames",
 ];
 
 pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {

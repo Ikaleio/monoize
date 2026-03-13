@@ -113,6 +113,7 @@ TM-TF-4. Allowed API-key response-phase transforms are exactly:
 - `strip_reasoning`
 - `reasoning_to_think_xml`
 - `think_xml_to_reasoning`
+- `split_sse_frames`
 
 TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routing, upstream model selection, upstream pricing tier, request execution mode, output token ceiling, or arbitrary provider passthrough fields. This forbidden set includes at minimum:
 
@@ -130,6 +131,8 @@ TM-TF-7. Runtime enforcement MUST be defensive: when an API key row is loaded fr
 TM-TF-8. Admin bypass: Users with role `super_admin` or `admin` (as determined by `UserRole::can_manage_system()`) are exempt from TM-TF-2 through TM-TF-5. For admin users, `validate_api_key_transforms` MUST accept any transform, and `sanitize_api_key_transforms` MUST preserve all transforms without filtering.
 
 TM-TF-9. When an API key create or update request is rejected by the server (including but not limited to transform validation failures), the frontend MUST display the server error message to the user via a toast notification. Silent failure is not acceptable.
+
+TM-TF-10. The dashboard transform registry consumed by the API key editor MUST carry explicit transform scope metadata. The API key editor MUST list only transforms whose scope includes `api_key`; transforms that are unavailable for API keys MUST be hidden rather than displayed and rejected later.
 
 ### 2.5 Delete API key
 

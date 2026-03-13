@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,10 @@ export function ApiKeysPage() {
   const { t } = useTranslation();
   const { data: keys = [], isLoading } = useApiKeys();
   const { data: transformRegistry = [] } = useTransformRegistry();
+  const apiKeyTransformRegistry = useMemo(
+    () => transformRegistry.filter((item) => item.supported_scopes.includes("api_key")),
+    [transformRegistry]
+  );
   const [createOpen, setCreateOpen] = useState(false);
   const [editKey, setEditKey] = useState<ApiKey | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
@@ -79,7 +83,7 @@ export function ApiKeysPage() {
 
   const handleCreate = async () => {
     if (!newKeyName.trim()) return;
-    const invalidRule = findFirstInvalidTransformRule(newKeyTransforms, transformRegistry);
+    const invalidRule = findFirstInvalidTransformRule(newKeyTransforms, apiKeyTransformRegistry);
     if (invalidRule) {
       const firstError = invalidRule.errors[0];
       toast.error(t("transforms.validationRuleInvalid", {
@@ -119,7 +123,7 @@ export function ApiKeysPage() {
 
   const handleUpdate = async () => {
     if (!editKey) return;
-    const invalidRule = findFirstInvalidTransformRule(newKeyTransforms, transformRegistry);
+    const invalidRule = findFirstInvalidTransformRule(newKeyTransforms, apiKeyTransformRegistry);
     if (invalidRule) {
       const firstError = invalidRule.errors[0];
       toast.error(t("transforms.validationRuleInvalid", {
@@ -386,7 +390,7 @@ export function ApiKeysPage() {
                   </div>
                   <TransformChainEditor
                     value={newKeyTransforms}
-                    registry={transformRegistry}
+                    registry={apiKeyTransformRegistry}
                     onChange={setNewKeyTransforms}
                   />
                 </div>
@@ -742,7 +746,7 @@ export function ApiKeysPage() {
               </div>
               <TransformChainEditor
                 value={newKeyTransforms}
-                registry={transformRegistry}
+                registry={apiKeyTransformRegistry}
                 onChange={setNewKeyTransforms}
               />
             </div>

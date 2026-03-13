@@ -20,6 +20,8 @@ export interface AuthResponse {
 
 export type Phase = "request" | "response";
 
+export type TransformScope = "provider" | "api_key";
+
 export interface TransformRuleConfig {
   transform: string;
   enabled: boolean;
@@ -31,6 +33,7 @@ export interface TransformRuleConfig {
 export interface TransformRegistryItem {
   type_id: string;
   supported_phases: Phase[];
+  supported_scopes: TransformScope[];
   config_schema: Record<string, unknown>;
 }
 

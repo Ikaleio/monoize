@@ -213,6 +213,12 @@ AK2. API key downstream transform editor MUST follow the same interaction contra
 
 AK3. API key transform edits MUST be scoped to the edited key only and MUST NOT mutate other keys.
 
+AK3a. API key transform editor option list MUST be filtered by transform scope metadata returned from `/api/dashboard/transforms/registry`.
+
+- The editor MUST show only transforms whose `supported_scopes` includes `api_key`.
+- The editor MUST continue filtering by `supported_phases` within the API-key-scoped subset.
+- Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
+
 ## 5. Dashboard Home Page
 
 DH1. `/dashboard` MUST render a dark themed overview shell containing exactly 3 visual rows:
