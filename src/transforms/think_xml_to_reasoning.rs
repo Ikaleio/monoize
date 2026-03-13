@@ -1,6 +1,6 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformState, UrpData,
+    TransformScope, TransformState, UrpData, response_output_messages_mut,
 };
 use async_trait::async_trait;
 use crate::urp::{Part, PartDelta, PartHeader, UrpStreamEvent};
@@ -43,6 +43,10 @@ impl Transform for ThinkXmlToReasoningTransform {
         &[Phase::Response]
     }
 
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -76,18 +80,20 @@ impl Transform for ThinkXmlToReasoningTransform {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
             UrpData::Response(resp) => {
-                let mut out = Vec::new();
-                for part in &resp.message.parts {
-                    if let Part::Text { content, .. } = part {
-                        let parsed = extract_text_and_reasoning(content, &cfg.tag);
-                        for piece in parsed {
-                            out.push(piece);
+                for message in response_output_messages_mut(resp) {
+                    let mut out = Vec::new();
+                    for part in &message.parts {
+                        if let Part::Text { content, .. } = part {
+                            let parsed = extract_text_and_reasoning(content, &cfg.tag);
+                            for piece in parsed {
+                                out.push(piece);
+                            }
+                        } else {
+                            out.push(part.clone());
                         }
-                    } else {
-                        out.push(part.clone());
                     }
+                    message.parts = out;
                 }
-                resp.message.parts = out;
             }
             UrpData::Stream(event) => {
                 let Some(stream_state) = state.as_any_mut().downcast_mut::<StreamState>() else {
@@ -112,7 +118,6 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
             if !rest.is_empty() {
                 parts.push(Part::Text {
                     content: rest.to_string(),
-                    phase: None,
                     extra_body: HashMap::new(),
                 });
             }
@@ -122,7 +127,6 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
         if !before.is_empty() {
             parts.push(Part::Text {
                 content: before.to_string(),
-                phase: None,
                 extra_body: HashMap::new(),
             });
         }
@@ -130,7 +134,10 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
         let Some(end) = after_open.find(&close) else {
             if !after_open.is_empty() {
                 parts.push(Part::Reasoning {
-                    content: after_open.to_string(),
+                    content: Some(after_open.to_string()),
+                    encrypted: None,
+                    summary: None,
+                    source: None,
                     extra_body: HashMap::new(),
                 });
             }
@@ -139,7 +146,10 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
         let reasoning = &after_open[..end];
         if !reasoning.is_empty() {
             parts.push(Part::Reasoning {
-                content: reasoning.to_string(),
+                content: Some(reasoning.to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
                 extra_body: HashMap::new(),
             });
         }
@@ -153,16 +163,24 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
     let close = format!("</{tag}>");
     match event {
         UrpStreamEvent::PartStart {
-            part_index, part, ..
+            message_index,
+            part_index,
+            header,
+            ..
         } => {
-            if matches!(part, PartHeader::Text) {
-                state.in_reasoning.insert(*part_index, false);
+            if matches!(header, PartHeader::Text) {
+                state
+                    .in_reasoning
+                    .insert((*message_index << 16) | *part_index, false);
             }
         }
         UrpStreamEvent::Delta {
-            part_index, delta, ..
+            part_index,
+            delta,
+            ..
         } => {
-            let Some(in_reasoning) = state.in_reasoning.get_mut(part_index) else {
+            let key = *part_index;
+            let Some(in_reasoning) = state.in_reasoning.get_mut(&key) else {
                 return;
             };
             if let PartDelta::Text { content } = delta {
@@ -176,11 +194,16 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                         s = s[..end].to_string();
                         *in_reasoning = false;
                     }
-                    *delta = PartDelta::Reasoning { content: s };
+                    *delta = PartDelta::Reasoning {
+                        content: s,
+                    };
                 }
             }
         }
-        UrpStreamEvent::PartDone { part_index, .. } => {
+        UrpStreamEvent::PartDone {
+            part_index,
+            ..
+        } => {
             state.in_reasoning.remove(part_index);
         }
         _ => {}

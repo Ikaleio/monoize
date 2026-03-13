@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState,
+    TransformRuntimeContext, TransformScope, TransformState,
     UrpData,
 };
 use async_trait::async_trait;
@@ -30,6 +30,10 @@ impl Transform for AutoCacheUserIdTransform {
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Request]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
     }
 
     fn config_schema(&self) -> Value {
@@ -95,7 +99,7 @@ impl Transform for AutoCacheUserIdTransform {
 }
 
 fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
-    req.messages.iter().any(|msg| {
+    req.inputs.iter().any(|msg| {
         msg.parts
             .iter()
             .any(|part| part_extra_body(part).is_some_and(|eb| eb.contains_key("cache_control")))
@@ -109,9 +113,9 @@ fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap
         | crate::urp::Part::Audio { extra_body, .. }
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ReasoningEncrypted { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
         | crate::urp::Part::ToolResult { extra_body, .. }
+        | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }
 }

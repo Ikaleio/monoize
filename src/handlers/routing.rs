@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn now_ts() -> i64 {
+pub(crate) fn now_ts() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
@@ -573,7 +573,7 @@ pub(super) fn error_to_sse_stream(
     futures_util::stream::iter(events.into_iter().map(Ok))
 }
 
-pub(super) fn wrap_responses_event(seq: &mut u64, name: &str, data: Value) -> Event {
+pub(crate) fn wrap_responses_event(seq: &mut u64, name: &str, data: Value) -> Event {
     let payload = json!({ "sequence_number": *seq, "data": data });
     *seq += 1;
     Event::default().event(name).data(payload.to_string())

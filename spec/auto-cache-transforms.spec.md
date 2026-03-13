@@ -8,7 +8,7 @@
 
 ## 1. Shared Definitions
 
-DEF-1. A **cache breakpoint** is any `Part` in `req.messages` whose `extra_body` contains a key `"cache_control"`.
+DEF-1. A **cache breakpoint** is any `Part` in `req.inputs` whose `extra_body` contains a key `"cache_control"`.
 
 DEF-2. The **cache breakpoint count** of a request is the total number of cache breakpoints across all messages and all parts.
 
@@ -32,7 +32,7 @@ ACUID-3. Config schema: empty object, no configuration parameters.
 
 ACUID-4. If `req.extra_body["__monoize_username"]` is absent or not a string, the transform is a no-op.
 
-ACUID-5. If no cache breakpoint exists anywhere in `req.messages` (i.e., cache breakpoint count = 0), the transform is a no-op.
+ACUID-5. If no cache breakpoint exists anywhere in `req.inputs` (i.e., cache breakpoint count = 0), the transform is a no-op.
 
 ### 2.3 Behavior
 
@@ -40,7 +40,7 @@ ACUID-6. **Anthropic user ID injection**: The transform MUST ensure `req.extra_b
 
 ACUID-7. **OpenAI user field injection**: If `req.user` is `None`, it MUST be set to `<username>`. If `req.user` is already `Some(...)`, it MUST NOT be overwritten.
 
-ACUID-8. The transform MUST NOT modify `req.messages`, `req.model`, or any `Part` content.
+ACUID-8. The transform MUST NOT modify `req.inputs`, `req.model`, or any `Part` content.
 
 ## 3. `auto_cache_system`
 
@@ -56,13 +56,13 @@ ACS-3. Config schema: empty object, no configuration parameters.
 
 ACS-4. If the cache breakpoint count is `>= 4`, the transform is a no-op.
 
-ACS-5. If `req.messages` contains no message with `role == System` or `role == Developer`, the transform is a no-op.
+ACS-5. If `req.inputs` contains no message with `role == System` or `role == Developer`, the transform is a no-op.
 
 ACS-6. If any part of the target system message (defined in ACS-7) already contains a `"cache_control"` key in its `extra_body`, the transform is a no-op.
 
 ### 3.3 Behavior
 
-ACS-7. The **target message** is the last message in `req.messages` whose role is `System` or `Developer` (searched via reverse-position scan).
+ACS-7. The **target message** is the last message in `req.inputs` whose role is `System` or `Developer` (searched via reverse-position scan).
 
 ACS-8. The transform MUST insert `"cache_control": {"type": "ephemeral"}` into the `extra_body` of the last `Part` of the target message.
 
@@ -82,24 +82,24 @@ ACTU-3. Config schema: empty object, no configuration parameters.
 
 ### 4.2 Preconditions
 
-ACTU-4. Let `last_msg` = the last element of `req.messages`. If `last_msg.role != Tool` AND `last_msg` contains no `Part::ToolResult`, the transform is a no-op. (The request is not a tool-result submission.)
+ACTU-4. Let `last_msg` = the last element of `req.inputs`. If `last_msg.role != Tool` AND `last_msg` contains no `Part::ToolResult`, the transform is a no-op. (The request is not a tool-result submission.)
 
 ACTU-5. If the cache breakpoint count is `>= 4`, the transform is a no-op.
 
 ### 4.3 Target Resolution
 
-ACTU-6. Starting from `last_msg` and scanning backwards through `req.messages`:
+ACTU-6. Starting from `last_msg` and scanning backwards through `req.inputs`:
 1. Skip contiguous trailing messages that are either `role == Tool` or contain any `Part::ToolResult`.
 2. The first non-skipped message MUST be `role == Assistant` with at least one `Part::ToolCall`. If this condition is not met, the transform is a no-op.
 3. Let `assistant_idx` = the index of this Assistant message.
 
 ACTU-7. Scan backwards from `assistant_idx - 1` to find the first message with `role == User`. Let `user_idx` = that index. If no such message exists, the transform is a no-op.
 
-ACTU-8. If any part of `req.messages[user_idx]` already contains a `"cache_control"` key in its `extra_body`, the transform is a no-op.
+ACTU-8. If any part of `req.inputs[user_idx]` already contains a `"cache_control"` key in its `extra_body`, the transform is a no-op.
 
 ### 4.4 Behavior
 
-ACTU-9. The transform MUST insert `"cache_control": {"type": "ephemeral"}` into the `extra_body` of the last `Part` of `req.messages[user_idx]`.
+ACTU-9. The transform MUST insert `"cache_control": {"type": "ephemeral"}` into the `extra_body` of the last `Part` of `req.inputs[user_idx]`.
 
 ACTU-10. After insertion, the cache breakpoint count increases by exactly `1`.
 

@@ -1,7 +1,7 @@
 use crate::urp::encode::{merge_extra, text_parts, usage_input_details, usage_output_details};
 use crate::urp::{
-    AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Part, Role, ToolChoice,
-    ToolDefinition, UrpRequest, UrpResponse,
+    merged_output_message, AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource,
+    Part, Role, ToolChoice, ToolDefinition, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -9,7 +9,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut contents = Vec::new();
     let mut system_parts = Vec::new();
 
-    for message in &req.messages {
+    for message in &req.inputs {
         match message.role {
             Role::System | Role::Developer => {
                 let text = text_parts(&message.parts);
@@ -97,16 +97,24 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    let merged = merged_output_message(&resp.outputs);
     let mut parts = Vec::new();
-    for part in &resp.message.parts {
+    for part in &merged.parts {
         match part {
             Part::Text { content, .. } => parts.push(json!({ "text": content })),
-            Part::Reasoning { content, .. } => {
+            Part::Reasoning {
+                content: Some(content),
+                ..
+            } => {
                 parts.push(json!({ "text": content, "thought": true }));
             }
-            Part::ReasoningEncrypted { data, .. } => {
+            Part::Reasoning {
+                encrypted: Some(data),
+                ..
+            } => {
                 parts.push(json!({ "thoughtSignature": data }));
             }
+            Part::Reasoning { .. } => {}
             Part::ToolCall {
                 call_id,
                 name,
@@ -126,6 +134,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             Part::File { source, .. } => parts.push(encode_file_part(source)),
             Part::Audio { source, .. } => parts.push(encode_audio_part(source)),
             Part::Refusal { content, .. } => parts.push(json!({ "text": content })),
+            Part::ProviderItem { body, .. } => parts.push(body.clone()),
             Part::ToolResult { .. } => {}
         }
     }
@@ -286,13 +295,21 @@ fn encode_message_parts(message: &crate::urp::Message) -> Vec<Value> {
                     }
                 }));
             }
-            Part::Reasoning { content, .. } => {
+            Part::Reasoning {
+                content: Some(content),
+                ..
+            } => {
                 out.push(json!({ "text": content, "thought": true }));
             }
-            Part::ReasoningEncrypted { data, .. } => {
+            Part::Reasoning {
+                encrypted: Some(data),
+                ..
+            } => {
                 out.push(json!({ "thoughtSignature": data }));
             }
+            Part::Reasoning { .. } => {}
             Part::Refusal { content, .. } => out.push(json!({ "text": content })),
+            Part::ProviderItem { body, .. } => out.push(body.clone()),
         }
     }
     out
@@ -369,7 +386,7 @@ mod tests {
         let response = UrpResponse {
             id: "gem_resp".to_string(),
             model: "gemini-2.5-pro".to_string(),
-            message: Message::new(Role::Assistant),
+            outputs: vec![Message::new(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 14,

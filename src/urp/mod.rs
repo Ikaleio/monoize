@@ -4,11 +4,14 @@ use std::collections::HashMap;
 
 pub mod decode;
 pub mod encode;
+pub mod stream_decode;
+pub mod stream_encode;
+pub(crate) mod streaming_shared;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpRequest {
     pub model: String,
-    pub messages: Vec<Message>,
+    pub inputs: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,8 +57,6 @@ pub enum Role {
 pub enum Part {
     Text {
         content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        phase: Option<String>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -75,12 +76,14 @@ pub enum Part {
         extra_body: HashMap<String, Value>,
     },
     Reasoning {
-        content: String,
-        #[serde(flatten)]
-        extra_body: HashMap<String, Value>,
-    },
-    ReasoningEncrypted {
-        data: Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encrypted: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -100,6 +103,12 @@ pub enum Part {
     },
     Refusal {
         content: String,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    ProviderItem {
+        item_type: String,
+        body: Value,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -201,7 +210,7 @@ pub struct JsonSchemaDefinition {
 pub struct UrpResponse {
     pub id: String,
     pub model: String,
-    pub message: Message,
+    pub outputs: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<FinishReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,26 +314,49 @@ pub enum UrpStreamEvent {
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
+    MessageStart {
+        message_index: u32,
+        role: Role,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
     PartStart {
         part_index: u32,
-        part: PartHeader,
+        message_index: u32,
+        header: PartHeader,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
     Delta {
         part_index: u32,
         delta: PartDelta,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
     PartDone {
         part_index: u32,
+        part: Part,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    MessageDone {
+        message_index: u32,
+        message: Message,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
     ResponseDone {
+        #[serde(skip_serializing_if = "Option::is_none")]
         finish_reason: Option<FinishReason>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        outputs: Vec<Message>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -340,26 +372,41 @@ pub enum UrpStreamEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PartHeader {
     Text,
-    Image,
-    Audio,
-    File,
     Reasoning,
-    ReasoningEncrypted,
     Refusal,
-    ToolCall { call_id: String, name: String },
+    ToolCall {
+        call_id: String,
+        name: String,
+    },
+    Image {
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    Audio {
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    File {
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    ProviderItem {
+        item_type: String,
+        body: Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PartDelta {
     Text { content: String },
+    Reasoning { content: String },
+    Refusal { content: String },
+    ToolCallArguments { arguments: String },
     Image { source: ImageSource },
     Audio { source: AudioSource },
     File { source: FileSource },
-    Reasoning { content: String },
-    ReasoningEncrypted { data: Value },
-    Refusal { content: String },
-    ToolCallArguments { arguments: String },
+    ProviderItem { data: Value },
 }
 
 impl Message {
@@ -375,7 +422,6 @@ impl Message {
         let mut msg = Self::new(role);
         msg.parts.push(Part::Text {
             content: content.into(),
-            phase: None,
             extra_body: HashMap::new(),
         });
         msg
@@ -386,9 +432,16 @@ pub fn content_text(parts: &[Part]) -> String {
     let mut out = String::new();
     for p in parts {
         match p {
-            Part::Text { content, .. }
-            | Part::Reasoning { content, .. }
-            | Part::Refusal { content, .. } => out.push_str(content),
+            Part::Text { content, .. } | Part::Refusal { content, .. } => out.push_str(content),
+            Part::Reasoning {
+                content, summary, ..
+            } => {
+                if let Some(content) = content {
+                    out.push_str(content);
+                } else if let Some(summary) = summary {
+                    out.push_str(summary);
+                }
+            }
             _ => {}
         }
     }
@@ -400,4 +453,29 @@ pub fn extract_tool_result_call_id(parts: &[Part]) -> Option<String> {
         Part::ToolResult { call_id, .. } => Some(call_id.clone()),
         _ => None,
     })
+}
+
+pub fn output_messages(outputs: &[Message]) -> impl Iterator<Item = &Message> {
+    outputs.iter()
+}
+
+pub fn output_messages_mut(outputs: &mut [Message]) -> impl Iterator<Item = &mut Message> {
+    outputs.iter_mut()
+}
+
+pub fn merged_output_message(outputs: &[Message]) -> Message {
+    let mut merged = Message::new(Role::Assistant);
+    for message in outputs {
+        if merged.parts.is_empty() {
+            merged.role = message.role;
+        }
+        merged.parts.extend(message.parts.clone());
+        for (k, v) in &message.extra_body {
+            merged
+                .extra_body
+                .entry(k.clone())
+                .or_insert_with(|| v.clone());
+        }
+    }
+    merged
 }

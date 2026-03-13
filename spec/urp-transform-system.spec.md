@@ -9,13 +9,13 @@
 
 ## 1. URP Core Contract
 
-URP-1. Internal request representation MUST be `UrpRequest { model, messages, ... }`.
+URP-1. Internal request representation MUST be `UrpRequest { model, inputs, ... }`.
 
 URP-2. URP MUST be messages-centric: request/response history is represented as an ordered array of `Message`.
 
 URP-3. A `Message` MUST include `role` and `parts`.
 
-URP-4. `Part` MUST support at least: `Text`, `Image`, `Audio`, `File`, `Reasoning`, `ReasoningEncrypted`, `ToolCall`, `ToolResult`, `Refusal`.
+URP-4. `Part` MUST support at least: `Text`, `Image`, `Audio`, `File`, `Reasoning`, `ToolCall`, `ToolResult`, `Refusal`, `ProviderItem`.
 
 URP-5. Every URP struct that maps to JSON MUST support unknown field passthrough using flattened `extra_body`.
 
@@ -35,15 +35,15 @@ DEC-3. Tool calls MUST decode to `Part::ToolCall`.
 
 DEC-4. Tool result messages MUST decode to `Role::Tool` + `Part::ToolResult` with sibling content parts.
 
-DEC-5. Reasoning fields from upstream/downstream wire formats MUST decode into `Part::Reasoning` and/or `Part::ReasoningEncrypted`.
+DEC-5. Reasoning fields from upstream/downstream wire formats MUST decode into `Part::Reasoning`, using `encrypted` when the provider requires opaque passthrough data.
 
 ENC-1. Upstream request construction MUST encode from URP only; transforms MUST NOT access raw wire payloads.
 
-ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`, `grok`.
+ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`, `grok`. The `grok` provider type MUST reuse the same request and response adapter logic as `responses`.
 
 ENC-3. History encoding rule:
-- if a message contains `ReasoningEncrypted`, plaintext `Reasoning` in the same message MUST be omitted.
-- otherwise `Reasoning` MAY be encoded when supported by target wire format.
+- if a message contains `Part::Reasoning { encrypted: Some(_), .. }`, plaintext `Part::Reasoning { content: Some(_), .. }` in the same message MUST be omitted when the target wire format requires opaque reasoning exclusivity.
+- otherwise `Part::Reasoning` MAY be encoded when supported by target wire format.
 
 ENC-4. Model rewrite MUST apply provider `models[requested].redirect` when present; otherwise use requested model.
 
@@ -51,9 +51,13 @@ ENC-4. Model rewrite MUST apply provider `models[requested].redirect` when prese
 
 STR-1. Internal streaming representation MUST use `UrpStreamEvent`.
 
-STR-2. `UrpStreamEvent` MUST support: `ResponseStart`, `PartStart`, `Delta`, `PartDone`, `ResponseDone`, `Error`.
+STR-2. `UrpStreamEvent` MUST support: `ResponseStart`, `MessageStart`, `PartStart`, `Delta`, `PartDone`, `MessageDone`, `ResponseDone`, `Error`.
 
-STR-3. `Delta` MUST be part-indexed and typed via `PartDelta` (text/reasoning/tool args/media/refusal variants).
+STR-3. `Delta` MUST be part-indexed and typed via `PartDelta` (text/reasoning/tool args/media/refusal/provider-item variants).
+
+STR-3a. `PartDone.part` MUST contain the complete terminal `Part`, `MessageDone.message` MUST contain the complete terminal `Message`, and `ResponseDone.outputs` MUST contain the complete terminal ordered `Vec<Message>`.
+
+STR-3b. `ResponseDone.outputs` is the authoritative final streamed response state for downstream response reconstruction.
 
 STR-4. Transform engine MUST be able to process stream events incrementally with per-request mutable state.
 
@@ -64,6 +68,7 @@ STR-5. If a streaming request matches any enabled response-phase transform rule,
 TF-1. A transform MUST implement:
 - `type_id()`
 - `supported_phases()`
+- `supported_scopes()`
 - `config_schema()`
 - `parse_config()`
 - `init_state()`
@@ -104,6 +109,20 @@ TF-7. Built-ins that MUST exist:
 - `auto_cache_tool_use`
 - `compress_user_message_images`
 
+TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include:
+
+- `type_id: string`
+- `supported_phases: Phase[]`
+- `supported_scopes: ("provider" | "api_key")[]`
+- `config_schema: object`
+
+TF-9. Scope semantics:
+
+- `provider` means the transform MAY be configured in provider transform chains.
+- `api_key` means the transform MAY be configured in API-key transform chains.
+- A transform MAY support both scopes.
+- Dashboard editors MUST hide transforms that do not include the current editor scope.
+
 ### 4.2 `append_empty_user_message`
 
 AEUM-1. Phase: `request` only.
@@ -111,9 +130,9 @@ AEUM-1. Phase: `request` only.
 AEUM-2. Config MAY contain:
 - `content` (string, optional): text content for the padding user message. Defaults to `" "` (a single space).
 AEUM-3. On apply:
-1. Inspect the last element of `req.messages`.
-2. If the last message has `role == assistant`, append a new `Message { role: user, parts: [Text { content: config.content }] }` to `req.messages`.
-3. If the last message is not `assistant`, or `messages` is empty, no-op.
+1. Inspect the last element of `req.inputs`.
+2. If the last message has `role == assistant`, append a new `Message { role: user, parts: [Text { content: config.content }] }` to `req.inputs`.
+3. If the last message is not `assistant`, or `inputs` is empty, no-op.
 
 ### 4.3 `compress_user_message_images`
 

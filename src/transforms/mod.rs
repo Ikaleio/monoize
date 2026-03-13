@@ -1,4 +1,4 @@
-use crate::urp::{Message, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent};
+use crate::urp::{Message, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent, output_messages_mut};
 use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,13 @@ pub mod compress_user_message_images;
 pub enum Phase {
     Request,
     Response,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransformScope {
+    Provider,
+    ApiKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +97,9 @@ pub struct TransformRuntimeContext {
 pub trait Transform: Send + Sync + 'static {
     fn type_id(&self) -> &'static str;
     fn supported_phases(&self) -> &'static [Phase];
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider]
+    }
     fn config_schema(&self) -> Value;
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError>;
     fn init_state(&self) -> Box<dyn TransformState>;
@@ -204,7 +214,6 @@ pub fn model_glob_match(pattern: &str, model: &str) -> bool {
 pub fn text_part(content: impl Into<String>) -> Part {
     Part::Text {
         content: content.into(),
-        phase: None,
         extra_body: HashMap::new(),
     }
 }
@@ -239,14 +248,32 @@ pub fn merge_same_role_messages(messages: &[Message]) -> Vec<Message> {
 pub fn strip_reasoning_parts(parts: &[Part]) -> Vec<Part> {
     parts
         .iter()
-        .filter(|part| {
-            !matches!(
-                part,
-                Part::Reasoning { .. } | Part::ReasoningEncrypted { .. }
-            )
-        })
+        .filter(|part| !matches!(part, Part::Reasoning { .. }))
         .cloned()
         .collect()
+}
+
+pub fn request_messages(req: &UrpRequest) -> &[Message] {
+    &req.inputs
+}
+
+pub fn request_messages_mut(req: &mut UrpRequest) -> &mut Vec<Message> {
+    &mut req.inputs
+}
+
+pub fn response_output_messages_mut(resp: &mut UrpResponse) -> impl Iterator<Item = &mut Message> {
+    output_messages_mut(&mut resp.outputs)
+}
+
+pub fn ensure_assistant_output_message(resp: &mut UrpResponse) -> &mut Message {
+    if !matches!(resp.outputs.first(), Some(message) if message.role == Role::Assistant) {
+        resp.outputs.insert(0, Message::new(Role::Assistant));
+    }
+
+    match resp.outputs.first_mut() {
+        Some(message) => message,
+        _ => unreachable!("first output should be a message"),
+    }
 }
 
 pub fn set_extra_path(extra: &mut HashMap<String, Value>, path: &str, value: Value) {

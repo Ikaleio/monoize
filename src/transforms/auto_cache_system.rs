@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState,
+    TransformRuntimeContext, TransformScope, TransformState,
     UrpData,
 };
 use async_trait::async_trait;
@@ -31,6 +31,10 @@ impl Transform for AutoCacheSystemTransform {
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Request]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
     }
 
     fn config_schema(&self) -> Value {
@@ -69,7 +73,7 @@ impl Transform for AutoCacheSystemTransform {
 
         // Find the last system message
         let system_idx = req
-            .messages
+            .inputs
             .iter()
             .rposition(|m| m.role == Role::System || m.role == Role::Developer);
         let Some(idx) = system_idx else {
@@ -77,7 +81,7 @@ impl Transform for AutoCacheSystemTransform {
         };
 
         // Check if any part of the system message already has cache_control
-        let already_has_cache = req.messages[idx]
+        let already_has_cache = req.inputs[idx]
             .parts
             .iter()
             .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")));
@@ -86,7 +90,7 @@ impl Transform for AutoCacheSystemTransform {
         }
 
         // Add cache_control to the last part of the system message
-        if let Some(last_part) = req.messages[idx].parts.last_mut() {
+        if let Some(last_part) = req.inputs[idx].parts.last_mut() {
             if let Some(eb) = part_extra_body_mut(last_part) {
                 eb.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
             }
@@ -97,7 +101,7 @@ impl Transform for AutoCacheSystemTransform {
 }
 
 fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
-    req.messages
+    req.inputs
         .iter()
         .flat_map(|m| m.parts.iter())
         .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
@@ -111,9 +115,9 @@ fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap
         | crate::urp::Part::Audio { extra_body, .. }
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ReasoningEncrypted { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
         | crate::urp::Part::ToolResult { extra_body, .. }
+        | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }
 }
@@ -127,9 +131,9 @@ fn part_extra_body_mut(
         | crate::urp::Part::Audio { extra_body, .. }
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ReasoningEncrypted { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
         | crate::urp::Part::ToolResult { extra_body, .. }
+        | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }
 }

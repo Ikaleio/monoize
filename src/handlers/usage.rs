@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub(super) async fn mark_stream_ttfb_if_needed(
+pub(crate) async fn mark_stream_ttfb_if_needed(
     started_at: Option<std::time::Instant>,
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) {
@@ -21,7 +21,7 @@ pub(super) async fn mark_stream_ttfb_if_needed(
     }
 }
 
-pub(super) async fn record_stream_usage_if_present(
+pub(crate) async fn record_stream_usage_if_present(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     usage: Option<urp::Usage>,
 ) {
@@ -45,7 +45,7 @@ pub(super) async fn record_stream_usage_if_present(
     }
 }
 
-pub(super) async fn latest_stream_usage_snapshot(
+pub(crate) async fn latest_stream_usage_snapshot(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> Option<urp::Usage> {
     let runtime_metrics = runtime_metrics.as_ref()?;
@@ -53,7 +53,7 @@ pub(super) async fn latest_stream_usage_snapshot(
     guard.usage.clone()
 }
 
-pub(super) async fn record_stream_done_sentinel(
+pub(crate) async fn record_stream_done_sentinel(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) {
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
@@ -63,7 +63,7 @@ pub(super) async fn record_stream_done_sentinel(
     guard.terminal.saw_done_sentinel = true;
 }
 
-pub(super) async fn record_stream_terminal_event(
+pub(crate) async fn record_stream_terminal_event(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     event: &str,
     finish_reason: Option<&str>,
@@ -78,7 +78,7 @@ pub(super) async fn record_stream_terminal_event(
     }
 }
 
-pub(super) async fn record_stream_synthetic_terminal_emitted(
+pub(crate) async fn record_stream_synthetic_terminal_emitted(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) {
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
@@ -88,7 +88,7 @@ pub(super) async fn record_stream_synthetic_terminal_emitted(
     guard.terminal.synthetic_terminal_emitted = true;
 }
 
-pub(super) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
+pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
         "prompt_tokens": usage.input_tokens,
         "completion_tokens": usage.output_tokens,
@@ -114,7 +114,7 @@ pub(super) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
     obj
 }
 
-pub(super) fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
+pub(crate) fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
@@ -139,7 +139,7 @@ pub(super) fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
     obj
 }
 
-pub(super) fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
+pub(crate) fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
@@ -244,7 +244,7 @@ fn make_output_details(
     }
 }
 
-pub(super) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
+pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
     let input_tokens = usage
         .get("prompt_tokens")
@@ -357,7 +357,7 @@ pub(super) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
     })
 }
 
-pub(super) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {
+pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj
         .get("usage")
         .or_else(|| obj.get("response").and_then(|v| v.get("usage")))?;
@@ -462,7 +462,7 @@ pub(super) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
     })
 }
 
-pub(super) fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage> {
+pub(crate) fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj
         .get("usage")
         .or_else(|| obj.get("message").and_then(|v| v.get("usage")))?
@@ -519,7 +519,7 @@ pub(super) fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage
     })
 }
 
-pub(super) fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> {
+pub(crate) fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usageMetadata")?.as_object()?;
     let input_tokens = usage
         .get("promptTokenCount")

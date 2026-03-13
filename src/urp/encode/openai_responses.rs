@@ -19,7 +19,7 @@ struct PendingResponsesMessageItem {
 
 fn text_part_phase(part: &Part) -> Option<&str> {
     match part {
-        Part::Text { phase, .. } => phase.as_deref(),
+        Part::Text { extra_body, .. } => extra_body.get("phase").and_then(|v| v.as_str()),
         _ => None,
     }
 }
@@ -32,10 +32,9 @@ fn can_use_responses_instructions(message: &Message) -> bool {
             matches!(
                 part,
                 Part::Text {
-                    phase: None,
                     extra_body,
                     ..
-                } if extra_body.is_empty()
+                } if extra_body.get("phase").is_none() && extra_body.is_empty()
             )
         })
 }
@@ -151,22 +150,28 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
     match part {
         Part::Reasoning {
             content,
+            encrypted,
+            summary,
+            source,
             extra_body,
         } => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
-            obj.insert(
-                "summary".to_string(),
-                Value::Array(vec![json!({ "type": "summary_text", "text": content })]),
-            );
-            obj.insert("text".to_string(), Value::String(content.clone()));
-            merge_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        Part::ReasoningEncrypted { data, extra_body } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String("reasoning".to_string()));
-            obj.insert("encrypted_content".to_string(), data.clone());
+            if let Some(summary) = summary.as_ref().or(content.as_ref()) {
+                obj.insert(
+                    "summary".to_string(),
+                    Value::Array(vec![json!({ "type": "summary_text", "text": summary })]),
+                );
+            }
+            if let Some(content) = content {
+                obj.insert("text".to_string(), Value::String(content.clone()));
+            }
+            if let Some(encrypted) = encrypted {
+                obj.insert("encrypted_content".to_string(), encrypted.clone());
+            }
+            if let Some(source) = source {
+                obj.insert("source".to_string(), Value::String(source.clone()));
+            }
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }
@@ -202,7 +207,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut instructions: Option<String> = None;
     let mut consumed_instructions = false;
 
-    for message in &req.messages {
+    for message in &req.inputs {
         if !consumed_instructions && can_use_responses_instructions(message) {
             let text = text_parts(&message.parts);
             if !text.is_empty() {
@@ -263,33 +268,55 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let mut output = Vec::new();
-    let mut pending_message: Option<PendingResponsesMessageItem> = None;
+    for message in &resp.outputs {
+        let mut pending_message: Option<PendingResponsesMessageItem> = None;
+        for part in &message.parts {
+            if let Some(content_part) = encode_message_content_part(part, true) {
+                append_content_part_to_pending(
+                    &mut pending_message,
+                    &mut output,
+                    message.role,
+                    text_part_phase(part),
+                    &message.extra_body,
+                    content_part,
+                );
+                continue;
+            }
 
-    for part in &resp.message.parts {
-        if let Some(content_part) = encode_message_content_part(part, true) {
-            append_content_part_to_pending(
-                &mut pending_message,
-                &mut output,
-                resp.message.role,
-                text_part_phase(part),
-                &resp.message.extra_body,
-                content_part,
-            );
-            continue;
+            flush_pending_message_item(&mut pending_message, &mut output);
+
+            if let Some(reasoning_item) = encode_reasoning_item(part) {
+                output.push(reasoning_item);
+                continue;
+            }
+
+            if let Some(tool_call_item) = encode_tool_call_item(part) {
+                output.push(tool_call_item);
+                continue;
+            }
+
+            if let Part::ProviderItem {
+                item_type,
+                body,
+                extra_body,
+            } = part
+            {
+                let mut item = match body {
+                    Value::Object(obj) => obj.clone(),
+                    other => {
+                        let mut obj = Map::new();
+                        obj.insert("body".to_string(), other.clone());
+                        obj
+                    }
+                };
+                item.entry("type".to_string())
+                    .or_insert_with(|| Value::String(item_type.clone()));
+                merge_extra(&mut item, extra_body);
+                output.push(Value::Object(item));
+            }
         }
-
         flush_pending_message_item(&mut pending_message, &mut output);
-
-        if let Some(reasoning_item) = encode_reasoning_item(part) {
-            output.push(reasoning_item);
-            continue;
-        }
-
-        if let Some(tool_call_item) = encode_tool_call_item(part) {
-            output.push(tool_call_item);
-        }
     }
-    flush_pending_message_item(&mut pending_message, &mut output);
 
     let mut body = json!({
         "id": resp.id,
@@ -357,7 +384,11 @@ fn encode_message_to_input_items(message: &Message, out: &mut Vec<Value>) {
         flush_pending_message_item(&mut pending_message, out);
 
         match part {
-            Part::Reasoning { .. } if encrypted_reasoning_present => {}
+            Part::Reasoning {
+                content: Some(_),
+                encrypted: None,
+                ..
+            } if encrypted_reasoning_present => {}
             _ => {
                 if let Some(item) =
                     encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
@@ -642,13 +673,16 @@ mod tests {
         let resp = UrpResponse {
             id: "resp_1".to_string(),
             model: "gpt-5.4".to_string(),
-            message: Message {
+            outputs: vec![Message {
                 role: Role::Assistant,
                 parts: vec![
                     Part::Text {
                         content: "thinking".to_string(),
-                        phase: Some("commentary".to_string()),
-                        extra_body: empty_map(),
+                        extra_body: {
+                            let mut m = empty_map();
+                            m.insert("phase".to_string(), json!("commentary"));
+                            m
+                        },
                     },
                     Part::ToolCall {
                         call_id: "call_1".to_string(),
@@ -658,8 +692,11 @@ mod tests {
                     },
                     Part::Text {
                         content: "done".to_string(),
-                        phase: Some("final_answer".to_string()),
-                        extra_body: empty_map(),
+                        extra_body: {
+                            let mut m = empty_map();
+                            m.insert("phase".to_string(), json!("final_answer"));
+                            m
+                        },
                     },
                 ],
                 extra_body: {
@@ -667,7 +704,7 @@ mod tests {
                     m.insert("custom_message_field".to_string(), json!(true));
                     m
                 },
-            },
+            }],
             finish_reason: Some(FinishReason::ToolCalls),
             usage: None,
             extra_body: empty_map(),
@@ -735,12 +772,15 @@ mod tests {
     fn encode_request_keeps_phased_developer_message_as_input_message() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            messages: vec![Message {
+            inputs: vec![Message {
                 role: Role::Developer,
                 parts: vec![Part::Text {
                     content: "preface".to_string(),
-                    phase: Some("commentary".to_string()),
-                    extra_body: empty_map(),
+                    extra_body: {
+                        let mut m = empty_map();
+                        m.insert("phase".to_string(), json!("commentary"));
+                        m
+                    },
                 }],
                 extra_body: empty_map(),
             }],
@@ -769,7 +809,7 @@ mod tests {
         let response = UrpResponse {
             id: "resp_usage".to_string(),
             model: "gpt-5.4".to_string(),
-            message: Message::new(Role::Assistant),
+            outputs: vec![Message::new(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 30,

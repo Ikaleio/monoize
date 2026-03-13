@@ -143,11 +143,13 @@ impl From<OpenAiResponsesUsage> for Usage {
 fn text_part_with_phase(
     content: impl Into<String>,
     phase: Option<&str>,
-    extra_body: HashMap<String, Value>,
+    mut extra_body: HashMap<String, Value>,
 ) -> Part {
+    if let Some(phase) = phase {
+        extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
+    }
     Part::Text {
         content: content.into(),
-        phase: phase.map(str::to_string),
         extra_body,
     }
 }
@@ -163,16 +165,16 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .ok_or_else(|| "missing model".to_string())?
         .to_string();
 
-    let mut messages = Vec::new();
+    let mut inputs = Vec::new();
 
     if let Some(instructions) = obj.get("instructions").and_then(|v| v.as_str()) {
         if !instructions.is_empty() {
-            messages.push(Message::text(Role::Developer, instructions));
+            inputs.push(Message::text(Role::Developer, instructions));
         }
     }
 
     if let Some(input) = obj.get("input") {
-        decode_input_items(input, &mut messages);
+        decode_input_items(input, &mut inputs);
     }
 
     let reasoning = obj
@@ -198,7 +200,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        messages,
+        inputs,
         stream: obj.get("stream").and_then(|v| v.as_bool()),
         temperature: obj.get("temperature").and_then(|v| v.as_f64()),
         top_p: obj.get("top_p").and_then(|v| v.as_f64()),
@@ -455,7 +457,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .as_object()
         .ok_or_else(|| "responses response must be object".to_string())?;
 
-    let mut message = Message::new(Role::Assistant);
+    let mut outputs = Vec::new();
 
     if let Some(output) = obj.get("output").and_then(|v| v.as_array()) {
         for item in output {
@@ -466,9 +468,22 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             match item_type {
                 "message" => {
                     let message_phase = item_obj.get("phase").and_then(|v| v.as_str());
-                    for (k, v) in split_extra(item_obj, &["type", "role", "content", "phase"]) {
-                        message.extra_body.entry(k).or_insert(v);
-                    }
+                    let role = match item_obj
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("assistant")
+                    {
+                        "system" => Role::System,
+                        "developer" => Role::Developer,
+                        "user" => Role::User,
+                        "tool" => Role::Tool,
+                        _ => Role::Assistant,
+                    };
+                    let mut message = Message {
+                        role,
+                        parts: Vec::new(),
+                        extra_body: split_extra(item_obj, &["type", "role", "content", "phase"]),
+                    };
                     if let Some(content_arr) = item_obj.get("content").and_then(|v| v.as_array()) {
                         for p in content_arr {
                             let Some(pobj) = p.as_object() else { continue };
@@ -503,6 +518,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                             }
                         }
                     }
+                    outputs.push(message);
                 }
                 "function_call" => {
                     let call_id = item_obj
@@ -524,6 +540,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     } else {
                         serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
                     };
+                    let mut message = Message::new(Role::Assistant);
                     message.parts.push(Part::ToolCall {
                         call_id,
                         name,
@@ -533,46 +550,73 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                             &["type", "call_id", "name", "arguments"],
                         ),
                     });
+                    outputs.push(message);
                 }
                 "reasoning" => {
-                    if let Some(encrypted) = item_obj.get("encrypted_content") {
-                        message.parts.push(Part::ReasoningEncrypted {
-                            data: encrypted.clone(),
-                            extra_body: split_extra(
-                                item_obj,
-                                &["type", "encrypted_content", "summary", "text"],
-                            ),
+                    let mut message = Message::new(Role::Assistant);
+                    let shared_extra = split_extra(
+                        item_obj,
+                        &["type", "encrypted_content", "summary", "text", "source"],
+                    );
+                    let encrypted =
+                        item_obj
+                            .get("encrypted_content")
+                            .and_then(|value| match value {
+                                Value::String(text) => Some(Value::String(text.clone())),
+                                _ => Some(value.clone()),
+                            });
+                    let summary = item_obj
+                        .get("summary")
+                        .and_then(|value| value.as_array())
+                        .map(|_| summary_to_text(item_obj))
+                        .flatten();
+                    let text = item_obj
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let source = item_obj
+                        .get("source")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    if text.is_some() || summary.is_some() || encrypted.is_some() {
+                        message.parts.push(Part::Reasoning {
+                            content: text.or_else(|| summary.clone()),
+                            encrypted,
+                            summary,
+                            source,
+                            extra_body: shared_extra,
                         });
                     }
-                    if let Some(text) = summary_to_text(item_obj) {
-                        if !text.is_empty() {
-                            message.parts.push(Part::Reasoning {
-                                content: text,
-                                extra_body: split_extra(
-                                    item_obj,
-                                    &["type", "summary", "text", "encrypted_content"],
-                                ),
-                            });
-                        }
+                    if !message.parts.is_empty() {
+                        outputs.push(message);
                     }
                 }
-                _ => {}
+                _ => {
+                    let mut message = Message::new(Role::Assistant);
+                    message.parts.push(Part::ProviderItem {
+                        item_type: item_type.to_string(),
+                        body: Value::Object(item_obj.clone()),
+                        extra_body: HashMap::new(),
+                    });
+                    outputs.push(message);
+                }
             }
         }
     }
 
+    let has_tool_calls = outputs.iter().any(|message| {
+        message
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::ToolCall { .. }))
+    });
+
     let finish_reason = match obj.get("status").and_then(|v| v.as_str()) {
-        Some("completed") => Some(
-            if message
-                .parts
-                .iter()
-                .any(|p| matches!(p, Part::ToolCall { .. }))
-            {
-                FinishReason::ToolCalls
-            } else {
-                FinishReason::Stop
-            },
-        ),
+        Some("completed") => Some(if has_tool_calls {
+            FinishReason::ToolCalls
+        } else {
+            FinishReason::Stop
+        }),
         Some("incomplete") => Some(FinishReason::Length),
         Some("failed") => Some(FinishReason::Other),
         _ => None,
@@ -594,7 +638,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        message,
+        outputs,
         finish_reason,
         usage,
         extra_body: split_extra(

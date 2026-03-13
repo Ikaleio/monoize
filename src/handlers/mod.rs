@@ -1,10 +1,10 @@
 mod billing;
-mod helpers;
+pub(crate) mod helpers;
 mod nonstream;
 mod request_logging;
-mod routing;
+pub(crate) mod routing;
 mod streaming;
-mod usage;
+pub(crate) mod usage;
 
 #[cfg(test)]
 mod tests;
@@ -507,9 +507,9 @@ const URP_KNOWN_MESSAGES_FIELDS: [&str; 8] = [
 ];
 
 #[derive(Clone, Debug)]
-struct UrpRequest {
-    model: String,
-    max_multiplier: Option<f64>,
+pub(crate) struct UrpRequest {
+    pub(crate) model: String,
+    pub(crate) max_multiplier: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -539,14 +539,14 @@ struct TriedProvider {
 }
 
 #[derive(Clone, Copy)]
-enum DownstreamProtocol {
+pub(crate) enum DownstreamProtocol {
     Responses,
     ChatCompletions,
     AnthropicMessages,
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
-struct StreamTerminalDiagnostics {
+pub(crate) struct StreamTerminalDiagnostics {
     saw_done_sentinel: bool,
     terminal_event: Option<String>,
     terminal_finish_reason: Option<String>,
@@ -554,7 +554,7 @@ struct StreamTerminalDiagnostics {
 }
 
 #[derive(Default)]
-struct StreamRuntimeMetrics {
+pub(crate) struct StreamRuntimeMetrics {
     ttfb_ms: Option<u64>,
     usage: Option<urp::Usage>,
     terminal: StreamTerminalDiagnostics,

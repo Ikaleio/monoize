@@ -1,6 +1,7 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState, UrpData, text_part,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
+    text_part,
 };
 use async_trait::async_trait;
 use crate::urp::{Message, Part, Role};
@@ -37,6 +38,10 @@ impl Transform for InjectSystemPromptTransform {
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Request]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
     }
 
     fn config_schema(&self) -> Value {
@@ -76,11 +81,12 @@ impl Transform for InjectSystemPromptTransform {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
+        let messages = request_messages_mut(req);
 
         let mut target_index: Option<usize> = None;
         match cfg.position {
             Position::Prepend => {
-                for (idx, msg) in req.messages.iter().enumerate() {
+                for (idx, msg) in messages.iter().enumerate() {
                     if msg.role == Role::System {
                         target_index = Some(idx);
                         break;
@@ -88,7 +94,7 @@ impl Transform for InjectSystemPromptTransform {
                 }
             }
             Position::Append => {
-                for (idx, msg) in req.messages.iter().enumerate().rev() {
+                for (idx, msg) in messages.iter().enumerate().rev() {
                     if msg.role == Role::System {
                         target_index = Some(idx);
                         break;
@@ -98,17 +104,16 @@ impl Transform for InjectSystemPromptTransform {
         }
 
         if let Some(idx) = target_index {
-            req.messages[idx].parts.push(Part::Text {
+            messages[idx].parts.push(Part::Text {
                 content: cfg.content.clone(),
-                phase: None,
                 extra_body: std::collections::HashMap::new(),
             });
         } else {
             let mut message = Message::new(Role::System);
             message.parts.push(text_part(cfg.content.clone()));
             match cfg.position {
-                Position::Prepend => req.messages.insert(0, message),
-                Position::Append => req.messages.push(message),
+                Position::Prepend => messages.insert(0, message),
+                Position::Append => messages.push(message),
             }
         }
         Ok(())

@@ -131,12 +131,12 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .unwrap_or_default()
         .to_string();
 
-    let mut messages = Vec::new();
+    let mut inputs = Vec::new();
 
     if let Some(system_instruction) = obj.get("systemInstruction") {
         let text = collect_content_text(system_instruction);
         if !text.is_empty() {
-            messages.push(Message::text(Role::System, text));
+            inputs.push(Message::text(Role::System, text));
         }
     }
 
@@ -163,7 +163,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 }
             }
             if !message.parts.is_empty() {
-                messages.push(message);
+                inputs.push(message);
             }
         }
     }
@@ -207,7 +207,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        messages,
+        inputs,
         stream: obj
             .get("stream")
             .and_then(|v| v.as_bool())
@@ -298,7 +298,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        message,
+        outputs: vec![message],
         finish_reason,
         usage,
         extra_body: split_extra(
@@ -387,13 +387,15 @@ fn decode_part(part: &Value, out: &mut Vec<Part>) {
         if !text.is_empty() {
             if obj.get("thought").and_then(|v| v.as_bool()) == Some(true) {
                 out.push(Part::Reasoning {
-                    content: text.to_string(),
+                    content: Some(text.to_string()),
+                    encrypted: None,
+                    summary: None,
+                    source: None,
                     extra_body: split_extra(obj, &["text", "thought", "thoughtSignature"]),
                 });
             } else {
                 out.push(Part::Text {
                     content: text.to_string(),
-                    phase: None,
                     extra_body: split_extra(obj, &["text", "thought", "thoughtSignature"]),
                 });
             }
@@ -401,8 +403,11 @@ fn decode_part(part: &Value, out: &mut Vec<Part>) {
     }
 
     if let Some(sig) = obj.get("thoughtSignature") {
-        out.push(Part::ReasoningEncrypted {
-            data: sig.clone(),
+        out.push(Part::Reasoning {
+            content: None,
+            encrypted: Some(sig.clone()),
+            summary: None,
+            source: None,
             extra_body: HashMap::new(),
         });
     }
@@ -460,7 +465,6 @@ fn decode_part(part: &Value, out: &mut Vec<Part>) {
         if !text.is_empty() {
             msg.parts.push(Part::Text {
                 content: text,
-                phase: None,
                 extra_body: HashMap::new(),
             });
         }

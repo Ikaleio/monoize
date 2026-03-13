@@ -74,9 +74,11 @@ impl Transform for SetFieldTransform {
             }
             UrpData::Stream(event) => match event {
                 crate::urp::UrpStreamEvent::ResponseStart { extra_body, .. }
+                | crate::urp::UrpStreamEvent::MessageStart { extra_body, .. }
                 | crate::urp::UrpStreamEvent::PartStart { extra_body, .. }
                 | crate::urp::UrpStreamEvent::Delta { extra_body, .. }
                 | crate::urp::UrpStreamEvent::PartDone { extra_body, .. }
+                | crate::urp::UrpStreamEvent::MessageDone { extra_body, .. }
                 | crate::urp::UrpStreamEvent::ResponseDone { extra_body, .. }
                 | crate::urp::UrpStreamEvent::Error { extra_body, .. } => {
                     set_extra_path(extra_body, &cfg.path, cfg.value.clone());

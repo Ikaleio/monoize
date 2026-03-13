@@ -3,8 +3,8 @@ use crate::urp::encode::{
     usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat, Role, ToolDefinition,
-    UrpRequest, UrpResponse,
+    merged_output_message, FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat,
+    Role, ToolDefinition, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -16,14 +16,6 @@ struct PendingChatMessage {
     refusal: Option<String>,
     reasoning_parts: Vec<Part>,
     message_extra: HashMap<String, Value>,
-    phase: Option<String>,
-}
-
-fn text_part_phase(part: &Part) -> Option<&str> {
-    match part {
-        Part::Text { phase, .. } => phase.as_deref(),
-        _ => None,
-    }
 }
 
 fn is_message_content_part(part: &Part) -> bool {
@@ -136,26 +128,20 @@ fn flush_pending_chat_message(pending: &mut Option<PendingChatMessage>, out: &mu
             Value::Array(pending_msg.tool_calls),
         );
     }
-    if let Some(phase) = pending_msg.phase {
-        m.insert("phase".to_string(), Value::String(phase));
-    }
     insert_openrouter_reasoning_fields(&mut m, &pending_msg.reasoning_parts);
     merge_extra(&mut m, &pending_msg.message_extra);
     out.push(Value::Object(m));
 }
 
-fn should_split_chat_message(
-    existing: &PendingChatMessage,
-    part: &Part,
-    phase: Option<&str>,
-) -> bool {
+fn should_split_chat_message(existing: &PendingChatMessage, part: &Part) -> bool {
     if matches!(part, Part::ToolCall { .. }) && !existing.content_parts.is_empty() {
         return true;
     }
     if is_message_content_part(part) && !existing.tool_calls.is_empty() {
         return true;
     }
-    existing.phase.as_deref() != phase
+    let _ = existing;
+    false
 }
 
 fn push_part_into_pending_chat_message(
@@ -164,10 +150,9 @@ fn push_part_into_pending_chat_message(
     message: &Message,
     part: &Part,
 ) {
-    let phase = text_part_phase(part);
     let should_flush = pending
         .as_ref()
-        .is_some_and(|existing| should_split_chat_message(existing, part, phase));
+        .is_some_and(|existing| should_split_chat_message(existing, part));
     if should_flush {
         flush_pending_chat_message(pending, out);
     }
@@ -179,7 +164,6 @@ fn push_part_into_pending_chat_message(
         refusal: None,
         reasoning_parts: Vec::new(),
         message_extra: message.extra_body.clone(),
-        phase: phase.map(str::to_string),
     });
 
     match part {
@@ -191,7 +175,7 @@ fn push_part_into_pending_chat_message(
         Part::Refusal { content, .. } => {
             entry.refusal = Some(content.clone());
         }
-        Part::Reasoning { .. } | Part::ReasoningEncrypted { .. } => {
+        Part::Reasoning { .. } => {
             entry.reasoning_parts.push(part.clone());
         }
         Part::ToolCall {
@@ -216,7 +200,7 @@ fn push_part_into_pending_chat_message(
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut body = json!({
         "model": upstream_model,
-        "messages": encode_messages(&req.messages),
+        "messages": encode_messages(&req.inputs),
     });
 
     let obj = body.as_object_mut().expect("chat request object");
@@ -261,13 +245,14 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let mut encoded_messages = encode_messages(std::slice::from_ref(&resp.message));
+    let merged = merged_output_message(&resp.outputs);
+    let mut encoded_messages = encode_messages(std::slice::from_ref(&merged));
     let message = match encoded_messages.len() {
         0 => {
             let mut fallback = Map::new();
             fallback.insert("role".to_string(), Value::String("assistant".to_string()));
             fallback.insert("content".to_string(), Value::String(String::new()));
-            merge_extra(&mut fallback, &resp.message.extra_body);
+            merge_extra(&mut fallback, &merged.extra_body);
             fallback
         }
         _ => encoded_messages
@@ -286,7 +271,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         .finish_reason
         .map(finish_reason_to_chat)
         .unwrap_or_else(|| {
-            if has_tool_calls(&resp.message) {
+            if has_tool_calls(&merged) {
                 "tool_calls"
             } else {
                 "stop"
@@ -501,7 +486,7 @@ mod tests {
     fn base_request(messages: Vec<Message>) -> UrpRequest {
         UrpRequest {
             model: "logical-model".to_string(),
-            messages,
+            inputs: messages,
             stream: None,
             temperature: None,
             top_p: None,
@@ -524,7 +509,6 @@ mod tests {
             role: Role::User,
             parts: vec![Part::Text {
                 content: "hello".to_string(),
-                phase: None,
                 extra_body: part_extra,
             }],
             extra_body: empty_map(),
@@ -553,7 +537,6 @@ mod tests {
             role: Role::User,
             parts: vec![Part::Text {
                 content: "hello".to_string(),
-                phase: None,
                 extra_body: empty_map(),
             }],
             extra_body: empty_map(),
@@ -567,13 +550,12 @@ mod tests {
     }
 
     #[test]
-    fn splits_assistant_messages_when_phase_changes() {
+    fn splits_assistant_messages_when_tool_calls_break_messages() {
         let req = base_request(vec![Message {
             role: Role::Assistant,
             parts: vec![
                 Part::Text {
                     content: "prep".to_string(),
-                    phase: Some("commentary".to_string()),
                     extra_body: empty_map(),
                 },
                 Part::ToolCall {
@@ -584,7 +566,6 @@ mod tests {
                 },
                 Part::Text {
                     content: "answer".to_string(),
-                    phase: Some("final_answer".to_string()),
                     extra_body: empty_map(),
                 },
             ],
@@ -595,14 +576,11 @@ mod tests {
         let messages = encoded["messages"].as_array().expect("messages array");
 
         assert_eq!(messages.len(), 3);
-        assert_eq!(messages[0]["phase"], json!("commentary"));
         assert_eq!(messages[0]["content"], json!("prep"));
-        assert!(messages[1].get("phase").is_none());
         assert_eq!(
             messages[1]["tool_calls"][0]["function"]["name"],
             json!("tool")
         );
-        assert_eq!(messages[2]["phase"], json!("final_answer"));
         assert_eq!(messages[2]["content"], json!("answer"));
     }
 
@@ -613,7 +591,7 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_usage".to_string(),
             model: "gpt-5.4".to_string(),
-            message: Message::new(Role::Assistant),
+            outputs: vec![Message::new(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 20,

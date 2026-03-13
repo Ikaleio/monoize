@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -35,6 +35,10 @@ impl Transform for SplitSseFramesTransform {
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Response]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
     }
 
     fn config_schema(&self) -> Value {

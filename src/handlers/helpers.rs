@@ -91,7 +91,7 @@ pub(super) struct UserImageRequestMetrics {
 
 pub(super) fn summarize_user_image_request_metrics(req: &urp::UrpRequest) -> UserImageRequestMetrics {
     let mut metrics = UserImageRequestMetrics::default();
-    for message in &req.messages {
+    for message in &req.inputs {
         if message.role != urp::Role::User {
             continue;
         }
@@ -273,7 +273,7 @@ pub(super) async fn apply_transform_rules_response(
     })
 }
 
-pub(super) fn typed_request_to_legacy(
+pub(crate) fn typed_request_to_legacy(
     req: &urp::UrpRequest,
     max_multiplier: Option<f64>,
 ) -> AppResult<UrpRequest> {

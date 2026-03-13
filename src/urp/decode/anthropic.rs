@@ -111,11 +111,13 @@ impl From<AnthropicUsage> for Usage {
 fn text_part_with_phase(
     content: impl Into<String>,
     phase: Option<&str>,
-    extra_body: HashMap<String, Value>,
+    mut extra_body: HashMap<String, Value>,
 ) -> Part {
+    if let Some(phase) = phase {
+        extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
+    }
     Part::Text {
         content: content.into(),
-        phase: phase.map(str::to_string),
         extra_body,
     }
 }
@@ -131,7 +133,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .ok_or_else(|| "missing model".to_string())?
         .to_string();
 
-    let mut messages = Vec::new();
+    let mut inputs = Vec::new();
 
     if let Some(system) = obj.get("system") {
         let system_text = if let Some(s) = system.as_str() {
@@ -145,7 +147,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             String::new()
         };
         if !system_text.is_empty() {
-            messages.push(Message::text(Role::System, system_text));
+            inputs.push(Message::text(Role::System, system_text));
         }
     }
 
@@ -200,14 +202,20 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     "thinking" => {
                         if let Some(thinking) = bobj.get("thinking").and_then(|v| v.as_str()) {
                             msg.parts.push(Part::Reasoning {
-                                content: thinking.to_string(),
+                                content: Some(thinking.to_string()),
+                                encrypted: None,
+                                summary: None,
+                                source: None,
                                 extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
                             });
                         }
                         if let Some(signature) = bobj.get("signature").and_then(|v| v.as_str()) {
                             if !signature.is_empty() {
-                                msg.parts.push(Part::ReasoningEncrypted {
-                                    data: Value::String(signature.to_string()),
+                                msg.parts.push(Part::Reasoning {
+                                    content: None,
+                                    encrypted: Some(Value::String(signature.to_string())),
+                                    summary: None,
+                                    source: None,
                                     extra_body: HashMap::new(),
                                 });
                             }
@@ -268,9 +276,9 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
 
         if !msg.parts.is_empty() {
-            messages.push(msg);
+            inputs.push(msg);
         }
-        messages.extend(tool_messages);
+        inputs.extend(tool_messages);
     }
 
     let tools = obj.get("tools").and_then(|v| v.as_array()).map(|arr| {
@@ -333,7 +341,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        messages,
+        inputs,
         stream: obj.get("stream").and_then(|v| v.as_bool()),
         temperature: obj.get("temperature").and_then(|v| v.as_f64()),
         top_p: obj.get("top_p").and_then(|v| v.as_f64()),
@@ -395,14 +403,20 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                 "thinking" => {
                     if let Some(thinking) = bobj.get("thinking").and_then(|v| v.as_str()) {
                         message.parts.push(Part::Reasoning {
-                            content: thinking.to_string(),
+                            content: Some(thinking.to_string()),
+                            encrypted: None,
+                            summary: None,
+                            source: None,
                             extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
                         });
                     }
                     if let Some(signature) = bobj.get("signature").and_then(|v| v.as_str()) {
                         if !signature.is_empty() {
-                            message.parts.push(Part::ReasoningEncrypted {
-                                data: Value::String(signature.to_string()),
+                            message.parts.push(Part::Reasoning {
+                                content: None,
+                                encrypted: Some(Value::String(signature.to_string())),
+                                summary: None,
+                                source: None,
                                 extra_body: HashMap::new(),
                             });
                         }
@@ -474,7 +488,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        message,
+        outputs: vec![message],
         finish_reason,
         usage,
         extra_body: split_extra(

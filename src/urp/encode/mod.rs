@@ -44,16 +44,29 @@ pub fn text_parts(parts: &[Part]) -> String {
 }
 
 pub fn has_encrypted_reasoning(parts: &[Part]) -> bool {
-    parts
-        .iter()
-        .any(|p| matches!(p, Part::ReasoningEncrypted { .. }))
+    parts.iter().any(|p| {
+        matches!(
+            p,
+            Part::Reasoning {
+                encrypted: Some(_),
+                ..
+            }
+        )
+    })
 }
 
 pub fn extract_reasoning_plain(parts: &[Part]) -> String {
     let mut out = String::new();
     for p in parts {
-        if let Part::Reasoning { content, .. } = p {
-            out.push_str(content);
+        if let Part::Reasoning {
+            content, summary, ..
+        } = p
+        {
+            if let Some(content) = content {
+                out.push_str(content);
+            } else if let Some(summary) = summary {
+                out.push_str(summary);
+            }
         }
     }
     out
@@ -61,7 +74,10 @@ pub fn extract_reasoning_plain(parts: &[Part]) -> String {
 
 pub fn extract_reasoning_encrypted(parts: &[Part]) -> Option<Value> {
     parts.iter().find_map(|p| match p {
-        Part::ReasoningEncrypted { data, .. } => Some(data.clone()),
+        Part::Reasoning {
+            encrypted: Some(data),
+            ..
+        } => Some(data.clone()),
         _ => None,
     })
 }

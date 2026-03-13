@@ -1,7 +1,7 @@
 use crate::image_transform_cache::CachedImagePayload;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
 use crate::urp::{ImageSource, Part, Role};
 use async_trait::async_trait;
@@ -56,6 +56,10 @@ impl Transform for CompressUserMessageImagesTransform {
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Request]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
     }
 
     fn config_schema(&self) -> Value {
@@ -119,7 +123,7 @@ impl Transform for CompressUserMessageImagesTransform {
             return Ok(());
         };
 
-        for message in &mut req.messages {
+        for message in &mut req.inputs {
             if message.role != Role::User {
                 continue;
             }
@@ -376,7 +380,7 @@ mod tests {
         let input_png = build_png_data_url_source();
         let mut req = UrpRequest {
             model: "gpt-test".to_string(),
-            messages: vec![Message {
+            inputs: vec![Message {
                 role: Role::User,
                 parts: vec![Part::Image {
                     source: ImageSource::Base64 {
@@ -420,7 +424,7 @@ mod tests {
         .await
         .expect("apply transforms");
 
-        let Part::Image { source, .. } = &req.messages[0].parts[0] else {
+        let Part::Image { source, .. } = &req.inputs[0].parts[0] else {
             panic!("expected image part");
         };
         let ImageSource::Base64 { media_type, data } = source else {
@@ -454,7 +458,7 @@ mod tests {
         let input_data_url = format!("data:image/png;base64,{input_png}");
         let mut req = UrpRequest {
             model: "gpt-test".to_string(),
-            messages: vec![Message {
+            inputs: vec![Message {
                 role: Role::User,
                 parts: vec![Part::Image {
                     source: ImageSource::Url {
@@ -498,7 +502,7 @@ mod tests {
         .await
         .expect("apply transforms");
 
-        let Part::Image { source, .. } = &req.messages[0].parts[0] else {
+        let Part::Image { source, .. } = &req.inputs[0].parts[0] else {
             panic!("expected image part");
         };
         let ImageSource::Url { url, detail } = source else {

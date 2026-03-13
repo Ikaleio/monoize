@@ -221,11 +221,12 @@ pub(super) fn encode_request_for_provider(
     attempt: &MonoizeAttempt,
 ) -> AppResult<Value> {
     let value = match attempt.provider_type {
-        ProviderType::Responses => urp::encode::openai_responses::encode_request(req, &req.model),
+        ProviderType::Responses | ProviderType::Grok => {
+            urp::encode::openai_responses::encode_request(req, &req.model)
+        }
         ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request(req, &req.model),
         ProviderType::Messages => urp::encode::anthropic::encode_request(req, &req.model),
         ProviderType::Gemini => urp::encode::gemini::encode_request(req, &req.model),
-        ProviderType::Grok => urp::encode::grok::encode_request(req, &req.model),
         ProviderType::Group => {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -242,11 +243,12 @@ pub(super) fn decode_response_from_provider(
     value: &Value,
 ) -> AppResult<urp::UrpResponse> {
     let decoded = match provider_type {
-        ProviderType::Responses => urp::decode::openai_responses::decode_response(value),
+        ProviderType::Responses | ProviderType::Grok => {
+            urp::decode::openai_responses::decode_response(value)
+        }
         ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),
         ProviderType::Messages => urp::decode::anthropic::decode_response(value),
         ProviderType::Gemini => urp::decode::gemini::decode_response(value),
-        ProviderType::Grok => urp::decode::grok::decode_response(value),
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
     };
     decoded.map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))

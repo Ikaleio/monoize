@@ -2,8 +2,8 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat, Role, ToolDefinition,
-    UrpRequest, UrpResponse,
+    merged_output_message, FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat,
+    Role, ToolDefinition, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -12,21 +12,26 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut system_blocks: Vec<Value> = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
 
-    for message in &req.messages {
+    for message in &req.inputs {
         match message.role {
             Role::System | Role::Developer => {
                 for part in &message.parts {
                     if let Part::Text {
                         content: text,
-                        phase,
                         extra_body,
+                        ..
                     } = part
                     {
                         if !text.is_empty() {
                             let mut block = json!({ "type": "text", "text": text });
                             if let Some(obj) = block.as_object_mut() {
-                                if let Some(phase) = phase {
-                                    obj.insert("phase".to_string(), Value::String(phase.clone()));
+                                if let Some(phase) =
+                                    extra_body.get("phase").and_then(|v| v.as_str())
+                                {
+                                    obj.insert(
+                                        "phase".to_string(),
+                                        Value::String(phase.to_string()),
+                                    );
                                 }
                                 merge_extra(obj, extra_body);
                             }
@@ -102,17 +107,22 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    let merged = merged_output_message(&resp.outputs);
     let mut content = Vec::new();
-    let encrypted = resp.message.parts.iter().find_map(|part| match part {
-        Part::ReasoningEncrypted { data, .. } => Some(data.clone()),
+    let encrypted = merged.parts.iter().find_map(|part| match part {
+        Part::Reasoning {
+            encrypted: Some(data),
+            ..
+        } => Some(data.clone()),
         _ => None,
     });
 
-    for part in &resp.message.parts {
+    for part in &merged.parts {
         match part {
             Part::Reasoning {
-                content: text,
+                content: Some(text),
                 extra_body,
+                ..
             } => {
                 let mut thinking = Map::new();
                 thinking.insert("type".to_string(), Value::String("thinking".to_string()));
@@ -125,13 +135,13 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             }
             Part::Text {
                 content: text,
-                phase,
                 extra_body,
+                ..
             } => {
                 let mut block = json!({ "type": "text", "text": text });
                 if let Some(obj) = block.as_object_mut() {
-                    if let Some(phase) = phase {
-                        obj.insert("phase".to_string(), Value::String(phase.clone()));
+                    if let Some(phase) = extra_body.get("phase").and_then(|v| v.as_str()) {
+                        obj.insert("phase".to_string(), Value::String(phase.to_string()));
                     }
                     merge_extra(obj, extra_body);
                 }
@@ -174,22 +184,38 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 }
                 content.push(block);
             }
+            Part::ProviderItem {
+                body, extra_body, ..
+            } => {
+                let mut block = body.clone();
+                if let Some(obj) = block.as_object_mut() {
+                    merge_extra(obj, extra_body);
+                }
+                content.push(block);
+            }
             Part::Audio { .. } | Part::ToolResult { .. } | Part::Refusal { .. } => {}
-            Part::ReasoningEncrypted { .. } => {
+            Part::Reasoning {
+                encrypted: Some(_), ..
+            } => {
                 // Handled below: emitted as standalone block only when no
                 // Part::Reasoning exists to carry it as a `signature`.
             }
+            Part::Reasoning { .. } => {}
         }
     }
 
     // When the response contains encrypted reasoning but no plaintext reasoning
     // (e.g. Gemini returns only thoughtSignature), emit a standalone thinking
     // block so the downstream receives the encrypted data.
-    let has_reasoning_part = resp
-        .message
-        .parts
-        .iter()
-        .any(|p| matches!(p, Part::Reasoning { .. }));
+    let has_reasoning_part = merged.parts.iter().any(|p| {
+        matches!(
+            p,
+            Part::Reasoning {
+                content: Some(_),
+                ..
+            }
+        )
+    });
     if !has_reasoning_part {
         if let Some(enc) = &encrypted {
             let block = json!({ "type": "thinking", "thinking": "", "signature": enc });
@@ -267,22 +293,27 @@ fn encode_regular_message(message: &Message) -> Value {
         _ => "user",
     };
     let mut content = Vec::new();
-    let has_encrypted = message
-        .parts
-        .iter()
-        .any(|part| matches!(part, Part::ReasoningEncrypted { .. }));
+    let has_encrypted = message.parts.iter().any(|part| {
+        matches!(
+            part,
+            Part::Reasoning {
+                encrypted: Some(_),
+                ..
+            }
+        )
+    });
 
     for part in &message.parts {
         match part {
             Part::Text {
                 content: text,
-                phase,
                 extra_body,
+                ..
             } => {
                 let mut block = json!({ "type": "text", "text": text });
                 if let Some(obj) = block.as_object_mut() {
-                    if let Some(phase) = phase {
-                        obj.insert("phase".to_string(), Value::String(phase.clone()));
+                    if let Some(phase) = extra_body.get("phase").and_then(|v| v.as_str()) {
+                        obj.insert("phase".to_string(), Value::String(phase.to_string()));
                     }
                     merge_extra(obj, extra_body);
                 }
@@ -307,8 +338,9 @@ fn encode_regular_message(message: &Message) -> Value {
                 content.push(block);
             }
             Part::Reasoning {
-                content: text,
+                content: Some(text),
                 extra_body,
+                ..
             } if !has_encrypted => {
                 let mut block = json!({ "type": "thinking", "thinking": text });
                 if let Some(obj) = block.as_object_mut() {
@@ -316,7 +348,11 @@ fn encode_regular_message(message: &Message) -> Value {
                 }
                 content.push(block);
             }
-            Part::ReasoningEncrypted { data, extra_body } => {
+            Part::Reasoning {
+                encrypted: Some(data),
+                extra_body,
+                ..
+            } => {
                 let mut block = json!({ "type": "thinking", "encrypted_thinking": data });
                 if let Some(obj) = block.as_object_mut() {
                     merge_extra(obj, extra_body);
@@ -337,6 +373,15 @@ fn encode_regular_message(message: &Message) -> Value {
                     "name": name,
                     "input": input
                 });
+                if let Some(obj) = block.as_object_mut() {
+                    merge_extra(obj, extra_body);
+                }
+                content.push(block);
+            }
+            Part::ProviderItem {
+                body, extra_body, ..
+            } => {
+                let mut block = body.clone();
                 if let Some(obj) = block.as_object_mut() {
                     merge_extra(obj, extra_body);
                 }
@@ -584,7 +629,7 @@ mod tests {
         let response = UrpResponse {
             id: "msg_usage".to_string(),
             model: "claude".to_string(),
-            message: Message::new(Role::Assistant),
+            outputs: vec![Message::new(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 11,

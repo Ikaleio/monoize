@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, response_output_messages_mut,
 };
 use async_trait::async_trait;
 use crate::urp::{Part, PartDelta, PartHeader, UrpStreamEvent};
@@ -30,6 +30,10 @@ impl Transform for ReasoningToThinkXmlTransform {
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Response]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
     }
 
     fn config_schema(&self) -> Value {
@@ -65,20 +69,24 @@ impl Transform for ReasoningToThinkXmlTransform {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
             UrpData::Response(resp) => {
-                let mut next_parts = Vec::with_capacity(resp.message.parts.len());
-                for part in &resp.message.parts {
-                    match part {
-                        Part::Reasoning { content, .. } => {
-                            next_parts.push(Part::Text {
-                                content: format!("<{0}>{1}</{0}>", cfg.tag, content),
-                                phase: None,
-                                extra_body: HashMap::new(),
-                            });
+                for message in response_output_messages_mut(resp) {
+                    let mut next_parts = Vec::with_capacity(message.parts.len());
+                    for part in &message.parts {
+                        match part {
+                            Part::Reasoning {
+                                content: Some(content),
+                                ..
+                            } => {
+                                next_parts.push(Part::Text {
+                                    content: format!("<{0}>{1}</{0}>", cfg.tag, content),
+                                    extra_body: HashMap::new(),
+                                });
+                            }
+                            other => next_parts.push(other.clone()),
                         }
-                        other => next_parts.push(other.clone()),
                     }
+                    message.parts = next_parts;
                 }
-                resp.message.parts = next_parts;
             }
             UrpData::Stream(event) => convert_stream_reasoning_to_xml(event, &cfg.tag),
             UrpData::Request(_) => {}
@@ -89,9 +97,9 @@ impl Transform for ReasoningToThinkXmlTransform {
 
 fn convert_stream_reasoning_to_xml(event: &mut UrpStreamEvent, tag: &str) {
     match event {
-        UrpStreamEvent::PartStart { part, .. } => {
-            if matches!(part, PartHeader::Reasoning) {
-                *part = PartHeader::Text;
+        UrpStreamEvent::PartStart { header, .. } => {
+            if matches!(header, PartHeader::Reasoning) {
+                *header = PartHeader::Text;
             }
         }
         UrpStreamEvent::Delta { delta, .. } => {

@@ -135,11 +135,13 @@ impl From<OpenAiChatUsage> for Usage {
 fn text_part_with_phase(
     content: impl Into<String>,
     phase: Option<&str>,
-    extra_body: HashMap<String, Value>,
+    mut extra_body: HashMap<String, Value>,
 ) -> Part {
+    if let Some(phase) = phase {
+        extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
+    }
     Part::Text {
         content: content.into(),
-        phase: phase.map(str::to_string),
         extra_body,
     }
 }
@@ -155,7 +157,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .ok_or_else(|| "missing model".to_string())?
         .to_string();
 
-    let mut messages = Vec::new();
+    let mut inputs = Vec::new();
     for raw_msg in obj
         .get("messages")
         .and_then(|v| v.as_array())
@@ -202,7 +204,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     .parts
                     .push(text_part_with_phase(text, None, HashMap::new()));
             }
-            messages.push(tool_msg);
+            inputs.push(tool_msg);
             continue;
         }
 
@@ -305,7 +307,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             }
         }
 
-        messages.push(msg);
+        inputs.push(msg);
     }
 
     let reasoning = extract_reasoning(obj);
@@ -317,7 +319,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        messages,
+        inputs,
         stream: obj.get("stream").and_then(|v| v.as_bool()),
         temperature: obj.get("temperature").and_then(|v| v.as_f64()),
         top_p: obj.get("top_p").and_then(|v| v.as_f64()),
@@ -494,7 +496,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        message,
+        outputs: vec![message],
         finish_reason,
         usage,
         extra_body: split_extra(
@@ -531,6 +533,40 @@ fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
 }
 
 fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Part>) {
+    fn merge_reasoning_part(
+        parts: &mut Vec<Part>,
+        content: Option<String>,
+        encrypted: Option<Value>,
+        summary: Option<String>,
+    ) {
+        if let Some(Part::Reasoning {
+            content: existing_content,
+            encrypted: existing_encrypted,
+            summary: existing_summary,
+            ..
+        }) = parts.last_mut()
+        {
+            if existing_content.is_none() && content.is_some() {
+                *existing_content = content;
+            }
+            if existing_encrypted.is_none() && encrypted.is_some() {
+                *existing_encrypted = encrypted;
+            }
+            if existing_summary.is_none() && summary.is_some() {
+                *existing_summary = summary;
+            }
+            return;
+        }
+
+        parts.push(Part::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source: None,
+            extra_body: HashMap::new(),
+        });
+    }
+
     let mut saw_plain = false;
     let mut saw_encrypted = false;
 
@@ -547,19 +583,18 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                 "reasoning.text" => {
                     if let Some(text) = detail_obj.get("text").and_then(|v| v.as_str()) {
                         if !text.is_empty() {
-                            parts.push(Part::Reasoning {
-                                content: text.to_string(),
-                                extra_body: HashMap::new(),
-                            });
+                            merge_reasoning_part(parts, Some(text.to_string()), None, None);
                             saw_plain = true;
                         }
                     }
                     if let Some(sig) = detail_obj.get("signature").and_then(|v| v.as_str()) {
                         if !sig.is_empty() {
-                            parts.push(Part::ReasoningEncrypted {
-                                data: Value::String(sig.to_string()),
-                                extra_body: HashMap::new(),
-                            });
+                            merge_reasoning_part(
+                                parts,
+                                None,
+                                Some(Value::String(sig.to_string())),
+                                None,
+                            );
                             saw_encrypted = true;
                         }
                     }
@@ -572,10 +607,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                                     continue;
                                 }
                             }
-                            parts.push(Part::ReasoningEncrypted {
-                                data: data.clone(),
-                                extra_body: HashMap::new(),
-                            });
+                            merge_reasoning_part(parts, None, Some(data.clone()), None);
                             saw_encrypted = true;
                         }
                     }
@@ -583,10 +615,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                 "reasoning.summary" => {
                     if let Some(summary) = detail_obj.get("summary").and_then(|v| v.as_str()) {
                         if !summary.is_empty() {
-                            parts.push(Part::Reasoning {
-                                content: summary.to_string(),
-                                extra_body: HashMap::new(),
-                            });
+                            merge_reasoning_part(parts, None, None, Some(summary.to_string()));
                             saw_plain = true;
                         }
                     }
@@ -599,10 +628,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
     if !saw_plain {
         if let Some(reasoning) = msg_obj.get("reasoning").and_then(|v| v.as_str()) {
             if !reasoning.is_empty() {
-                parts.push(Part::Reasoning {
-                    content: reasoning.to_string(),
-                    extra_body: HashMap::new(),
-                });
+                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None);
                 saw_plain = true;
             }
         }
@@ -611,10 +637,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
     if !saw_plain {
         if let Some(reasoning) = msg_obj.get("reasoning_content").and_then(|v| v.as_str()) {
             if !reasoning.is_empty() {
-                parts.push(Part::Reasoning {
-                    content: reasoning.to_string(),
-                    extra_body: HashMap::new(),
-                });
+                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None);
             }
         }
     }
@@ -622,10 +645,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
     if !saw_encrypted {
         if let Some(opaque) = msg_obj.get("reasoning_opaque").and_then(|v| v.as_str()) {
             if !opaque.is_empty() {
-                parts.push(Part::ReasoningEncrypted {
-                    data: Value::String(opaque.to_string()),
-                    extra_body: HashMap::new(),
-                });
+                merge_reasoning_part(parts, None, Some(Value::String(opaque.to_string())), None);
             }
         }
     }
@@ -736,17 +756,16 @@ mod tests {
         let decoded = decode_response(&value).expect("decode_response should succeed");
         let mut saw_reasoning = false;
         let mut saw_sig = false;
-        for part in decoded.message.parts {
-            match part {
-                Part::Reasoning { content, .. } => {
-                    assert_eq!(content, "new_reasoning");
-                    saw_reasoning = true;
-                }
-                Part::ReasoningEncrypted { data, .. } => {
-                    assert_eq!(data.as_str().unwrap_or(""), "new_sig");
-                    saw_sig = true;
-                }
-                _ => {}
+        let message = &decoded.outputs[0];
+        for part in &message.parts {
+            if let Part::Reasoning {
+                content, encrypted, ..
+            } = part
+            {
+                assert_eq!(content.as_deref(), Some("new_reasoning"));
+                assert_eq!(encrypted.as_ref().and_then(|v| v.as_str()), Some("new_sig"));
+                saw_reasoning = true;
+                saw_sig = true;
             }
         }
         assert!(saw_reasoning);
@@ -773,17 +792,19 @@ mod tests {
         let decoded = decode_response(&value).expect("decode_response should succeed");
         let mut saw_reasoning = false;
         let mut saw_sig = false;
-        for part in decoded.message.parts {
-            match part {
-                Part::Reasoning { content, .. } => {
-                    assert_eq!(content, "legacy_reasoning");
-                    saw_reasoning = true;
-                }
-                Part::ReasoningEncrypted { data, .. } => {
-                    assert_eq!(data.as_str().unwrap_or(""), "legacy_sig");
-                    saw_sig = true;
-                }
-                _ => {}
+        let message = &decoded.outputs[0];
+        for part in &message.parts {
+            if let Part::Reasoning {
+                content, encrypted, ..
+            } = part
+            {
+                assert_eq!(content.as_deref(), Some("legacy_reasoning"));
+                assert_eq!(
+                    encrypted.as_ref().and_then(|v| v.as_str()),
+                    Some("legacy_sig")
+                );
+                saw_reasoning = true;
+                saw_sig = true;
             }
         }
         assert!(saw_reasoning);

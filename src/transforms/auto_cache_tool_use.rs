@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState,
+    TransformRuntimeContext, TransformScope, TransformState,
     UrpData,
 };
 use async_trait::async_trait;
@@ -34,6 +34,10 @@ impl Transform for AutoCacheToolUseTransform {
         &[Phase::Request]
     }
 
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -65,7 +69,7 @@ impl Transform for AutoCacheToolUseTransform {
         };
 
         // Check if the last message is a Tool result
-        let last_msg = req.messages.last();
+        let last_msg = req.inputs.last();
         let is_tool_result = last_msg.is_some_and(|m| {
             m.role == Role::Tool || m.parts.iter().any(|p| matches!(p, Part::ToolResult { .. }))
         });
@@ -80,7 +84,7 @@ impl Transform for AutoCacheToolUseTransform {
         // Walk backwards to find: Tool(result) <- Assistant(ToolCall) <- User(the target)
         // Find the last Assistant message with a ToolCall before the trailing tool results
         let mut assistant_tool_call_idx: Option<usize> = None;
-        for (i, msg) in req.messages.iter().enumerate().rev() {
+        for (i, msg) in req.inputs.iter().enumerate().rev() {
             if msg.role == Role::Tool
                 || msg
                     .parts
@@ -106,7 +110,7 @@ impl Transform for AutoCacheToolUseTransform {
         // Find the last User message before the assistant's tool call
         let mut target_user_idx: Option<usize> = None;
         for i in (0..assistant_idx).rev() {
-            if req.messages[i].role == Role::User {
+            if req.inputs[i].role == Role::User {
                 target_user_idx = Some(i);
                 break;
             }
@@ -117,7 +121,7 @@ impl Transform for AutoCacheToolUseTransform {
         };
 
         // Check if that User message already has cache_control
-        let already_has_cache = req.messages[user_idx]
+        let already_has_cache = req.inputs[user_idx]
             .parts
             .iter()
             .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")));
@@ -126,7 +130,7 @@ impl Transform for AutoCacheToolUseTransform {
         }
 
         // Add cache_control to the last part of the target User message
-        if let Some(last_part) = req.messages[user_idx].parts.last_mut() {
+        if let Some(last_part) = req.inputs[user_idx].parts.last_mut() {
             if let Some(eb) = part_extra_body_mut(last_part) {
                 eb.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
             }
@@ -137,7 +141,7 @@ impl Transform for AutoCacheToolUseTransform {
 }
 
 fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
-    req.messages
+    req.inputs
         .iter()
         .flat_map(|m| m.parts.iter())
         .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
@@ -151,9 +155,9 @@ fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap
         | crate::urp::Part::Audio { extra_body, .. }
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ReasoningEncrypted { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
         | crate::urp::Part::ToolResult { extra_body, .. }
+        | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }
 }
@@ -167,9 +171,9 @@ fn part_extra_body_mut(
         | crate::urp::Part::Audio { extra_body, .. }
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ReasoningEncrypted { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
         | crate::urp::Part::ToolResult { extra_body, .. }
+        | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }
 }

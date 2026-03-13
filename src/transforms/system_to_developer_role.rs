@@ -1,6 +1,7 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState, UrpData, move_system_to_developer,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, move_system_to_developer,
+    request_messages_mut,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -26,6 +27,10 @@ impl Transform for SystemToDeveloperRoleTransform {
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Request]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
     }
 
     fn config_schema(&self) -> Value {
@@ -55,7 +60,7 @@ impl Transform for SystemToDeveloperRoleTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            move_system_to_developer(&mut req.messages);
+            move_system_to_developer(request_messages_mut(req));
         }
         Ok(())
     }

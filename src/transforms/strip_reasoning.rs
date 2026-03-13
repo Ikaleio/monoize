@@ -1,9 +1,9 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformState, UrpData, strip_reasoning_parts,
+    TransformScope, TransformState, UrpData, response_output_messages_mut, strip_reasoning_parts,
 };
 use async_trait::async_trait;
-use crate::urp::{PartDelta, PartHeader, UrpStreamEvent};
+use crate::urp::{Part, PartDelta, PartHeader, UrpStreamEvent};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -41,6 +41,10 @@ impl Transform for StripReasoningTransform {
         &[Phase::Response]
     }
 
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -69,7 +73,9 @@ impl Transform for StripReasoningTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                resp.message.parts = strip_reasoning_parts(&resp.message.parts);
+                for message in response_output_messages_mut(resp) {
+                    message.parts = strip_reasoning_parts(&message.parts);
+                }
             }
             UrpData::Stream(event) => strip_stream_reasoning(event, state),
             UrpData::Request(_) => {}
@@ -84,25 +90,43 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
     };
     match event {
         UrpStreamEvent::PartStart {
-            part_index, part, ..
+            message_index,
+            part_index,
+            header,
+            ..
         } => {
-            if matches!(part, PartHeader::Reasoning | PartHeader::ReasoningEncrypted) {
-                strip_state.stripped_indices.insert(*part_index);
-                *part = PartHeader::Text;
+            if matches!(header, PartHeader::Reasoning) {
+                strip_state
+                    .stripped_indices
+                    .insert((*message_index << 16) | *part_index);
+                *header = PartHeader::Text;
             }
         }
         UrpStreamEvent::Delta {
-            part_index, delta, ..
+            part_index,
+            delta,
+            ..
         } => {
-            if strip_state.stripped_indices.contains(part_index) {
-                match delta {
-                    PartDelta::Reasoning { .. } | PartDelta::ReasoningEncrypted { .. } => {
-                        *delta = PartDelta::Text {
-                            content: String::new(),
-                        };
-                    }
-                    _ => {}
-                }
+            let key = *part_index;
+            if strip_state.stripped_indices.contains(&key)
+                && matches!(delta, PartDelta::Reasoning { .. })
+            {
+                *delta = PartDelta::Text {
+                    content: String::new(),
+                };
+            }
+        }
+        UrpStreamEvent::PartDone {
+            part_index,
+            part,
+            ..
+        } => {
+            let key = *part_index;
+            if strip_state.stripped_indices.contains(&key) {
+                *part = Part::Text {
+                    content: String::new(),
+                    extra_body: Default::default(),
+                };
             }
         }
         _ => {}

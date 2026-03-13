@@ -1,7 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformState,
-    UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
 };
 use async_trait::async_trait;
 use crate::urp::{Message, Role};
@@ -37,6 +36,10 @@ impl Transform for AppendEmptyUserMessageTransform {
         &[Phase::Request]
     }
 
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -70,9 +73,10 @@ impl Transform for AppendEmptyUserMessageTransform {
             .downcast_ref::<Config>()
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         if let UrpData::Request(req) = data {
-            if let Some(last) = req.messages.last() {
+            let messages = request_messages_mut(req);
+            if let Some(last) = messages.last() {
                 if last.role == Role::Assistant {
-                    req.messages.push(Message::text(Role::User, cfg.content.clone()));
+                    messages.push(Message::text(Role::User, cfg.content.clone()));
                 }
             }
         }
