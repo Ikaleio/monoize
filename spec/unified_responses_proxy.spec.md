@@ -475,7 +475,9 @@ PR6b. Responses streaming phase preservation:
 - When Monoize emits Responses-style downstream SSE, it MUST NOT merge text across distinct `phase` values or across tool-call boundaries.
 - When Monoize synthesizes missing downstream events from `response.completed.output[]`, it MUST preserve both item order and `phase` metadata from the completed payload.
 - Unknown SSE event names, unknown item types, and unknown fields MUST NOT terminate streaming adaptation solely because they are unknown.
-- Monoize MAY continue forwarding intermediate URP `ItemStart`/`ItemDone` events that mirror upstream event boundaries before the terminal object is available, even when those boundaries differ from the final greedy-merged `ResponseDone.outputs` shape required by GZ8.
+- When Monoize emits downstream `/v1/responses` SSE from greedy-merged assistant URP items, Monoize MUST emit canonical Responses output-item boundaries derived from part class, not raw upstream or URP item boundaries.
+- For such downstream `/v1/responses` SSE, every `response.output_item.done` event MUST have exactly one earlier matching `response.output_item.added` event with the same `output_index`.
+- Monoize MUST emit `response.content_part.added` and `response.content_part.done` only for `message` output items. Monoize MUST NOT encode reasoning parts or function-call parts as `message.content[]` stream parts.
 
 PR6c. Final Responses-stream object synthesis:
 

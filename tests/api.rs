@@ -125,6 +125,99 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
             // If tools are present and no tool outputs were provided yet, stream a tool call.
             if tools_present && tool_outputs.is_empty() {
+                if body.get("stream_mode").and_then(|v| v.as_str()) == Some("reasoning_text_tool") {
+                    let stream = futures_util::stream::iter(vec![
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_item.added")
+                            .data(json!({
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": { "type": "reasoning", "text": "" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.reasoning_text.delta")
+                            .data(json!({
+                                "type": "response.reasoning_text.delta",
+                                "output_index": 0,
+                                "delta": "mock_reasoning"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_item.done")
+                            .data(json!({
+                                "type": "response.output_item.done",
+                                "output_index": 0,
+                                "item": { "type": "reasoning", "text": "mock_reasoning" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_item.added")
+                            .data(json!({
+                                "type": "response.output_item.added",
+                                "output_index": 1,
+                                "item": { "type": "message", "role": "assistant", "phase": "analysis", "content": [] }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.content_part.added")
+                            .data(json!({
+                                "type": "response.content_part.added",
+                                "output_index": 1,
+                                "content_index": 0,
+                                "part": { "type": "output_text", "text": "" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_text.delta")
+                            .data(json!({
+                                "type": "response.output_text.delta",
+                                "output_index": 1,
+                                "content_index": 0,
+                                "delta": "answer"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.content_part.done")
+                            .data(json!({
+                                "type": "response.content_part.done",
+                                "output_index": 1,
+                                "content_index": 0,
+                                "part": { "type": "output_text", "text": "answer" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_item.done")
+                            .data(json!({
+                                "type": "response.output_item.done",
+                                "output_index": 1,
+                                "item": {
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "phase": "analysis",
+                                    "content": [{ "type": "output_text", "text": "answer" }]
+                                }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_item.added")
+                            .data(json!({
+                                "type": "response.output_item.added",
+                                "output_index": 2,
+                                "item": { "type": "function_call", "call_id": "call_1", "name": "tool_a", "arguments": "" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.function_call_arguments.delta")
+                            .data(json!({
+                                "type": "response.function_call_arguments.delta",
+                                "output_index": 2,
+                                "call_id": "call_1",
+                                "name": "tool_a",
+                                "delta": "{\"a\":1}"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_item.done")
+                            .data(json!({
+                                "type": "response.output_item.done",
+                                "output_index": 2,
+                                "item": { "type": "function_call", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                    ]);
+                    return Sse::new(stream).into_response();
+                }
                 if body.get("stream_mode").and_then(|v| v.as_str()) == Some("completed_only_tool") {
                     let calls = if parallel {
                         vec![
@@ -2639,6 +2732,44 @@ async fn responses_streaming_includes_tool_calls_and_reasoning_when_upstream_is_
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(text.contains("event: response.function_call_arguments.delta"));
     assert!(text.contains("event: response.reasoning_text.delta"));
+}
+
+#[tokio::test]
+async fn responses_streaming_reencodes_greedy_merged_items_with_canonical_sse_boundaries() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"stream tool"}]}],
+                "tools":[{ "type":"function","name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}],
+                "stream": true,
+                "stream_mode": "reasoning_text_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert!(text.contains("event: response.output_item.added"));
+    assert!(text.contains("\"output_index\":0"));
+    assert!(text.contains("\"output_index\":1"));
+    assert!(text.contains("\"output_index\":2"));
+    assert!(text.contains("\"type\":\"reasoning\""));
+    assert!(text.contains("\"type\":\"message\""));
+    assert!(text.contains("\"type\":\"function_call\""));
+    assert!(text.contains("\"phase\":\"analysis\""));
+    assert!(text.contains("event: response.content_part.added"));
+    assert!(text.contains("\"part\":{\"text\":\"\",\"type\":\"output_text\"}"));
+    assert!(!text.contains("\"part\":{\"text\":\"\",\"type\":\"reasoning\"}"));
+    assert!(!text.contains("event: response.content_part.added\ndata: {\"content_index\":2"));
 }
 
 #[tokio::test]
