@@ -1,64 +1,45 @@
-use crate::config::ProviderType;
 use crate::error::{AppError, AppResult};
-use crate::handlers::routing::{now_ts, wrap_responses_event};
-use crate::handlers::usage::{latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_chat_object, parse_usage_from_messages_object, parse_usage_from_responses_object, record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present, usage_to_messages_usage_json, usage_to_responses_usage_json};
+use crate::handlers::usage::{
+    latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_messages_object,
+    record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
+};
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
-use crate::urp::stream_helpers::*;
+use crate::urp::{
+    FinishReason, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
+};
 use axum::http::StatusCode;
-use axum::response::sse::Event;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, Mutex};
 
-pub(crate) async fn stream_messages_sse_as_responses(
+enum ActivePart {
+    Text,
+    Reasoning,
+    ToolCall(String),
+}
+
+pub(crate) async fn stream_messages_to_urp_events(
     urp: &HandlerUrpRequest,
     upstream_resp: reqwest::Response,
-    tx: mpsc::Sender<Event>,
+    tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> AppResult<()> {
-    let mut seq = 1u64;
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4());
-    let created = now_ts();
+    let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
+    let mut response_model = urp.model.clone();
+    let mut response_extra = HashMap::new();
     let mut output_text = String::new();
     let mut reasoning_text = String::new();
     let mut reasoning_sig = String::new();
-    let mut call_order: Vec<String> = Vec::new();
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut current_tool_call_id: Option<String> = None;
-
-    let base_response = json!({
-        "id": response_id,
-        "object": "response",
-        "created": created,
-        "model": urp.model,
-        "status": "in_progress",
-        "output": []
-    });
-    let _ = tx
-        .send(wrap_responses_event(
-            &mut seq,
-            "response.created",
-            base_response.clone(),
-        ))
-        .await;
-    let _ = tx
-        .send(wrap_responses_event(
-            &mut seq,
-            "response.in_progress",
-            base_response.clone(),
-        ))
-        .await;
-    let _ = tx
-        .send(wrap_responses_event(
-            &mut seq,
-            "response.output_item.added",
-            json!({"type":"message","role":"assistant","content":[]}),
-        ))
-        .await;
+    let mut active_parts: HashMap<u32, ActivePart> = HashMap::new();
+    let mut finished_parts: HashMap<u32, Part> = HashMap::new();
+    let mut part_order: Vec<u32> = Vec::new();
+    let mut item_started = false;
 
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = stream.next().await {
@@ -77,114 +58,171 @@ pub(crate) async fn stream_messages_sse_as_responses(
             record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
+
         let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
         record_stream_usage_if_present(
             &runtime_metrics,
             parse_usage_from_messages_object(&data_val),
         )
         .await;
-        let event_type = data_val.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        match event_type {
-            "content_block_start" => {
-                let cb = data_val
-                    .get("content_block")
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let cb_type = cb.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if cb_type == "tool_use" {
-                    let call_id = cb
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let name = cb
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    current_tool_call_id = if call_id.is_empty() {
-                        None
-                    } else {
-                        Some(call_id.clone())
-                    };
-                    if !call_id.is_empty() && !calls.contains_key(&call_id) {
-                        call_order.push(call_id.clone());
-                        calls.insert(call_id.clone(), (name.clone(), String::new()));
-                        let item = json!({
-                            "type": "function_call",
-                            "call_id": call_id,
-                            "name": name,
-                            "arguments": ""
-                        });
-                        let _ = tx
-                            .send(wrap_responses_event(
-                                &mut seq,
-                                "response.output_item.added",
-                                item,
-                            ))
-                            .await;
-                    }
+
+        match data_val.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "message_start" => {
+                let message = data_val.get("message").cloned().unwrap_or(Value::Null);
+                if let Some(id) = message.get("id").and_then(|v| v.as_str()) {
+                    response_id = id.to_string();
                 }
+                if let Some(model) = message.get("model").and_then(|v| v.as_str()) {
+                    response_model = model.to_string();
+                }
+                response_extra = object_without_keys(
+                    &message,
+                    &["id", "type", "role", "model", "content", "stop_reason", "stop_sequence", "usage"],
+                );
+                let _ = tx
+                    .send(UrpStreamEvent::ResponseStart {
+                        id: response_id.clone(),
+                        model: response_model.clone(),
+                        extra_body: response_extra.clone(),
+                    })
+                    .await;
+                let _ = tx
+                    .send(UrpStreamEvent::ItemStart {
+                        item_index: 0,
+                        header: ItemHeader::Message {
+                            role: Role::Assistant,
+                        },
+                        extra_body: HashMap::new(),
+                    })
+                    .await;
+                item_started = true;
+            }
+            "content_block_start" => {
+                let part_index = data_val
+                    .get("index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let cb = data_val.get("content_block").cloned().unwrap_or(Value::Null);
+                let cb_type = cb.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let extra_body = object_without_keys(&cb, &["type", "id", "name", "text", "thinking"]);
+                let header = match cb_type {
+                    "text" => {
+                        active_parts.insert(part_index, ActivePart::Text);
+                        PartHeader::Text
+                    }
+                    "thinking" => {
+                        active_parts.insert(part_index, ActivePart::Reasoning);
+                        PartHeader::Reasoning
+                    }
+                    "tool_use" => {
+                        let call_id = cb
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let name = cb
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        current_tool_call_id = if call_id.is_empty() {
+                            None
+                        } else {
+                            Some(call_id.clone())
+                        };
+                        if !call_id.is_empty() && !calls.contains_key(&call_id) {
+                            calls.insert(call_id.clone(), (name.clone(), String::new()));
+                        }
+                        active_parts.insert(part_index, ActivePart::ToolCall(call_id.clone()));
+                        PartHeader::ToolCall { call_id, name }
+                    }
+                    _ => continue,
+                };
+                if !part_order.contains(&part_index) {
+                    part_order.push(part_index);
+                }
+                let _ = tx
+                    .send(UrpStreamEvent::PartStart {
+                        part_index,
+                        item_index: 0,
+                        header,
+                        extra_body,
+                    })
+                    .await;
             }
             "content_block_delta" => {
+                let part_index = data_val
+                    .get("index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
                 let delta = data_val.get("delta").cloned().unwrap_or(Value::Null);
                 let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 match delta_type {
                     "text_delta" => {
-                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
-                            if !text.is_empty() {
-                                output_text.push_str(text);
-                                let _ = tx
-                                    .send(wrap_responses_event(
-                                        &mut seq,
-                                        "response.output_text.delta",
-                                        json!({ "text": text }),
-                                    ))
-                                    .await;
-                            }
+                        if let Some(text) = delta.get("text").and_then(|v| v.as_str())
+                            && !text.is_empty()
+                        {
+                            output_text.push_str(text);
+                            let _ = tx
+                                .send(UrpStreamEvent::Delta {
+                                    part_index,
+                                    delta: PartDelta::Text {
+                                        content: text.to_string(),
+                                    },
+                                    usage: None,
+                                    extra_body: HashMap::new(),
+                                })
+                                .await;
                         }
                     }
                     "thinking_delta" => {
-                        if let Some(t) = delta.get("thinking").and_then(|v| v.as_str()) {
-                            if !t.is_empty() {
-                                reasoning_text.push_str(t);
-                                let _ = tx
-                                    .send(wrap_responses_event(
-                                        &mut seq,
-                                        "response.reasoning_text.delta",
-                                        json!({ "delta": t }),
-                                    ))
-                                    .await;
-                            }
+                        if let Some(text) = delta.get("thinking").and_then(|v| v.as_str())
+                            && !text.is_empty()
+                        {
+                            reasoning_text.push_str(text);
+                            let _ = tx
+                                .send(UrpStreamEvent::Delta {
+                                    part_index,
+                                    delta: PartDelta::Reasoning {
+                                        content: text.to_string(),
+                                    },
+                                    usage: None,
+                                    extra_body: HashMap::new(),
+                                })
+                                .await;
                         }
                     }
                     "signature_delta" => {
-                        if let Some(s) = delta.get("signature").and_then(|v| v.as_str()) {
-                            if !s.is_empty() {
-                                reasoning_sig.push_str(s);
-                                let _ = tx
-                                    .send(wrap_responses_event(
-                                        &mut seq,
-                                        "response.reasoning_signature.delta",
-                                        json!({ "delta": s }),
-                                    ))
-                                    .await;
-                            }
+                        if let Some(sig) = delta.get("signature").and_then(|v| v.as_str())
+                            && !sig.is_empty()
+                        {
+                            reasoning_sig.push_str(sig);
                         }
                     }
                     "input_json_delta" => {
-                        if let Some(partial) = delta.get("partial_json").and_then(|v| v.as_str()) {
-                            if let Some(call_id) = current_tool_call_id.clone() {
-                                if let Some(entry) = calls.get_mut(&call_id) {
-                                    entry.1.push_str(partial);
-                                    let _ = tx
-                                        .send(wrap_responses_event(
-                                            &mut seq,
-                                            "response.function_call_arguments.delta",
-                                            json!({ "call_id": call_id, "name": entry.0, "delta": partial }),
-                                        ))
-                                        .await;
+                        if let Some(arguments) = delta.get("partial_json").and_then(|v| v.as_str())
+                            && !arguments.is_empty()
+                        {
+                            let tool_call_id = match active_parts.get(&part_index) {
+                                Some(ActivePart::ToolCall(call_id)) if !call_id.is_empty() => {
+                                    Some(call_id.clone())
                                 }
+                                _ => current_tool_call_id.clone(),
+                            };
+                            if let Some(call_id) = tool_call_id {
+                                if let Some(entry) = calls.get_mut(&call_id) {
+                                    entry.1.push_str(arguments);
+                                }
+                                let _ = tx
+                                    .send(UrpStreamEvent::Delta {
+                                        part_index,
+                                        delta: PartDelta::ToolCallArguments {
+                                            arguments: arguments.to_string(),
+                                        },
+                                        usage: None,
+                                        extra_body: HashMap::new(),
+                                    })
+                                    .await;
                             }
                         }
                     }
@@ -192,7 +230,88 @@ pub(crate) async fn stream_messages_sse_as_responses(
                 }
             }
             "content_block_stop" => {
+                let part_index = data_val
+                    .get("index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let part = match active_parts.get(&part_index) {
+                    Some(ActivePart::Text) => Part::Text {
+                        content: output_text.clone(),
+                        extra_body: HashMap::new(),
+                    },
+                    Some(ActivePart::Reasoning) => Part::Reasoning {
+                        content: (!reasoning_text.is_empty()).then(|| reasoning_text.clone()),
+                        encrypted: (!reasoning_sig.is_empty())
+                            .then(|| Value::String(reasoning_sig.clone())),
+                        summary: None,
+                        source: None,
+                        extra_body: HashMap::new(),
+                    },
+                    Some(ActivePart::ToolCall(call_id)) => {
+                        let (name, arguments) = calls
+                            .get(call_id)
+                            .cloned()
+                            .unwrap_or_else(|| (String::new(), String::new()));
+                        Part::ToolCall {
+                            call_id: call_id.clone(),
+                            name,
+                            arguments,
+                            extra_body: HashMap::new(),
+                        }
+                    }
+                    None => continue,
+                };
                 current_tool_call_id = None;
+                finished_parts.insert(part_index, part.clone());
+                let _ = tx
+                    .send(UrpStreamEvent::PartDone {
+                        part_index,
+                        part,
+                        usage: None,
+                        extra_body: HashMap::new(),
+                    })
+                    .await;
+            }
+            "message_delta" => {
+                let finish_reason = data_val
+                    .get("delta")
+                    .and_then(|v| v.get("stop_reason"))
+                    .and_then(|v| v.as_str())
+                    .and_then(map_finish_reason);
+                let usage = latest_stream_usage_snapshot(&runtime_metrics).await;
+                let parts = part_order
+                    .iter()
+                    .filter_map(|index| finished_parts.get(index).cloned())
+                    .collect::<Vec<_>>();
+                let item = Item::Message {
+                    role: Role::Assistant,
+                    parts,
+                    extra_body: HashMap::new(),
+                };
+                if item_started {
+                    let _ = tx
+                        .send(UrpStreamEvent::ItemDone {
+                            item_index: 0,
+                            item: item.clone(),
+                            usage: usage.clone(),
+                            extra_body: HashMap::new(),
+                        })
+                        .await;
+                }
+                let _ = tx
+                    .send(UrpStreamEvent::ResponseDone {
+                        finish_reason,
+                        usage,
+                        outputs: vec![item],
+                        extra_body: response_extra.clone(),
+                    })
+                    .await;
+                record_stream_terminal_event(
+                    &runtime_metrics,
+                    "response_done",
+                    finish_reason.as_ref().map(finish_reason_name),
+                )
+                .await;
             }
             "message_stop" => {
                 record_stream_terminal_event(&runtime_metrics, "message_stop", None).await;
@@ -202,628 +321,37 @@ pub(crate) async fn stream_messages_sse_as_responses(
         }
     }
 
-    let mut output_items: Vec<Value> = Vec::new();
-    if !reasoning_text.is_empty() || !reasoning_sig.is_empty() {
-        output_items.push(
-            json!({ "type": "reasoning", "text": reasoning_text, "signature": reasoning_sig }),
-        );
-    }
-    for call_id in &call_order {
-        if let Some((name, args)) = calls.get(call_id) {
-            let item = json!({
-                "type": "function_call",
-                "call_id": call_id,
-                "name": name,
-                "arguments": args
-            });
-            let _ = tx
-                .send(wrap_responses_event(
-                    &mut seq,
-                    "response.output_item.done",
-                    item.clone(),
-                ))
-                .await;
-            output_items.push(item);
-        }
-    }
-
-    let output_item = json!({
-        "type": "message",
-        "role": "assistant",
-        "content": [{ "type": "output_text", "text": output_text }]
-    });
-    output_items.push(output_item.clone());
-    let mut final_response = json!({
-        "id": response_id,
-        "object": "response",
-        "created": created,
-        "model": urp.model,
-        "status": "completed",
-        "output": output_items
-    });
-    if let Some(usage) = latest_stream_usage_snapshot(&runtime_metrics).await {
-        final_response["usage"] = usage_to_responses_usage_json(&usage);
-    }
-    let _ = tx
-        .send(wrap_responses_event(
-            &mut seq,
-            "response.output_item.done",
-            output_item,
-        ))
-        .await;
-    let _ = tx
-        .send(wrap_responses_event(
-            &mut seq,
-            "response.output_text.done",
-            json!({}),
-        ))
-        .await;
-    let _ = tx
-        .send(wrap_responses_event(
-            &mut seq,
-            "response.completed",
-            final_response,
-        ))
-        .await;
-    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
 
-pub(crate) async fn stream_any_sse_as_messages(
-    urp: &HandlerUrpRequest,
-    provider_type: ProviderType,
-    upstream_resp: reqwest::Response,
-    tx: mpsc::Sender<Event>,
-    started_at: Option<std::time::Instant>,
-    runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
-) -> AppResult<()> {
-    let message_id = format!("msg_{}", uuid::Uuid::new_v4());
-    if provider_type == ProviderType::Messages {
-        let mut stream = upstream_resp.bytes_stream().eventsource();
-        while let Some(ev) = stream.next().await {
-            let ev = ev.map_err(|err| {
-                AppError::new(
-                    StatusCode::BAD_GATEWAY,
-                    "upstream_stream_decode_failed",
-                    err.to_string(),
-                )
-            })?;
-            if tx.is_closed() {
-                break;
-            }
-            mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
-            if ev.data.trim() == "[DONE]" {
-                record_stream_done_sentinel(&runtime_metrics).await;
-                break;
-            }
-            let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
-            record_stream_usage_if_present(
-                &runtime_metrics,
-                parse_usage_from_messages_object(&data_val),
-            )
-            .await;
-            if data_val.get("type").and_then(|v| v.as_str()) == Some("message_stop") {
-                record_stream_terminal_event(&runtime_metrics, "message_stop", None).await;
-            }
-            let _ = tx.send(Event::default().data(ev.data)).await;
-        }
-        return Ok(());
+fn object_without_keys(value: &Value, ignored: &[&str]) -> HashMap<String, Value> {
+    let Some(obj) = value.as_object() else {
+        return HashMap::new();
+    };
+    obj.iter()
+        .filter(|(key, _)| !ignored.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn map_finish_reason(reason: &str) -> Option<FinishReason> {
+    match reason {
+        "end_turn" => Some(FinishReason::Stop),
+        "max_tokens" => Some(FinishReason::Length),
+        "tool_use" => Some(FinishReason::ToolCalls),
+        "refusal" => Some(FinishReason::ContentFilter),
+        "stop_sequence" => Some(FinishReason::Stop),
+        "" => None,
+        _ => Some(FinishReason::Other),
     }
+}
 
-    let start = json!({
-        "type": "message_start",
-        "message": {
-            "id": message_id,
-            "type": "message",
-            "role": "assistant",
-            "model": urp.model,
-            "content": [],
-            "stop_reason": Value::Null,
-            "stop_sequence": Value::Null,
-            "usage": {
-                "input_tokens": 0,
-                "output_tokens": 0
-            }
-        }
-    });
-    let _ = tx.send(Event::default().data(start.to_string())).await;
-
-    let mut next_index: u32 = 0;
-    let mut text_index: Option<u32> = None;
-    let mut thinking_index: Option<u32> = None;
-    let mut saw_responses_text_delta = false;
-    let mut saw_responses_tool_delta = false;
-    let mut saw_responses_reasoning_delta = false;
-    let mut tool_indices: HashMap<String, u32> = HashMap::new();
-    let mut tool_names: HashMap<String, String> = HashMap::new();
-    let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
-    let mut started: Vec<u32> = Vec::new();
-
-    let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = stream.next().await {
-        let ev = ev.map_err(|err| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_stream_decode_failed",
-                err.to_string(),
-            )
-        })?;
-        if tx.is_closed() {
-            break;
-        }
-        mark_stream_ttfb_if_needed(started_at, &runtime_metrics).await;
-        if ev.data.trim() == "[DONE]" {
-            record_stream_done_sentinel(&runtime_metrics).await;
-            break;
-        }
-
-        match provider_type {
-            ProviderType::ChatCompletion => {
-                let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
-                record_stream_usage_if_present(
-                    &runtime_metrics,
-                    parse_usage_from_chat_object(&data_val),
-                )
-                .await;
-                let delta = data_val
-                    .get("choices")
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|c| c.get("delta"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-
-                let (reasoning_text_deltas, reasoning_sig_deltas) =
-                    extract_chat_reasoning_deltas(&delta);
-                for t in reasoning_text_deltas {
-                    let idx = ensure_anthropic_thinking_block(
-                        &tx,
-                        &mut thinking_index,
-                        &mut next_index,
-                        &mut started,
-                    )
-                    .await?;
-                    let d = json!({
-                        "type": "content_block_delta",
-                        "index": idx,
-                        "delta": { "type": "thinking_delta", "thinking": t }
-                    });
-                    let _ = tx.send(Event::default().data(d.to_string())).await;
-                }
-                for s in reasoning_sig_deltas {
-                    let idx = ensure_anthropic_thinking_block(
-                        &tx,
-                        &mut thinking_index,
-                        &mut next_index,
-                        &mut started,
-                    )
-                    .await?;
-                    let d = json!({
-                        "type": "content_block_delta",
-                        "index": idx,
-                        "delta": { "type": "signature_delta", "signature": s }
-                    });
-                    let _ = tx.send(Event::default().data(d.to_string())).await;
-                }
-
-                if let Some(t) = delta.get("content").and_then(|v| v.as_str()) {
-                    if !t.is_empty() {
-                        let idx = ensure_anthropic_text_block(
-                            &tx,
-                            &mut text_index,
-                            &mut next_index,
-                            &mut started,
-                        )
-                        .await?;
-                        let d = json!({
-                            "type": "content_block_delta",
-                            "index": idx,
-                            "delta": { "type": "text_delta", "text": t }
-                        });
-                        let _ = tx.send(Event::default().data(d.to_string())).await;
-                    }
-                }
-
-                if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                    for tc in tool_calls {
-                        let call_id = tc
-                            .get("id")
-                            .or_else(|| tc.get("call_id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if call_id.is_empty() {
-                            continue;
-                        }
-                        let name = tc
-                            .get("function")
-                            .and_then(|f| f.get("name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let args = tc
-                            .get("function")
-                            .and_then(|f| f.get("arguments"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let idx = ensure_anthropic_tool_block(
-                            &tx,
-                            &mut tool_indices,
-                            &mut tool_names,
-                            &mut next_index,
-                            &mut started,
-                            call_id,
-                            name,
-                        )
-                        .await?;
-                        if !args.is_empty() {
-                            let d = json!({
-                                "type": "content_block_delta",
-                                "index": idx,
-                                "delta": { "type": "input_json_delta", "partial_json": args }
-                            });
-                            let _ = tx.send(Event::default().data(d.to_string())).await;
-                        }
-                    }
-                }
-            }
-            ProviderType::Responses | ProviderType::Grok => {
-                let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
-                record_stream_usage_if_present(
-                    &runtime_metrics,
-                    parse_usage_from_responses_object(&data_val),
-                )
-                .await;
-                match ev.event.as_str() {
-                    "response.output_text.delta" => {
-                        let t = data_val
-                            .get("text")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| data_val.get("delta").and_then(|v| v.as_str()))
-                            .unwrap_or("");
-                        if !t.is_empty() {
-                            saw_responses_text_delta = true;
-                            let idx = ensure_anthropic_text_block(
-                                &tx,
-                                &mut text_index,
-                                &mut next_index,
-                                &mut started,
-                            )
-                            .await?;
-                            let d = json!({ "type": "content_block_delta", "index": idx, "delta": { "type": "text_delta", "text": t } });
-                            let _ = tx.send(Event::default().data(d.to_string())).await;
-                        }
-                    }
-                    "response.reasoning_text.delta" => {
-                        let t = data_val
-                            .get("delta")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
-                            .unwrap_or("");
-                        if !t.is_empty() {
-                            saw_responses_reasoning_delta = true;
-                            let idx = ensure_anthropic_thinking_block(
-                                &tx,
-                                &mut thinking_index,
-                                &mut next_index,
-                                &mut started,
-                            )
-                            .await?;
-                            let d = json!({ "type": "content_block_delta", "index": idx, "delta": { "type": "thinking_delta", "thinking": t } });
-                            let _ = tx.send(Event::default().data(d.to_string())).await;
-                        }
-                    }
-                    "response.reasoning_signature.delta" => {
-                        let t = data_val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
-                        if !t.is_empty() {
-                            saw_responses_reasoning_delta = true;
-                            let idx = ensure_anthropic_thinking_block(
-                                &tx,
-                                &mut thinking_index,
-                                &mut next_index,
-                                &mut started,
-                            )
-                            .await?;
-                            let d = json!({ "type": "content_block_delta", "index": idx, "delta": { "type": "signature_delta", "signature": t } });
-                            let _ = tx.send(Event::default().data(d.to_string())).await;
-                        }
-                    }
-                    "response.output_item.added" => {
-                        let item = data_val.get("item").unwrap_or(&data_val);
-                        if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
-                            let call_id =
-                                item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-                            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                            if !call_id.is_empty() {
-                                saw_responses_tool_delta = true;
-                                if let Some(output_index) =
-                                    data_val.get("output_index").and_then(|v| v.as_u64())
-                                {
-                                    call_ids_by_output_index
-                                        .insert(output_index, call_id.to_string());
-                                }
-                                let _ = ensure_anthropic_tool_block(
-                                    &tx,
-                                    &mut tool_indices,
-                                    &mut tool_names,
-                                    &mut next_index,
-                                    &mut started,
-                                    call_id,
-                                    name,
-                                )
-                                .await?;
-                            }
-                        }
-                    }
-                    "response.function_call_arguments.delta" => {
-                        let call_id = data_val
-                            .get("call_id")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                data_val
-                                    .get("output_index")
-                                    .and_then(|v| v.as_u64())
-                                    .and_then(|idx| {
-                                        call_ids_by_output_index.get(&idx).map(|s| s.as_str())
-                                    })
-                            })
-                            .unwrap_or("");
-                        let name = data_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let delta = data_val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
-                        if !call_id.is_empty() {
-                            saw_responses_tool_delta = true;
-                            let idx = ensure_anthropic_tool_block(
-                                &tx,
-                                &mut tool_indices,
-                                &mut tool_names,
-                                &mut next_index,
-                                &mut started,
-                                call_id,
-                                name,
-                            )
-                            .await?;
-                            if !delta.is_empty() {
-                                let d = json!({
-                                    "type": "content_block_delta",
-                                    "index": idx,
-                                    "delta": { "type": "input_json_delta", "partial_json": delta }
-                                });
-                                let _ = tx.send(Event::default().data(d.to_string())).await;
-                            }
-                        }
-                    }
-                    "response.output_item.done" => {
-                        let item = data_val.get("item").unwrap_or(&data_val);
-                        if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
-                            let call_id =
-                                item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-                            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                            let args = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
-                            if !call_id.is_empty() {
-                                saw_responses_tool_delta = true;
-                                if let Some(output_index) =
-                                    data_val.get("output_index").and_then(|v| v.as_u64())
-                                {
-                                    call_ids_by_output_index
-                                        .insert(output_index, call_id.to_string());
-                                }
-                                let idx = ensure_anthropic_tool_block(
-                                    &tx,
-                                    &mut tool_indices,
-                                    &mut tool_names,
-                                    &mut next_index,
-                                    &mut started,
-                                    call_id,
-                                    name,
-                                )
-                                .await?;
-                                if !args.is_empty() {
-                                    let d = json!({
-                                        "type": "content_block_delta",
-                                        "index": idx,
-                                        "delta": { "type": "input_json_delta", "partial_json": args }
-                                    });
-                                    let _ = tx.send(Event::default().data(d.to_string())).await;
-                                }
-                            }
-                        } else if item.get("type").and_then(|v| v.as_str()) == Some("message") {
-                            if !saw_responses_text_delta {
-                                let text = extract_responses_message_text(item);
-                                if !text.is_empty() {
-                                    let idx = ensure_anthropic_text_block(
-                                        &tx,
-                                        &mut text_index,
-                                        &mut next_index,
-                                        &mut started,
-                                    )
-                                    .await?;
-                                    let d = json!({
-                                        "type": "content_block_delta",
-                                        "index": idx,
-                                        "delta": { "type": "text_delta", "text": text }
-                                    });
-                                    let _ = tx.send(Event::default().data(d.to_string())).await;
-                                }
-                            }
-                        } else if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
-                            let (reasoning_text, reasoning_sig) =
-                                extract_reasoning_text_and_signature(item);
-                            if !reasoning_text.is_empty() {
-                                saw_responses_reasoning_delta = true;
-                                let idx = ensure_anthropic_thinking_block(
-                                    &tx,
-                                    &mut thinking_index,
-                                    &mut next_index,
-                                    &mut started,
-                                )
-                                .await?;
-                                let d = json!({
-                                    "type": "content_block_delta",
-                                    "index": idx,
-                                    "delta": { "type": "thinking_delta", "thinking": reasoning_text }
-                                });
-                                let _ = tx.send(Event::default().data(d.to_string())).await;
-                            }
-                            if !reasoning_sig.is_empty() {
-                                saw_responses_reasoning_delta = true;
-                                let idx = ensure_anthropic_thinking_block(
-                                    &tx,
-                                    &mut thinking_index,
-                                    &mut next_index,
-                                    &mut started,
-                                )
-                                .await?;
-                                let d = json!({
-                                    "type": "content_block_delta",
-                                    "index": idx,
-                                    "delta": { "type": "signature_delta", "signature": reasoning_sig }
-                                });
-                                let _ = tx.send(Event::default().data(d.to_string())).await;
-                            }
-                        }
-                    }
-                    "response.completed" => {
-                        let completed = data_val.get("response").unwrap_or(&data_val);
-                        let Some(output) = completed.get("output").and_then(|v| v.as_array())
-                        else {
-                            continue;
-                        };
-                        for item in output {
-                            match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
-                                "function_call" => {
-                                    if saw_responses_tool_delta {
-                                        continue;
-                                    }
-                                    let call_id =
-                                        item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-                                    if call_id.is_empty() {
-                                        continue;
-                                    }
-                                    let name =
-                                        item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                                    let args = item
-                                        .get("arguments")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("");
-                                    let idx = ensure_anthropic_tool_block(
-                                        &tx,
-                                        &mut tool_indices,
-                                        &mut tool_names,
-                                        &mut next_index,
-                                        &mut started,
-                                        call_id,
-                                        name,
-                                    )
-                                    .await?;
-                                    if !args.is_empty() {
-                                        let d = json!({
-                                            "type": "content_block_delta",
-                                            "index": idx,
-                                            "delta": { "type": "input_json_delta", "partial_json": args }
-                                        });
-                                        let _ = tx.send(Event::default().data(d.to_string())).await;
-                                    }
-                                }
-                                "message" => {
-                                    if saw_responses_text_delta {
-                                        continue;
-                                    }
-                                    let text = extract_responses_message_text(item);
-                                    if !text.is_empty() {
-                                        saw_responses_text_delta = true;
-                                        let idx = ensure_anthropic_text_block(
-                                            &tx,
-                                            &mut text_index,
-                                            &mut next_index,
-                                            &mut started,
-                                        )
-                                        .await?;
-                                        let d = json!({
-                                            "type": "content_block_delta",
-                                            "index": idx,
-                                            "delta": { "type": "text_delta", "text": text }
-                                        });
-                                        let _ = tx.send(Event::default().data(d.to_string())).await;
-                                    }
-                                }
-                                "reasoning" => {
-                                    if saw_responses_reasoning_delta {
-                                        continue;
-                                    }
-                                    let (reasoning_text, reasoning_sig) =
-                                        extract_reasoning_text_and_signature(item);
-                                    if !reasoning_text.is_empty() {
-                                        saw_responses_reasoning_delta = true;
-                                        let idx = ensure_anthropic_thinking_block(
-                                            &tx,
-                                            &mut thinking_index,
-                                            &mut next_index,
-                                            &mut started,
-                                        )
-                                        .await?;
-                                        let d = json!({
-                                            "type": "content_block_delta",
-                                            "index": idx,
-                                            "delta": { "type": "thinking_delta", "thinking": reasoning_text }
-                                        });
-                                        let _ = tx.send(Event::default().data(d.to_string())).await;
-                                    }
-                                    if !reasoning_sig.is_empty() {
-                                        saw_responses_reasoning_delta = true;
-                                        let idx = ensure_anthropic_thinking_block(
-                                            &tx,
-                                            &mut thinking_index,
-                                            &mut next_index,
-                                            &mut started,
-                                        )
-                                        .await?;
-                                        let d = json!({
-                                            "type": "content_block_delta",
-                                            "index": idx,
-                                            "delta": { "type": "signature_delta", "signature": reasoning_sig }
-                                        });
-                                        let _ = tx.send(Event::default().data(d.to_string())).await;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            ProviderType::Gemini | ProviderType::Group | ProviderType::Messages => {}
-        }
+fn finish_reason_name(reason: &FinishReason) -> &'static str {
+    match reason {
+        FinishReason::Stop => "stop",
+        FinishReason::Length => "length",
+        FinishReason::ToolCalls => "tool_calls",
+        FinishReason::ContentFilter => "content_filter",
+        FinishReason::Other => "other",
     }
-
-    for idx in started.iter() {
-        let stop = json!({ "type": "content_block_stop", "index": idx });
-        let _ = tx.send(Event::default().data(stop.to_string())).await;
-    }
-    let message_usage = latest_stream_usage_snapshot(&runtime_metrics)
-        .await
-        .map(|usage| usage_to_messages_usage_json(&usage))
-        .unwrap_or_else(|| json!({ "input_tokens": 0, "output_tokens": 0 }));
-    let message_delta = json!({
-        "type": "message_delta",
-        "delta": {
-            "stop_reason": if tool_indices.is_empty() { "end_turn" } else { "tool_use" },
-            "stop_sequence": Value::Null
-        },
-        "usage": message_usage
-    });
-    let _ = tx
-        .send(Event::default().data(message_delta.to_string()))
-        .await;
-    let stop = json!({ "type": "message_stop" });
-    let _ = tx.send(Event::default().data(stop.to_string())).await;
-    record_stream_terminal_event(
-        &runtime_metrics,
-        "message_stop",
-        Some(if tool_indices.is_empty() {
-            "end_turn"
-        } else {
-            "tool_use"
-        }),
-    )
-    .await;
-    Ok(())
 }
