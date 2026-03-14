@@ -442,6 +442,19 @@ PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Respons
 - tool-call items are nested under `item` for `response.output_item.added` / `response.output_item.done`;
 - argument deltas identify the call via `output_index` (not necessarily `call_id`) for `response.function_call_arguments.delta`.
 
+PR5a. Responses stream item-start reconstruction:
+
+- When upstream emits `response.output_item.added` for a top-level Responses output item of type `reasoning` or `function_call`, Monoize MUST emit a URP `ItemStart` before any URP `Delta` derived from that output item.
+- For such top-level `reasoning` and `function_call` outputs, Monoize MUST also allocate and emit a URP `PartStart` before forwarding any URP `Delta` derived from the same output item because upstream Responses does not guarantee a preceding `response.content_part.added` event for those item types.
+- Monoize MUST decode top-level Responses `reasoning` and `function_call` output items as assistant URP message items containing one reasoning part or one tool-call part, respectively.
+
+PR5b. Responses stream index normalization:
+
+- Upstream Responses `output_index` and `content_index` are upstream protocol coordinates and MUST NOT be reused as URP `item_index` or `part_index` values by assumption alone.
+- The Responses streaming decoder MUST assign URP `item_index` values sequentially starting from 0 in first-seen output-item order, satisfying STR6 even when greedy regrouping later collapses multiple upstream output items into one final `ResponseDone.outputs` item.
+- The Responses streaming decoder MUST assign URP `part_index` values from its own sequential namespace and maintain a mapping from upstream coordinates to URP part indices for all later `Delta`/`PartDone` events.
+- During downstream Responses re-encoding, Monoize MUST continue to emit upstream-facing `output_index` / `content_index` coordinates required by the Responses wire protocol, but those coordinates are adapter-local and MUST NOT alter URP stream-index semantics.
+
 PR6. If upstream Responses streaming does not emit `response.output_text.delta` but emits assistant message text inside `response.output_item.added` and/or `response.output_item.done`, Monoize MUST reconstruct semantically equivalent downstream text streaming from those message items.
 
 PR6b. Responses streaming phase preservation:
@@ -458,6 +471,7 @@ PR6c. Final Responses-stream object synthesis:
 - If the upstream Responses stream already emitted `response.completed`, Monoize MUST forward at most one corresponding `UrpStreamEvent::ResponseDone`. Monoize MUST NOT emit a duplicate synthetic terminal response after forwarding the upstream terminal response.
 - The synthesized or forwarded `ResponseDone.outputs` value MUST use greedy regrouping per GZ8.
 - When the accumulated assistant text is empty, Monoize MUST NOT synthesize an empty assistant text `Item::Message` solely to carry that empty string.
+- When Monoize emits downstream `response.completed` from `ResponseDone.outputs`, the `response.output` array MUST be encoded with the same Responses encoder logic used for non-streaming responses so that top-level `reasoning`, `message`, and `function_call` items remain in canonical Responses output positions rather than being nested inside `message.content[]`.
 
 PR6a. For streaming translation from upstream `type=responses` (or `type=grok`, which uses Responses event shape) to downstream `POST /v1/chat/completions` or `POST /v1/messages`, Monoize MUST support completion-only fallback:
 

@@ -39,6 +39,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut saw_text_delta = false;
     let mut response_done_sent = false;
+    let mut index_state = ResponsesStreamIndexState::default();
 
     let _ = tx
         .send(UrpStreamEvent::ResponseStart {
@@ -231,9 +232,12 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
 
-        if let Some(stream_event) =
-            map_responses_event_to_urp_event(&ev.event, data_val, &message_phases_by_output_index)
-        {
+        for stream_event in map_responses_event_to_urp_events_with_state(
+            &ev.event,
+            data_val,
+            &message_phases_by_output_index,
+            &mut index_state,
+        ) {
             response_done_sent |= matches!(stream_event, UrpStreamEvent::ResponseDone { .. });
             let _ = tx.send(stream_event).await;
         }
@@ -345,33 +349,37 @@ pub(crate) async fn stream_responses_to_urp_events(
     Ok(())
 }
 
-fn map_responses_event_to_urp_event(
+fn map_responses_event_to_urp_events_with_state(
     event_name: &str,
     data_val: Value,
     message_phases_by_output_index: &HashMap<u64, String>,
-) -> Option<UrpStreamEvent> {
+    index_state: &mut ResponsesStreamIndexState,
+) -> Vec<UrpStreamEvent> {
     match event_name {
-        "response.created" | "response.in_progress" => None,
-        "response.output_item.added" => map_output_item_added(data_val),
-        "response.content_part.added" => map_content_part_added(data_val),
-        "response.output_text.delta" => Some(UrpStreamEvent::Delta {
-            part_index: data_val
-                .get("content_index")
-                .or_else(|| data_val.get("part_index"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
+        "response.created" | "response.in_progress" => Vec::new(),
+        "response.output_item.added" => {
+            let mut events = Vec::new();
+            if let Some(event) = map_output_item_added(data_val.clone(), index_state) {
+                events.push(event);
+            }
+            if let Some(event) = map_output_item_added_part_start(data_val, index_state) {
+                events.push(event);
+            }
+            events
+        }
+        "response.content_part.added" => map_content_part_added(data_val, index_state)
+            .into_iter()
+            .collect(),
+        "response.output_text.delta" => vec![UrpStreamEvent::Delta {
+            part_index: urp_part_index_from_delta(&data_val, index_state),
             delta: PartDelta::Text {
                 content: output_text_delta_content(&data_val).to_string(),
             },
             usage: None,
             extra_body: delta_extra_body_with_phase(data_val, message_phases_by_output_index),
-        }),
-        "response.reasoning_text.delta" => Some(UrpStreamEvent::Delta {
-            part_index: data_val
-                .get("content_index")
-                .or_else(|| data_val.get("part_index"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
+        }],
+        "response.reasoning_text.delta" => vec![UrpStreamEvent::Delta {
+            part_index: urp_part_index_from_delta(&data_val, index_state),
             delta: PartDelta::Reasoning {
                 content: data_val
                     .get("delta")
@@ -391,14 +399,9 @@ fn map_responses_event_to_urp_event(
                     "part_index",
                 ],
             ),
-        }),
-        "response.function_call_arguments.delta" => Some(UrpStreamEvent::Delta {
-            part_index: data_val
-                .get("content_index")
-                .or_else(|| data_val.get("part_index"))
-                .or_else(|| data_val.get("output_index"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
+        }],
+        "response.function_call_arguments.delta" => vec![UrpStreamEvent::Delta {
+            part_index: urp_part_index_from_delta(&data_val, index_state),
             delta: PartDelta::ToolCallArguments {
                 arguments: data_val
                     .get("delta")
@@ -418,11 +421,15 @@ fn map_responses_event_to_urp_event(
                     "part_index",
                 ],
             ),
-        }),
-        "response.content_part.done" => map_content_part_done(data_val),
-        "response.output_item.done" => map_output_item_done(data_val),
-        "response.completed" => map_response_completed(data_val),
-        "error" => Some(UrpStreamEvent::Error {
+        }],
+        "response.content_part.done" => map_content_part_done(data_val, index_state)
+            .into_iter()
+            .collect(),
+        "response.output_item.done" => map_output_item_done(data_val, index_state)
+            .into_iter()
+            .collect(),
+        "response.completed" => map_response_completed(data_val).into_iter().collect(),
+        "error" => vec![UrpStreamEvent::Error {
             code: data_val
                 .get("code")
                 .and_then(|v| v.as_str())
@@ -433,17 +440,65 @@ fn map_responses_event_to_urp_event(
                 .unwrap_or_else(|| data_val.as_str().unwrap_or("upstream error"))
                 .to_string(),
             extra_body: split_known_fields(data_val, &["code", "message"]),
-        }),
-        _ => None,
+        }],
+        _ => Vec::new(),
     }
 }
 
-fn map_output_item_added(data_val: Value) -> Option<UrpStreamEvent> {
+#[derive(Debug, Default)]
+struct ResponsesStreamIndexState {
+    next_item_index: u32,
+    next_part_index: u32,
+    item_index_by_output_index: HashMap<u64, u32>,
+    part_index_by_content_key: HashMap<(u64, u64), u32>,
+    synthetic_part_index_by_output_index: HashMap<u64, u32>,
+}
+
+impl ResponsesStreamIndexState {
+    fn item_index_for_output(&mut self, output_index: u64) -> u32 {
+        *self
+            .item_index_by_output_index
+            .entry(output_index)
+            .or_insert_with(|| {
+                let next = self.next_item_index;
+                self.next_item_index += 1;
+                next
+            })
+    }
+
+    fn part_index_for_content(&mut self, output_index: u64, content_index: u64) -> u32 {
+        *self
+            .part_index_by_content_key
+            .entry((output_index, content_index))
+            .or_insert_with(|| {
+                let next = self.next_part_index;
+                self.next_part_index += 1;
+                next
+            })
+    }
+
+    fn synthetic_part_index_for_output(&mut self, output_index: u64) -> u32 {
+        *self
+            .synthetic_part_index_by_output_index
+            .entry(output_index)
+            .or_insert_with(|| {
+                let next = self.next_part_index;
+                self.next_part_index += 1;
+                next
+            })
+    }
+}
+
+fn map_output_item_added(
+    data_val: Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Option<UrpStreamEvent> {
     let item = data_val.get("item")?;
-    let item_index = data_val
+    let output_index = data_val
         .get("output_index")
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .unwrap_or(0);
+    let item_index = index_state.item_index_for_output(output_index);
     match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
         "message" => Some(UrpStreamEvent::ItemStart {
             item_index,
@@ -451,6 +506,13 @@ fn map_output_item_added(data_val: Value) -> Option<UrpStreamEvent> {
                 role: role_from_item(item),
             },
             extra_body: item_extra_body_from_value(item),
+        }),
+        "reasoning" | "function_call" => Some(UrpStreamEvent::ItemStart {
+            item_index,
+            header: ItemHeader::Message {
+                role: Role::Assistant,
+            },
+            extra_body: HashMap::new(),
         }),
         "function_call_output" => Some(UrpStreamEvent::ItemStart {
             item_index,
@@ -468,17 +530,60 @@ fn map_output_item_added(data_val: Value) -> Option<UrpStreamEvent> {
     }
 }
 
-fn map_content_part_added(data_val: Value) -> Option<UrpStreamEvent> {
+fn map_output_item_added_part_start(
+    data_val: Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Option<UrpStreamEvent> {
+    let item = data_val.get("item")?;
+    let output_index = data_val
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let item_index = index_state.item_index_for_output(output_index);
+    match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+        "reasoning" => Some(UrpStreamEvent::PartStart {
+            part_index: index_state.synthetic_part_index_for_output(output_index),
+            item_index,
+            header: PartHeader::Reasoning,
+            extra_body: part_extra_body_from_value(item),
+        }),
+        "function_call" => Some(UrpStreamEvent::PartStart {
+            part_index: index_state.synthetic_part_index_for_output(output_index),
+            item_index,
+            header: PartHeader::ToolCall {
+                call_id: item
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                name: item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            },
+            extra_body: part_extra_body_from_value(item),
+        }),
+        _ => None,
+    }
+}
+
+fn map_content_part_added(
+    data_val: Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Option<UrpStreamEvent> {
     let part = data_val.get("part")?;
-    let part_index = data_val
+    let output_index = data_val
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let content_index = data_val
         .get("content_index")
         .or_else(|| data_val.get("part_index"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let item_index = data_val
-        .get("output_index")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .unwrap_or(0);
+    let part_index = index_state.part_index_for_content(output_index, content_index);
+    let item_index = index_state.item_index_for_output(output_index);
     let header = match part.get("type").and_then(|v| v.as_str()).unwrap_or("") {
         "output_text" | "text" => PartHeader::Text,
         "reasoning" => PartHeader::Reasoning,
@@ -508,13 +613,21 @@ fn map_content_part_added(data_val: Value) -> Option<UrpStreamEvent> {
     })
 }
 
-fn map_content_part_done(data_val: Value) -> Option<UrpStreamEvent> {
+fn map_content_part_done(
+    data_val: Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Option<UrpStreamEvent> {
     let part = data_val.get("part")?;
-    let part_index = data_val
+    let output_index = data_val
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let content_index = data_val
         .get("content_index")
         .or_else(|| data_val.get("part_index"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .unwrap_or(0);
+    let part_index = index_state.part_index_for_content(output_index, content_index);
     Some(UrpStreamEvent::PartDone {
         part_index,
         part: decode_part_from_value(part),
@@ -523,12 +636,16 @@ fn map_content_part_done(data_val: Value) -> Option<UrpStreamEvent> {
     })
 }
 
-fn map_output_item_done(data_val: Value) -> Option<UrpStreamEvent> {
+fn map_output_item_done(
+    data_val: Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Option<UrpStreamEvent> {
     let item = data_val.get("item")?;
     let item_index = data_val
         .get("output_index")
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .map(|output_index| index_state.item_index_for_output(output_index))
+        .unwrap_or(0);
     Some(UrpStreamEvent::ItemDone {
         item_index,
         item: decode_item_from_value(item),
@@ -583,6 +700,24 @@ fn map_response_completed(data_val: Value) -> Option<UrpStreamEvent> {
             ],
         ),
     })
+}
+
+fn urp_part_index_from_delta(
+    data_val: &Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> u32 {
+    let output_index = data_val
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if let Some(content_index) = data_val
+        .get("content_index")
+        .or_else(|| data_val.get("part_index"))
+        .and_then(|v| v.as_u64())
+    {
+        return index_state.part_index_for_content(output_index, content_index);
+    }
+    index_state.synthetic_part_index_for_output(output_index)
 }
 
 fn output_text_delta_content<'a>(data_val: &'a Value) -> &'a str {
@@ -1074,5 +1209,132 @@ mod tests {
             Part::Text { content, extra_body } if content == "answer" && extra_body.get("phase") == Some(&json!("analysis"))
         ));
         assert!(matches!(&parts[2], Part::ToolCall { call_id, .. } if call_id == "call_1"));
+    }
+
+    #[test]
+    fn top_level_reasoning_and_function_call_items_emit_item_and_part_starts_with_sequential_urp_indices() {
+        let mut state = ResponsesStreamIndexState::default();
+        let reasoning_events = map_responses_event_to_urp_events_with_state(
+            "response.output_item.added",
+            json!({
+                "output_index": 7,
+                "item": { "type": "reasoning", "text": "think" }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert_eq!(reasoning_events.len(), 2);
+        assert!(matches!(
+            &reasoning_events[0],
+            UrpStreamEvent::ItemStart {
+                item_index,
+                header: ItemHeader::Message { role: Role::Assistant },
+                ..
+            } if *item_index == 0
+        ));
+        assert!(matches!(
+            &reasoning_events[1],
+            UrpStreamEvent::PartStart {
+                item_index,
+                part_index,
+                header: PartHeader::Reasoning,
+                ..
+            } if *item_index == 0 && *part_index == 0
+        ));
+
+        let function_events = map_responses_event_to_urp_events_with_state(
+            "response.output_item.added",
+            json!({
+                "output_index": 9,
+                "item": {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": ""
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert_eq!(function_events.len(), 2);
+        assert!(matches!(
+            &function_events[0],
+            UrpStreamEvent::ItemStart {
+                item_index,
+                header: ItemHeader::Message { role: Role::Assistant },
+                ..
+            } if *item_index == 1
+        ));
+        assert!(matches!(
+            &function_events[1],
+            UrpStreamEvent::PartStart {
+                item_index,
+                part_index,
+                header: PartHeader::ToolCall { call_id, name },
+                ..
+            } if *item_index == 1 && *part_index == 1 && call_id == "call_1" && name == "lookup"
+        ));
+
+        let function_delta = map_responses_event_to_urp_events_with_state(
+            "response.function_call_arguments.delta",
+            json!({
+                "output_index": 9,
+                "delta": "{}"
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(matches!(
+            &function_delta[0],
+            UrpStreamEvent::Delta {
+                part_index,
+                delta: PartDelta::ToolCallArguments { arguments },
+                ..
+            } if *part_index == 1 && arguments == "{}"
+        ));
+    }
+
+    #[test]
+    fn content_part_done_reuses_normalized_urp_part_index() {
+        let mut state = ResponsesStreamIndexState::default();
+
+        let added = map_responses_event_to_urp_events_with_state(
+            "response.content_part.added",
+            json!({
+                "output_index": 7,
+                "content_index": 42,
+                "part": { "type": "output_text", "text": "" }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(matches!(
+            &added[0],
+            UrpStreamEvent::PartStart {
+                part_index,
+                item_index,
+                header: PartHeader::Text,
+                ..
+            } if *item_index == 0 && *part_index == 0
+        ));
+
+        let done = map_responses_event_to_urp_events_with_state(
+            "response.content_part.done",
+            json!({
+                "output_index": 7,
+                "content_index": 42,
+                "part": { "type": "output_text", "text": "done" }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(matches!(
+            &done[0],
+            UrpStreamEvent::PartDone {
+                part_index,
+                part: Part::Text { content, .. },
+                ..
+            } if *part_index == 0 && content == "done"
+        ));
     }
 }

@@ -1,8 +1,8 @@
 use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
 use crate::urp::{
-    self, FinishReason, InputDetails, Item, ItemHeader, OutputDetails, Part, PartDelta, PartHeader,
-    Role, ToolResultContent, UrpStreamEvent, Usage,
+    self, Item, ItemHeader, Part, PartDelta, PartHeader, Role, ToolResultContent,
+    UrpStreamEvent,
 };
 use crate::urp::stream_helpers::*;
 use axum::response::sse::Event;
@@ -150,7 +150,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
 ) -> AppResult<()> {
     let mut seq = 1u64;
     let mut response_id = "resp".to_string();
-    let mut created = now_ts();
+    let mut created: Option<i64> = None;
     let mut output_indices: HashMap<u32, usize> = HashMap::new();
     let mut part_indices: HashMap<u32, (usize, u32)> = HashMap::new();
     let mut tool_calls_by_part_index: HashMap<u32, (usize, String, String)> = HashMap::new();
@@ -159,15 +159,17 @@ pub(crate) async fn encode_urp_stream_as_responses(
         match event {
             UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
                 response_id = id.clone();
-                created = extra_body
-                    .get("created")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or_else(now_ts);
+                created = Some(
+                    extra_body
+                        .get("created")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or_else(now_ts),
+                );
 
                 let payload = json!({
                     "id": id,
                     "object": "response",
-                    "created": created,
+                    "created": created.expect("response.created timestamp set from response start"),
                     "model": logical_model,
                     "status": "in_progress",
                     "output": []
@@ -345,7 +347,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     .entry(item_index)
                     .or_insert(item_index as usize);
                 let encoded_item = sanitize_responses_output_item_for_frame_limit(
-                    &encode_output_item(&item),
+                    &encode_stream_output_item(&item),
                     sse_max_frame_length,
                 );
                 send_responses_event(
@@ -366,17 +368,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 ..
             } => {
                 send_responses_event(&tx, &mut seq, "response.output_text.done", json!({})).await?;
-                let encoded_outputs: Vec<Value> = outputs.iter().map(encode_output_item).collect();
-                let mut response = json!({
-                    "id": response_id,
-                    "object": "response",
-                    "created": created,
-                    "model": logical_model,
-                    "status": finish_reason_to_status(finish_reason),
-                    "output": encoded_outputs,
-                });
-                if let Some(usage) = usage.as_ref() {
-                    response["usage"] = encode_usage_value(usage);
+                let mut response = urp::encode::openai_responses::encode_response(
+                    &urp::UrpResponse {
+                        id: response_id.clone(),
+                        model: logical_model.to_string(),
+                        outputs,
+                        finish_reason,
+                        usage,
+                        extra_body: HashMap::new(),
+                    },
+                    logical_model,
+                );
+                if let Some(created) = created {
+                    response["created"] = json!(created);
                 }
                 let completed_response =
                     sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length);
@@ -425,7 +429,7 @@ fn encode_item_start_stub(header: &ItemHeader) -> Value {
     }
 }
 
-fn encode_output_item(item: &Item) -> Value {
+fn encode_stream_output_item(item: &Item) -> Value {
     match item {
         Item::Message {
             role,
@@ -761,39 +765,6 @@ fn encode_tool_result_output(content: &[ToolResultContent]) -> Value {
     )
 }
 
-fn encode_usage_value(usage: &Usage) -> Value {
-    let input_details = usage.input_details.as_ref().cloned().unwrap_or_default();
-    let output_details = usage.output_details.as_ref().cloned().unwrap_or_default();
-    let mut usage_value = json!({
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens(),
-        "output_tokens_details": encode_output_details(&output_details),
-        "input_tokens_details": encode_input_details(&input_details),
-    });
-    if let Some(obj) = usage_value.as_object_mut() {
-        merge_json_extra(obj, &usage.extra_body);
-    }
-    usage_value
-}
-
-fn encode_input_details(details: &InputDetails) -> Value {
-    json!({
-        "cached_tokens": details.cache_read_tokens,
-        "cache_write_tokens": details.cache_creation_tokens,
-        "cache_creation_tokens": details.cache_creation_tokens,
-        "tool_prompt_tokens": details.tool_prompt_tokens,
-    })
-}
-
-fn encode_output_details(details: &OutputDetails) -> Value {
-    json!({
-        "reasoning_tokens": details.reasoning_tokens,
-        "accepted_prediction_tokens": details.accepted_prediction_tokens,
-        "rejected_prediction_tokens": details.rejected_prediction_tokens,
-    })
-}
-
 fn merge_json_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
     for (k, v) in extra {
         obj.insert(k.clone(), v.clone());
@@ -810,10 +781,66 @@ fn role_to_str(role: Role) -> &'static str {
     }
 }
 
-fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str {
-    match finish_reason {
-        Some(FinishReason::Length) => "incomplete",
-        Some(FinishReason::Other) => "failed",
-        _ => "completed",
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::urp::{FinishReason, Part, Role, UrpResponse};
+
+    fn empty_map() -> HashMap<String, Value> {
+        HashMap::new()
+    }
+
+    #[test]
+    fn streamed_completion_uses_nonstream_response_output_shape_for_merged_items() {
+        let outputs = vec![Item::Message {
+            role: Role::Assistant,
+            parts: vec![
+                Part::Reasoning {
+                    content: Some("think".to_string()),
+                    encrypted: Some(json!("sig_1")),
+                    summary: None,
+                    source: None,
+                    extra_body: empty_map(),
+                },
+                Part::Text {
+                    content: "answer".to_string(),
+                    extra_body: {
+                        let mut map = empty_map();
+                        map.insert("phase".to_string(), json!("analysis"));
+                        map
+                    },
+                },
+                Part::ToolCall {
+                    call_id: "call_1".to_string(),
+                    name: "lookup".to_string(),
+                    arguments: "{}".to_string(),
+                    extra_body: empty_map(),
+                },
+            ],
+            extra_body: {
+                let mut map = empty_map();
+                map.insert("custom_message_field".to_string(), json!(true));
+                map
+            },
+        }];
+
+        let encoded = urp::encode::openai_responses::encode_response(
+            &UrpResponse {
+                id: "resp_1".to_string(),
+                model: "gpt-5.4".to_string(),
+                outputs,
+                finish_reason: Some(FinishReason::ToolCalls),
+                usage: None,
+                extra_body: empty_map(),
+            },
+            "gpt-5.4",
+        );
+        let output = encoded["output"].as_array().expect("output array");
+        assert_eq!(output.len(), 3);
+        assert_eq!(output[0]["type"], json!("reasoning"));
+        assert_eq!(output[1]["type"], json!("message"));
+        assert_eq!(output[1]["phase"], json!("analysis"));
+        assert_eq!(output[1]["custom_message_field"], json!(true));
+        assert_eq!(output[2]["type"], json!("function_call"));
     }
 }
