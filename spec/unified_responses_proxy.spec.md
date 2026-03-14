@@ -566,7 +566,11 @@ PC7a. For downstream `POST /v1/chat/completions` translated from upstream `type=
 - If upstream already emitted at least one terminal chunk with non-null `choices[0].finish_reason`, Monoize MUST NOT append an additional synthetic terminal chat chunk with a different `finish_reason`.
 - Monoize MUST preserve upstream terminal finish semantics (for example `tool_calls`) so downstream clients can continue ReACT/tool loops correctly.
 
-PC7b. If an upstream `type=chat_completion` stream emits any tool-call deltas (`choices[0].delta.tool_calls[]`) in a turn, but emits terminal `choices[0].finish_reason = "stop"`, Monoize MUST normalize downstream terminal finish reason to `tool_calls` for `POST /v1/chat/completions`.
+PC7b. If an upstream `type=chat_completion` stream emits any tool-call presence (either tool-call header chunks or argument deltas via `choices[0].delta.tool_calls[]`) in a turn, but emits terminal `choices[0].finish_reason = "stop"`, Monoize MUST normalize downstream terminal finish reason to `tool_calls` for `POST /v1/chat/completions`.
+
+PC7c. For downstream `POST /v1/chat/completions` translated from upstream `type=chat_completion` streaming, every non-terminal downstream chunk that carries assistant deltas (including `content`, `reasoning_details`, and `tool_calls`) MUST emit `choices[0].finish_reason = null`.
+
+PC7d. For downstream `POST /v1/chat/completions` translated from upstream `type=chat_completion` streaming, Monoize MUST emit at most one downstream chunk with non-null `choices[0].finish_reason`, and that terminal chunk MUST be emitted only after the last downstream assistant delta of the turn.
 
 PC8. Reasoning (non-stream and stream):
 

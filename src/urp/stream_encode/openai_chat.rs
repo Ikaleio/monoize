@@ -194,7 +194,28 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 header: PartHeader::ToolCall { call_id, name },
                 ..
             } => {
-                tool_info.insert(part_index, (call_id, name, tool_idx, false));
+                saw_tool = true;
+                let idx = tool_idx;
+                let chunk = json!({
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": logical_model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": idx,
+                                "id": call_id,
+                                "type": "function",
+                                "function": { "name": name, "arguments": "" }
+                            }]
+                        },
+                        "finish_reason": Value::Null
+                    }]
+                });
+                send_plain_sse_data(&tx, chunk.to_string()).await?;
+                tool_info.insert(part_index, (call_id, name, idx, true));
                 tool_idx += 1;
             }
             UrpStreamEvent::PartStart { .. }

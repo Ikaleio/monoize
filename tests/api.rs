@@ -518,6 +518,111 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
 
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
             if tools_present && tool_outputs.is_empty() {
+                if body.get("stream_mode").and_then(|v| v.as_str()) == Some("header_only_tool") {
+                    let chunks: Vec<Result<Event, Infallible>> = vec![
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": { "role": "assistant", "content": Value::Null }, "finish_reason": Value::Null }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "id": "call_empty",
+                                        "type": "function",
+                                        "function": { "name": "tool_empty", "arguments": "" }
+                                    }]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                        }).to_string())),
+                        Ok(Event::default().data("[DONE]")),
+                    ];
+                    return Sse::new(futures_util::stream::iter(chunks)).into_response();
+                }
+                if body.get("stream_mode").and_then(|v| v.as_str()) == Some("reasoning_text_tool") {
+                    let mut chunks: Vec<Result<Event, Infallible>> = Vec::new();
+                    chunks.push(Ok(Event::default().data(json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{ "index": 0, "delta": { "role": "assistant", "content": Value::Null }, "finish_reason": Value::Null }]
+                    }).to_string())));
+                    chunks.push(Ok(Event::default().data(json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }] }, "finish_reason": Value::Null }]
+                    }).to_string())));
+                    chunks.push(Ok(Event::default().data(json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{ "index": 0, "delta": { "content": "answer" }, "finish_reason": Value::Null }]
+                    }).to_string())));
+                    chunks.push(Ok(Event::default().data(json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": { "name": "tool_a", "arguments": "" }
+                                }]
+                            },
+                            "finish_reason": Value::Null
+                        }]
+                    }).to_string())));
+                    chunks.push(Ok(Event::default().data(json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": 0,
+                                    "function": { "arguments": "{\"a\":1}" }
+                                }]
+                            },
+                            "finish_reason": Value::Null
+                        }]
+                    }).to_string())));
+                    chunks.push(Ok(Event::default().data(json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+                    }).to_string())));
+                    chunks.push(Ok(Event::default().data("[DONE]")));
+                    return Sse::new(futures_util::stream::iter(chunks)).into_response();
+                }
                 let mut chunks: Vec<Result<Event, Infallible>> = Vec::new();
                 // Initial role chunk (matches real OpenAI format)
                 chunks.push(Ok(Event::default().data(json!({
@@ -636,27 +741,27 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             chunks.push(Ok::<_, Infallible>(
                 Event::default().data(chunk.to_string()),
             ));
+            // Real OpenAI always emits a terminal chunk with finish_reason
+            // before [DONE]; usage is only included when stream_options.include_usage is set.
+            let mut terminal = json!({
+                "id": "chatcmpl_mock",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": model,
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
+            });
             if emit_usage {
-                chunks.push(Ok::<_, Infallible>(
-                    Event::default().data(
-                        json!({
-                            "id": "chatcmpl_mock",
-                            "object": "chat.completion.chunk",
-                            "created": 0,
-                            "model": model,
-                            "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }],
-                            "usage": {
-                                "prompt_tokens": 12,
-                                "completion_tokens": 8,
-                                "total_tokens": 20,
-                                "prompt_tokens_details": { "cached_tokens": 0 },
-                                "completion_tokens_details": { "reasoning_tokens": 0 }
-                            }
-                        })
-                        .to_string(),
-                    ),
-                ));
+                terminal["usage"] = json!({
+                    "prompt_tokens": 12,
+                    "completion_tokens": 8,
+                    "total_tokens": 20,
+                    "prompt_tokens_details": { "cached_tokens": 0 },
+                    "completion_tokens_details": { "reasoning_tokens": 0 }
+                });
             }
+            chunks.push(Ok::<_, Infallible>(
+                Event::default().data(terminal.to_string()),
+            ));
             chunks.push(Ok::<_, Infallible>(Event::default().data("[DONE]")));
             let stream = futures_util::stream::iter(chunks);
             return Sse::new(stream).into_response();
@@ -3061,6 +3166,86 @@ async fn chat_streaming_parallel_tool_calls_from_chat_upstream_reassembles_argum
 }
 
 #[tokio::test]
+async fn chat_streaming_content_then_tool_call_keeps_finish_reason_terminal() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true,
+                "stream_mode": "reasoning_text_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut saw_content = false;
+    let mut saw_tool_calls = false;
+    let mut terminal_count = 0usize;
+    let mut tool_call_seen_before_terminal = false;
+
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let choice = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+
+        if delta.get("content").and_then(|v| v.as_str()) == Some("answer") {
+            saw_content = true;
+        }
+        if delta.get("tool_calls").and_then(|v| v.as_array()).is_some() {
+            saw_tool_calls = true;
+            tool_call_seen_before_terminal = true;
+        }
+        assert!(
+            !(delta.get("content").is_some() && delta.get("tool_calls").is_some()),
+            "downstream chunk must not co-pack content and tool_calls: {payload}"
+        );
+
+        let finish_reason = choice.get("finish_reason").and_then(|v| v.as_str());
+        if let Some(reason) = finish_reason {
+            terminal_count += 1;
+            assert_eq!(reason, "tool_calls", "unexpected terminal reason: {payload}");
+            assert!(
+                tool_call_seen_before_terminal,
+                "terminal finish_reason arrived before tool_call delta: {text}"
+            );
+            assert!(
+                delta.as_object().map(|obj| obj.is_empty()).unwrap_or(false),
+                "terminal finish_reason must be emitted on an empty delta: {payload}"
+            );
+        }
+    }
+
+    assert!(saw_content, "expected upstream content delta to survive downstream stream: {text}");
+    assert!(saw_tool_calls, "expected downstream tool_call delta: {text}");
+    assert_eq!(terminal_count, 1, "expected exactly one terminal finish_reason chunk: {text}");
+    assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
 async fn chat_streaming_maps_text_from_responses_output_item_done() {
     let ctx = setup().await;
     let req = Request::builder()
@@ -5329,4 +5514,140 @@ async fn ip_whitelist_blocks_non_whitelisted() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
     assert_eq!(v["error"]["code"].as_str(), Some("ip_not_allowed"));
+}
+
+#[tokio::test]
+async fn chat_streaming_content_only_from_chat_upstream_has_terminal_chunk_and_usage() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"hello"}],
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut finish_reasons: Vec<String> = Vec::new();
+    let mut has_usage = false;
+    let mut has_content = false;
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if v.get("usage").is_some() {
+            has_usage = true;
+        }
+        let choice = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first());
+        if let Some(c) = choice {
+            if let Some(reason) = c.get("finish_reason").and_then(|v| v.as_str()) {
+                if !reason.is_empty() {
+                    finish_reasons.push(reason.to_string());
+                }
+            }
+            if c.get("delta")
+                .and_then(|d| d.get("content"))
+                .and_then(|v| v.as_str())
+                .is_some()
+            {
+                has_content = true;
+            }
+        }
+    }
+
+    assert!(has_content, "should have content deltas: {text}");
+    assert_eq!(
+        finish_reasons,
+        vec!["stop".to_string()],
+        "content-only chat stream must have exactly one terminal finish_reason=stop: {text}"
+    );
+    assert!(has_usage, "PC9: usage must be present via auto-injected stream_options.include_usage: {text}");
+    assert!(text.contains("[DONE]"), "must end with [DONE]: {text}");
+}
+
+#[tokio::test]
+async fn chat_streaming_header_only_tool_call_still_finishes_as_tool_calls() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_empty","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true,
+                "stream_mode": "header_only_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut finish_reasons = Vec::new();
+    let mut saw_tool_call_header = false;
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if v.get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|choice| choice.get("delta"))
+            .and_then(|delta| delta.get("tool_calls"))
+            .and_then(|v| v.as_array())
+            .is_some()
+        {
+            saw_tool_call_header = true;
+        }
+        if let Some(reason) = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|choice| choice.get("finish_reason"))
+            .and_then(|v| v.as_str())
+        {
+            if !reason.is_empty() {
+                finish_reasons.push(reason.to_string());
+            }
+        }
+    }
+
+    assert!(saw_tool_call_header, "expected downstream tool call header chunk: {text}");
+    assert_eq!(
+        finish_reasons,
+        vec!["tool_calls".to_string()],
+        "header-only tool call must still normalize terminal finish reason to tool_calls: {text}"
+    );
+    assert!(text.contains("[DONE]"));
 }
