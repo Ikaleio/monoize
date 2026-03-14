@@ -6,7 +6,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 struct PendingChatMessage {
@@ -99,6 +99,20 @@ fn finalize_chat_message_content(m: &mut Map<String, Value>, content_parts: Vec<
     } else {
         m.insert("content".to_string(), Value::String(String::new()));
     }
+}
+
+fn finalize_chat_response_content(m: &mut Map<String, Value>, content_parts: Vec<Value>) {
+    let content = content_parts
+        .into_iter()
+        .filter_map(|part| {
+            (part.get("type").and_then(|v| v.as_str()) == Some("text"))
+                .then(|| part.get("text").and_then(|v| v.as_str()))
+                .flatten()
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    m.insert("content".to_string(), Value::String(content));
 }
 
 fn flush_pending_chat_message(pending: &mut Option<PendingChatMessage>, out: &mut Vec<Value>) {
@@ -542,7 +556,7 @@ fn merge_assistant_chat_messages(assistant_messages: &[Item]) -> Map<String, Val
         }
     }
 
-    finalize_chat_message_content(&mut merged, merged_content_parts);
+    finalize_chat_response_content(&mut merged, merged_content_parts);
     if !merged_tool_calls.is_empty() {
         merged.insert("tool_calls".to_string(), Value::Array(merged_tool_calls));
     }
@@ -795,18 +809,14 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 4);
         assert_eq!(output.accepted_prediction_tokens, 5);
         assert_eq!(output.rejected_prediction_tokens, 6);
-        assert!(
-            decoded_usage
-                .extra_body
-                .get("prompt_tokens_details")
-                .is_none()
-        );
-        assert!(
-            decoded_usage
-                .extra_body
-                .get("completion_tokens_details")
-                .is_none()
-        );
+        assert!(decoded_usage
+            .extra_body
+            .get("prompt_tokens_details")
+            .is_none());
+        assert!(decoded_usage
+            .extra_body
+            .get("completion_tokens_details")
+            .is_none());
         assert_eq!(
             decoded_usage.extra_body.get("provider_specific"),
             Some(&json!(true))
@@ -864,14 +874,7 @@ mod tests {
         let message = encoded["choices"][0]["message"]
             .as_object()
             .expect("chat message object");
-        let content = message
-            .get("content")
-            .and_then(|value| value.as_array())
-            .expect("content should be block array");
-
-        assert_eq!(content.len(), 2);
-        assert_eq!(content[0]["text"], json!("prep"));
-        assert_eq!(content[1]["text"], json!("answer"));
+        assert_eq!(message.get("content"), Some(&json!("prep\n\nanswer")));
         assert_eq!(message["tool_calls"][0]["function"]["name"], json!("tool"));
         assert_eq!(message["reasoning"], json!("think"));
         assert_eq!(message["reasoning_details"][0]["signature"], json!("sig_1"));

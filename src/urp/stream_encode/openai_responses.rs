@@ -10,6 +10,14 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+#[derive(Clone)]
+struct PendingResponsesMessageItem {
+    role: Role,
+    phase: Option<String>,
+    content: Vec<Value>,
+    extra_body: HashMap<String, Value>,
+}
+
 pub(crate) async fn emit_synthetic_responses_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
@@ -343,23 +351,27 @@ pub(crate) async fn encode_urp_stream_as_responses(
             UrpStreamEvent::ItemDone {
                 item_index, item, ..
             } => {
-                let output_index = *output_indices
+                let mut output_index = *output_indices
                     .entry(item_index)
                     .or_insert(item_index as usize);
-                let encoded_item = sanitize_responses_output_item_for_frame_limit(
-                    &encode_stream_output_item(&item),
-                    sse_max_frame_length,
-                );
-                send_responses_event(
-                    &tx,
-                    &mut seq,
-                    "response.output_item.done",
-                    json!({
-                        "output_index": output_index,
-                        "item": encoded_item,
-                    }),
-                )
-                .await?;
+                let encoded_items = encode_stream_output_item(&item);
+                for encoded_item in encoded_items {
+                    let done_item = sanitize_responses_output_item_for_frame_limit(
+                        &encoded_item,
+                        sse_max_frame_length,
+                    );
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.output_item.done",
+                        json!({
+                            "output_index": output_index,
+                            "item": done_item,
+                        }),
+                    )
+                    .await?;
+                    output_index += 1;
+                }
             }
             UrpStreamEvent::ResponseDone {
                 finish_reason,
@@ -429,36 +441,129 @@ fn encode_item_start_stub(header: &ItemHeader) -> Value {
     }
 }
 
-fn encode_stream_output_item(item: &Item) -> Value {
+fn text_part_phase(part: &Part) -> Option<&str> {
+    match part {
+        Part::Text { extra_body, .. } => extra_body.get("phase").and_then(|v| v.as_str()),
+        _ => None,
+    }
+}
+
+fn flush_pending_message_item(
+    pending: &mut Option<PendingResponsesMessageItem>,
+    out: &mut Vec<Value>,
+) {
+    let Some(pending_item) = pending.take() else {
+        return;
+    };
+    if pending_item.content.is_empty() {
+        return;
+    }
+
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), json!("message"));
+    obj.insert("role".to_string(), json!(role_to_str(pending_item.role)));
+    obj.insert("content".to_string(), Value::Array(pending_item.content));
+    obj.insert("id".to_string(), json!(format!("msg_{}", uuid::Uuid::new_v4())));
+    obj.insert("status".to_string(), json!("completed"));
+    if let Some(phase) = pending_item.phase {
+        obj.insert("phase".to_string(), Value::String(phase));
+    }
+    merge_json_extra(&mut obj, &pending_item.extra_body);
+    out.push(Value::Object(obj));
+}
+
+fn append_content_part_to_pending(
+    pending: &mut Option<PendingResponsesMessageItem>,
+    out: &mut Vec<Value>,
+    role: Role,
+    phase: Option<&str>,
+    message_extra: &HashMap<String, Value>,
+    content_part: Value,
+) {
+    let phase_owned = phase.map(str::to_string);
+    let should_flush = pending.as_ref().is_some_and(|existing| {
+        existing.role != role
+            || existing.phase != phase_owned
+            || existing.extra_body != *message_extra
+    });
+    if should_flush {
+        flush_pending_message_item(pending, out);
+    }
+
+    let entry = pending.get_or_insert_with(|| PendingResponsesMessageItem {
+        role,
+        phase: phase_owned,
+        content: Vec::new(),
+        extra_body: message_extra.clone(),
+    });
+    entry.content.push(content_part);
+}
+
+fn encode_message_content_part(part: &Part) -> Option<Value> {
+    match part {
+        Part::Text {
+            content,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("output_text"));
+            obj.insert("text".to_string(), json!(content));
+            merge_json_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
+        }
+        Part::Image { source, extra_body } => Some(encode_image_part(source, extra_body)),
+        Part::File { source, extra_body } => Some(encode_file_part(source, extra_body)),
+        Part::Refusal {
+            content,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("refusal"));
+            obj.insert("refusal".to_string(), json!(content));
+            merge_json_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
+        }
+        _ => None,
+    }
+}
+
+fn encode_stream_output_item(item: &Item) -> Vec<Value> {
     match item {
         Item::Message {
             role,
             parts,
             extra_body,
         } => {
-            if parts.len() == 1 {
-                if let Some(reasoning) = encode_reasoning_output_item(&parts[0]) {
-                    return reasoning;
+            let mut output = Vec::new();
+            let mut pending_message: Option<PendingResponsesMessageItem> = None;
+
+            for part in parts {
+                if let Some(content_part) = encode_message_content_part(part) {
+                    append_content_part_to_pending(
+                        &mut pending_message,
+                        &mut output,
+                        *role,
+                        text_part_phase(part),
+                        extra_body,
+                        content_part,
+                    );
+                    continue;
                 }
-                if let Some(tool_call) = encode_function_call_output_item(&parts[0]) {
-                    return tool_call;
+
+                flush_pending_message_item(&mut pending_message, &mut output);
+
+                if let Some(reasoning_item) = encode_reasoning_output_item(part) {
+                    output.push(reasoning_item);
+                    continue;
+                }
+                if let Some(tool_call_item) = encode_function_call_output_item(part) {
+                    output.push(tool_call_item);
+                    continue;
                 }
             }
 
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("message"));
-            obj.insert("role".to_string(), json!(role_to_str(*role)));
-            obj.insert(
-                "content".to_string(),
-                Value::Array(parts.iter().map(encode_part_value).collect()),
-            );
-            obj.insert(
-                "id".to_string(),
-                json!(format!("msg_{}", uuid::Uuid::new_v4())),
-            );
-            obj.insert("status".to_string(), json!("completed"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            flush_pending_message_item(&mut pending_message, &mut output);
+            output
         }
         Item::ToolResult {
             call_id,
@@ -479,7 +584,7 @@ fn encode_stream_output_item(item: &Item) -> Value {
                 obj.insert("is_error".to_string(), Value::Bool(true));
             }
             merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            vec![Value::Object(obj)]
         }
     }
 }

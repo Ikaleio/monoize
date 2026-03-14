@@ -30,7 +30,7 @@ pub(crate) async fn stream_responses_to_urp_events(
 ) -> AppResult<()> {
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let created = now_ts();
-    let mut output_text = String::new();
+    let mut output_texts_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut message_phases_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut reasoning_text = String::new();
     let mut reasoning_sig = String::new();
@@ -84,7 +84,14 @@ pub(crate) async fn stream_responses_to_urp_events(
                 .and_then(|v| v.as_str())
                 .or_else(|| data_val.get("delta").and_then(|v| v.as_str()))
             {
-                output_text.push_str(text);
+                let output_index = data_val
+                    .get("output_index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                output_texts_by_output_index
+                    .entry(output_index)
+                    .or_default()
+                    .push_str(text);
                 saw_text_delta = true;
             }
         }
@@ -128,6 +135,12 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("message") {
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                    let text = extract_responses_message_text(item);
+                    if !text.is_empty() {
+                        output_texts_by_output_index
+                            .entry(idx)
+                            .or_insert(text);
+                    }
                     if let Some(phase) = extract_responses_message_phase(item) {
                         message_phases_by_output_index.insert(idx, phase);
                     }
@@ -223,8 +236,14 @@ pub(crate) async fn stream_responses_to_urp_events(
             } else if item.get("type").and_then(|v| v.as_str()) == Some("message")
                 && !saw_text_delta
             {
-                output_text.push_str(&extract_responses_message_text(item));
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                    let text = extract_responses_message_text(item);
+                    if !text.is_empty() {
+                        output_texts_by_output_index
+                            .entry(idx)
+                            .or_default()
+                            .push_str(&text);
+                    }
                     if let Some(phase) = extract_responses_message_phase(item) {
                         message_phases_by_output_index.insert(idx, phase);
                     }
@@ -244,15 +263,11 @@ pub(crate) async fn stream_responses_to_urp_events(
     }
 
     if !response_done_sent {
-        let message_phase = message_phases_by_output_index
-            .iter()
-            .min_by_key(|(idx, _)| *idx)
-            .map(|(_, phase)| phase.as_str());
         let output_items = build_accumulated_output_items(
             &reasoning_text,
             &reasoning_sig,
-            &output_text,
-            message_phase,
+            &output_texts_by_output_index,
+            &message_phases_by_output_index,
             &call_order,
             &calls,
         );
@@ -288,14 +303,14 @@ pub(crate) async fn stream_responses_to_urp_events(
                     let _ = tx
                         .send(UrpStreamEvent::PartStart {
                             item_index: final_item_index,
-                            part_index: final_item_index,
+                            part_index: 0,
                             header: PartHeader::Text,
                             extra_body: HashMap::new(),
                         })
                         .await;
                     let _ = tx
                         .send(UrpStreamEvent::Delta {
-                            part_index: final_item_index,
+                            part_index: 0,
                             delta: PartDelta::Text {
                                 content: text.to_string(),
                             },
@@ -305,7 +320,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                         .await;
                     let _ = tx
                         .send(UrpStreamEvent::PartDone {
-                            part_index: final_item_index,
+                            part_index: 0,
                             part: Part::Text {
                                 content: text.to_string(),
                                 extra_body: HashMap::new(),
@@ -953,8 +968,8 @@ fn feed_assistant_part(
 fn build_accumulated_output_items(
     reasoning_text: &str,
     reasoning_sig: &str,
-    output_text: &str,
-    message_phase: Option<&str>,
+    output_texts_by_output_index: &HashMap<u64, String>,
+    message_phases_by_output_index: &HashMap<u64, String>,
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
 ) -> Vec<Item> {
@@ -979,9 +994,17 @@ fn build_accumulated_output_items(
         );
     }
 
-    if !output_text.is_empty() {
+    let mut output_indices = output_texts_by_output_index.keys().copied().collect::<Vec<_>>();
+    output_indices.sort_unstable();
+    for output_index in output_indices {
+        let Some(output_text) = output_texts_by_output_index.get(&output_index) else {
+            continue;
+        };
+        if output_text.is_empty() {
+            continue;
+        }
         let mut text_extra_body = HashMap::new();
-        if let Some(phase) = message_phase {
+        if let Some(phase) = message_phases_by_output_index.get(&output_index) {
             text_extra_body.insert("phase".to_string(), json!(phase));
         }
         feed_assistant_part(
@@ -989,7 +1012,7 @@ fn build_accumulated_output_items(
             &mut pending_assistant_extra_body,
             &mut outputs,
             Part::Text {
-                content: output_text.to_string(),
+                content: output_text.clone(),
                 extra_body: text_extra_body,
             },
             &HashMap::new(),
@@ -1075,8 +1098,8 @@ mod tests {
         let outputs = build_accumulated_output_items(
             "think",
             "sig_1",
-            "answer",
-            Some("analysis"),
+            &HashMap::from([(0, "answer".to_string())]),
+            &HashMap::from([(0, "analysis".to_string())]),
             &["call_1".to_string()],
             &calls,
         );
@@ -1120,8 +1143,8 @@ mod tests {
         let outputs = build_accumulated_output_items(
             "",
             "sig_only",
-            "",
-            Some("analysis"),
+            &HashMap::new(),
+            &HashMap::from([(0, "analysis".to_string())]),
             &[],
             &HashMap::new(),
         );
@@ -1142,6 +1165,46 @@ mod tests {
                 encrypted: Some(Value::String(sig)),
                 ..
             } if sig == "sig_only"
+        ));
+    }
+
+    #[test]
+    fn build_accumulated_output_items_preserves_multiple_output_text_phases() {
+        let outputs = build_accumulated_output_items(
+            "",
+            "",
+            &HashMap::from([
+                (0, "analysis".to_string()),
+                (2, "final".to_string()),
+            ]),
+            &HashMap::from([
+                (0, "commentary".to_string()),
+                (2, "final_answer".to_string()),
+            ]),
+            &[],
+            &HashMap::new(),
+        );
+
+        assert_eq!(outputs.len(), 2);
+        assert!(matches!(
+            &outputs[0],
+            Item::Message { parts, .. }
+                if matches!(
+                    &parts[0],
+                    Part::Text { content, extra_body }
+                        if content == "analysis"
+                            && extra_body.get("phase") == Some(&json!("commentary"))
+                )
+        ));
+        assert!(matches!(
+            &outputs[1],
+            Item::Message { parts, .. }
+                if matches!(
+                    &parts[0],
+                    Part::Text { content, extra_body }
+                        if content == "final"
+                            && extra_body.get("phase") == Some(&json!("final_answer"))
+                )
         ));
     }
 
