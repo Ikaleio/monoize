@@ -140,6 +140,17 @@ FP5. **Adapt response:** Convert the upstream output (non-streaming or streaming
 
 FP5a. For streaming upstream calls, Monoize MUST first decode upstream protocol events into a sequence of `UrpStreamEvent` values before producing any downstream SSE frames.
 
+FP5b. The pass-through streaming decoder entrypoint MUST be `stream_upstream_to_urp_events(urp, provider_type, upstream_resp, tx, started_at, runtime_metrics)`.
+
+FP5c. `stream_upstream_to_urp_events` MUST dispatch by `provider_type` to exactly these decoder families:
+
+- `responses` and `grok` → Responses-event decoder;
+- `chat_completion` → Chat Completions decoder;
+- `messages` → Anthropic Messages decoder;
+- `gemini` → Gemini decoder.
+
+`group` is virtual and MUST NOT be streamed directly.
+
 FP6. **Render downstream:** Convert URP-Proto output into the downstream endpoint’s response shape (Responses / Chat Completions / Messages), streaming or non-streaming.
 
 FP6a. For pass-through streaming on `/v1/responses`, `/v1/chat/completions`, and `/v1/messages`, Monoize MUST implement the downstream adapter as a two-stage pipeline connected by an in-memory channel of `UrpStreamEvent` values:
@@ -148,6 +159,23 @@ FP6a. For pass-through streaming on `/v1/responses`, `/v1/chat/completions`, and
 - stage 2: downstream-specific encoder consumes `UrpStreamEvent` values and emits downstream SSE frames.
 
 FP6b. The pass-through streaming pipeline in FP6a MUST preserve existing routing, billing, logging, and terminal-stream observability semantics. The change in internal streaming representation MUST NOT by itself permit provider fallback after the first downstream byte.
+
+FP6c. The pass-through streaming encoder entrypoint MUST be `encode_urp_stream(downstream, rx, tx, logical_model, sse_max_frame_length)`.
+
+FP6d. `encode_urp_stream` MUST dispatch by downstream protocol to exactly these encoder families:
+
+- `Responses` → Responses encoder;
+- `ChatCompletions` → Chat Completions encoder;
+- `AnthropicMessages` → Anthropic Messages encoder.
+
+FP6e. The forwarding handler MUST spawn exactly two asynchronous tasks for pass-through streaming after upstream response headers are accepted:
+
+- one decode task that runs `stream_upstream_to_urp_events` and sends `UrpStreamEvent` values into an in-memory channel;
+- one encode task that runs `encode_urp_stream` and reads the same channel to emit downstream SSE.
+
+FP6f. The decode task and encode task in FP6e MUST be joined before request-final logging and billing finalization.
+
+FP6g. The streaming pipeline MUST use `ResponseDone.outputs` as the authoritative final streamed response state. Monoize MUST NOT require or depend on any helper named `merged_output_items()` in the streaming path.
 
 ## 6. Routing rules
 

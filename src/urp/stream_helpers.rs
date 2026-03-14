@@ -3,7 +3,6 @@ use crate::handlers::routing::wrap_responses_event;
 use axum::http::StatusCode;
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 pub(crate) async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: String) -> AppResult<()> {
@@ -472,33 +471,6 @@ pub(crate) fn chat_reasoning_delta_from_signature(signature: &str) -> Value {
     })
 }
 
-pub(crate) fn normalize_chat_reasoning_delta_object(delta: &mut Map<String, Value>) {
-    if delta
-        .get("reasoning_details")
-        .and_then(|v| v.as_array())
-        .is_none()
-    {
-        let mut details = Vec::new();
-        if let Some(text) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
-            if !text.is_empty() {
-                details.push(reasoning_text_detail_value(text, None));
-            }
-        }
-        if let Some(sig) = delta.get("reasoning_opaque").and_then(|v| v.as_str()) {
-            if !sig.is_empty() {
-                details.push(reasoning_encrypted_detail_value(Value::String(
-                    sig.to_string(),
-                )));
-            }
-        }
-        if !details.is_empty() {
-            delta.insert("reasoning_details".to_string(), Value::Array(details));
-        }
-    }
-    delta.remove("reasoning_content");
-    delta.remove("reasoning_opaque");
-}
-
 pub(crate) fn extract_responses_message_text(item: &Value) -> String {
     let mut out = String::new();
     if item.get("type").and_then(|v| v.as_str()) != Some("message") {
@@ -536,85 +508,4 @@ pub(crate) fn responses_text_delta_payload(text: &str, phase: Option<&str>) -> V
     obj.insert("text".to_string(), Value::String(text.to_string()));
     insert_phase_if_present(&mut obj, phase);
     Value::Object(obj)
-}
-
-pub(crate) async fn ensure_anthropic_text_block(
-    tx: &mpsc::Sender<Event>,
-    text_index: &mut Option<u32>,
-    next_index: &mut u32,
-    started: &mut Vec<u32>,
-) -> AppResult<u32> {
-    if let Some(i) = *text_index {
-        return Ok(i);
-    }
-    let i = *next_index;
-    *next_index += 1;
-    *text_index = Some(i);
-    started.push(i);
-    let block_start = json!({
-        "type": "content_block_start",
-        "index": i,
-        "content_block": { "type": "text", "text": "" }
-    });
-    tx.send(Event::default().data(block_start.to_string()))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
-    Ok(i)
-}
-
-pub(crate) async fn ensure_anthropic_thinking_block(
-    tx: &mpsc::Sender<Event>,
-    thinking_index: &mut Option<u32>,
-    next_index: &mut u32,
-    started: &mut Vec<u32>,
-) -> AppResult<u32> {
-    if let Some(i) = *thinking_index {
-        return Ok(i);
-    }
-    let i = *next_index;
-    *next_index += 1;
-    *thinking_index = Some(i);
-    started.push(i);
-    let block_start = json!({
-        "type": "content_block_start",
-        "index": i,
-        "content_block": { "type": "thinking", "thinking": "", "signature": "" }
-    });
-    tx.send(Event::default().data(block_start.to_string()))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
-    Ok(i)
-}
-
-pub(crate) async fn ensure_anthropic_tool_block(
-    tx: &mpsc::Sender<Event>,
-    tool_indices: &mut HashMap<String, u32>,
-    tool_names: &mut HashMap<String, String>,
-    next_index: &mut u32,
-    started: &mut Vec<u32>,
-    call_id: &str,
-    name: &str,
-) -> AppResult<u32> {
-    if let Some(i) = tool_indices.get(call_id).copied() {
-        if !name.is_empty() && !tool_names.contains_key(call_id) {
-            tool_names.insert(call_id.to_string(), name.to_string());
-        }
-        return Ok(i);
-    }
-    let i = *next_index;
-    *next_index += 1;
-    tool_indices.insert(call_id.to_string(), i);
-    if !name.is_empty() {
-        tool_names.insert(call_id.to_string(), name.to_string());
-    }
-    started.push(i);
-    let block_start = json!({
-        "type": "content_block_start",
-        "index": i,
-        "content_block": { "type": "tool_use", "id": call_id, "name": name, "input": {} }
-    });
-    tx.send(Event::default().data(block_start.to_string()))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))?;
-    Ok(i)
 }

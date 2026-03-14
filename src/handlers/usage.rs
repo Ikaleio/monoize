@@ -78,16 +78,6 @@ pub(crate) async fn record_stream_terminal_event(
     }
 }
 
-pub(crate) async fn record_stream_synthetic_terminal_emitted(
-    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
-) {
-    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
-        return;
-    };
-    let mut guard = runtime_metrics.lock().await;
-    guard.terminal.synthetic_terminal_emitted = true;
-}
-
 pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
     let mut obj = json!({
         "prompt_tokens": usage.input_tokens,
@@ -106,46 +96,6 @@ pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
         }
     });
     // Overwrite with full upstream detail objects (e.g. cache_write_tokens)
-    if let Some(map) = obj.as_object_mut() {
-        for (k, v) in &usage.extra_body {
-            map.insert(k.clone(), v.clone());
-        }
-    }
-    obj
-}
-
-pub(crate) fn usage_to_responses_usage_json(usage: &urp::Usage) -> Value {
-    let mut obj = json!({
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens(),
-        "output_tokens_details": {
-            "reasoning_tokens": usage.reasoning_tokens().unwrap_or(0),
-            "accepted_prediction_tokens": usage.output_details.as_ref().map(|d| d.accepted_prediction_tokens).unwrap_or(0),
-            "rejected_prediction_tokens": usage.output_details.as_ref().map(|d| d.rejected_prediction_tokens).unwrap_or(0)
-        },
-        "input_tokens_details": {
-            "cached_tokens": usage.cached_tokens().unwrap_or(0),
-            "cache_write_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
-            "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0),
-            "tool_prompt_tokens": usage.input_details.as_ref().map(|d| d.tool_prompt_tokens).unwrap_or(0)
-        }
-    });
-    if let Some(map) = obj.as_object_mut() {
-        for (k, v) in &usage.extra_body {
-            map.insert(k.clone(), v.clone());
-        }
-    }
-    obj
-}
-
-pub(crate) fn usage_to_messages_usage_json(usage: &urp::Usage) -> Value {
-    let mut obj = json!({
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "cache_read_input_tokens": usage.cached_tokens().unwrap_or(0),
-        "cache_creation_input_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0)
-    });
     if let Some(map) = obj.as_object_mut() {
         for (k, v) in &usage.extra_body {
             map.insert(k.clone(), v.clone());

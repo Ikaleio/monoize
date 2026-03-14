@@ -59,6 +59,8 @@ STR-3a. `PartDone.part` MUST contain the complete terminal `Part`, `ItemDone.ite
 
 STR-3b. `ResponseDone.outputs` is the authoritative final streamed response state for downstream response reconstruction.
 
+STR-3c. Pass-through streaming MUST follow an `upstream SSE -> decoder -> UrpStreamEvent channel -> downstream encoder` architecture. Provider-specific stream decoders emit `UrpStreamEvent`; downstream-specific stream encoders consume `UrpStreamEvent` and produce SSE.
+
 STR-4. Transform engine MUST be able to process stream events incrementally with per-request mutable state.
 
 STR-5. If a streaming request matches any enabled response-phase transform rule, the runtime MAY execute upstream in non-stream mode, apply response transforms on `UrpResponse`, and emit a synthesized downstream stream. In this mode, downstream still receives protocol-correct streaming events (`SSE` for Chat/Responses/Messages), but event timing is buffered.
