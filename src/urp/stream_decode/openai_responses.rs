@@ -34,6 +34,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut message_phases_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut reasoning_text = String::new();
     let mut reasoning_sig = String::new();
+    let mut reasoning_output_index: Option<u64> = None;
     let mut call_order: Vec<String> = Vec::new();
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
@@ -147,6 +148,9 @@ pub(crate) async fn stream_responses_to_urp_events(
                     }
                 }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
+                if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                    reasoning_output_index.get_or_insert(idx);
+                }
                 let (text, sig) = extract_reasoning_text_and_signature(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
@@ -227,6 +231,9 @@ pub(crate) async fn stream_responses_to_urp_events(
                     }
                 }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
+                if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                    reasoning_output_index.get_or_insert(idx);
+                }
                 let (text, sig) = extract_reasoning_text_and_signature(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
@@ -281,10 +288,12 @@ pub(crate) async fn stream_responses_to_urp_events(
         let output_items = build_accumulated_output_items(
             &reasoning_text,
             &reasoning_sig,
+            reasoning_output_index,
             &output_texts_by_output_index,
             &message_phases_by_output_index,
             &call_order,
             &calls,
+            &call_ids_by_output_index,
         );
         let final_usage = latest_stream_usage_snapshot(&runtime_metrics).await;
 
@@ -863,28 +872,28 @@ fn map_output_item_done(
             if !part_done_seen {
                 let decoded_item = decode_item_from_value(item);
                 if let Item::Message { parts, .. } = decoded_item {
-                    if let Some(first_part) = parts.first().cloned() {
-                        let item_extra_body = index_state
-                            .output_state_by_index
-                            .get(&output_index)
-                            .map(|state| state.item_extra_body.clone())
-                            .unwrap_or_else(|| item_extra_body_from_value(item));
-                        let role = index_state
-                            .output_state_by_index
-                            .get(&output_index)
-                            .and_then(|state| state.role)
-                            .unwrap_or_else(|| role_from_item(item));
+                    let item_extra_body = index_state
+                        .output_state_by_index
+                        .get(&output_index)
+                        .map(|state| state.item_extra_body.clone())
+                        .unwrap_or_else(|| item_extra_body_from_value(item));
+                    let role = index_state
+                        .output_state_by_index
+                        .get(&output_index)
+                        .and_then(|state| state.role)
+                        .unwrap_or_else(|| role_from_item(item));
+                    for part in parts {
                         let _ = ensure_assistant_item_for_part(
                             index_state,
                             output_index,
                             role,
-                            item_extra_body,
-                            first_part,
+                            item_extra_body.clone(),
+                            part.clone(),
                             &mut events,
                         );
-                    }
-                    if let Some(active_item) = index_state.active_assistant_item.as_mut() {
-                        active_item.parts.extend(parts);
+                        if let Some(active_item) = index_state.active_assistant_item.as_mut() {
+                            active_item.parts.push(part);
+                        }
                     }
                 }
             }
@@ -1204,76 +1213,127 @@ fn feed_assistant_part(
 fn build_accumulated_output_items(
     reasoning_text: &str,
     reasoning_sig: &str,
+    reasoning_output_index: Option<u64>,
     output_texts_by_output_index: &HashMap<u64, String>,
     message_phases_by_output_index: &HashMap<u64, String>,
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
+    call_ids_by_output_index: &HashMap<u64, String>,
 ) -> Vec<Item> {
     let mut outputs = Vec::new();
     let mut merger = GreedyMerger::new();
     let mut pending_assistant_extra_body = HashMap::new();
 
+    #[derive(Clone, Debug)]
+    enum FallbackOutputKind {
+        Reasoning(u64),
+        Text(u64),
+        ToolCall(u64, String),
+    }
+
+    let mut ordered_kinds = Vec::new();
     if !reasoning_text.is_empty() || !reasoning_sig.is_empty() {
-        feed_assistant_part(
-            &mut merger,
-            &mut pending_assistant_extra_body,
-            &mut outputs,
-            Part::Reasoning {
-                content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
-                encrypted: (!reasoning_sig.is_empty())
-                    .then(|| Value::String(reasoning_sig.to_string())),
-                summary: None,
-                source: None,
-                extra_body: HashMap::new(),
-            },
-            &HashMap::new(),
-        );
+        ordered_kinds.push(FallbackOutputKind::Reasoning(
+            reasoning_output_index.unwrap_or(0),
+        ));
     }
 
-    let mut output_indices = output_texts_by_output_index.keys().copied().collect::<Vec<_>>();
-    output_indices.sort_unstable();
-    for output_index in output_indices {
-        let Some(output_text) = output_texts_by_output_index.get(&output_index) else {
-            continue;
-        };
-        if output_text.is_empty() {
-            continue;
-        }
-        let mut text_extra_body = HashMap::new();
-        if let Some(phase) = message_phases_by_output_index.get(&output_index) {
-            text_extra_body.insert("phase".to_string(), json!(phase));
-        }
-        feed_assistant_part(
-            &mut merger,
-            &mut pending_assistant_extra_body,
-            &mut outputs,
-            Part::Text {
-                content: output_text.clone(),
-                extra_body: text_extra_body,
-            },
-            &HashMap::new(),
-        );
-    }
+    let mut text_indices = output_texts_by_output_index.keys().copied().collect::<Vec<_>>();
+    text_indices.sort_unstable();
+    ordered_kinds.extend(text_indices.into_iter().map(FallbackOutputKind::Text));
 
-    for call_id in call_order {
-        if let Some((name, arguments)) = calls.get(call_id) {
-            feed_assistant_part(
-                &mut merger,
-                &mut pending_assistant_extra_body,
-                &mut outputs,
-                Part::ToolCall {
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                    arguments: arguments.clone(),
-                    extra_body: HashMap::new(),
-                },
-                &HashMap::new(),
-            );
+    let mut call_output_indices = call_order
+        .iter()
+        .enumerate()
+        .map(|(call_position, call_id)| {
+            let output_index = output_index_for_call_id(call_ids_by_output_index, call_id)
+                .unwrap_or(call_position as u64 + 1);
+            (output_index, call_id.clone())
+        })
+        .collect::<Vec<_>>();
+    call_output_indices.sort_by_key(|(output_index, _)| *output_index);
+    ordered_kinds.extend(
+        call_output_indices
+            .into_iter()
+            .map(|(output_index, call_id)| FallbackOutputKind::ToolCall(output_index, call_id)),
+    );
+
+    ordered_kinds.sort_by_key(|kind| match kind {
+        FallbackOutputKind::Reasoning(output_index) => *output_index,
+        FallbackOutputKind::Text(output_index) => *output_index,
+        FallbackOutputKind::ToolCall(output_index, _) => *output_index,
+    });
+
+    for kind in ordered_kinds {
+        match kind {
+            FallbackOutputKind::Reasoning(_) => {
+                feed_assistant_part(
+                    &mut merger,
+                    &mut pending_assistant_extra_body,
+                    &mut outputs,
+                    Part::Reasoning {
+                        content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
+                        encrypted: (!reasoning_sig.is_empty())
+                            .then(|| Value::String(reasoning_sig.to_string())),
+                        summary: None,
+                        source: None,
+                        extra_body: HashMap::new(),
+                    },
+                    &HashMap::new(),
+                );
+            }
+            FallbackOutputKind::Text(output_index) => {
+                let Some(output_text) = output_texts_by_output_index.get(&output_index) else {
+                    continue;
+                };
+                if output_text.is_empty() {
+                    continue;
+                }
+                let mut text_extra_body = HashMap::new();
+                if let Some(phase) = message_phases_by_output_index.get(&output_index) {
+                    text_extra_body.insert("phase".to_string(), json!(phase));
+                }
+                feed_assistant_part(
+                    &mut merger,
+                    &mut pending_assistant_extra_body,
+                    &mut outputs,
+                    Part::Text {
+                        content: output_text.clone(),
+                        extra_body: text_extra_body,
+                    },
+                    &HashMap::new(),
+                );
+            }
+            FallbackOutputKind::ToolCall(_, call_id) => {
+                if let Some((name, arguments)) = calls.get(&call_id) {
+                    feed_assistant_part(
+                        &mut merger,
+                        &mut pending_assistant_extra_body,
+                        &mut outputs,
+                        Part::ToolCall {
+                            call_id: call_id.clone(),
+                            name: name.clone(),
+                            arguments: arguments.clone(),
+                            extra_body: HashMap::new(),
+                        },
+                        &HashMap::new(),
+                    );
+                }
+            }
         }
     }
 
     flush_assistant_merger(&mut merger, &mut pending_assistant_extra_body, &mut outputs);
     outputs
+}
+
+fn output_index_for_call_id(
+    call_ids_by_output_index: &HashMap<u64, String>,
+    target_call_id: &str,
+) -> Option<u64> {
+    call_ids_by_output_index.iter().find_map(|(output_index, call_id)| {
+        (call_id == target_call_id).then_some(*output_index)
+    })
 }
 
 fn item_extra_body_from_value(item: &Value) -> HashMap<String, Value> {
@@ -1334,10 +1394,12 @@ mod tests {
         let outputs = build_accumulated_output_items(
             "think",
             "sig_1",
+            Some(0),
             &HashMap::from([(0, "answer".to_string())]),
             &HashMap::from([(0, "analysis".to_string())]),
             &["call_1".to_string()],
             &calls,
+            &HashMap::from([(1, "call_1".to_string())]),
         );
 
         assert_eq!(outputs.len(), 1);
@@ -1379,9 +1441,11 @@ mod tests {
         let outputs = build_accumulated_output_items(
             "",
             "sig_only",
+            Some(0),
             &HashMap::new(),
             &HashMap::from([(0, "analysis".to_string())]),
             &[],
+            &HashMap::new(),
             &HashMap::new(),
         );
 
@@ -1409,6 +1473,7 @@ mod tests {
         let outputs = build_accumulated_output_items(
             "",
             "",
+            None,
             &HashMap::from([
                 (0, "analysis".to_string()),
                 (2, "final".to_string()),
@@ -1418,6 +1483,7 @@ mod tests {
                 (2, "final_answer".to_string()),
             ]),
             &[],
+            &HashMap::new(),
             &HashMap::new(),
         );
 
@@ -1442,6 +1508,33 @@ mod tests {
                             && extra_body.get("phase") == Some(&json!("final_answer"))
                 )
         ));
+    }
+
+    #[test]
+    fn build_accumulated_output_items_preserves_real_output_index_order_in_fallback() {
+        let calls = HashMap::from([(
+            "call_1".to_string(),
+            ("lookup".to_string(), "{}".to_string()),
+        )]);
+
+        let outputs = build_accumulated_output_items(
+            "think",
+            "",
+            Some(2),
+            &HashMap::from([(5, "answer".to_string())]),
+            &HashMap::new(),
+            &["call_1".to_string()],
+            &calls,
+            &HashMap::from([(9, "call_1".to_string())]),
+        );
+
+        assert_eq!(outputs.len(), 1);
+        let Item::Message { parts, .. } = &outputs[0] else {
+            panic!("expected merged assistant output");
+        };
+        assert!(matches!(&parts[0], Part::Reasoning { .. }));
+        assert!(matches!(&parts[1], Part::Text { content, .. } if content == "answer"));
+        assert!(matches!(&parts[2], Part::ToolCall { call_id, .. } if call_id == "call_1"));
     }
 
     #[test]
@@ -1644,9 +1737,11 @@ mod tests {
         let output_items = build_accumulated_output_items(
             "",
             "",
+            None,
             &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
             &HashMap::from([(0, "commentary".to_string()), (2, "final_answer".to_string())]),
             &[],
+            &HashMap::new(),
             &HashMap::new(),
         );
         let mut state = ResponsesStreamIndexState::default();
@@ -1747,5 +1842,73 @@ mod tests {
         }
 
         assert!(!(!saw_text_delta && !saw_text_part_done));
+    }
+
+    #[test]
+    fn map_output_item_done_message_fallback_routes_every_part_through_greedy_merger() {
+        let mut state = ResponsesStreamIndexState::default();
+        let added_events = map_responses_event_to_urp_events_with_state(
+            "response.output_item.added",
+            json!({
+                "output_index": 3,
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(added_events.is_empty());
+
+        let done_events = map_responses_event_to_urp_events_with_state(
+            "response.output_item.done",
+            json!({
+                "output_index": 3,
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        { "type": "output_text", "text": "answer" },
+                        { "type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}" }
+                    ]
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+
+        assert_eq!(done_events.len(), 1, "fallback should start one merged assistant item");
+        assert!(matches!(
+            &done_events[0],
+            UrpStreamEvent::ItemStart {
+                item_index: 0,
+                header: ItemHeader::Message { role: Role::Assistant },
+                ..
+            }
+        ));
+
+        let active_item = state
+            .active_assistant_item
+            .as_ref()
+            .expect("assistant item remains active after message fallback");
+        assert_eq!(active_item.item_index, 0);
+        assert_eq!(active_item.parts.len(), 2);
+        assert!(matches!(&active_item.parts[0], Part::Text { content, .. } if content == "answer"));
+        assert!(matches!(&active_item.parts[1], Part::ToolCall { call_id, .. } if call_id == "call_1"));
+
+        let mut finish_events = Vec::new();
+        finish_assistant_stream_group(&mut state, &mut finish_events);
+        assert_eq!(finish_events.len(), 1);
+        let UrpStreamEvent::ItemDone { item, .. } = &finish_events[0] else {
+            panic!("expected flushed merged item");
+        };
+        let Item::Message { parts, .. } = item else {
+            panic!("expected message item");
+        };
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Part::Text { content, .. } if content == "answer"));
+        assert!(matches!(&parts[1], Part::ToolCall { call_id, .. } if call_id == "call_1"));
     }
 }
