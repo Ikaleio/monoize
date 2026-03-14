@@ -2,8 +2,8 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    merged_output_items, FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role,
-    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -118,121 +118,150 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let merged = merged_output_items(&resp.outputs);
-    let Item::Message {
-        parts,
-        extra_body: _,
-        ..
-    } = &merged
-    else {
-        unreachable!("merged_output_items always returns a message item")
-    };
     let mut content = Vec::new();
-    let encrypted = parts.iter().find_map(|part| match part {
-        Part::Reasoning {
-            encrypted: Some(data),
-            ..
-        } => Some(data.clone()),
-        _ => None,
-    });
+    let mut encrypted = None;
+    for item in &resp.outputs {
+        match item {
+            Item::Message {
+                role: Role::Assistant,
+                parts,
+                ..
+            } => {
+                if encrypted.is_none() {
+                    encrypted = parts.iter().find_map(|part| match part {
+                        Part::Reasoning {
+                            encrypted: Some(data),
+                            ..
+                        } => Some(data.clone()),
+                        _ => None,
+                    });
+                }
+            }
+            Item::ToolResult { .. } | Item::Message { .. } => continue,
+        }
+    }
 
-    for part in parts {
-        match part {
-            Part::Reasoning {
-                content: Some(text),
-                extra_body,
+    for item in &resp.outputs {
+        match item {
+            Item::Message {
+                role: Role::Assistant,
+                parts,
                 ..
             } => {
-                let mut thinking = Map::new();
-                thinking.insert("type".to_string(), Value::String("thinking".to_string()));
-                thinking.insert("thinking".to_string(), Value::String(text.clone()));
-                if let Some(sig) = encrypted.clone() {
-                    thinking.insert("signature".to_string(), sig);
-                }
-                merge_extra(&mut thinking, extra_body);
-                content.push(Value::Object(thinking));
-            }
-            Part::Text {
-                content: text,
-                extra_body,
-                ..
-            } => {
-                let mut block = json!({ "type": "text", "text": text });
-                if let Some(obj) = block.as_object_mut() {
-                    if let Some(phase) = extra_body.get("phase").and_then(|v| v.as_str()) {
-                        obj.insert("phase".to_string(), Value::String(phase.to_string()));
+                for part in parts {
+                    match part {
+                        Part::Reasoning {
+                            content: Some(text),
+                            extra_body,
+                            ..
+                        } => {
+                            let mut thinking = Map::new();
+                            thinking
+                                .insert("type".to_string(), Value::String("thinking".to_string()));
+                            thinking.insert("thinking".to_string(), Value::String(text.clone()));
+                            if let Some(sig) = encrypted.clone() {
+                                thinking.insert("signature".to_string(), sig);
+                            }
+                            merge_extra(&mut thinking, extra_body);
+                            content.push(Value::Object(thinking));
+                        }
+                        Part::Text {
+                            content: text,
+                            extra_body,
+                            ..
+                        } => {
+                            let mut block = json!({ "type": "text", "text": text });
+                            if let Some(obj) = block.as_object_mut() {
+                                if let Some(phase) =
+                                    extra_body.get("phase").and_then(|v| v.as_str())
+                                {
+                                    obj.insert(
+                                        "phase".to_string(),
+                                        Value::String(phase.to_string()),
+                                    );
+                                }
+                                merge_extra(obj, extra_body);
+                            }
+                            content.push(block);
+                        }
+                        Part::ToolCall {
+                            call_id,
+                            name,
+                            arguments,
+                            extra_body,
+                        } => {
+                            let input = serde_json::from_str::<Value>(arguments)
+                                .unwrap_or_else(|_| json!({ "_raw": arguments }));
+                            let mut block = json!({
+                                "type": "tool_use",
+                                "id": call_id,
+                                "name": name,
+                                "input": input
+                            });
+                            if let Some(obj) = block.as_object_mut() {
+                                merge_extra(obj, extra_body);
+                            }
+                            content.push(block);
+                        }
+                        Part::Image {
+                            source, extra_body, ..
+                        } => {
+                            let mut block = encode_anthropic_image(source);
+                            if let Some(obj) = block.as_object_mut() {
+                                merge_extra(obj, extra_body);
+                            }
+                            content.push(block);
+                        }
+                        Part::File {
+                            source, extra_body, ..
+                        } => {
+                            let mut block = encode_anthropic_file(source);
+                            if let Some(obj) = block.as_object_mut() {
+                                merge_extra(obj, extra_body);
+                            }
+                            content.push(block);
+                        }
+                        Part::ProviderItem {
+                            body, extra_body, ..
+                        } => {
+                            let mut block = body.clone();
+                            if let Some(obj) = block.as_object_mut() {
+                                merge_extra(obj, extra_body);
+                            }
+                            content.push(block);
+                        }
+                        Part::Audio { .. } | Part::Refusal { .. } => {}
+                        Part::Reasoning {
+                            encrypted: Some(_), ..
+                        } => {
+                            // Handled below: emitted as standalone block only when no
+                            // Part::Reasoning exists to carry it as a `signature`.
+                        }
+                        Part::Reasoning { .. } => {}
                     }
-                    merge_extra(obj, extra_body);
                 }
-                content.push(block);
             }
-            Part::ToolCall {
-                call_id,
-                name,
-                arguments,
-                extra_body,
-            } => {
-                let input = serde_json::from_str::<Value>(arguments)
-                    .unwrap_or_else(|_| json!({ "_raw": arguments }));
-                let mut block = json!({
-                    "type": "tool_use",
-                    "id": call_id,
-                    "name": name,
-                    "input": input
-                });
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::Image {
-                source, extra_body, ..
-            } => {
-                let mut block = encode_anthropic_image(source);
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::File {
-                source, extra_body, ..
-            } => {
-                let mut block = encode_anthropic_file(source);
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::ProviderItem {
-                body, extra_body, ..
-            } => {
-                let mut block = body.clone();
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::Audio { .. } | Part::Refusal { .. } => {}
-            Part::Reasoning {
-                encrypted: Some(_), ..
-            } => {
-                // Handled below: emitted as standalone block only when no
-                // Part::Reasoning exists to carry it as a `signature`.
-            }
-            Part::Reasoning { .. } => {}
+            Item::ToolResult { .. } | Item::Message { .. } => continue,
         }
     }
 
     // When the response contains encrypted reasoning but no plaintext reasoning
     // (e.g. Gemini returns only thoughtSignature), emit a standalone thinking
     // block so the downstream receives the encrypted data.
-    let has_reasoning_part = parts.iter().any(|p| {
+    let has_reasoning_part = resp.outputs.iter().any(|item| {
         matches!(
-            p,
-            Part::Reasoning {
-                content: Some(_),
+            item,
+            Item::Message {
+                role: Role::Assistant,
+                parts,
                 ..
-            }
+            } if parts.iter().any(|p| matches!(
+                p,
+                Part::Reasoning {
+                    content: Some(_),
+                    ..
+                }
+            ))
         )
     });
     if !has_reasoning_part {

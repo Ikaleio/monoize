@@ -1,7 +1,7 @@
 use crate::urp::encode::{merge_extra, text_parts, usage_input_details, usage_output_details};
 use crate::urp::{
-    merged_output_items, AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource,
-    Item, Part, Role, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Item, Part, Role,
+    ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -126,48 +126,55 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let merged = merged_output_items(&resp.outputs);
     let mut parts = Vec::new();
-    let merged_parts: &[Part] = match &merged {
-        Item::Message { parts, .. } => parts,
-        Item::ToolResult { .. } => &[],
-    };
-    for part in merged_parts {
-        match part {
-            Part::Text { content, .. } => parts.push(json!({ "text": content })),
-            Part::Reasoning {
-                content: Some(content),
+    for item in &resp.outputs {
+        match item {
+            Item::Message {
+                role: Role::Assistant,
+                parts: message_parts,
                 ..
             } => {
-                parts.push(json!({ "text": content, "thought": true }));
-            }
-            Part::Reasoning {
-                encrypted: Some(data),
-                ..
-            } => {
-                parts.push(json!({ "thoughtSignature": data }));
-            }
-            Part::Reasoning { .. } => {}
-            Part::ToolCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } => {
-                let args = serde_json::from_str::<Value>(&arguments).unwrap_or_else(|_| json!({}));
-                parts.push(json!({
-                    "functionCall": {
-                        "id": call_id,
-                        "name": name,
-                        "args": args
+                for part in message_parts {
+                    match part {
+                        Part::Text { content, .. } => parts.push(json!({ "text": content })),
+                        Part::Reasoning {
+                            content: Some(content),
+                            ..
+                        } => {
+                            parts.push(json!({ "text": content, "thought": true }));
+                        }
+                        Part::Reasoning {
+                            encrypted: Some(data),
+                            ..
+                        } => {
+                            parts.push(json!({ "thoughtSignature": data }));
+                        }
+                        Part::Reasoning { .. } => {}
+                        Part::ToolCall {
+                            call_id,
+                            name,
+                            arguments,
+                            ..
+                        } => {
+                            let args = serde_json::from_str::<Value>(&arguments)
+                                .unwrap_or_else(|_| json!({}));
+                            parts.push(json!({
+                                "functionCall": {
+                                    "id": call_id,
+                                    "name": name,
+                                    "args": args
+                                }
+                            }));
+                        }
+                        Part::Image { source, .. } => parts.push(encode_image_part(&source)),
+                        Part::File { source, .. } => parts.push(encode_file_part(&source)),
+                        Part::Audio { source, .. } => parts.push(encode_audio_part(&source)),
+                        Part::Refusal { content, .. } => parts.push(json!({ "text": content })),
+                        Part::ProviderItem { body, .. } => parts.push(body.clone()),
                     }
-                }));
+                }
             }
-            Part::Image { source, .. } => parts.push(encode_image_part(&source)),
-            Part::File { source, .. } => parts.push(encode_file_part(&source)),
-            Part::Audio { source, .. } => parts.push(encode_audio_part(&source)),
-            Part::Refusal { content, .. } => parts.push(json!({ "text": content })),
-            Part::ProviderItem { body, .. } => parts.push(body.clone()),
+            Item::ToolResult { .. } | Item::Message { .. } => continue,
         }
     }
 

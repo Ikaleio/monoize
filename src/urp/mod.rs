@@ -477,37 +477,3 @@ pub fn output_items(outputs: &[Item]) -> impl Iterator<Item = &Item> {
 pub fn output_items_mut(outputs: &mut [Item]) -> impl Iterator<Item = &mut Item> {
     outputs.iter_mut()
 }
-
-pub fn merged_output_items(outputs: &[Item]) -> Item {
-    let mut merged = Item::new_message(Role::Assistant);
-    for item in outputs {
-        if let Item::Message {
-            role,
-            parts,
-            extra_body,
-        } = item
-        {
-            let Item::Message {
-                role: merged_role,
-                parts: merged_parts,
-                extra_body: merged_extra_body,
-            } = &mut merged
-            else {
-                unreachable!();
-            };
-
-            if merged_parts.is_empty() {
-                *merged_role = *role;
-            }
-            if *role == Role::Assistant {
-                merged_parts.extend(parts.clone());
-                for (k, v) in extra_body {
-                    merged_extra_body
-                        .entry(k.clone())
-                        .or_insert_with(|| v.clone());
-                }
-            }
-        }
-    }
-    merged
-}

@@ -3,8 +3,8 @@ use crate::urp::encode::{
     usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    merged_output_items, FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role,
-    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -246,14 +246,24 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let merged = merged_output_items(&resp.outputs);
-    let mut encoded_messages = encode_messages(std::slice::from_ref(&merged));
+    let mut assistant_messages = Vec::new();
+    for item in &resp.outputs {
+        match item {
+            Item::Message {
+                role: Role::Assistant,
+                ..
+            } => assistant_messages.push(item.clone()),
+            Item::ToolResult { .. } | Item::Message { .. } => continue,
+        }
+    }
+
+    let mut encoded_messages = encode_messages(&assistant_messages);
     let message = match encoded_messages.len() {
         0 => {
             let mut fallback = Map::new();
             fallback.insert("role".to_string(), Value::String("assistant".to_string()));
             fallback.insert("content".to_string(), Value::String(String::new()));
-            if let Item::Message { extra_body, .. } = &merged {
+            if let Some(Item::Message { extra_body, .. }) = assistant_messages.first() {
                 merge_extra(&mut fallback, extra_body);
             }
             fallback
@@ -274,7 +284,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         .finish_reason
         .map(finish_reason_to_chat)
         .unwrap_or_else(|| {
-            if has_tool_calls(&merged) {
+            if assistant_messages.iter().any(has_tool_calls) {
                 "tool_calls"
             } else {
                 "stop"
