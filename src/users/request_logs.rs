@@ -4,11 +4,15 @@ use super::{
     RequestLogError, RequestLogProvider, RequestLogRow, RequestLogTiming,
     RequestLogTokens, RequestLogUser, UserStore,
 };
+use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use sea_orm::ConnectionTrait;
 use sea_orm::Value as SeaValue;
 use serde_json::Value;
+
+const REQUEST_LOG_RETENTION_DAYS: i64 = 90;
+pub(super) const REQUEST_LOG_RETENTION_INTERVAL_SECS: u64 = 3600;
 
 fn normalize_request_log_filter(value: Option<&str>) -> Option<String> {
     value
@@ -63,10 +67,8 @@ fn postgres_charge_expr(column: &str) -> String {
     )
 }
 
-fn postgres_created_at_expr(column: &str) -> String {
-    format!(
-        "CASE WHEN {column} IS NULL OR btrim({column}) = '' THEN NULL WHEN {column} ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}:\\d{{2}}(?:\\.\\d+)?(?:Z|[+-]\\d{{2}}:\\d{{2}})$' THEN CAST({column} AS TIMESTAMPTZ) ELSE NULL END"
-    )
+fn request_log_time_filter_column() -> &'static str {
+    "COALESCE(rl.created_at_unix_ms, -9223372036854775808)"
 }
 
 fn parse_decimal_query_to_i64(value: Option<String>) -> i64 {
@@ -160,29 +162,27 @@ fn append_request_log_filters(
         *idx += 4;
     }
     if let Some(time_from) = time_from {
-        if is_postgres {
-            sql.push_str(&format!(
-                " AND {} >= CAST(${} AS TIMESTAMPTZ)",
-                postgres_created_at_expr("rl.created_at"),
-                *idx
-            ));
-        } else {
-            sql.push_str(&format!(" AND rl.created_at >= ${}", *idx));
+        let parsed = chrono::DateTime::parse_from_rfc3339(time_from)
+            .map_err(|e| e.to_string())
+            .ok()
+            .map(|dt| dt.timestamp_millis());
+        if let Some(time_from_unix_ms) = parsed {
+            let _ = is_postgres;
+            sql.push_str(&format!(" AND {} >= ${}", request_log_time_filter_column(), *idx));
+            values.push(time_from_unix_ms.into());
         }
-        values.push(time_from.into());
         *idx += 1;
     }
     if let Some(time_to) = time_to {
-        if is_postgres {
-            sql.push_str(&format!(
-                " AND {} < CAST(${} AS TIMESTAMPTZ)",
-                postgres_created_at_expr("rl.created_at"),
-                *idx
-            ));
-        } else {
-            sql.push_str(&format!(" AND rl.created_at < ${}", *idx));
+        let parsed = chrono::DateTime::parse_from_rfc3339(time_to)
+            .map_err(|e| e.to_string())
+            .ok()
+            .map(|dt| dt.timestamp_millis());
+        if let Some(time_to_unix_ms) = parsed {
+            let _ = is_postgres;
+            sql.push_str(&format!(" AND {} < ${}", request_log_time_filter_column(), *idx));
+            values.push(time_to_unix_ms.into());
         }
-        values.push(time_to.into());
         *idx += 1;
     }
 }
@@ -274,6 +274,18 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
 }
 
 impl UserStore {
+    pub async fn cleanup_expired_request_logs(&self) -> Result<u64, String> {
+        let cutoff_unix_ms = (Utc::now() - Duration::days(REQUEST_LOG_RETENTION_DAYS)).timestamp_millis();
+        let result = self.db.write().await
+            .execute(self.db.stmt(
+                "DELETE FROM request_logs WHERE created_at_unix_ms IS NOT NULL AND created_at_unix_ms < $1",
+                vec![cutoff_unix_ms.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn cleanup_pending_request_logs(&self) -> Result<u64, String> {
         let result = self.db.write().await
             .execute(self.db.stmt(
@@ -351,7 +363,6 @@ impl UserStore {
         time_to: Option<&str>,
     ) -> Result<(Vec<RequestLogRow>, i64, String), String> {
         let is_postgres = self.db.is_postgres();
-        let postgres_created_at = postgres_created_at_expr("rl.created_at");
         let postgres_charge = postgres_charge_expr("rl.charge_nano_usd");
 
         let model = normalize_request_log_filter(model);
@@ -451,13 +462,12 @@ impl UserStore {
         );
         if is_postgres {
             rows_sql.push_str(&format!(
-                " ORDER BY {} DESC NULLS LAST, rl.created_at DESC LIMIT ${} OFFSET ${}",
-                postgres_created_at,
+                " ORDER BY rl.created_at_unix_ms DESC NULLS LAST, rl.created_at DESC LIMIT ${} OFFSET ${}",
                 rows_idx,
                 rows_idx + 1
             ));
         } else {
-            rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+            rows_sql.push_str(&format!(" ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
         }
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
@@ -489,7 +499,6 @@ impl UserStore {
         time_to: Option<&str>,
     ) -> Result<(Vec<RequestLogRow>, i64, String), String> {
         let is_postgres = self.db.is_postgres();
-        let postgres_created_at = postgres_created_at_expr("rl.created_at");
         let postgres_charge = postgres_charge_expr("rl.charge_nano_usd");
 
         let model = normalize_request_log_filter(model);
@@ -592,13 +601,12 @@ impl UserStore {
         );
         if is_postgres {
             rows_sql.push_str(&format!(
-                " ORDER BY {} DESC NULLS LAST, rl.created_at DESC LIMIT ${} OFFSET ${}",
-                postgres_created_at,
+                " ORDER BY rl.created_at_unix_ms DESC NULLS LAST, rl.created_at DESC LIMIT ${} OFFSET ${}",
                 rows_idx,
                 rows_idx + 1
             ));
         } else {
-            rows_sql.push_str(&format!(" ORDER BY rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+            rows_sql.push_str(&format!(" ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
         }
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
@@ -631,16 +639,12 @@ impl UserStore {
         } else {
             "CASE WHEN rl.charge_nano_usd IS NULL OR btrim(rl.charge_nano_usd) = '' THEN NULL WHEN rl.charge_nano_usd ~ '^-?[0-9]+$' THEN CAST(rl.charge_nano_usd AS NUMERIC(39,0)) ELSE NULL END"
         };
-        let postgres_created_at = postgres_created_at_expr("rl.created_at");
 
         // 1. Model bucketed aggregation (cost + calls)
         let bucket_expr = if is_sqlite {
-            "CAST((julianday(rl.created_at) - julianday($1)) / $2 AS BIGINT)".to_string()
+            "CAST(((rl.created_at_unix_ms - $1) / 86400000.0) / $2 AS BIGINT)".to_string()
         } else {
-            format!(
-                "CAST(EXTRACT(EPOCH FROM (({}) - CAST($1 AS TIMESTAMPTZ))) / ($2 * 86400.0) AS BIGINT)",
-                postgres_created_at
-            )
+            "CAST(((rl.created_at_unix_ms - $1)::DOUBLE PRECISION / 86400000.0) / $2 AS BIGINT)".to_string()
         };
 
         let mut model_sql = format!(
@@ -652,21 +656,23 @@ impl UserStore {
                FROM request_logs rl
                WHERE {time_col} >= $3 AND {time_col} < $4"#,
             time_col = if is_sqlite {
-                "rl.created_at".to_string()
+                "rl.created_at_unix_ms".to_string()
             } else {
-                format!("{}", postgres_created_at)
+                "rl.created_at_unix_ms".to_string()
             }
         );
-        if !is_sqlite {
-            model_sql = model_sql
-                .replace(" >= $3", " >= CAST($3 AS TIMESTAMPTZ)")
-                .replace(" < $4", " < CAST($4 AS TIMESTAMPTZ)");
-        }
+        model_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
+        let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
+        let time_to_unix_ms = chrono::DateTime::parse_from_rfc3339(time_to)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
         let mut model_values: Vec<SeaValue> = vec![
-            time_from.into(),
+            time_from_unix_ms.into(),
             SeaValue::Double(Some(bucket_width_days)),
-            time_from.into(),
-            time_to.into(),
+            time_from_unix_ms.into(),
+            time_to_unix_ms.into(),
         ];
         let mut model_idx = 5usize;
 
@@ -711,21 +717,17 @@ impl UserStore {
                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
                WHERE {time_col} >= $3 AND {time_col} < $4"#,
             time_col = if is_sqlite {
-                "rl.created_at".to_string()
+                "rl.created_at_unix_ms".to_string()
             } else {
-                format!("{}", postgres_created_at)
+                "rl.created_at_unix_ms".to_string()
             }
         );
-        if !is_sqlite {
-            prov_sql = prov_sql
-                .replace(" >= $3", " >= CAST($3 AS TIMESTAMPTZ)")
-                .replace(" < $4", " < CAST($4 AS TIMESTAMPTZ)");
-        }
+        prov_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let mut prov_values: Vec<SeaValue> = vec![
-            time_from.into(),
+            time_from_unix_ms.into(),
             SeaValue::Double(Some(bucket_width_days)),
-            time_from.into(),
-            time_to.into(),
+            time_from_unix_ms.into(),
+            time_to_unix_ms.into(),
         ];
         let mut prov_idx = 5usize;
 
@@ -762,19 +764,15 @@ impl UserStore {
                FROM request_logs rl
                WHERE {time_col} >= $1 AND {time_col} < $2"#,
             time_col = if is_sqlite {
-                "rl.created_at".to_string()
+                "rl.created_at_unix_ms".to_string()
             } else {
-                format!("{}", postgres_created_at)
+                "rl.created_at_unix_ms".to_string()
             }
         );
-        if !is_sqlite {
-            total_sql = total_sql
-                .replace(" >= $1", " >= CAST($1 AS TIMESTAMPTZ)")
-                .replace(" < $2", " < CAST($2 AS TIMESTAMPTZ)");
-        }
+        total_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let mut total_values: Vec<SeaValue> = vec![
-            time_from.into(),
-            time_to.into(),
+            time_from_unix_ms.into(),
+            time_to_unix_ms.into(),
         ];
         let mut total_idx = 3usize;
 
@@ -817,16 +815,17 @@ impl UserStore {
                FROM request_logs rl
                WHERE {time_col} >= $1"#,
             time_col = if is_sqlite {
-                "rl.created_at".to_string()
+                "rl.created_at_unix_ms".to_string()
             } else {
-                format!("{}", postgres_created_at)
+                "rl.created_at_unix_ms".to_string()
             }
         );
-        if !is_sqlite {
-            today_sql = today_sql.replace(" >= $1", " >= CAST($1 AS TIMESTAMPTZ)");
-        }
+        today_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
+        let today_start_unix_ms = chrono::DateTime::parse_from_rfc3339(today_start)
+            .map_err(|e| e.to_string())?
+            .timestamp_millis();
         let mut today_values: Vec<SeaValue> = vec![
-            today_start.into(),
+            today_start_unix_ms.into(),
         ];
         let mut today_idx = 2usize;
 

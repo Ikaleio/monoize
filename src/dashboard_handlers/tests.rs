@@ -173,3 +173,39 @@ async fn provider_store_rejects_invalid_groups_json() {
     assert!(err.contains("invalid groups_json"));
     assert!(err.contains("prov_bad_groups"));
 }
+
+#[tokio::test]
+async fn sqlite_migration_creates_request_log_retention_indexes() {
+    let db = DbPool::connect("sqlite::memory:").await.expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let rows = db
+        .read()
+        .query_all(db.stmt(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'request_logs' ORDER BY name",
+            vec![],
+        ))
+        .await
+        .expect("list sqlite indexes");
+
+    let index_rows: Vec<(String, String)> = rows
+        .into_iter()
+        .filter_map(|row| {
+            Some((
+                row.try_get::<String>("", "name").ok()?,
+                row.try_get::<String>("", "sql").ok()?,
+            ))
+        })
+        .collect();
+
+    assert!(index_rows.iter().any(|(name, sql)| {
+        name == "idx_request_logs_user_created_at"
+            && sql.contains("(user_id, created_at_unix_ms DESC)")
+    }));
+    assert!(index_rows.iter().any(|(name, sql)| {
+        name == "idx_request_logs_created_at" && sql.contains("(created_at_unix_ms DESC)")
+    }));
+}

@@ -14,6 +14,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use chrono::{Duration as ChronoDuration, Utc};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -2303,6 +2304,123 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
         .expect("query user after")
         .expect("user exists");
     assert_eq!(user_before.balance_nano_usd, user_after.balance_nano_usd);
+}
+
+#[tokio::test]
+async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    let old_created_at = Utc::now() - ChronoDuration::days(91);
+    let new_created_at = Utc::now() - ChronoDuration::days(30);
+
+    ctx.state
+        .user_store
+        .finalize_request_log(monoize::users::InsertRequestLog {
+            request_id: Some("retention-old".to_string()),
+            user_id: user.id.clone(),
+            api_key_id: None,
+            model: "retention-model-old".to_string(),
+            provider_id: None,
+            upstream_model: None,
+            channel_id: None,
+            is_stream: false,
+            input_tokens: Some(1),
+            output_tokens: Some(1),
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
+            reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
+            provider_multiplier: None,
+            charge_nano_usd: Some(1),
+            status: monoize::users::REQUEST_LOG_STATUS_SUCCESS.to_string(),
+            usage_breakdown_json: None,
+            billing_breakdown_json: None,
+            error_code: None,
+            error_message: None,
+            error_http_status: None,
+            duration_ms: Some(1),
+            ttfb_ms: None,
+            request_ip: None,
+            reasoning_effort: None,
+            tried_providers_json: None,
+            request_kind: None,
+            created_at: old_created_at,
+        })
+        .await
+        .expect("insert old request log");
+
+    ctx.state
+        .user_store
+        .finalize_request_log(monoize::users::InsertRequestLog {
+            request_id: Some("retention-new".to_string()),
+            user_id: user.id.clone(),
+            api_key_id: None,
+            model: "retention-model-new".to_string(),
+            provider_id: None,
+            upstream_model: None,
+            channel_id: None,
+            is_stream: false,
+            input_tokens: Some(1),
+            output_tokens: Some(1),
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
+            reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
+            provider_multiplier: None,
+            charge_nano_usd: Some(1),
+            status: monoize::users::REQUEST_LOG_STATUS_SUCCESS.to_string(),
+            usage_breakdown_json: None,
+            billing_breakdown_json: None,
+            error_code: None,
+            error_message: None,
+            error_http_status: None,
+            duration_ms: Some(1),
+            ttfb_ms: None,
+            request_ip: None,
+            reasoning_effort: None,
+            tried_providers_json: None,
+            request_kind: None,
+            created_at: new_created_at,
+        })
+        .await
+        .expect("insert new request log");
+
+    ctx.state.user_store.flush_all_batchers().await;
+
+    let deleted = ctx
+        .state
+        .user_store
+        .cleanup_expired_request_logs()
+        .await
+        .expect("cleanup expired request logs");
+    assert_eq!(deleted, 1, "only logs older than 90 days should be deleted");
+
+    let (logs, _, _) = ctx
+        .state
+        .user_store
+        .list_request_logs_by_user(&user.id, 100, 0, None, None, None, None, None, None)
+        .await
+        .expect("list request logs after retention cleanup");
+
+    assert!(
+        logs.iter().all(|log| log.request_id.as_deref() != Some("retention-old")),
+        "expired log should be removed"
+    );
+    assert!(
+        logs.iter().any(|log| log.request_id.as_deref() == Some("retention-new")),
+        "recent log should remain"
+    );
 }
 
 #[tokio::test]

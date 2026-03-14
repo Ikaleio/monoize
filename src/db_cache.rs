@@ -123,6 +123,7 @@ impl RequestLogBatcher {
         for log in &entries {
             let id = uuid::Uuid::new_v4().to_string();
             let created_at = log.created_at.to_rfc3339();
+            let created_at_unix_ms = log.created_at.timestamp_millis();
             let values = vec![
                 id.into(),
                 log.request_id.clone().into(),
@@ -189,6 +190,7 @@ impl RequestLogBatcher {
                     .into(),
                 log.request_kind.clone().into(),
                 created_at.into(),
+                created_at_unix_ms.into(),
             ];
 
             let sql = r#"INSERT INTO request_logs
@@ -197,8 +199,8 @@ impl RequestLogBatcher {
                     accepted_prediction_tokens, rejected_prediction_tokens,
                     provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
                     billing_breakdown_json, error_code, error_message, error_http_status,
-                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)"#;
+                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at, created_at_unix_ms)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)"#;
 
             if let Err(e) = tx.execute(db.stmt(sql, values)).await {
                 tracing::warn!("request_log_batcher flush error: {e}");

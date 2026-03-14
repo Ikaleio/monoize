@@ -186,6 +186,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(RequestLogs::TriedProvidersJson).text())
                     .col(ColumnDef::new(RequestLogs::RequestKind).text())
                     .col(ColumnDef::new(RequestLogs::CreatedAt).text().not_null())
+                    .col(ColumnDef::new(RequestLogs::CreatedAtUnixMs).big_integer())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_request_logs_user_id")
@@ -614,9 +615,10 @@ impl MigrationTrait for Migration {
             .create_index(
                 Index::create()
                                     .if_not_exists()
-                                    .name("idx_request_logs_user_id")
+                                    .name("idx_request_logs_user_created_at")
                                     .table(RequestLogs::Table)
                                     .col(RequestLogs::UserId)
+                                    .col(RequestLogs::CreatedAtUnixMs)
                                     .to_owned(),
             )
             .await?;
@@ -626,7 +628,7 @@ impl MigrationTrait for Migration {
                                     .if_not_exists()
                                     .name("idx_request_logs_created_at")
                                     .table(RequestLogs::Table)
-                                    .col(RequestLogs::CreatedAt)
+                                    .col(RequestLogs::CreatedAtUnixMs)
                                     .to_owned(),
             )
             .await?;
@@ -902,6 +904,7 @@ enum RequestLogs {
     TriedProvidersJson,
     RequestKind,
     CreatedAt,
+    CreatedAtUnixMs,
 }
 
 #[derive(Iden)]

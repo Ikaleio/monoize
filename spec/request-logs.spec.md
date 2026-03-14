@@ -195,15 +195,23 @@ The API returns the same enriched schema for all users. The frontend controls co
 
 RL-S1. Request logs MUST be stored in table `request_logs`.
 
-RL-S2. The table MUST have a composite index on `(user_id, created_at DESC)` for efficient pagination.
+RL-S2. The table MUST have a persisted sortable time column `created_at_unix_ms` storing the request creation instant as Unix epoch milliseconds.
 
-RL-S2a. Request-log reads MUST use backend-native compatibility expressions over the canonical columns defined in RL-S1:
-- SQLite time filters/order operate on RFC3339 `created_at` text directly.
-- PostgreSQL time filters/order MUST cast valid RFC3339 `created_at` text to `TIMESTAMPTZ` at query time.
+RL-S2a. The table MUST have indexes on the persisted sortable time column:
+- a composite index on `(user_id, created_at_unix_ms DESC)` for per-user pagination and time-range filtering,
+- an index on `(created_at_unix_ms DESC)` for global pagination, analytics range scans, and retention cleanup.
+
+RL-S2b. Request-log reads MUST use `created_at_unix_ms` as the primary ordering and range-filter column on both SQLite and PostgreSQL. When a row has `created_at_unix_ms IS NULL`, the system MUST fall back to the canonical `created_at` text column only as a compatibility tie-breaker for legacy rows.
+
+RL-S2c. `created_at_unix_ms` MUST be backfilled for pre-existing rows during migration using the canonical `created_at` value when that value is parseable. Rows whose legacy `created_at` cannot be parsed may retain `created_at_unix_ms = NULL`.
+
+RL-S2d. Request-log writes MUST populate both canonical time representations from the same captured request terminalization instant:
+- `created_at` stores RFC3339 text,
+- `created_at_unix_ms` stores the same instant as Unix epoch milliseconds.
+
+RL-S2e. Request-log charge aggregation MUST continue to use backend-native compatibility expressions over the canonical `charge_nano_usd` text column:
 - SQLite charge aggregation MUST cast `charge_nano_usd` text to `BIGINT`.
 - PostgreSQL charge aggregation MUST cast syntactically valid integer `charge_nano_usd` text to `NUMERIC(39,0)` at query time.
-
-RL-S2b. The composite index `(user_id, created_at DESC)` defined in RL-S2 MUST remain the only required request-log time index across both SQLite and PostgreSQL backends.
 
 RL-S3. The `user_id` foreign key MUST cascade on delete.
 
@@ -216,6 +224,12 @@ RL-S5. `request_kind` MUST be added as a nullable `TEXT` column via migration lo
 RL-S7. If a PostgreSQL database still contains legacy shadow columns (`created_at_ts`, `is_stream_bool`, `charge_nano_usd_decimal`) from an older Monoize version, startup migration MUST drop those columns and their associated indexes without touching the canonical columns (`created_at`, `is_stream`, `charge_nano_usd`).
 
 RL-S8. While SQLite and PostgreSQL both remain supported, request-log writes MUST target only the canonical columns present in RL-S1. The application MUST NOT create, backfill, or write PostgreSQL-only shadow columns.
+
+RL-S9. Request-log retention MUST delete rows whose `created_at_unix_ms` is older than 90 days relative to cleanup execution time.
+
+RL-S10. Expired-row cleanup defined in RL-S9 SHOULD execute once during startup before the HTTP listener begins accepting traffic. If that cleanup attempt fails, startup MAY continue and the failure MUST be logged.
+
+RL-S11. Expired-row cleanup defined in RL-S9 MUST also execute periodically in a background task while the process is running. The default cleanup interval MUST be 1 hour.
 
 ## 5. Frontend display
 

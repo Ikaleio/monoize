@@ -133,6 +133,15 @@ impl UserStore {
         self.request_log_batcher.clone().spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(2));
         self.api_key_cache.clone().spawn_eviction_task(std::time::Duration::from_secs(30));
         self.balance_cache.clone().spawn_eviction_task(std::time::Duration::from_secs(30));
+        let store = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(super::request_logs::REQUEST_LOG_RETENTION_INTERVAL_SECS)).await;
+                if let Err(e) = store.cleanup_expired_request_logs().await {
+                    tracing::warn!("failed to cleanup expired request logs: {e}");
+                }
+            }
+        });
     }
 
     pub async fn flush_all_batchers(&self) {

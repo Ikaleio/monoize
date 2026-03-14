@@ -37,6 +37,12 @@ async fn run() -> Result<(), AppError> {
         Err(e) => tracing::warn!("failed to cleanup pending request logs: {e}"),
     }
 
+    match state.user_store.cleanup_expired_request_logs().await {
+        Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up expired request logs"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("failed to cleanup expired request logs: {e}"),
+    }
+
     let app = monoize::app::build_app(state.clone());
     let addr: std::net::SocketAddr =
         state
