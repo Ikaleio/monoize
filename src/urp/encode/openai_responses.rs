@@ -1,6 +1,6 @@
 use crate::urp::encode::{
-    has_encrypted_reasoning, merge_extra, role_to_str, text_parts, tool_choice_to_value,
-    usage_input_details, usage_output_details,
+    merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
+    usage_output_details,
 };
 use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
@@ -392,7 +392,6 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             parts,
             extra_body,
         } => {
-            let encrypted_reasoning_present = has_encrypted_reasoning(parts);
             let mut pending_message: Option<PendingResponsesMessageItem> = None;
 
             for part in parts {
@@ -413,9 +412,21 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
                 match part {
                     Part::Reasoning {
                         content: Some(_),
-                        encrypted: None,
+                        encrypted: Some(_),
                         ..
-                    } if encrypted_reasoning_present => {}
+                    } => {
+                        let mut reasoning_part = part.clone();
+                        if let Part::Reasoning {
+                            content, summary, ..
+                        } = &mut reasoning_part
+                        {
+                            *content = None;
+                            *summary = None;
+                        }
+                        if let Some(item) = encode_reasoning_item(&reasoning_part) {
+                            out.push(item);
+                        }
+                    }
                     _ => {
                         if let Some(item) =
                             encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
@@ -839,7 +850,11 @@ mod tests {
         });
 
         let decoded = decode_responses::decode_response(&source).expect("decode");
-        assert_eq!(decoded.outputs.len(), 2, "greedy merger must produce 2 items");
+        assert_eq!(
+            decoded.outputs.len(),
+            2,
+            "greedy merger must produce 2 items"
+        );
 
         let reencoded = encode_response(&decoded, "gpt-5.4");
         let output = reencoded["output"].as_array().expect("output array");
@@ -885,6 +900,52 @@ mod tests {
         assert!(encoded.get("instructions").is_none());
         assert_eq!(encoded["input"][0]["type"], json!("message"));
         assert_eq!(encoded["input"][0]["phase"], json!("commentary"));
+    }
+
+    #[test]
+    fn encode_request_preserves_distinct_plain_reasoning_parts_when_other_parts_are_encrypted() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            inputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![
+                    Part::Reasoning {
+                        content: Some("signed think".to_string()),
+                        encrypted: Some(json!("sig_1")),
+                        summary: Some("signed summary".to_string()),
+                        source: None,
+                        extra_body: empty_map(),
+                    },
+                    Part::Reasoning {
+                        content: Some("plain think".to_string()),
+                        encrypted: None,
+                        summary: None,
+                        source: None,
+                        extra_body: empty_map(),
+                    },
+                ],
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        let input = encoded["input"].as_array().expect("input array");
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0]["type"], json!("reasoning"));
+        assert_eq!(input[0]["encrypted_content"], json!("sig_1"));
+        assert!(input[0].get("text").is_none());
+        assert_eq!(input[1]["type"], json!("reasoning"));
+        assert_eq!(input[1]["text"], json!("plain think"));
     }
 
     #[test]

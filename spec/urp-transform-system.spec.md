@@ -42,7 +42,8 @@ ENC-1. Upstream request construction MUST encode from URP only; transforms MUST 
 ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`, `grok`. The `grok` provider type MUST reuse the same request and response adapter logic as `responses`.
 
 ENC-3. History encoding rule:
-- if a message contains `Part::Reasoning { encrypted: Some(_), .. }`, plaintext `Part::Reasoning { content: Some(_), .. }` in the same message MUST be omitted when the target wire format requires opaque reasoning exclusivity.
+- if a single `Part::Reasoning` carries both opaque reasoning payload (`encrypted`) and plaintext fields (`content` and/or `summary`), adapters MAY omit the plaintext fields only when the target wire format requires opaque reasoning exclusivity for that same reasoning part.
+- adapters MUST NOT drop a distinct `Part::Reasoning` solely because another reasoning part in the same message carries `encrypted: Some(_)`.
 - otherwise `Part::Reasoning` MAY be encoded when supported by target wire format.
 
 ENC-4. Model rewrite MUST apply provider `models[requested].redirect` when present; otherwise use requested model.
