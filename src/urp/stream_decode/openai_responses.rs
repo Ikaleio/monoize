@@ -38,6 +38,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut saw_text_delta = false;
+    let mut saw_text_part_done = false;
     let mut response_done_sent = false;
     let mut index_state = ResponsesStreamIndexState::default();
 
@@ -250,6 +251,20 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
+        if ev.event == "response.content_part.done"
+            && data_val
+                .get("part")
+                .and_then(|part| part.get("type"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|part_type| matches!(part_type, "output_text" | "text"))
+            && data_val
+                .get("part")
+                .and_then(|part| part.get("text"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|text| !text.is_empty())
+        {
+            saw_text_part_done = true;
+        }
 
         for stream_event in map_responses_event_to_urp_events_with_state(
             &ev.event,
@@ -273,71 +288,85 @@ pub(crate) async fn stream_responses_to_urp_events(
         );
         let final_usage = latest_stream_usage_snapshot(&runtime_metrics).await;
 
-        if !saw_text_delta {
-            if let Some((final_item_index, output_item)) = output_items
-                .iter()
-                .enumerate()
-                .find(|(_, item)| output_item_text(item).is_some())
-                .map(|(idx, item)| (idx as u32, item))
-            {
-                let synthetic_text_item = Item::Message {
+        if !saw_text_delta && !saw_text_part_done {
+
+            for (final_item_index, output_item) in output_items.iter().enumerate() {
+                let Some(Item::Message {
                     role: Role::Assistant,
-                    parts: vec![Part::Text {
-                        content: output_item_text(output_item)
-                            .expect("text item index must contain text")
-                            .to_string(),
-                        extra_body: HashMap::new(),
-                    }],
-                    extra_body: item_extra_body_from_item(output_item),
+                    parts,
+                    extra_body,
+                }) = Some(output_item)
+                else {
+                    continue;
                 };
-                let _ = tx
-                    .send(UrpStreamEvent::ItemStart {
-                        item_index: final_item_index,
-                        header: ItemHeader::Message {
-                            role: Role::Assistant,
-                        },
-                        extra_body: item_extra_body_from_item(&synthetic_text_item),
-                    })
-                    .await;
-                if let Some(text) = output_item_text(&synthetic_text_item) {
+
+                for part in parts {
+                    let Part::Text {
+                        content,
+                        extra_body: text_extra_body,
+                    } = part
+                    else {
+                        continue;
+                    };
+
+                    let synthetic_text_item = Item::Message {
+                        role: Role::Assistant,
+                        parts: vec![Part::Text {
+                            content: content.clone(),
+                            extra_body: text_extra_body.clone(),
+                        }],
+                        extra_body: extra_body.clone(),
+                    };
+                    let part_index = index_state.allocate_fresh_part_index();
+                    let item_index = final_item_index as u32;
+
+                    let _ = tx
+                        .send(UrpStreamEvent::ItemStart {
+                            item_index,
+                            header: ItemHeader::Message {
+                                role: Role::Assistant,
+                            },
+                            extra_body: item_extra_body_from_item(&synthetic_text_item),
+                        })
+                        .await;
                     let _ = tx
                         .send(UrpStreamEvent::PartStart {
-                            item_index: final_item_index,
-                            part_index: 0,
+                            item_index,
+                            part_index,
                             header: PartHeader::Text,
-                            extra_body: HashMap::new(),
+                            extra_body: text_extra_body.clone(),
                         })
                         .await;
                     let _ = tx
                         .send(UrpStreamEvent::Delta {
-                            part_index: 0,
+                            part_index,
                             delta: PartDelta::Text {
-                                content: text.to_string(),
+                                content: content.clone(),
                             },
                             usage: final_usage.clone(),
-                            extra_body: HashMap::new(),
+                            extra_body: text_extra_body.clone(),
                         })
                         .await;
                     let _ = tx
                         .send(UrpStreamEvent::PartDone {
-                            part_index: 0,
+                            part_index,
                             part: Part::Text {
-                                content: text.to_string(),
-                                extra_body: HashMap::new(),
+                                content: content.clone(),
+                                extra_body: text_extra_body.clone(),
                             },
+                            usage: final_usage.clone(),
+                            extra_body: text_extra_body.clone(),
+                        })
+                        .await;
+                    let _ = tx
+                        .send(UrpStreamEvent::ItemDone {
+                            item_index,
+                            item: synthetic_text_item,
                             usage: final_usage.clone(),
                             extra_body: HashMap::new(),
                         })
                         .await;
                 }
-                let _ = tx
-                    .send(UrpStreamEvent::ItemDone {
-                        item_index: final_item_index,
-                        item: synthetic_text_item,
-                        usage: final_usage.clone(),
-                        extra_body: HashMap::new(),
-                    })
-                    .await;
             }
         }
 
@@ -501,6 +530,12 @@ impl ResponsesStreamIndexState {
                 self.next_part_index += 1;
                 next
             })
+    }
+
+    fn allocate_fresh_part_index(&mut self) -> u32 {
+        let next = self.next_part_index;
+        self.next_part_index += 1;
+        next
     }
 }
 
@@ -892,16 +927,6 @@ fn item_extra_body_from_item(item: &Item) -> HashMap<String, Value> {
         Item::Message { extra_body, .. } | Item::ToolResult { extra_body, .. } => {
             extra_body.clone()
         }
-    }
-}
-
-fn output_item_text(item: &Item) -> Option<&str> {
-    match item {
-        Item::Message { parts, .. } => parts.iter().find_map(|part| match part {
-            Part::Text { content, .. } => Some(content.as_str()),
-            _ => None,
-        }),
-        _ => None,
     }
 }
 
@@ -1399,5 +1424,115 @@ mod tests {
                 ..
             } if *part_index == 0 && content == "done"
         ));
+    }
+
+    #[test]
+    fn synthetic_text_fallback_preserves_multiple_phases_and_allocates_distinct_part_indices() {
+        let output_items = build_accumulated_output_items(
+            "",
+            "",
+            &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
+            &HashMap::from([(0, "commentary".to_string()), (2, "final_answer".to_string())]),
+            &[],
+            &HashMap::new(),
+        );
+        let mut state = ResponsesStreamIndexState::default();
+        assert_eq!(state.item_index_for_output(11), 0);
+        assert_eq!(state.part_index_for_content(11, 4), 0);
+        assert_eq!(state.synthetic_part_index_for_output(12), 1);
+
+        let mut observed = Vec::new();
+
+        for (final_item_index, output_item) in output_items.iter().enumerate() {
+            let Item::Message {
+                role: Role::Assistant,
+                parts,
+                extra_body,
+            } = output_item
+            else {
+                continue;
+            };
+
+            for part in parts {
+                let Part::Text {
+                    content,
+                    extra_body: text_extra_body,
+                } = part
+                else {
+                    continue;
+                };
+                let synthetic_text_item = Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Text {
+                        content: content.clone(),
+                        extra_body: text_extra_body.clone(),
+                    }],
+                    extra_body: extra_body.clone(),
+                };
+                let part_index = state.allocate_fresh_part_index();
+                let item_index = final_item_index as u32;
+
+                observed.push(UrpStreamEvent::ItemStart {
+                    item_index,
+                    header: ItemHeader::Message {
+                        role: Role::Assistant,
+                    },
+                    extra_body: item_extra_body_from_item(&synthetic_text_item),
+                });
+                observed.push(UrpStreamEvent::PartStart {
+                    item_index,
+                    part_index,
+                    header: PartHeader::Text,
+                    extra_body: text_extra_body.clone(),
+                });
+                observed.push(UrpStreamEvent::Delta {
+                    part_index,
+                    delta: PartDelta::Text {
+                        content: content.clone(),
+                    },
+                    usage: None,
+                    extra_body: text_extra_body.clone(),
+                });
+            }
+        }
+
+        assert!(matches!(
+            &observed[1],
+            UrpStreamEvent::PartStart { part_index, extra_body, .. }
+                if *part_index == 2 && extra_body.get("phase") == Some(&json!("commentary"))
+        ));
+        assert!(matches!(
+            &observed[4],
+            UrpStreamEvent::PartStart { part_index, extra_body, .. }
+                if *part_index == 3 && extra_body.get("phase") == Some(&json!("final_answer"))
+        ));
+    }
+
+    #[test]
+    fn synthetic_text_fallback_is_suppressed_when_text_part_done_already_emitted() {
+        let saw_text_delta = false;
+        let mut saw_text_part_done = false;
+
+        let done_event = json!({
+            "output_index": 4,
+            "content_index": 9,
+            "part": { "type": "output_text", "text": "ready" }
+        });
+
+        if done_event
+            .get("part")
+            .and_then(|part| part.get("type"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|part_type| matches!(part_type, "output_text" | "text"))
+            && done_event
+                .get("part")
+                .and_then(|part| part.get("text"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|text| !text.is_empty())
+        {
+            saw_text_part_done = true;
+        }
+
+        assert!(!(!saw_text_delta && !saw_text_part_done));
     }
 }

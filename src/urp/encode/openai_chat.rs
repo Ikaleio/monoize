@@ -881,4 +881,36 @@ mod tests {
         assert_eq!(message.get("phase"), Some(&json!("analysis")));
         assert_eq!(message.get("segment"), Some(&json!(3)));
     }
+
+    #[test]
+    fn encode_response_keeps_chat_message_content_as_string_when_text_parts_have_phase() {
+        let response = UrpResponse {
+            id: "chatcmpl_phase_string".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![
+                    Part::Text {
+                        content: "analysis".to_string(),
+                        extra_body: HashMap::from([("phase".to_string(), json!("commentary"))]),
+                    },
+                    Part::Text {
+                        content: "final".to_string(),
+                        extra_body: HashMap::from([("phase".to_string(), json!("final_answer"))]),
+                    },
+                ],
+                extra_body: empty_map(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        assert_eq!(
+            encoded["choices"][0]["message"]["content"],
+            json!("analysis\n\nfinal")
+        );
+        assert!(encoded["choices"][0]["message"]["content"].is_string());
+    }
 }

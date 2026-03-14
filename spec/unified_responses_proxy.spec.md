@@ -345,6 +345,8 @@ ES2a. When rendering a non-streaming Chat Completions response, Monoize MUST mer
 
 ES2b. In a non-streaming Chat Completions response, `choices[0].message.content` MUST always be a JSON string. If multiple assistant text segments are merged into one response message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator. Monoize MUST NOT emit assistant response `content` as an array of content blocks.
 
+ES2c. Internal URP `phase` metadata MAY influence how assistant text segments are merged, but Monoize MUST NOT serialize `phase` as a chat-completions response content-block field because Chat Completions response `choices[0].message.content` is emitted as a scalar string, not a content-block array.
+
 ES3. The Anthropic Messages encoder MUST merge consecutive assistant `Item::Message` items into a single `messages[]` entry with `role="assistant"`, concatenating their content blocks.
 
 ### 7.7 Extra field forwarding
@@ -466,6 +468,7 @@ PR6b. Responses streaming phase preservation:
 - When Monoize emits Responses-style downstream SSE, it MUST NOT merge text across distinct `phase` values or across tool-call boundaries.
 - When Monoize synthesizes missing downstream events from `response.completed.output[]`, it MUST preserve both item order and `phase` metadata from the completed payload.
 - Unknown SSE event names, unknown item types, and unknown fields MUST NOT terminate streaming adaptation solely because they are unknown.
+- Monoize MAY continue forwarding intermediate URP `ItemStart`/`ItemDone` events that mirror upstream event boundaries before the terminal object is available, even when those boundaries differ from the final greedy-merged `ResponseDone.outputs` shape required by GZ8.
 
 PR6c. Final Responses-stream object synthesis:
 
@@ -474,6 +477,7 @@ PR6c. Final Responses-stream object synthesis:
 - The synthesized or forwarded `ResponseDone.outputs` value MUST use greedy regrouping per GZ8.
 - When the accumulated assistant text is empty, Monoize MUST NOT synthesize an empty assistant text `Item::Message` solely to carry that empty string.
 - When Monoize emits downstream `response.completed` from `ResponseDone.outputs`, the `response.output` array MUST be encoded with the same Responses encoder logic used for non-streaming responses so that top-level `reasoning`, `message`, and `function_call` items remain in canonical Responses output positions rather than being nested inside `message.content[]`.
+- If Monoize synthesizes missing assistant text stream events because upstream omitted text deltas, it MUST synthesize one URP text stream segment per recovered text-bearing `ResponseDone.outputs` item in output order. Each synthesized segment MUST preserve that text part's `phase` metadata and MUST allocate a fresh URP `part_index` from the decoder's synthetic part-index namespace instead of reusing an `item_index` value.
 
 PR6a. For streaming translation from upstream `type=responses` (or `type=grok`, which uses Responses event shape) to downstream `POST /v1/chat/completions` or `POST /v1/messages`, Monoize MUST support completion-only fallback:
 
