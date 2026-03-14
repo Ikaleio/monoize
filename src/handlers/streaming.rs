@@ -1,9 +1,6 @@
 use super::*;
-use crate::urp::stream_decode::{
-    stream_upstream_sse_as_chat, stream_upstream_sse_as_messages,
-    stream_upstream_sse_as_responses,
-};
-use crate::urp::stream_encode::emit_synthetic_stream_from_urp_response;
+use crate::urp::stream_decode::stream_upstream_to_urp_events;
+use crate::urp::stream_encode::{emit_synthetic_stream_from_urp_response, encode_urp_stream};
 
 pub(super) async fn forward_stream_typed(
     state: AppState,
@@ -257,6 +254,7 @@ pub(super) async fn forward_stream_typed(
                 let auth_for_log = auth.clone();
                 let attempt_for_log = attempt.clone();
                 let model_for_log = logical_model.clone();
+                let model_for_encode = logical_model.clone();
                 let request_id_for_log = request_id.clone();
                 let request_ip_for_log = request_ip.clone();
                 let channel_id_for_log = attempt.channel_id.clone();
@@ -265,41 +263,53 @@ pub(super) async fn forward_stream_typed(
                 let tried_providers_for_log = tried_providers.clone();
                 tokio::spawn(async move {
                     let tx_err = tx.clone();
-                    let stream_result = match downstream {
-                        DownstreamProtocol::Responses => {
-                            stream_upstream_sse_as_responses(
+                    let (urp_tx, urp_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+
+                    let decode_handle = {
+                        let metrics = metrics_for_stream.clone();
+                        tokio::spawn(async move {
+                            stream_upstream_to_urp_events(
                                 &legacy,
                                 provider_type,
                                 upstream_resp,
-                                tx,
+                                urp_tx,
                                 Some(started_at),
-                                Some(metrics_for_stream.clone()),
+                                Some(metrics),
                             )
                             .await
-                        }
-                        DownstreamProtocol::ChatCompletions => {
-                            stream_upstream_sse_as_chat(
-                                &legacy,
-                                provider_type,
-                                upstream_resp,
-                                tx,
-                                Some(started_at),
-                                Some(metrics_for_stream.clone()),
-                            )
-                            .await
-                        }
-                        DownstreamProtocol::AnthropicMessages => {
-                            stream_upstream_sse_as_messages(
-                                &legacy,
-                                provider_type,
-                                upstream_resp,
-                                tx,
-                                Some(started_at),
-                                Some(metrics_for_stream.clone()),
-                            )
-                            .await
-                        }
+                        })
                     };
+
+                    let encode_handle = {
+                        let tx = tx;
+                        tokio::spawn(async move {
+                            encode_urp_stream(
+                                downstream,
+                                urp_rx,
+                                tx,
+                                &model_for_encode,
+                                sse_max_frame_length,
+                            )
+                            .await
+                        })
+                    };
+
+                    let (decode_result, encode_result) = tokio::join!(decode_handle, encode_handle);
+                    let stream_result = decode_result
+                        .unwrap_or_else(|e| {
+                            Err(AppError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "task_panic",
+                                e.to_string(),
+                            ))
+                        })
+                        .and(encode_result.unwrap_or_else(|e| {
+                            Err(AppError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "task_panic",
+                                e.to_string(),
+                            ))
+                        }));
 
                     let (ttfb_ms, usage, terminal_diagnostics) = {
                         let guard = runtime_metrics.lock().await;

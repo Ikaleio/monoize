@@ -1,9 +1,13 @@
 use crate::error::AppResult;
-use crate::handlers::routing::{now_ts, wrap_responses_event as _};
-use crate::urp::{self};
+use crate::handlers::routing::now_ts;
+use crate::urp::{
+    self, FinishReason, InputDetails, Item, ItemHeader, OutputDetails, Part, PartDelta, PartHeader,
+    Role, ToolResultContent, UrpStreamEvent, Usage,
+};
 use crate::urp::stream_helpers::*;
 use axum::response::sse::Event;
-use serde_json::{json, Value as _};
+use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 pub(crate) async fn emit_synthetic_responses_stream(
@@ -136,4 +140,680 @@ pub(crate) async fn emit_synthetic_responses_stream(
     )
     .await?;
     Ok(())
+}
+
+pub(crate) async fn encode_urp_stream_as_responses(
+    mut rx: mpsc::Receiver<UrpStreamEvent>,
+    tx: mpsc::Sender<Event>,
+    logical_model: &str,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let mut seq = 1u64;
+    let mut response_id = "resp".to_string();
+    let mut created = now_ts();
+    let mut output_indices: HashMap<u32, usize> = HashMap::new();
+    let mut part_indices: HashMap<u32, (usize, u32)> = HashMap::new();
+    let mut tool_calls_by_part_index: HashMap<u32, (usize, String, String)> = HashMap::new();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
+                response_id = id.clone();
+                created = extra_body
+                    .get("created")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or_else(now_ts);
+
+                let payload = json!({
+                    "id": id,
+                    "object": "response",
+                    "created": created,
+                    "model": logical_model,
+                    "status": "in_progress",
+                    "output": []
+                });
+                send_responses_event(&tx, &mut seq, "response.created", payload.clone()).await?;
+                send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
+            }
+            UrpStreamEvent::ItemStart {
+                item_index,
+                header,
+                ..
+            } => {
+                let output_index = item_index as usize;
+                output_indices.insert(item_index, output_index);
+                let item = encode_item_start_stub(&header);
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "response.output_item.added",
+                    json!({
+                        "output_index": output_index,
+                        "item": item,
+                    }),
+                )
+                .await?;
+            }
+            UrpStreamEvent::PartStart {
+                part_index,
+                item_index,
+                header,
+                ..
+            } => {
+                let output_index = *output_indices
+                    .entry(item_index)
+                    .or_insert(item_index as usize);
+                part_indices.insert(part_index, (output_index, part_index));
+                if let PartHeader::ToolCall { call_id, name } = &header {
+                    tool_calls_by_part_index.insert(
+                        part_index,
+                        (output_index, call_id.clone(), name.clone()),
+                    );
+                }
+
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "response.content_part.added",
+                    json!({
+                        "output_index": output_index,
+                        "content_index": part_index,
+                        "part": encode_part_start_header(&header),
+                    }),
+                )
+                .await?;
+            }
+            UrpStreamEvent::Delta {
+                part_index, delta, ..
+            } => match delta {
+                PartDelta::Text { content } => {
+                    let (output_index, content_index) = part_indices
+                        .get(&part_index)
+                        .copied()
+                        .unwrap_or((0, part_index));
+                    send_responses_delta_string(
+                        &tx,
+                        &mut seq,
+                        "response.output_text.delta",
+                        responses_text_delta_payload("", None)
+                            .as_object()
+                            .cloned()
+                            .map(Value::Object)
+                            .map(|mut value| {
+                                if let Some(obj) = value.as_object_mut() {
+                                    obj.insert("output_index".to_string(), json!(output_index));
+                                    obj.insert("content_index".to_string(), json!(content_index));
+                                }
+                                value
+                            })
+                            .unwrap_or_else(|| json!({ "output_index": output_index, "content_index": content_index })),
+                        "delta",
+                        &content,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                PartDelta::Reasoning { content } => {
+                    let (output_index, content_index) = part_indices
+                        .get(&part_index)
+                        .copied()
+                        .unwrap_or((0, part_index));
+                    send_responses_delta_string(
+                        &tx,
+                        &mut seq,
+                        "response.reasoning_text.delta",
+                        json!({
+                            "output_index": output_index,
+                            "content_index": content_index,
+                        }),
+                        "delta",
+                        &content,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                PartDelta::ToolCallArguments { arguments } => {
+                    let (output_index, call_id, name) = tool_calls_by_part_index
+                        .get(&part_index)
+                        .cloned()
+                        .unwrap_or_else(|| (0, String::new(), String::new()));
+                    send_responses_delta_string(
+                        &tx,
+                        &mut seq,
+                        "response.function_call_arguments.delta",
+                        json!({
+                            "output_index": output_index,
+                            "content_index": part_index,
+                            "call_id": call_id,
+                            "name": name,
+                        }),
+                        "delta",
+                        &arguments,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                PartDelta::Refusal { content } => {
+                    let (output_index, content_index) = part_indices
+                        .get(&part_index)
+                        .copied()
+                        .unwrap_or((0, part_index));
+                    send_responses_delta_string(
+                        &tx,
+                        &mut seq,
+                        "response.output_text.delta",
+                        json!({
+                            "output_index": output_index,
+                            "content_index": content_index,
+                            "delta": "",
+                            "type": "refusal"
+                        }),
+                        "delta",
+                        &content,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                PartDelta::Image { .. }
+                | PartDelta::Audio { .. }
+                | PartDelta::File { .. }
+                | PartDelta::ProviderItem { .. } => {}
+            },
+            UrpStreamEvent::PartDone {
+                part_index, part, ..
+            } => {
+                let (output_index, content_index) = part_indices
+                    .get(&part_index)
+                    .copied()
+                    .unwrap_or((0, part_index));
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "response.content_part.done",
+                    json!({
+                        "output_index": output_index,
+                        "content_index": content_index,
+                        "part": encode_part_value(&part),
+                    }),
+                )
+                .await?;
+            }
+            UrpStreamEvent::ItemDone {
+                item_index, item, ..
+            } => {
+                let output_index = *output_indices
+                    .entry(item_index)
+                    .or_insert(item_index as usize);
+                let encoded_item = sanitize_responses_output_item_for_frame_limit(
+                    &encode_output_item(&item),
+                    sse_max_frame_length,
+                );
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "response.output_item.done",
+                    json!({
+                        "output_index": output_index,
+                        "item": encoded_item,
+                    }),
+                )
+                .await?;
+            }
+            UrpStreamEvent::ResponseDone {
+                finish_reason,
+                usage,
+                outputs,
+                ..
+            } => {
+                send_responses_event(&tx, &mut seq, "response.output_text.done", json!({})).await?;
+                let encoded_outputs: Vec<Value> = outputs.iter().map(encode_output_item).collect();
+                let mut response = json!({
+                    "id": response_id,
+                    "object": "response",
+                    "created": created,
+                    "model": logical_model,
+                    "status": finish_reason_to_status(finish_reason),
+                    "output": encoded_outputs,
+                });
+                if let Some(usage) = usage.as_ref() {
+                    response["usage"] = encode_usage_value(usage);
+                }
+                let completed_response =
+                    sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length);
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "response.completed",
+                    json!({ "response": completed_response }),
+                )
+                .await?;
+            }
+            UrpStreamEvent::Error { code, message, .. } => {
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "error",
+                    json!({
+                        "code": code,
+                        "message": message,
+                    }),
+                )
+                .await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn encode_item_start_stub(header: &ItemHeader) -> Value {
+    match header {
+        ItemHeader::Message { role } => json!({
+            "type": "message",
+            "role": role_to_str(*role),
+            "content": [],
+            "id": format!("msg_{}", uuid::Uuid::new_v4()),
+            "status": "in_progress",
+        }),
+        ItemHeader::ToolResult { call_id } => json!({
+            "type": "tool_result",
+            "call_id": call_id,
+            "output": "",
+            "id": format!("tr_{}", uuid::Uuid::new_v4()),
+            "status": "in_progress",
+        }),
+    }
+}
+
+fn encode_output_item(item: &Item) -> Value {
+    match item {
+        Item::Message {
+            role,
+            parts,
+            extra_body,
+        } => {
+            if parts.len() == 1 {
+                if let Some(reasoning) = encode_reasoning_output_item(&parts[0]) {
+                    return reasoning;
+                }
+                if let Some(tool_call) = encode_function_call_output_item(&parts[0]) {
+                    return tool_call;
+                }
+            }
+
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!(role_to_str(*role)));
+            obj.insert(
+                "content".to_string(),
+                Value::Array(parts.iter().map(encode_part_value).collect()),
+            );
+            obj.insert(
+                "id".to_string(),
+                json!(format!("msg_{}", uuid::Uuid::new_v4())),
+            );
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        Item::ToolResult {
+            call_id,
+            content,
+            is_error,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("function_call_output"));
+            obj.insert("call_id".to_string(), json!(call_id));
+            obj.insert(
+                "id".to_string(),
+                json!(format!("tr_{}", uuid::Uuid::new_v4())),
+            );
+            obj.insert("status".to_string(), json!("completed"));
+            obj.insert("output".to_string(), encode_tool_result_output(content));
+            if *is_error {
+                obj.insert("is_error".to_string(), Value::Bool(true));
+            }
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+    }
+}
+
+fn encode_reasoning_output_item(part: &Part) -> Option<Value> {
+    let Part::Reasoning {
+        content,
+        encrypted,
+        summary,
+        source,
+        extra_body,
+    } = part
+    else {
+        return None;
+    };
+
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), json!("reasoning"));
+    if let Some(text) = summary.as_ref().or(content.as_ref()) {
+        obj.insert(
+            "summary".to_string(),
+            Value::Array(vec![json!({ "type": "summary_text", "text": text })]),
+        );
+    }
+    if let Some(text) = content {
+        obj.insert("text".to_string(), json!(text));
+    }
+    if let Some(encrypted) = encrypted {
+        obj.insert("encrypted_content".to_string(), encrypted.clone());
+    }
+    if let Some(source) = source {
+        obj.insert("source".to_string(), json!(source));
+    }
+    merge_json_extra(&mut obj, extra_body);
+    Some(Value::Object(obj))
+}
+
+fn encode_function_call_output_item(part: &Part) -> Option<Value> {
+    let Part::ToolCall {
+        call_id,
+        name,
+        arguments,
+        extra_body,
+    } = part
+    else {
+        return None;
+    };
+
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), json!("function_call"));
+    obj.insert("call_id".to_string(), json!(call_id));
+    obj.insert("name".to_string(), json!(name));
+    obj.insert("arguments".to_string(), json!(arguments));
+    obj.insert(
+        "id".to_string(),
+        json!(format!("fc_{}", uuid::Uuid::new_v4())),
+    );
+    obj.insert("status".to_string(), json!("completed"));
+    merge_json_extra(&mut obj, extra_body);
+    Some(Value::Object(obj))
+}
+
+fn encode_part_start_header(header: &PartHeader) -> Value {
+    match header {
+        PartHeader::Text => json!({ "type": "output_text", "text": "" }),
+        PartHeader::Reasoning => json!({ "type": "reasoning", "text": "" }),
+        PartHeader::Refusal => json!({ "type": "refusal", "refusal": "" }),
+        PartHeader::ToolCall { call_id, name } => json!({
+            "type": "function_call",
+            "call_id": call_id,
+            "name": name,
+            "arguments": "",
+        }),
+        PartHeader::Image { extra_body } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("output_image"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        PartHeader::Audio { extra_body } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("audio"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        PartHeader::File { extra_body } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("output_file"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        PartHeader::ProviderItem { item_type, body } => {
+            let mut obj = match body {
+                Value::Object(map) => map.clone(),
+                other => {
+                    let mut map = Map::new();
+                    map.insert("body".to_string(), other.clone());
+                    map
+                }
+            };
+            obj.entry("type".to_string())
+                .or_insert_with(|| Value::String(item_type.clone()));
+            Value::Object(obj)
+        }
+    }
+}
+
+fn encode_part_value(part: &Part) -> Value {
+    match part {
+        Part::Text {
+            content,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("output_text"));
+            obj.insert("text".to_string(), json!(content));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        Part::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("reasoning"));
+            if let Some(text) = content {
+                obj.insert("text".to_string(), json!(text));
+            }
+            if let Some(text) = summary {
+                obj.insert(
+                    "summary".to_string(),
+                    Value::Array(vec![json!({ "type": "summary_text", "text": text })]),
+                );
+            }
+            if let Some(encrypted) = encrypted {
+                obj.insert("encrypted_content".to_string(), encrypted.clone());
+            }
+            if let Some(source) = source {
+                obj.insert("source".to_string(), json!(source));
+            }
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        Part::ToolCall {
+            call_id,
+            name,
+            arguments,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("function_call"));
+            obj.insert("call_id".to_string(), json!(call_id));
+            obj.insert("name".to_string(), json!(name));
+            obj.insert("arguments".to_string(), json!(arguments));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        Part::Refusal {
+            content,
+            extra_body,
+        } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("refusal"));
+            obj.insert("refusal".to_string(), json!(content));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        Part::Image { source, extra_body } => encode_image_part(source, extra_body),
+        Part::Audio { source, extra_body } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("audio"));
+            obj.insert("source".to_string(), encode_audio_source(source));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        Part::File { source, extra_body } => encode_file_part(source, extra_body),
+        Part::ProviderItem {
+            item_type,
+            body,
+            extra_body,
+        } => {
+            let mut obj = match body {
+                Value::Object(map) => map.clone(),
+                other => {
+                    let mut map = Map::new();
+                    map.insert("body".to_string(), other.clone());
+                    map
+                }
+            };
+            obj.entry("type".to_string())
+                .or_insert_with(|| Value::String(item_type.clone()));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+    }
+}
+
+fn encode_image_part(
+    source: &crate::urp::ImageSource,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), json!("output_image"));
+    match source {
+        crate::urp::ImageSource::Url { url, detail } => {
+            obj.insert("url".to_string(), json!(url));
+            if let Some(detail) = detail {
+                obj.insert("detail".to_string(), json!(detail));
+            }
+        }
+        crate::urp::ImageSource::Base64 { media_type, data } => {
+            obj.insert(
+                "source".to_string(),
+                json!({ "type": "base64", "media_type": media_type, "data": data }),
+            );
+        }
+    }
+    merge_json_extra(&mut obj, extra_body);
+    Value::Object(obj)
+}
+
+fn encode_file_part(
+    source: &crate::urp::FileSource,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), json!("output_file"));
+    match source {
+        crate::urp::FileSource::Url { url } => {
+            obj.insert("url".to_string(), json!(url));
+        }
+        crate::urp::FileSource::Base64 {
+            filename,
+            media_type,
+            data,
+        } => {
+            obj.insert(
+                "source".to_string(),
+                json!({
+                    "type": "base64",
+                    "filename": filename,
+                    "media_type": media_type,
+                    "data": data,
+                }),
+            );
+        }
+    }
+    merge_json_extra(&mut obj, extra_body);
+    Value::Object(obj)
+}
+
+fn encode_audio_source(source: &crate::urp::AudioSource) -> Value {
+    match source {
+        crate::urp::AudioSource::Url { url } => json!({ "type": "url", "url": url }),
+        crate::urp::AudioSource::Base64 { media_type, data } => {
+            json!({ "type": "base64", "media_type": media_type, "data": data })
+        }
+    }
+}
+
+fn encode_tool_result_output(content: &[ToolResultContent]) -> Value {
+    if content.is_empty() {
+        return Value::String(String::new());
+    }
+    if content.len() == 1 {
+        if let ToolResultContent::Text { text } = &content[0] {
+            return Value::String(text.clone());
+        }
+    }
+
+    Value::Array(
+        content
+            .iter()
+            .map(|part| match part {
+                ToolResultContent::Text { text } => json!({ "type": "input_text", "text": text }),
+                ToolResultContent::Image { source } => encode_image_part(source, &HashMap::new()),
+                ToolResultContent::File { source } => encode_file_part(source, &HashMap::new()),
+            })
+            .collect(),
+    )
+}
+
+fn encode_usage_value(usage: &Usage) -> Value {
+    let input_details = usage.input_details.as_ref().cloned().unwrap_or_default();
+    let output_details = usage.output_details.as_ref().cloned().unwrap_or_default();
+    let mut usage_value = json!({
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens(),
+        "output_tokens_details": encode_output_details(&output_details),
+        "input_tokens_details": encode_input_details(&input_details),
+    });
+    if let Some(obj) = usage_value.as_object_mut() {
+        merge_json_extra(obj, &usage.extra_body);
+    }
+    usage_value
+}
+
+fn encode_input_details(details: &InputDetails) -> Value {
+    json!({
+        "cached_tokens": details.cache_read_tokens,
+        "cache_write_tokens": details.cache_creation_tokens,
+        "cache_creation_tokens": details.cache_creation_tokens,
+        "tool_prompt_tokens": details.tool_prompt_tokens,
+    })
+}
+
+fn encode_output_details(details: &OutputDetails) -> Value {
+    json!({
+        "reasoning_tokens": details.reasoning_tokens,
+        "accepted_prediction_tokens": details.accepted_prediction_tokens,
+        "rejected_prediction_tokens": details.rejected_prediction_tokens,
+    })
+}
+
+fn merge_json_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
+    for (k, v) in extra {
+        obj.insert(k.clone(), v.clone());
+    }
+}
+
+fn role_to_str(role: Role) -> &'static str {
+    match role {
+        Role::System => "system",
+        Role::Developer => "developer",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    }
+}
+
+fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str {
+    match finish_reason {
+        Some(FinishReason::Length) => "incomplete",
+        Some(FinishReason::Other) => "failed",
+        _ => "completed",
+    }
 }

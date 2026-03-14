@@ -138,7 +138,16 @@ FP4d. For streaming upstream calls, Monoize MUST track terminal-stream evidence 
 
 FP5. **Adapt response:** Convert the upstream output (non-streaming or streaming chunks) into URP-Proto `Item`-based output.
 
+FP5a. For streaming upstream calls, Monoize MUST first decode upstream protocol events into a sequence of `UrpStreamEvent` values before producing any downstream SSE frames.
+
 FP6. **Render downstream:** Convert URP-Proto output into the downstream endpoint’s response shape (Responses / Chat Completions / Messages), streaming or non-streaming.
+
+FP6a. For pass-through streaming on `/v1/responses`, `/v1/chat/completions`, and `/v1/messages`, Monoize MUST implement the downstream adapter as a two-stage pipeline connected by an in-memory channel of `UrpStreamEvent` values:
+
+- stage 1: provider-specific decoder consumes upstream SSE and emits `UrpStreamEvent` values;
+- stage 2: downstream-specific encoder consumes `UrpStreamEvent` values and emits downstream SSE frames.
+
+FP6b. The pass-through streaming pipeline in FP6a MUST preserve existing routing, billing, logging, and terminal-stream observability semantics. The change in internal streaming representation MUST NOT by itself permit provider fallback after the first downstream byte.
 
 ## 6. Routing rules
 

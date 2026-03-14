@@ -6,22 +6,22 @@ pub mod openai_responses;
 use crate::config::ProviderType;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest};
+use crate::urp::UrpStreamEvent;
 use axum::http::StatusCode;
-use axum::response::sse::Event;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
-pub(crate) async fn stream_upstream_sse_as_responses(
+pub(crate) async fn stream_upstream_to_urp_events(
     urp: &UrpRequest,
     provider_type: ProviderType,
     upstream_resp: reqwest::Response,
-    tx: mpsc::Sender<Event>,
+    tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> AppResult<()> {
     match provider_type {
         ProviderType::Responses | ProviderType::Grok => {
-            openai_responses::stream_responses_sse_as_responses(
+            openai_responses::stream_responses_to_urp_events(
                 urp,
                 upstream_resp,
                 tx,
@@ -31,7 +31,7 @@ pub(crate) async fn stream_upstream_sse_as_responses(
             .await
         }
         ProviderType::ChatCompletion => {
-            openai_chat::stream_chat_sse_as_responses(
+            openai_chat::stream_chat_to_urp_events(
                 urp,
                 upstream_resp,
                 tx,
@@ -41,7 +41,7 @@ pub(crate) async fn stream_upstream_sse_as_responses(
             .await
         }
         ProviderType::Messages => {
-            anthropic::stream_messages_sse_as_responses(
+            anthropic::stream_messages_to_urp_events(
                 urp,
                 upstream_resp,
                 tx,
@@ -51,84 +51,8 @@ pub(crate) async fn stream_upstream_sse_as_responses(
             .await
         }
         ProviderType::Gemini => {
-            gemini::stream_gemini_sse_as_responses(
+            gemini::stream_gemini_to_urp_events(
                 urp,
-                upstream_resp,
-                tx,
-                started_at,
-                runtime_metrics,
-            )
-            .await
-        }
-        ProviderType::Group => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "provider_type_not_supported",
-            "group is virtual",
-        )),
-    }
-}
-
-pub(crate) async fn stream_upstream_sse_as_chat(
-    urp: &UrpRequest,
-    provider_type: ProviderType,
-    upstream_resp: reqwest::Response,
-    tx: mpsc::Sender<Event>,
-    started_at: Option<std::time::Instant>,
-    runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
-) -> AppResult<()> {
-    match provider_type {
-        ProviderType::Gemini => {
-            gemini::stream_gemini_sse_as_chat(
-                urp,
-                upstream_resp,
-                tx,
-                started_at,
-                runtime_metrics,
-            )
-            .await
-        }
-        ProviderType::Responses | ProviderType::Grok | ProviderType::ChatCompletion | ProviderType::Messages => {
-            openai_chat::stream_any_sse_as_chat(
-                urp,
-                provider_type,
-                upstream_resp,
-                tx,
-                started_at,
-                runtime_metrics,
-            )
-            .await
-        }
-        ProviderType::Group => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "provider_type_not_supported",
-            "group is virtual",
-        )),
-    }
-}
-
-pub(crate) async fn stream_upstream_sse_as_messages(
-    urp: &UrpRequest,
-    provider_type: ProviderType,
-    upstream_resp: reqwest::Response,
-    tx: mpsc::Sender<Event>,
-    started_at: Option<std::time::Instant>,
-    runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
-) -> AppResult<()> {
-    match provider_type {
-        ProviderType::Gemini => {
-            gemini::stream_gemini_sse_as_messages(
-                urp,
-                upstream_resp,
-                tx,
-                started_at,
-                runtime_metrics,
-            )
-            .await
-        }
-        ProviderType::Responses | ProviderType::Grok | ProviderType::ChatCompletion | ProviderType::Messages => {
-            anthropic::stream_any_sse_as_messages(
-                urp,
-                provider_type,
                 upstream_resp,
                 tx,
                 started_at,
