@@ -519,12 +519,13 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
             if tools_present && tool_outputs.is_empty() {
                 let mut chunks: Vec<Result<Event, Infallible>> = Vec::new();
+                // Initial role chunk (matches real OpenAI format)
                 chunks.push(Ok(Event::default().data(json!({
                     "id": "chatcmpl_mock",
                     "object": "chat.completion.chunk",
                     "created": 0,
                     "model": model,
-                    "choices": [{ "index": 0, "delta": { "role": "assistant" }, "finish_reason": Value::Null }]
+                    "choices": [{ "index": 0, "delta": { "role": "assistant", "content": Value::Null }, "finish_reason": Value::Null }]
                 }).to_string())));
                 chunks.push(Ok(Event::default().data(json!({
                     "id": "chatcmpl_mock",
@@ -533,15 +534,16 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     "model": model,
                     "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }] }, "finish_reason": Value::Null }]
                 }).to_string())));
-                let calls = if parallel {
+                let calls: Vec<(usize, &str, &str, Vec<&str>)> = if parallel {
                     vec![
-                        ("call_1", "tool_a", "{\"a\":1}"),
-                        ("call_2", "tool_b", "{\"b\":2}"),
+                        (0, "call_1", "tool_a", vec!["{\"a\"", ":1}"]),
+                        (1, "call_2", "tool_b", vec!["{\"b\"", ":2}"]),
                     ]
                 } else {
-                    vec![("call_1", "tool_a", "{\"a\":1}")]
+                    vec![(0, "call_1", "tool_a", vec!["{\"a\"", ":1}"])]
                 };
-                for (call_id, name, args) in calls {
+                for (tc_idx, call_id, name, arg_fragments) in calls {
+                    // Header chunk: has id, type, name, empty arguments (matches real OpenAI)
                     chunks.push(Ok(Event::default().data(
                         json!({
                             "id": "chatcmpl_mock",
@@ -552,10 +554,10 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                                 "index": 0,
                                 "delta": {
                                     "tool_calls": [{
-                                        "index": 0,
+                                        "index": tc_idx,
                                         "id": call_id,
                                         "type": "function",
-                                        "function": { "name": name, "arguments": args }
+                                        "function": { "name": name, "arguments": "" }
                                     }]
                                 },
                                 "finish_reason": Value::Null
@@ -563,7 +565,37 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                         })
                         .to_string(),
                     )));
+                    // Continuation chunks: only index + arguments fragment (no id, no type, no name)
+                    for frag in arg_fragments {
+                        chunks.push(Ok(Event::default().data(
+                            json!({
+                                "id": "chatcmpl_mock",
+                                "object": "chat.completion.chunk",
+                                "created": 0,
+                                "model": model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {
+                                        "tool_calls": [{
+                                            "index": tc_idx,
+                                            "function": { "arguments": frag }
+                                        }]
+                                    },
+                                    "finish_reason": Value::Null
+                                }]
+                            })
+                            .to_string(),
+                        )));
+                    }
                 }
+                // Terminal chunk: empty delta with finish_reason (matches real OpenAI)
+                chunks.push(Ok(Event::default().data(json!({
+                    "id": "chatcmpl_mock",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": model,
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+                }).to_string())));
                 chunks.push(Ok(Event::default().data("[DONE]")));
                 return Sse::new(futures_util::stream::iter(chunks)).into_response();
             }
@@ -2936,6 +2968,95 @@ async fn chat_streaming_normalizes_chat_upstream_stop_to_tool_calls_when_tools_e
         vec!["tool_calls".to_string()],
         "finish_reason should normalize to tool_calls when tool deltas were emitted: {text}"
     );
+    assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn chat_streaming_parallel_tool_calls_from_chat_upstream_reassembles_arguments() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[
+                    { "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}},
+                    { "type":"function","function":{ "name":"tool_b","parameters":{ "type":"object","additionalProperties":true }}}
+                ],
+                "parallel_tool_calls": true,
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut tool_calls_by_idx: HashMap<u64, (String, String, String)> = HashMap::new();
+    let mut finish_reasons: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if let Some(reason) = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|v| v.as_str())
+        {
+            if !reason.is_empty() {
+                finish_reasons.push(reason.to_string());
+            }
+        }
+        if let Some(tcs) = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("delta"))
+            .and_then(|d| d.get("tool_calls"))
+            .and_then(|v| v.as_array())
+        {
+            for tc in tcs {
+                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let entry = tool_calls_by_idx.entry(idx).or_insert_with(|| {
+                    (String::new(), String::new(), String::new())
+                });
+                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                    entry.0 = id.to_string();
+                }
+                if let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|v| v.as_str()) {
+                    entry.1 = name.to_string();
+                }
+                if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|v| v.as_str()) {
+                    entry.2.push_str(args);
+                }
+            }
+        }
+    }
+
+    assert_eq!(tool_calls_by_idx.len(), 2, "expected 2 parallel tool calls: {text}");
+    let tc0 = &tool_calls_by_idx[&0];
+    assert_eq!(tc0.0, "call_1");
+    assert_eq!(tc0.1, "tool_a");
+    assert_eq!(tc0.2, "{\"a\":1}", "tool_a arguments should be reassembled from fragments");
+    let tc1 = &tool_calls_by_idx[&1];
+    assert_eq!(tc1.0, "call_2");
+    assert_eq!(tc1.1, "tool_b");
+    assert_eq!(tc1.2, "{\"b\":2}", "tool_b arguments should be reassembled from fragments");
+    assert_eq!(finish_reasons, vec!["tool_calls".to_string()]);
     assert!(text.contains("[DONE]"));
 }
 
