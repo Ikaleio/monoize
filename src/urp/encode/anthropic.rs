@@ -2,8 +2,8 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, Item, Part, Role, ToolDefinition, ToolResultContent,
+    UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -103,15 +103,6 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 );
             }
         }
-    }
-    if matches!(
-        req.response_format,
-        Some(ResponseFormat::JsonObject | ResponseFormat::JsonSchema { .. })
-    ) {
-        obj.insert(
-            "response_format".to_string(),
-            Value::String("unsupported".to_string()),
-        );
     }
     merge_extra(obj, &req.extra_body);
     body
@@ -616,11 +607,42 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
 mod tests {
     use super::*;
     use crate::urp::decode::anthropic as decode_anthropic;
-    use crate::urp::{Item, OutputDetails, UrpResponse, Usage};
+    use crate::urp::{Item, OutputDetails, ResponseFormat, Role, UrpRequest, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
+    }
+
+    #[test]
+    fn encode_request_does_not_emit_fake_response_format() {
+        let req = UrpRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            inputs: vec![Item::Message {
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: Some(ResponseFormat::JsonObject),
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "claude-sonnet-4-5");
+        assert!(
+            encoded.get("response_format").is_none(),
+            "Anthropic requests must omit unsupported response_format"
+        );
     }
 
     #[test]

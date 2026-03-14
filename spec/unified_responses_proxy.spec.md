@@ -434,6 +434,13 @@ PR3. For streaming, Monoize MUST parse upstream SSE and convert it into Monoize 
 
 PR4. When constructing upstream `POST /v1/responses` requests, Monoize MUST emit `tools[]` in Responses-style function-tool shape (`type/name/parameters`) even if the downstream request used another tool schema.
 
+PR4b. When encoding URP `response_format` to an upstream `type=responses` request:
+
+- `ResponseFormat::Text` MUST encode as `text.format.type = "text"`.
+- `ResponseFormat::JsonObject` MUST encode as `text.format.type = "json_object"`.
+- `ResponseFormat::JsonSchema` MUST encode as `text.format.type = "json_schema"` with the provided schema object.
+- Monoize MUST NOT rewrite `ResponseFormat::JsonObject` into a synthetic `json_schema` object.
+
 PR4a. Responses `phase` mapping:
 
 - When decoding Responses `message` items, Monoize MUST read `item.phase` when present and copy it onto every URP text part derived from that `message` item.
@@ -610,6 +617,8 @@ PM4.2. For PM4.1 block-array content, Monoize MUST map blocks to URP multipart t
 
 PM4.3. When parsing upstream Messages assistant output, Monoize MUST support multimodal output blocks `image` and `document` in addition to `text` / `thinking` / `tool_use`.
 
+PM4.4. When encoding a request to an upstream `type=messages` provider, Monoize MUST NOT synthesize an upstream request field named `response_format`. If the downstream URP request carries `response_format`, Monoize MUST omit it unless Anthropic later defines an official request field with that exact meaning.
+
 PM5. Reasoning:
 
 - When the upstream Messages output contains a `thinking` block, Monoize MUST convert it into a URP-Proto `output` item with `type="reasoning"` (§7.1.2).
@@ -669,6 +678,8 @@ PG4. Monoize MUST encode URP requests to Gemini native request fields:
 - `systemInstruction` for leading system/developer instruction;
 - `generationConfig` for temperature/top_p/max_output_tokens;
 - `tools[]` and `toolConfig.functionCallingConfig` for tool definitions and tool choice.
+
+PG4a. When encoding a URP `Item::ToolResult` into Gemini `functionResponse`, Monoize MUST set `functionResponse.name` to the tool function name, not the URP `call_id`. Monoize MAY recover that function name from preserved metadata or from the corresponding earlier URP tool-call part.
 
 PG5. Monoize MUST decode Gemini responses from `candidates[].content.parts[]` and convert them to URP output parts, including:
 

@@ -8,33 +8,44 @@ use serde_json::{json, Map, Value};
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut contents = Vec::new();
     let mut system_parts = Vec::new();
+    let mut tool_names_by_call_id: Map<String, Value> = Map::new();
 
     for item in &req.inputs {
         match item {
-            Item::Message { role, parts, .. } => match role {
-                Role::System | Role::Developer => {
-                    let text = text_parts(parts);
-                    if !text.is_empty() {
-                        system_parts.push(json!({ "text": text }));
+            Item::Message { role, parts, .. } => {
+                for part in parts {
+                    if let Part::ToolCall { call_id, name, .. } = part {
+                        tool_names_by_call_id
+                            .entry(call_id.clone())
+                            .or_insert_with(|| Value::String(name.clone()));
                     }
                 }
-                _ => {
-                    let role = if *role == Role::Assistant {
-                        "model"
-                    } else {
-                        "user"
-                    };
-                    let parts = encode_message_parts(item);
-                    if !parts.is_empty() {
-                        contents.push(json!({ "role": role, "parts": parts }));
+
+                match role {
+                    Role::System | Role::Developer => {
+                        let text = text_parts(parts);
+                        if !text.is_empty() {
+                            system_parts.push(json!({ "text": text }));
+                        }
+                    }
+                    _ => {
+                        let role = if *role == Role::Assistant {
+                            "model"
+                        } else {
+                            "user"
+                        };
+                        let parts = encode_message_parts(item);
+                        if !parts.is_empty() {
+                            contents.push(json!({ "role": role, "parts": parts }));
+                        }
                     }
                 }
-            },
+            }
             Item::ToolResult {
                 call_id,
                 content,
                 is_error,
-                ..
+                extra_body,
             } => {
                 let result = content
                     .iter()
@@ -44,11 +55,16 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                     })
                     .collect::<Vec<_>>()
                     .join("");
+                let function_name = extra_body
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| tool_names_by_call_id.get(call_id).and_then(|v| v.as_str()))
+                    .unwrap_or(call_id);
                 contents.push(json!({
                     "role": "user",
                     "parts": [{
                         "functionResponse": {
-                            "name": call_id,
+                            "name": function_name,
                             "response": {
                                 "result": result,
                                 "is_error": is_error
@@ -402,7 +418,7 @@ fn finish_reason_to_gemini(finish_reason: Option<FinishReason>) -> &'static str 
 mod tests {
     use super::*;
     use crate::urp::decode::gemini as decode_gemini;
-    use crate::urp::{InputDetails, Item, OutputDetails, Role, UrpResponse, Usage};
+    use crate::urp::{InputDetails, Item, OutputDetails, Role, UrpRequest, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
@@ -481,6 +497,55 @@ mod tests {
         assert_eq!(
             decoded_usage.extra_body.get("providerCounter"),
             Some(&json!(9))
+        );
+    }
+
+    #[test]
+    fn encode_request_uses_function_name_for_function_response() {
+        let req = UrpRequest {
+            model: "gemini-2.5-pro".to_string(),
+            inputs: vec![
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::ToolCall {
+                        call_id: "call_1".to_string(),
+                        name: "lookup".to_string(),
+                        arguments: "{\"q\":1}".to_string(),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+                Item::ToolResult {
+                    call_id: "call_1".to_string(),
+                    is_error: false,
+                    content: vec![ToolResultContent::Text {
+                        text: "ok".to_string(),
+                    }],
+                    extra_body: empty_map(),
+                },
+            ],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gemini-2.5-pro");
+        let contents = encoded["contents"].as_array().expect("contents array");
+        let function_response = contents[1]["parts"][0]["functionResponse"]
+            .as_object()
+            .expect("function response object");
+
+        assert_eq!(
+            function_response.get("name"),
+            Some(&json!("lookup")),
+            "Gemini functionResponse.name must use the function name, not the call_id"
         );
     }
 }

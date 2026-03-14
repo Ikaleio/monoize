@@ -679,7 +679,7 @@ fn apply_response_format(obj: &mut Map<String, Value>, format: &ResponseFormat) 
         ResponseFormat::JsonObject => {
             obj.insert(
                 "text".to_string(),
-                json!({"format": { "type": "json_schema", "name": "response", "schema": { "type": "object" } }}),
+                json!({"format": { "type": "json_object" }}),
             );
         }
         ResponseFormat::JsonSchema { json_schema } => {
@@ -1027,5 +1027,35 @@ mod tests {
             decoded_usage.extra_body.get("upstream_counter"),
             Some(&json!(42))
         );
+    }
+
+    #[test]
+    fn encode_request_keeps_json_object_response_format() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            inputs: vec![Item::Message {
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: Some(ResponseFormat::JsonObject),
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        assert_eq!(encoded["text"]["format"]["type"], json!("json_object"));
+        assert!(encoded["text"]["format"].get("schema").is_none());
+        assert!(encoded["text"]["format"].get("name").is_none());
     }
 }
