@@ -1,9 +1,9 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, response_output_messages_mut, strip_reasoning_parts,
+    TransformScope, TransformState, UrpData, response_output_items_mut, strip_reasoning_parts,
 };
 use async_trait::async_trait;
-use crate::urp::{Part, PartDelta, PartHeader, UrpStreamEvent};
+use crate::urp::{Item, Part, PartDelta, PartHeader, UrpStreamEvent};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -73,8 +73,10 @@ impl Transform for StripReasoningTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                for message in response_output_messages_mut(resp) {
-                    message.parts = strip_reasoning_parts(&message.parts);
+                for message in response_output_items_mut(resp) {
+                    if let Item::Message { parts, .. } = message {
+                        *parts = strip_reasoning_parts(parts);
+                    }
                 }
             }
             UrpData::Stream(event) => strip_stream_reasoning(event, state),
@@ -90,7 +92,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
     };
     match event {
         UrpStreamEvent::PartStart {
-            message_index,
+            item_index,
             part_index,
             header,
             ..
@@ -98,7 +100,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
             if matches!(header, PartHeader::Reasoning) {
                 strip_state
                     .stripped_indices
-                    .insert((*message_index << 16) | *part_index);
+                    .insert((*item_index << 16) | *part_index);
                 *header = PartHeader::Text;
             }
         }

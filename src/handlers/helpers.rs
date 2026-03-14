@@ -91,11 +91,14 @@ pub(super) struct UserImageRequestMetrics {
 
 pub(super) fn summarize_user_image_request_metrics(req: &urp::UrpRequest) -> UserImageRequestMetrics {
     let mut metrics = UserImageRequestMetrics::default();
-    for message in &req.inputs {
-        if message.role != urp::Role::User {
+    for item in &req.inputs {
+        let urp::Item::Message { role, parts, .. } = item else {
+            continue;
+        };
+        if *role != urp::Role::User {
             continue;
         }
-        for part in &message.parts {
+        for part in parts {
             let urp::Part::Image { source, .. } = part else {
                 continue;
             };
@@ -104,10 +107,10 @@ pub(super) fn summarize_user_image_request_metrics(req: &urp::UrpRequest) -> Use
                 urp::ImageSource::Base64 { data, .. } => {
                     metrics.base64_parts += 1;
                     metrics.base64_chars += data.len();
-                    metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
+                    metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(&data);
                 }
                 urp::ImageSource::Url { url, .. } => {
-                    if let Some(data) = extract_base64_data_url_payload(url) {
+                    if let Some(data) = extract_base64_data_url_payload(&url) {
                         metrics.base64_parts += 1;
                         metrics.base64_chars += data.len();
                         metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);

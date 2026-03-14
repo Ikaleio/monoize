@@ -3,7 +3,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{ImageSource, Part, Role};
+use crate::urp::{ImageSource, Item, Part, Role};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
@@ -124,11 +124,17 @@ impl Transform for CompressUserMessageImagesTransform {
         };
 
         for message in &mut req.inputs {
-            if message.role != Role::User {
+            let Item::Message { role, parts, .. } = message else {
+                continue;
+            };
+            if *role != Role::User {
                 continue;
             }
-            for part in &mut message.parts {
-                let Part::Image { source, .. } = part else {
+            for part in parts.iter_mut() {
+                let Part::Image {
+                    source,
+                    ..
+                } = part else {
                     continue;
                 };
                 match source {
@@ -146,7 +152,7 @@ impl Transform for CompressUserMessageImagesTransform {
                         *source = next_source;
                     }
                     ImageSource::Url { url, detail } => {
-                        let Some((media_type, data)) = split_image_data_url(url) else {
+                        let Some((media_type, data)) = split_image_data_url(&url) else {
                             continue;
                         };
                         let Some(next_source) = compress_base64_image(
@@ -361,7 +367,7 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::{Message, UrpRequest};
+    use crate::urp::{Item, UrpRequest};
     use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
     use image::{ImageBuffer, ImageEncoder, Rgb};
     use serde_json::json;
@@ -380,7 +386,7 @@ mod tests {
         let input_png = build_png_data_url_source();
         let mut req = UrpRequest {
             model: "gpt-test".to_string(),
-            inputs: vec![Message {
+            inputs: vec![Item::Message {
                 role: Role::User,
                 parts: vec![Part::Image {
                     source: ImageSource::Base64 {
@@ -424,7 +430,10 @@ mod tests {
         .await
         .expect("apply transforms");
 
-        let Part::Image { source, .. } = &req.inputs[0].parts[0] else {
+        let Item::Message { parts, .. } = &req.inputs[0] else {
+            panic!("expected message item");
+        };
+        let Part::Image { source, .. } = &parts[0] else {
             panic!("expected image part");
         };
         let ImageSource::Base64 { media_type, data } = source else {
@@ -458,7 +467,7 @@ mod tests {
         let input_data_url = format!("data:image/png;base64,{input_png}");
         let mut req = UrpRequest {
             model: "gpt-test".to_string(),
-            inputs: vec![Message {
+            inputs: vec![Item::Message {
                 role: Role::User,
                 parts: vec![Part::Image {
                     source: ImageSource::Url {
@@ -502,7 +511,10 @@ mod tests {
         .await
         .expect("apply transforms");
 
-        let Part::Image { source, .. } = &req.inputs[0].parts[0] else {
+        let Item::Message { parts, .. } = &req.inputs[0] else {
+            panic!("expected message item");
+        };
+        let Part::Image { source, .. } = &parts[0] else {
             panic!("expected image part");
         };
         let ImageSource::Url { url, detail } = source else {

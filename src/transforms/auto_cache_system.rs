@@ -4,7 +4,7 @@ use crate::transforms::{
     UrpData,
 };
 use async_trait::async_trait;
-use crate::urp::Role;
+use crate::urp::{Item, Role};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::any::Any;
@@ -75,24 +75,36 @@ impl Transform for AutoCacheSystemTransform {
         let system_idx = req
             .inputs
             .iter()
-            .rposition(|m| m.role == Role::System || m.role == Role::Developer);
+            .rposition(|item| {
+                matches!(
+                    item,
+                    Item::Message {
+                        role: Role::System | Role::Developer,
+                        ..
+                    }
+                )
+            });
         let Some(idx) = system_idx else {
             return Ok(());
         };
 
         // Check if any part of the system message already has cache_control
-        let already_has_cache = req.inputs[idx]
-            .parts
-            .iter()
-            .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")));
+        let already_has_cache = match &req.inputs[idx] {
+            Item::Message { parts, .. } => parts
+                .iter()
+                .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control"))),
+            Item::ToolResult { extra_body, .. } => extra_body.contains_key("cache_control"),
+        };
         if already_has_cache {
             return Ok(());
         }
 
         // Add cache_control to the last part of the system message
-        if let Some(last_part) = req.inputs[idx].parts.last_mut() {
-            if let Some(eb) = part_extra_body_mut(last_part) {
-                eb.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+        if let Item::Message { parts, .. } = &mut req.inputs[idx] {
+            if let Some(last_part) = parts.last_mut() {
+                if let Some(eb) = part_extra_body_mut(last_part) {
+                    eb.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+                }
             }
         }
 
@@ -103,9 +115,14 @@ impl Transform for AutoCacheSystemTransform {
 fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
     req.inputs
         .iter()
-        .flat_map(|m| m.parts.iter())
-        .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
-        .count()
+        .map(|item| match item {
+            Item::Message { parts, .. } => parts
+                .iter()
+                .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
+                .count(),
+            Item::ToolResult { extra_body, .. } => usize::from(extra_body.contains_key("cache_control")),
+        })
+        .sum()
 }
 
 fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap<String, Value>> {
@@ -116,7 +133,6 @@ fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
-        | crate::urp::Part::ToolResult { extra_body, .. }
         | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }
@@ -132,7 +148,6 @@ fn part_extra_body_mut(
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
-        | crate::urp::Part::ToolResult { extra_body, .. }
         | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }

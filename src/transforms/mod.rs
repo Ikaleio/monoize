@@ -1,4 +1,4 @@
-use crate::urp::{Message, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent, output_messages_mut};
+use crate::urp::{Item, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent, output_items_mut};
 use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -218,29 +218,43 @@ pub fn text_part(content: impl Into<String>) -> Part {
     }
 }
 
-pub fn move_system_to_developer(messages: &mut [Message]) {
-    for message in messages {
-        if message.role == Role::System {
-            message.role = Role::Developer;
+pub fn move_system_to_developer(items: &mut [Item]) {
+    for item in items.iter_mut() {
+        if let Item::Message { role, .. } = item {
+            if *role == Role::System {
+                *role = Role::Developer;
+            }
         }
     }
 }
 
-pub fn merge_same_role_messages(messages: &[Message]) -> Vec<Message> {
-    let mut merged: Vec<Message> = Vec::new();
-    for message in messages {
-        if let Some(last) = merged.last_mut() {
-            if last.role == message.role {
-                last.parts.extend(message.parts.clone());
-                for (k, v) in &message.extra_body {
-                    if !last.extra_body.contains_key(k) {
-                        last.extra_body.insert(k.clone(), v.clone());
+pub fn merge_same_role_items(items: &[Item]) -> Vec<Item> {
+    let mut merged: Vec<Item> = Vec::new();
+    for item in items {
+        if let Item::Message {
+            role,
+            parts,
+            extra_body,
+        } = item
+        {
+            if let Some(Item::Message {
+                role: last_role,
+                parts: last_parts,
+                extra_body: last_extra,
+            }) = merged.last_mut()
+            {
+                if last_role == role {
+                    last_parts.extend(parts.clone());
+                    for (k, v) in extra_body {
+                        if !last_extra.contains_key(k) {
+                            last_extra.insert(k.clone(), v.clone());
+                        }
                     }
+                    continue;
                 }
-                continue;
             }
         }
-        merged.push(message.clone());
+        merged.push(item.clone());
     }
     merged
 }
@@ -253,26 +267,26 @@ pub fn strip_reasoning_parts(parts: &[Part]) -> Vec<Part> {
         .collect()
 }
 
-pub fn request_messages(req: &UrpRequest) -> &[Message] {
+pub fn request_messages(req: &UrpRequest) -> &[Item] {
     &req.inputs
 }
 
-pub fn request_messages_mut(req: &mut UrpRequest) -> &mut Vec<Message> {
+pub fn request_messages_mut(req: &mut UrpRequest) -> &mut Vec<Item> {
     &mut req.inputs
 }
 
-pub fn response_output_messages_mut(resp: &mut UrpResponse) -> impl Iterator<Item = &mut Message> {
-    output_messages_mut(&mut resp.outputs)
+pub fn response_output_items_mut(resp: &mut UrpResponse) -> impl Iterator<Item = &mut Item> {
+    output_items_mut(&mut resp.outputs)
 }
 
-pub fn ensure_assistant_output_message(resp: &mut UrpResponse) -> &mut Message {
-    if !matches!(resp.outputs.first(), Some(message) if message.role == Role::Assistant) {
-        resp.outputs.insert(0, Message::new(Role::Assistant));
+pub fn ensure_assistant_output_message(resp: &mut UrpResponse) -> &mut Item {
+    if !matches!(resp.outputs.first(), Some(Item::Message { role: Role::Assistant, .. })) {
+        resp.outputs.insert(0, Item::new_message(Role::Assistant));
     }
 
     match resp.outputs.first_mut() {
         Some(message) => message,
-        _ => unreachable!("first output should be a message"),
+        _ => unreachable!("first output should be an item"),
     }
 }
 

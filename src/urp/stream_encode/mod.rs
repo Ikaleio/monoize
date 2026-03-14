@@ -4,7 +4,7 @@ pub mod openai_responses;
 
 use crate::error::AppResult;
 use crate::handlers::DownstreamProtocol;
-use crate::urp::{self, streaming_shared};
+use crate::urp::{self};
 use axum::response::sse::Event;
 use tokio::sync::mpsc;
 
@@ -17,7 +17,7 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
 ) -> AppResult<()> {
     match downstream {
         DownstreamProtocol::Responses => {
-            streaming_shared::emit_synthetic_responses_stream(
+            openai_responses::emit_synthetic_responses_stream(
                 logical_model,
                 resp,
                 sse_max_frame_length,
@@ -26,7 +26,7 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
             .await
         }
         DownstreamProtocol::ChatCompletions => {
-            streaming_shared::emit_synthetic_chat_stream(
+            openai_chat::emit_synthetic_chat_stream(
                 logical_model,
                 resp,
                 sse_max_frame_length,
@@ -35,7 +35,7 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
             .await
         }
         DownstreamProtocol::AnthropicMessages => {
-            streaming_shared::emit_synthetic_messages_stream(
+            anthropic::emit_synthetic_messages_stream(
                 logical_model,
                 resp,
                 sse_max_frame_length,

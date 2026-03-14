@@ -1,11 +1,11 @@
 pub mod anthropic;
+pub mod gemini;
 pub mod openai_chat;
 pub mod openai_responses;
 
 use crate::config::ProviderType;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest};
-use crate::urp::streaming_shared;
 use axum::http::StatusCode;
 use axum::response::sse::Event;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ pub(crate) async fn stream_upstream_sse_as_responses(
 ) -> AppResult<()> {
     match provider_type {
         ProviderType::Responses | ProviderType::Grok => {
-            streaming_shared::stream_responses_sse_as_responses(
+            openai_responses::stream_responses_sse_as_responses(
                 urp,
                 upstream_resp,
                 tx,
@@ -31,7 +31,7 @@ pub(crate) async fn stream_upstream_sse_as_responses(
             .await
         }
         ProviderType::ChatCompletion => {
-            streaming_shared::stream_chat_sse_as_responses(
+            openai_chat::stream_chat_sse_as_responses(
                 urp,
                 upstream_resp,
                 tx,
@@ -41,7 +41,7 @@ pub(crate) async fn stream_upstream_sse_as_responses(
             .await
         }
         ProviderType::Messages => {
-            streaming_shared::stream_messages_sse_as_responses(
+            anthropic::stream_messages_sse_as_responses(
                 urp,
                 upstream_resp,
                 tx,
@@ -51,7 +51,7 @@ pub(crate) async fn stream_upstream_sse_as_responses(
             .await
         }
         ProviderType::Gemini => {
-            streaming_shared::stream_gemini_sse_as_responses(
+            gemini::stream_gemini_sse_as_responses(
                 urp,
                 upstream_resp,
                 tx,
@@ -78,7 +78,7 @@ pub(crate) async fn stream_upstream_sse_as_chat(
 ) -> AppResult<()> {
     match provider_type {
         ProviderType::Gemini => {
-            streaming_shared::stream_gemini_sse_as_chat(
+            gemini::stream_gemini_sse_as_chat(
                 urp,
                 upstream_resp,
                 tx,
@@ -88,7 +88,7 @@ pub(crate) async fn stream_upstream_sse_as_chat(
             .await
         }
         ProviderType::Responses | ProviderType::Grok | ProviderType::ChatCompletion | ProviderType::Messages => {
-            streaming_shared::stream_any_sse_as_chat(
+            openai_chat::stream_any_sse_as_chat(
                 urp,
                 provider_type,
                 upstream_resp,
@@ -116,7 +116,7 @@ pub(crate) async fn stream_upstream_sse_as_messages(
 ) -> AppResult<()> {
     match provider_type {
         ProviderType::Gemini => {
-            streaming_shared::stream_gemini_sse_as_messages(
+            gemini::stream_gemini_sse_as_messages(
                 urp,
                 upstream_resp,
                 tx,
@@ -126,7 +126,7 @@ pub(crate) async fn stream_upstream_sse_as_messages(
             .await
         }
         ProviderType::Responses | ProviderType::Grok | ProviderType::ChatCompletion | ProviderType::Messages => {
-            streaming_shared::stream_any_sse_as_messages(
+            anthropic::stream_any_sse_as_messages(
                 urp,
                 provider_type,
                 upstream_resp,

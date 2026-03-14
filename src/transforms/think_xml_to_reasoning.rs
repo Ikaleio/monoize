@@ -1,9 +1,9 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, response_output_messages_mut,
+    TransformScope, TransformState, UrpData, response_output_items_mut,
 };
 use async_trait::async_trait;
-use crate::urp::{Part, PartDelta, PartHeader, UrpStreamEvent};
+use crate::urp::{Item, Part, PartDelta, PartHeader, UrpStreamEvent};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -80,19 +80,21 @@ impl Transform for ThinkXmlToReasoningTransform {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
             UrpData::Response(resp) => {
-                for message in response_output_messages_mut(resp) {
-                    let mut out = Vec::new();
-                    for part in &message.parts {
-                        if let Part::Text { content, .. } = part {
-                            let parsed = extract_text_and_reasoning(content, &cfg.tag);
-                            for piece in parsed {
-                                out.push(piece);
+                for message in response_output_items_mut(resp) {
+                    if let Item::Message { parts, .. } = message {
+                        let mut out = Vec::new();
+                        for part in parts.iter() {
+                            if let Part::Text { content, .. } = part {
+                                let parsed = extract_text_and_reasoning(&content, &cfg.tag);
+                                for piece in parsed {
+                                    out.push(piece);
+                                }
+                            } else {
+                                out.push(part.clone());
                             }
-                        } else {
-                            out.push(part.clone());
                         }
+                        *parts = out;
                     }
-                    message.parts = out;
                 }
             }
             UrpData::Stream(event) => {
@@ -163,7 +165,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
     let close = format!("</{tag}>");
     match event {
         UrpStreamEvent::PartStart {
-            message_index,
+            item_index,
             part_index,
             header,
             ..
@@ -171,7 +173,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
             if matches!(header, PartHeader::Text) {
                 state
                     .in_reasoning
-                    .insert((*message_index << 16) | *part_index, false);
+                    .insert((*item_index << 16) | *part_index, false);
             }
         }
         UrpStreamEvent::Delta {

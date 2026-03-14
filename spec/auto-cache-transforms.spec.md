@@ -82,14 +82,14 @@ ACTU-3. Config schema: empty object, no configuration parameters.
 
 ### 4.2 Preconditions
 
-ACTU-4. Let `last_msg` = the last element of `req.inputs`. If `last_msg.role != Tool` AND `last_msg` contains no `Part::ToolResult`, the transform is a no-op. (The request is not a tool-result submission.)
+ACTU-4. Let `last_msg` = the last element of `req.inputs`. If `last_msg.role != Tool` AND `last_msg` contains no `Item::ToolResult`, the transform is a no-op. (The request is not a tool-result submission.)
 
 ACTU-5. If the cache breakpoint count is `>= 4`, the transform is a no-op.
 
 ### 4.3 Target Resolution
 
 ACTU-6. Starting from `last_msg` and scanning backwards through `req.inputs`:
-1. Skip contiguous trailing messages that are either `role == Tool` or contain any `Part::ToolResult`.
+1. Skip contiguous trailing messages that are either `role == Tool` or contain any `Item::ToolResult`.
 2. The first non-skipped message MUST be `role == Assistant` with at least one `Part::ToolCall`. If this condition is not met, the transform is a no-op.
 3. Let `assistant_idx` = the index of this Assistant message.
 

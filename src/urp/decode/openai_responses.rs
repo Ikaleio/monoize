@@ -3,8 +3,9 @@ use crate::urp::decode::{
     parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
-    FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
-    UrpRequest, UrpResponse, Usage,
+    greedy::{Action, GreedyMerger},
+    FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -154,6 +155,47 @@ fn text_part_with_phase(
     }
 }
 
+fn build_message_item(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Item {
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), Value::String("message".to_string()));
+    obj.insert(
+        "role".to_string(),
+        serde_json::to_value(role).expect("role should serialize"),
+    );
+    obj.insert(
+        "parts".to_string(),
+        serde_json::to_value(parts).expect("parts should serialize"),
+    );
+    obj.extend(extra_body);
+    serde_json::from_value(Value::Object(obj)).expect("message item should deserialize")
+}
+
+fn push_part(item: &mut Item, part: Part) {
+    let mut obj = serde_json::to_value(item.clone())
+        .expect("item should serialize")
+        .as_object()
+        .cloned()
+        .expect("item should serialize to object");
+
+    let parts = obj
+        .entry("parts".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Value::Array(parts) = parts else {
+        panic!("message item should contain parts array");
+    };
+    parts.push(serde_json::to_value(part).expect("part should serialize"));
+
+    *item = serde_json::from_value(Value::Object(obj)).expect("item should deserialize");
+}
+
+fn item_parts(item: &Item) -> Option<Vec<Part>> {
+    let obj = serde_json::to_value(item).ok()?.as_object()?.clone();
+    if obj.get("type")?.as_str()? != "message" {
+        return None;
+    }
+    serde_json::from_value(obj.get("parts")?.clone()).ok()
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -169,7 +211,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     if let Some(instructions) = obj.get("instructions").and_then(|v| v.as_str()) {
         if !instructions.is_empty() {
-            inputs.push(Message::text(Role::Developer, instructions));
+            inputs.push(Item::text(Role::Developer, instructions));
         }
     }
 
@@ -237,9 +279,9 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     })
 }
 
-fn decode_input_items(input: &Value, out: &mut Vec<Message>) {
+fn decode_input_items(input: &Value, out: &mut Vec<Item>) {
     if let Some(s) = input.as_str() {
-        out.push(Message::text(Role::User, s));
+        out.push(Item::text(Role::User, s));
         return;
     }
 
@@ -253,13 +295,13 @@ fn decode_input_items(input: &Value, out: &mut Vec<Message>) {
             if let Some(obj) = item.as_object() {
                 decode_input_item(obj, out);
             } else if let Some(s) = item.as_str() {
-                out.push(Message::text(Role::User, s));
+                out.push(Item::text(Role::User, s));
             }
         }
     }
 }
 
-fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
+fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Item>) {
     let item_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match item_type {
         "function_call" => {
@@ -283,14 +325,17 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
             } else {
                 serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
             };
-            let mut msg = Message::new(Role::Assistant);
-            msg.parts.push(Part::ToolCall {
-                call_id,
-                name,
-                arguments,
-                extra_body: split_extra(obj, &["type", "call_id", "id", "name", "arguments"]),
-            });
-            out.push(msg);
+            let mut item = Item::new_message(Role::Assistant);
+            push_part(
+                &mut item,
+                Part::ToolCall {
+                    call_id,
+                    name,
+                    arguments,
+                    extra_body: split_extra(obj, &["type", "call_id", "id", "name", "arguments"]),
+                },
+            );
+            out.push(item);
         }
         "function_call_output" => {
             let call_id = obj
@@ -298,16 +343,16 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let mut msg = Message::new(Role::Tool);
-            msg.parts.push(Part::ToolResult {
+            let mut content = Vec::new();
+            if let Some(output) = obj.get("output") {
+                decode_tool_result_content(output, &mut content);
+            }
+            out.push(Item::ToolResult {
                 call_id,
                 is_error: false,
+                content,
                 extra_body: split_extra(obj, &["type", "call_id", "output"]),
             });
-            if let Some(output) = obj.get("output") {
-                decode_tool_output_parts(output, &mut msg.parts);
-            }
-            out.push(msg);
         }
         "message" | "" => {
             let role = match obj.get("role").and_then(|v| v.as_str()).unwrap_or("user") {
@@ -318,17 +363,12 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                 _ => Role::User,
             };
             let message_phase = obj.get("phase").and_then(|v| v.as_str());
-            let mut msg = Message {
-                role,
-                parts: Vec::new(),
-                extra_body: split_extra(obj, &["type", "role", "content", "phase"]),
-            };
+            let mut parts = Vec::new();
 
             if let Some(content) = obj.get("content") {
                 if let Some(s) = content.as_str() {
                     if !s.is_empty() {
-                        msg.parts
-                            .push(text_part_with_phase(s, message_phase, HashMap::new()));
+                        parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
                     }
                 } else if let Some(content_arr) = content.as_array() {
                     for p in content_arr {
@@ -341,7 +381,7 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                                     .and_then(|v| v.as_str())
                                     .or_else(|| pobj.get("content").and_then(|v| v.as_str()))
                                 {
-                                    msg.parts.push(text_part_with_phase(
+                                    parts.push(text_part_with_phase(
                                         text,
                                         message_phase,
                                         split_extra(pobj, &["type", "text", "content"]),
@@ -350,7 +390,7 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                             }
                             "refusal" => {
                                 if let Some(text) = pobj.get("refusal").and_then(|v| v.as_str()) {
-                                    msg.parts.push(Part::Refusal {
+                                    parts.push(Part::Refusal {
                                         content: text.to_string(),
                                         extra_body: split_extra(pobj, &["type", "refusal"]),
                                     });
@@ -358,10 +398,10 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                             }
                             _ => {
                                 if let Some(image) = parse_image_part_from_obj(pobj) {
-                                    msg.parts.push(image);
+                                    parts.push(image);
                                 }
                                 if let Some(file) = parse_file_part_from_obj(pobj) {
-                                    msg.parts.push(file);
+                                    parts.push(file);
                                 }
                             }
                         }
@@ -369,53 +409,61 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Message>) {
                 }
             }
 
-            out.push(msg);
+            out.push(build_message_item(
+                role,
+                parts,
+                split_extra(obj, &["type", "role", "content", "phase"]),
+            ));
         }
         _ => {
-            let mut msg = Message::new(Role::User);
-            msg.parts.push(text_part_with_phase(
-                serde_json::to_string(obj).unwrap_or_default(),
-                None,
+            out.push(build_message_item(
+                Role::User,
+                vec![text_part_with_phase(
+                    serde_json::to_string(obj).unwrap_or_default(),
+                    None,
+                    HashMap::new(),
+                )],
                 HashMap::new(),
             ));
-            out.push(msg);
         }
     }
 }
 
-fn decode_tool_output_parts(output: &Value, parts: &mut Vec<Part>) {
+fn decode_tool_result_content(output: &Value, content: &mut Vec<ToolResultContent>) {
     match output {
         Value::String(text) => {
             if !text.is_empty() {
-                parts.push(text_part_with_phase(text, None, HashMap::new()));
+                content.push(ToolResultContent::Text { text: text.clone() });
             }
         }
         Value::Array(items) => {
             for item in items {
-                decode_tool_output_part(item, parts);
+                decode_tool_result_item(item, content);
             }
         }
-        Value::Object(_) => decode_tool_output_part(output, parts),
+        Value::Object(_) => decode_tool_result_item(output, content),
         other => {
             let text = value_to_text(other);
             if !text.is_empty() {
-                parts.push(text_part_with_phase(text, None, HashMap::new()));
+                content.push(ToolResultContent::Text { text });
             }
         }
     }
 }
 
-fn decode_tool_output_part(value: &Value, parts: &mut Vec<Part>) {
+fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) {
     if let Some(text) = value.as_str() {
         if !text.is_empty() {
-            parts.push(text_part_with_phase(text, None, HashMap::new()));
+            content.push(ToolResultContent::Text {
+                text: text.to_string(),
+            });
         }
         return;
     }
     let Some(obj) = value.as_object() else {
         let text = value_to_text(value);
         if !text.is_empty() {
-            parts.push(text_part_with_phase(text, None, HashMap::new()));
+            content.push(ToolResultContent::Text { text });
         }
         return;
     };
@@ -428,27 +476,89 @@ fn decode_tool_output_part(value: &Value, parts: &mut Vec<Part>) {
                 .and_then(|v| v.as_str())
                 .or_else(|| obj.get("content").and_then(|v| v.as_str()))
             {
-                parts.push(text_part_with_phase(
-                    text,
-                    None,
-                    split_extra(obj, &["type", "text", "content"]),
-                ));
+                content.push(ToolResultContent::Text {
+                    text: text.to_string(),
+                });
             }
         }
         _ => {
             if let Some(image) = parse_image_part_from_obj(obj) {
-                parts.push(image);
+                let Part::Image { source, .. } = image else {
+                    unreachable!();
+                };
+                content.push(ToolResultContent::Image { source });
                 return;
             }
             if let Some(file) = parse_file_part_from_obj(obj) {
-                parts.push(file);
+                let Part::File { source, .. } = file else {
+                    unreachable!();
+                };
+                content.push(ToolResultContent::File { source });
                 return;
             }
             let text = value_to_text(value);
             if !text.is_empty() {
-                parts.push(text_part_with_phase(text, None, HashMap::new()));
+                content.push(ToolResultContent::Text { text });
             }
         }
+    }
+}
+
+fn merge_extra_body(dst: &mut HashMap<String, Value>, src: HashMap<String, Value>) {
+    for (key, value) in src {
+        dst.entry(key).or_insert(value);
+    }
+}
+
+fn flush_assistant_merger(
+    merger: &mut GreedyMerger,
+    pending_extra_body: &mut HashMap<String, Value>,
+    outputs: &mut Vec<Item>,
+) {
+    if let Some(parts) = merger.finish() {
+        outputs.push(build_message_item(
+            Role::Assistant,
+            parts,
+            std::mem::take(pending_extra_body),
+        ));
+    }
+}
+
+fn feed_assistant_part(
+    merger: &mut GreedyMerger,
+    pending_extra_body: &mut HashMap<String, Value>,
+    outputs: &mut Vec<Item>,
+    part: Part,
+    item_extra_body: &HashMap<String, Value>,
+) {
+    match merger.feed(part, Role::Assistant) {
+        Action::Append => {
+            if pending_extra_body.is_empty() {
+                *pending_extra_body = item_extra_body.clone();
+            } else {
+                merge_extra_body(pending_extra_body, item_extra_body.clone());
+            }
+        }
+        Action::FlushAndNew(flushed_parts) => {
+            outputs.push(build_message_item(
+                Role::Assistant,
+                flushed_parts,
+                std::mem::take(pending_extra_body),
+            ));
+            *pending_extra_body = item_extra_body.clone();
+        }
+    }
+}
+
+fn push_assistant_parts(
+    merger: &mut GreedyMerger,
+    pending_extra_body: &mut HashMap<String, Value>,
+    outputs: &mut Vec<Item>,
+    item_extra_body: HashMap<String, Value>,
+    parts: Vec<Part>,
+) {
+    for part in parts {
+        feed_assistant_part(merger, pending_extra_body, outputs, part, &item_extra_body);
     }
 }
 
@@ -458,6 +568,8 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .ok_or_else(|| "responses response must be object".to_string())?;
 
     let mut outputs = Vec::new();
+    let mut merger = GreedyMerger::new();
+    let mut pending_assistant_extra_body = HashMap::new();
 
     if let Some(output) = obj.get("output").and_then(|v| v.as_array()) {
         for item in output {
@@ -479,11 +591,8 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         "tool" => Role::Tool,
                         _ => Role::Assistant,
                     };
-                    let mut message = Message {
-                        role,
-                        parts: Vec::new(),
-                        extra_body: split_extra(item_obj, &["type", "role", "content", "phase"]),
-                    };
+                    let extra_body = split_extra(item_obj, &["type", "role", "content", "phase"]);
+                    let mut parts = Vec::new();
                     if let Some(content_arr) = item_obj.get("content").and_then(|v| v.as_array()) {
                         for p in content_arr {
                             let Some(pobj) = p.as_object() else { continue };
@@ -491,7 +600,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                             match ptype {
                                 "output_text" | "text" => {
                                     if let Some(text) = pobj.get("text").and_then(|v| v.as_str()) {
-                                        message.parts.push(text_part_with_phase(
+                                        parts.push(text_part_with_phase(
                                             text,
                                             message_phase,
                                             split_extra(pobj, &["type", "text"]),
@@ -501,7 +610,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                                 "refusal" => {
                                     if let Some(text) = pobj.get("refusal").and_then(|v| v.as_str())
                                     {
-                                        message.parts.push(Part::Refusal {
+                                        parts.push(Part::Refusal {
                                             content: text.to_string(),
                                             extra_body: split_extra(pobj, &["type", "refusal"]),
                                         });
@@ -509,16 +618,32 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                                 }
                                 _ => {
                                     if let Some(image) = parse_image_part_from_obj(pobj) {
-                                        message.parts.push(image);
+                                        parts.push(image);
                                     }
                                     if let Some(file) = parse_file_part_from_obj(pobj) {
-                                        message.parts.push(file);
+                                        parts.push(file);
                                     }
                                 }
                             }
                         }
                     }
-                    outputs.push(message);
+
+                    if role == Role::Assistant {
+                        push_assistant_parts(
+                            &mut merger,
+                            &mut pending_assistant_extra_body,
+                            &mut outputs,
+                            extra_body,
+                            parts,
+                        );
+                    } else {
+                        flush_assistant_merger(
+                            &mut merger,
+                            &mut pending_assistant_extra_body,
+                            &mut outputs,
+                        );
+                        outputs.push(build_message_item(role, parts, extra_body));
+                    }
                 }
                 "function_call" => {
                     let call_id = item_obj
@@ -540,20 +665,46 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     } else {
                         serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
                     };
-                    let mut message = Message::new(Role::Assistant);
-                    message.parts.push(Part::ToolCall {
+                    feed_assistant_part(
+                        &mut merger,
+                        &mut pending_assistant_extra_body,
+                        &mut outputs,
+                        Part::ToolCall {
+                            call_id,
+                            name,
+                            arguments,
+                            extra_body: split_extra(
+                                item_obj,
+                                &["type", "call_id", "name", "arguments"],
+                            ),
+                        },
+                        &HashMap::new(),
+                    );
+                }
+                "function_call_output" => {
+                    flush_assistant_merger(
+                        &mut merger,
+                        &mut pending_assistant_extra_body,
+                        &mut outputs,
+                    );
+                    let call_id = item_obj
+                        .get("call_id")
+                        .or_else(|| item_obj.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let mut content = Vec::new();
+                    if let Some(output) = item_obj.get("output") {
+                        decode_tool_result_content(output, &mut content);
+                    }
+                    outputs.push(Item::ToolResult {
                         call_id,
-                        name,
-                        arguments,
-                        extra_body: split_extra(
-                            item_obj,
-                            &["type", "call_id", "name", "arguments"],
-                        ),
+                        is_error: false,
+                        content,
+                        extra_body: split_extra(item_obj, &["type", "call_id", "id", "output"]),
                     });
-                    outputs.push(message);
                 }
                 "reasoning" => {
-                    let mut message = Message::new(Role::Assistant);
                     let shared_extra = split_extra(
                         item_obj,
                         &["type", "encrypted_content", "summary", "text", "source"],
@@ -579,36 +730,48 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     if text.is_some() || summary.is_some() || encrypted.is_some() {
-                        message.parts.push(Part::Reasoning {
-                            content: text.or_else(|| summary.clone()),
-                            encrypted,
-                            summary,
-                            source,
-                            extra_body: shared_extra,
-                        });
-                    }
-                    if !message.parts.is_empty() {
-                        outputs.push(message);
+                        feed_assistant_part(
+                            &mut merger,
+                            &mut pending_assistant_extra_body,
+                            &mut outputs,
+                            Part::Reasoning {
+                                content: text.or_else(|| summary.clone()),
+                                encrypted,
+                                summary,
+                                source,
+                                extra_body: shared_extra,
+                            },
+                            &HashMap::new(),
+                        );
                     }
                 }
                 _ => {
-                    let mut message = Message::new(Role::Assistant);
-                    message.parts.push(Part::ProviderItem {
-                        item_type: item_type.to_string(),
-                        body: Value::Object(item_obj.clone()),
-                        extra_body: HashMap::new(),
-                    });
-                    outputs.push(message);
+                    feed_assistant_part(
+                        &mut merger,
+                        &mut pending_assistant_extra_body,
+                        &mut outputs,
+                        Part::ProviderItem {
+                            item_type: item_type.to_string(),
+                            body: Value::Object(item_obj.clone()),
+                            extra_body: HashMap::new(),
+                        },
+                        &HashMap::new(),
+                    );
                 }
             }
         }
     }
 
-    let has_tool_calls = outputs.iter().any(|message| {
-        message
-            .parts
-            .iter()
-            .any(|part| matches!(part, Part::ToolCall { .. }))
+    flush_assistant_merger(&mut merger, &mut pending_assistant_extra_body, &mut outputs);
+
+    let has_tool_calls = outputs.iter().any(|item| {
+        item_parts(item)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .any(|part| matches!(part, Part::ToolCall { .. }))
+            })
+            .unwrap_or(false)
     });
 
     let finish_reason = match obj.get("status").and_then(|v| v.as_str()) {

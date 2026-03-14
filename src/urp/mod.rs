@@ -4,14 +4,15 @@ use std::collections::HashMap;
 
 pub mod decode;
 pub mod encode;
+pub mod greedy;
 pub mod stream_decode;
 pub mod stream_encode;
-pub(crate) mod streaming_shared;
+pub mod stream_helpers;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpRequest {
     pub model: String,
-    pub inputs: Vec<Message>,
+    pub inputs: Vec<Item>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,11 +36,22 @@ pub struct UrpRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    pub role: Role,
-    pub parts: Vec<Part>,
-    #[serde(flatten)]
-    pub extra_body: HashMap<String, Value>,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Item {
+    Message {
+        role: Role,
+        parts: Vec<Part>,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    ToolResult {
+        call_id: String,
+        #[serde(default)]
+        is_error: bool,
+        content: Vec<ToolResultContent>,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,7 +64,7 @@ pub enum Role {
     Tool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
     Text {
@@ -94,13 +106,6 @@ pub enum Part {
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
-    ToolResult {
-        call_id: String,
-        #[serde(default)]
-        is_error: bool,
-        #[serde(flatten)]
-        extra_body: HashMap<String, Value>,
-    },
     Refusal {
         content: String,
         #[serde(flatten)]
@@ -114,7 +119,7 @@ pub enum Part {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
     Url {
@@ -128,14 +133,14 @@ pub enum ImageSource {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AudioSource {
     Url { url: String },
     Base64 { media_type: String, data: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FileSource {
     Url {
@@ -146,6 +151,14 @@ pub enum FileSource {
         media_type: String,
         data: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolResultContent {
+    Text { text: String },
+    Image { source: ImageSource },
+    File { source: FileSource },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,7 +223,7 @@ pub struct JsonSchemaDefinition {
 pub struct UrpResponse {
     pub id: String,
     pub model: String,
-    pub outputs: Vec<Message>,
+    pub outputs: Vec<Item>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<FinishReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,15 +327,15 @@ pub enum UrpStreamEvent {
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
-    MessageStart {
-        message_index: u32,
-        role: Role,
+    ItemStart {
+        item_index: u32,
+        header: ItemHeader,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
     PartStart {
         part_index: u32,
-        message_index: u32,
+        item_index: u32,
         header: PartHeader,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
@@ -343,9 +356,9 @@ pub enum UrpStreamEvent {
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
-    MessageDone {
-        message_index: u32,
-        message: Message,
+    ItemDone {
+        item_index: u32,
+        item: Item,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
         #[serde(flatten)]
@@ -356,7 +369,7 @@ pub enum UrpStreamEvent {
         finish_reason: Option<FinishReason>,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
-        outputs: Vec<Message>,
+        outputs: Vec<Item>,
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
@@ -366,6 +379,13 @@ pub enum UrpStreamEvent {
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ItemHeader {
+    Message { role: Role },
+    ToolResult { call_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -409,9 +429,9 @@ pub enum PartDelta {
     ProviderItem { data: Value },
 }
 
-impl Message {
-    pub fn new(role: Role) -> Self {
-        Self {
+impl Item {
+    pub fn new_message(role: Role) -> Self {
+        Item::Message {
             role,
             parts: Vec::new(),
             extra_body: HashMap::new(),
@@ -419,12 +439,14 @@ impl Message {
     }
 
     pub fn text(role: Role, content: impl Into<String>) -> Self {
-        let mut msg = Self::new(role);
-        msg.parts.push(Part::Text {
-            content: content.into(),
+        Item::Message {
+            role,
+            parts: vec![Part::Text {
+                content: content.into(),
+                extra_body: HashMap::new(),
+            }],
             extra_body: HashMap::new(),
-        });
-        msg
+        }
     }
 }
 
@@ -448,33 +470,43 @@ pub fn content_text(parts: &[Part]) -> String {
     out
 }
 
-pub fn extract_tool_result_call_id(parts: &[Part]) -> Option<String> {
-    parts.iter().find_map(|p| match p {
-        Part::ToolResult { call_id, .. } => Some(call_id.clone()),
-        _ => None,
-    })
-}
-
-pub fn output_messages(outputs: &[Message]) -> impl Iterator<Item = &Message> {
+pub fn output_items(outputs: &[Item]) -> impl Iterator<Item = &Item> {
     outputs.iter()
 }
 
-pub fn output_messages_mut(outputs: &mut [Message]) -> impl Iterator<Item = &mut Message> {
+pub fn output_items_mut(outputs: &mut [Item]) -> impl Iterator<Item = &mut Item> {
     outputs.iter_mut()
 }
 
-pub fn merged_output_message(outputs: &[Message]) -> Message {
-    let mut merged = Message::new(Role::Assistant);
-    for message in outputs {
-        if merged.parts.is_empty() {
-            merged.role = message.role;
-        }
-        merged.parts.extend(message.parts.clone());
-        for (k, v) in &message.extra_body {
-            merged
-                .extra_body
-                .entry(k.clone())
-                .or_insert_with(|| v.clone());
+pub fn merged_output_items(outputs: &[Item]) -> Item {
+    let mut merged = Item::new_message(Role::Assistant);
+    for item in outputs {
+        if let Item::Message {
+            role,
+            parts,
+            extra_body,
+        } = item
+        {
+            let Item::Message {
+                role: merged_role,
+                parts: merged_parts,
+                extra_body: merged_extra_body,
+            } = &mut merged
+            else {
+                unreachable!();
+            };
+
+            if merged_parts.is_empty() {
+                *merged_role = *role;
+            }
+            if *role == Role::Assistant {
+                merged_parts.extend(parts.clone());
+                for (k, v) in extra_body {
+                    merged_extra_body
+                        .entry(k.clone())
+                        .or_insert_with(|| v.clone());
+                }
+            }
         }
     }
     merged

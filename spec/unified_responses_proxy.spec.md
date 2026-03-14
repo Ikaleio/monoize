@@ -23,6 +23,12 @@
 - **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, `grok`, or `group`.
 - **URP-Proto request:** A Responses-create-compatible JSON request (Monoize internal).
 - **URP-Proto response:** A Responses-compatible JSON response object (Monoize internal).
+- **Item:** The fundamental unit in URP-Proto `input` and `output` sequences. An `Item` is one of two variants:
+  - `Item::Message { role: Role, parts: Vec<Part>, extra_body }` — a conversation message with role and typed content parts.
+  - `Item::ToolResult { call_id: String, is_error: bool, content: Vec<ToolResultContent>, extra_body }` — a tool execution result.
+- **ToolResultContent:** A typed content entry within `Item::ToolResult.content`. One of: `Text { text: String }`, `Image { source: ImageSource }`, or `File { source: FileSource }`.
+- **ItemHeader:** Discriminated header carried by stream `ItemStart` events. One of: `Message { role: Role }` or `ToolResult { call_id: String }`.
+- **PhaseZone:** State machine enum governing decoder greedy merging of upstream parts into `Item`s. Values: `Empty`, `InReasoning`, `InContent`, `InAction`.
 
 ## 2. External HTTP API surface
 
@@ -103,7 +109,7 @@ C5. Monoize MUST accept downstream request bodies up to 50 MiB on forwarding end
 
 For each downstream request to any forwarding endpoint in §2.2, Monoize MUST execute the following pipeline:
 
-FP1. **Parse:** Parse the downstream request into an internal URP-Proto request.
+FP1. **Parse:** Parse the downstream request into an internal URP-Proto request. The parser produces a sequence of `Item`s (§1) from the downstream protocol's native representation.
 
 FP2. **Route:** Select an upstream provider for the request according to routing rules (§6).
 
@@ -130,7 +136,7 @@ FP4c. The request-shape observability log in FP4b MUST include at minimum:
 
 FP4d. For streaming upstream calls, Monoize MUST track terminal-stream evidence in memory during adaptation. At minimum the tracked evidence consists of: whether a literal `[DONE]` sentinel was received, which terminal protocol event was last observed, the terminal finish reason when present, and whether Monoize emitted a synthetic terminal chunk. This evidence is observability-only and MUST NOT change downstream response semantics by itself.
 
-FP5. **Adapt response:** Convert the upstream output (non-streaming or streaming chunks) into URP-Proto output.
+FP5. **Adapt response:** Convert the upstream output (non-streaming or streaming chunks) into URP-Proto `Item`-based output.
 
 FP6. **Render downstream:** Convert URP-Proto output into the downstream endpoint’s response shape (Responses / Chat Completions / Messages), streaming or non-streaming.
 
@@ -159,6 +165,8 @@ Monoize MUST accept URP-Proto request fields consistent with Responses create re
 - `max_output_tokens`
 - `parallel_tool_calls`
 
+IN1. The `input` field contains a `Vec<Item>`. Each `Item` is either `Item::Message` (a conversation message with `role`, `parts`, and `extra_body`) or `Item::ToolResult` (a tool execution result with `call_id`, `is_error`, `content: Vec<ToolResultContent>`, and `extra_body`). See §1 for type definitions.
+
 T0. For internal URP-Proto requests, tool descriptors in `tools[]` MUST use Responses-style function-tool objects:
 
 ```json
@@ -177,23 +185,29 @@ S3. Monoize MUST ignore `conversation` and `previous_response_id` (treat them as
 
 ### 7.1.1 URP-Proto (internal) tool-calling items
 
-TCI1. URP-Proto `input` MAY contain non-message items that represent tool-calling state, using the following JSON objects:
+TCI1. URP-Proto `input` MAY contain tool-calling state represented as `Item` variants:
 
-- **Function call (tool call) input/output item:**
+- **Tool call (function call):** Represented as a `Part::ToolCall` within an `Item::Message`. Each tool call part carries `call_id: String`, `name: String`, and `arguments: String` (JSON-encoded).
 
-```json
-{ "type": "function_call", "call_id": "call_x", "name": "tool_name", "arguments": "{\"k\":\"v\"}" }
-```
-
-- **Function call output (tool result) input item:**
-
-```json
-{ "type": "function_call_output", "call_id": "call_x", "output": "{\"result\":true}" }
-```
+- **Tool result (function call output):** Represented as `Item::ToolResult` with fields:
+  - `call_id: String` — correlates to the originating tool call.
+  - `is_error: bool` — indicates whether the tool execution failed.
+  - `content: Vec<ToolResultContent>` — typed result content (see §7.1.1a).
+  - `extra_body: HashMap<String, Value>` — preserved unknown fields per §7.7 XF4.
 
 TCI2. Monoize MUST NOT execute tools locally. Tool execution is always performed by the downstream client.
 
-TCI3. When Monoize forwards a request, Monoize MUST forward any tool-calling items present in URP-Proto `input` by adapting them into the selected upstream provider’s request format (§7.2–§7.8).
+TCI3. When Monoize forwards a request, Monoize MUST forward any tool-calling `Item`s present in URP-Proto `input` by adapting them into the selected upstream provider's request format (§7.2–§7.8).
+
+### 7.1.1a ToolResultContent type
+
+TRC1. `ToolResultContent` is an enum representing typed content within `Item::ToolResult.content`. The variants are:
+
+- `Text { text: String }` — plain text result.
+- `Image { source: ImageSource }` — image result with provider-appropriate source reference.
+- `File { source: FileSource }` — file/document result with provider-appropriate source reference.
+
+TRC2. Each `Item::ToolResult.content` field contains zero or more `ToolResultContent` entries. An empty `content` vector represents a tool result with no output payload.
 
 ### 7.1.2 URP-Proto (internal) reasoning item
 
@@ -249,6 +263,43 @@ RC4. When the selected upstream provider type is:
 
 RC5. If Monoize generated provider-native reasoning-control fields under RC4, Monoize MUST NOT forward conflicting source fields from `extra` to the same upstream request.
 
+### 7.1.5 Greedy Phase-Zone Merging
+
+GZ1. ALL decoders MUST merge upstream protocol items into URP `Item`s using the PhaseZone state machine.
+
+GZ2. PhaseZone has four states: `Empty`, `InReasoning`, `InContent`, `InAction`. Each decoder instance initializes PhaseZone to `Empty` at the start of each response.
+
+GZ3. Parts are classified into three groups:
+
+- **Reasoning-like:** `Reasoning`.
+- **Content-like:** `Text`, `Image`, `Audio`, `File`, `Refusal`.
+- **Action-like:** `ToolCall`.
+
+GZ4. Transition rules for assistant `Item`s (current zone × part class → action):
+
+| Current Zone  | Reasoning-like             | Content-like                | Action-like        |
+|---------------|----------------------------|-----------------------------|--------------------|
+| `Empty`       | → `InReasoning`            | → `InContent`               | → `InAction`       |
+| `InReasoning` | stay in `InReasoning`      | → `InContent`               | → `InAction`       |
+| `InContent`   | FLUSH, → `InReasoning`     | stay in `InContent`          | → `InAction`       |
+| `InAction`    | FLUSH, → `InReasoning`     | FLUSH, → `InContent`        | stay in `InAction` |
+
+FLUSH means: finalize the current `Item::Message`, emit it, and start a new `Item::Message` before appending the incoming part.
+
+GZ5. A role change between consecutive upstream items MUST always trigger FLUSH, regardless of part class.
+
+GZ6. After greedy merging, every assistant `Item::Message` MUST conform to the part-order constraint: `[Reasoning*] [ContentLike?] [ActionLike*]`.
+
+GZ7. No decoder MUST preserve upstream item boundaries. Greedy merging always applies; upstream message/item boundaries are discarded.
+
+### 7.1.6 Encoder Splitting
+
+ES1. The Responses encoder MUST split a merged `Item::Message` back into native Responses output items: `reasoning` items for Reasoning-like parts, `message` items for Content-like parts, and `function_call` items for Action-like parts. A single merged `Item::Message` with reasoning, text, and tool calls produces three or more native Responses items.
+
+ES2. The Chat Completions encoder MUST prevent content/tool-call interleaving within a single chat message by splitting `Item::Message` items at content-to-action and action-to-content boundaries.
+
+ES3. The Anthropic Messages encoder MUST merge consecutive assistant `Item::Message` items into a single `messages[]` entry with `role="assistant"`, concatenating their content blocks.
+
 ### 7.7 Extra field forwarding
 
 XF1. For any downstream endpoint in §2.2, Monoize MUST preserve unknown fields according to §3 and store them in the internal URP request field named `extra`.
@@ -264,10 +315,10 @@ XF4. Content-block-level unknown fields:
 - This applies to all content-block types: `text`, `image`, `document`/`file`, `thinking`, `tool_use`, and `tool_result` blocks.
   This applies to system blocks, regular message content blocks, tool-result inner content blocks, and response content blocks.
 
-XF4a. Message-item-level unknown fields:
+XF4a. Item-level unknown fields:
 
-- When decoding protocol objects that correspond to a URP message item (for example Responses `message` items or Chat `assistant` messages), Monoize MUST preserve unknown fields on that protocol object in the corresponding URP `Message.extra_body`.
-- When encoding protocol objects from a URP message, Monoize MUST merge `Message.extra_body` into every generated protocol object derived from that URP message, subject to the same precedence rule as XF3.
+- When decoding protocol objects that correspond to a URP `Item` (for example Responses `message` items or Chat `assistant` messages), Monoize MUST preserve unknown fields on that protocol object in the corresponding `Item::Message.extra_body` or `Item::ToolResult.extra_body`.
+- When encoding protocol objects from a URP `Item`, Monoize MUST merge the `Item` variant's `extra_body` into every generated protocol object derived from that `Item`, subject to the same precedence rule as XF3.
 
 XF5. Usage-level unknown fields:
 
@@ -393,7 +444,7 @@ PC2a. Chat `phase` mapping:
 - Monoize MUST accept optional extension field `phase` on chat assistant messages.
 - When decoding a chat assistant message, Monoize MUST copy `phase` onto every URP text part derived from that assistant message.
 - When encoding URP assistant text parts back to chat messages, Monoize MUST split assistant messages whenever flattening would combine text with different `phase` values or combine text across tool-call boundaries.
-- Monoize MUST merge `Message.extra_body` into every emitted chat message segment created from one URP message.
+- Monoize MUST merge the `Item::Message` variant's `extra_body` into every emitted chat message segment created from one URP `Item::Message`.
 
 PC2.1. Input coercion for chat adapter:
 
@@ -710,7 +761,7 @@ When the downstream endpoint is `POST /v1/responses` with `stream=true`, Monoize
 
 - `response.created`
 - `response.in_progress`
-- `response.output_item.added` (at least one message item)
+- `response.output_item.added` (at least one output item)
 - `response.output_text.delta` (zero or more)
 - `response.output_text.done`
 - `response.output_item.done`
@@ -725,6 +776,24 @@ STR1. Each SSE event `data` MUST be a JSON object containing:
 STR2. `sequence_number` MUST be monotonically increasing starting from 1 within a single response stream.
 
 STR3. For downstream `POST /v1/responses` streams synthesized from non-responses upstream event formats, Monoize MUST include a `usage` object in the terminal `response.completed` payload when cumulative stream usage counters are available.
+
+### 8.1 Internal URP stream events
+
+STR4. URP-Proto internally represents stream boundaries using `ItemStart` and `ItemDone` events:
+
+- `ItemStart` carries:
+  - `item_index: u32` — zero-based index of this item in the output sequence.
+  - `header: ItemHeader` — discriminated header identifying the item variant.
+
+- `ItemDone` carries:
+  - `item_index: u32` — matching index from the corresponding `ItemStart`.
+  - `item: Item` — the fully assembled `Item`.
+
+STR5. `ItemHeader` is an enum with two variants:
+- `Message { role: Role }` — indicates the item is an `Item::Message` with the given role.
+- `ToolResult { call_id: String }` — indicates the item is an `Item::ToolResult` for the given call.
+
+STR6. Every `ItemStart` event MUST be followed by exactly one `ItemDone` event with the same `item_index` before another `ItemStart` may be emitted. `item_index` values MUST be assigned sequentially starting from 0 within a single response stream.
 
 ## 9. Stream error termination
 

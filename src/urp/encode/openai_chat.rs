@@ -3,8 +3,8 @@ use crate::urp::encode::{
     usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    merged_output_message, FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat,
-    Role, ToolDefinition, UrpRequest, UrpResponse,
+    merged_output_items, FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role,
+    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -147,7 +147,8 @@ fn should_split_chat_message(existing: &PendingChatMessage, part: &Part) -> bool
 fn push_part_into_pending_chat_message(
     pending: &mut Option<PendingChatMessage>,
     out: &mut Vec<Value>,
-    message: &Message,
+    role: Role,
+    extra_body: &HashMap<String, Value>,
     part: &Part,
 ) {
     let should_flush = pending
@@ -158,12 +159,12 @@ fn push_part_into_pending_chat_message(
     }
 
     let entry = pending.get_or_insert_with(|| PendingChatMessage {
-        role: message.role,
+        role,
         content_parts: Vec::new(),
         tool_calls: Vec::new(),
         refusal: None,
         reasoning_parts: Vec::new(),
-        message_extra: message.extra_body.clone(),
+        message_extra: extra_body.clone(),
     });
 
     match part {
@@ -245,14 +246,16 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let merged = merged_output_message(&resp.outputs);
+    let merged = merged_output_items(&resp.outputs);
     let mut encoded_messages = encode_messages(std::slice::from_ref(&merged));
     let message = match encoded_messages.len() {
         0 => {
             let mut fallback = Map::new();
             fallback.insert("role".to_string(), Value::String("assistant".to_string()));
             fallback.insert("content".to_string(), Value::String(String::new()));
-            merge_extra(&mut fallback, &merged.extra_body);
+            if let Item::Message { extra_body, .. } = &merged {
+                merge_extra(&mut fallback, extra_body);
+            }
             fallback
         }
         _ => encoded_messages
@@ -322,30 +325,58 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     result
 }
 
-fn encode_messages(messages: &[Message]) -> Vec<Value> {
+fn encode_messages(messages: &[Item]) -> Vec<Value> {
     let mut out = Vec::new();
-    for msg in messages {
-        if msg.role == Role::Tool {
-            let call_id = msg.parts.iter().find_map(|p| match p {
-                Part::ToolResult { call_id, .. } => Some(call_id.clone()),
-                _ => None,
-            });
-            let mut m = Map::new();
-            m.insert("role".to_string(), Value::String("tool".to_string()));
-            m.insert("content".to_string(), Value::String(text_parts(&msg.parts)));
-            if let Some(call_id) = call_id {
-                m.insert("tool_call_id".to_string(), Value::String(call_id));
+    for item in messages {
+        match item {
+            Item::ToolResult {
+                call_id,
+                content,
+                extra_body,
+                ..
+            } => {
+                let text = content
+                    .iter()
+                    .filter_map(|content| match content {
+                        ToolResultContent::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                let mut m = Map::new();
+                m.insert("role".to_string(), Value::String("tool".to_string()));
+                m.insert("content".to_string(), Value::String(text));
+                m.insert("tool_call_id".to_string(), Value::String(call_id.clone()));
+                merge_extra(&mut m, extra_body);
+                out.push(Value::Object(m));
             }
-            merge_extra(&mut m, &msg.extra_body);
-            out.push(Value::Object(m));
-            continue;
-        }
+            Item::Message {
+                role,
+                parts,
+                extra_body,
+            } => {
+                if *role == Role::Tool {
+                    let mut m = Map::new();
+                    m.insert("role".to_string(), Value::String("tool".to_string()));
+                    m.insert("content".to_string(), Value::String(text_parts(parts)));
+                    merge_extra(&mut m, extra_body);
+                    out.push(Value::Object(m));
+                    continue;
+                }
 
-        let mut pending: Option<PendingChatMessage> = None;
-        for part in &msg.parts {
-            push_part_into_pending_chat_message(&mut pending, &mut out, msg, part);
+                let mut pending: Option<PendingChatMessage> = None;
+                for part in parts {
+                    push_part_into_pending_chat_message(
+                        &mut pending,
+                        &mut out,
+                        *role,
+                        extra_body,
+                        part,
+                    );
+                }
+                flush_pending_chat_message(&mut pending, &mut out);
+            }
         }
-        flush_pending_chat_message(&mut pending, &mut out);
     }
     out
 }
@@ -407,11 +438,11 @@ fn encode_response_format(format: &ResponseFormat) -> Value {
     }
 }
 
-fn has_tool_calls(message: &Message) -> bool {
-    message
-        .parts
-        .iter()
-        .any(|p| matches!(p, Part::ToolCall { .. }))
+fn has_tool_calls(item: &Item) -> bool {
+    match item {
+        Item::Message { parts, .. } => parts.iter().any(|p| matches!(p, Part::ToolCall { .. })),
+        Item::ToolResult { .. } => false,
+    }
 }
 
 fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part]) {
@@ -483,7 +514,7 @@ mod tests {
         HashMap::new()
     }
 
-    fn base_request(messages: Vec<Message>) -> UrpRequest {
+    fn base_request(messages: Vec<Item>) -> UrpRequest {
         UrpRequest {
             model: "logical-model".to_string(),
             inputs: messages,
@@ -505,7 +536,7 @@ mod tests {
         let mut part_extra = HashMap::new();
         part_extra.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
 
-        let req = base_request(vec![Message {
+        let req = base_request(vec![Item::Message {
             role: Role::User,
             parts: vec![Part::Text {
                 content: "hello".to_string(),
@@ -533,7 +564,7 @@ mod tests {
 
     #[test]
     fn still_collapses_single_plain_text_block_to_string() {
-        let req = base_request(vec![Message {
+        let req = base_request(vec![Item::Message {
             role: Role::User,
             parts: vec![Part::Text {
                 content: "hello".to_string(),
@@ -551,7 +582,7 @@ mod tests {
 
     #[test]
     fn splits_assistant_messages_when_tool_calls_break_messages() {
-        let req = base_request(vec![Message {
+        let req = base_request(vec![Item::Message {
             role: Role::Assistant,
             parts: vec![
                 Part::Text {
@@ -585,13 +616,44 @@ mod tests {
     }
 
     #[test]
+    fn encodes_tool_result_items_as_tool_messages_with_text_only_content() {
+        let req = base_request(vec![Item::ToolResult {
+            call_id: "call_1".to_string(),
+            is_error: false,
+            content: vec![
+                ToolResultContent::Text {
+                    text: "hello".to_string(),
+                },
+                ToolResultContent::Image {
+                    source: ImageSource::Url {
+                        url: "https://example.com/image.png".to_string(),
+                        detail: None,
+                    },
+                },
+                ToolResultContent::Text {
+                    text: " world".to_string(),
+                },
+            ],
+            extra_body: HashMap::from([("provider_field".to_string(), json!(true))]),
+        }]);
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        let msg = encoded["messages"][0].as_object().expect("message object");
+
+        assert_eq!(msg.get("role"), Some(&json!("tool")));
+        assert_eq!(msg.get("tool_call_id"), Some(&json!("call_1")));
+        assert_eq!(msg.get("content"), Some(&json!("hello world")));
+        assert_eq!(msg.get("provider_field"), Some(&json!(true)));
+    }
+
+    #[test]
     fn chat_usage_round_trips_all_typed_usage_fields_without_extra_leakage() {
         let mut usage_extra = HashMap::new();
         usage_extra.insert("provider_specific".to_string(), json!(true));
         let response = UrpResponse {
             id: "chatcmpl_usage".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Message::new(Role::Assistant)],
+            outputs: vec![Item::new_message(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 20,

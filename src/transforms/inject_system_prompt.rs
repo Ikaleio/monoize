@@ -4,7 +4,7 @@ use crate::transforms::{
     text_part,
 };
 use async_trait::async_trait;
-use crate::urp::{Message, Part, Role};
+use crate::urp::{Item, Part, Role};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -87,7 +87,7 @@ impl Transform for InjectSystemPromptTransform {
         match cfg.position {
             Position::Prepend => {
                 for (idx, msg) in messages.iter().enumerate() {
-                    if msg.role == Role::System {
+                    if matches!(msg, Item::Message { role: Role::System, .. }) {
                         target_index = Some(idx);
                         break;
                     }
@@ -95,7 +95,7 @@ impl Transform for InjectSystemPromptTransform {
             }
             Position::Append => {
                 for (idx, msg) in messages.iter().enumerate().rev() {
-                    if msg.role == Role::System {
+                    if matches!(msg, Item::Message { role: Role::System, .. }) {
                         target_index = Some(idx);
                         break;
                     }
@@ -104,13 +104,17 @@ impl Transform for InjectSystemPromptTransform {
         }
 
         if let Some(idx) = target_index {
-            messages[idx].parts.push(Part::Text {
-                content: cfg.content.clone(),
-                extra_body: std::collections::HashMap::new(),
-            });
+            if let Item::Message { parts, .. } = &mut messages[idx] {
+                parts.push(Part::Text {
+                    content: cfg.content.clone(),
+                    extra_body: std::collections::HashMap::new(),
+                });
+            }
         } else {
-            let mut message = Message::new(Role::System);
-            message.parts.push(text_part(cfg.content.clone()));
+            let mut message = Item::new_message(Role::System);
+            if let Item::Message { parts, .. } = &mut message {
+                parts.push(text_part(cfg.content.clone()));
+            }
             match cfg.position {
                 Position::Prepend => messages.insert(0, message),
                 Position::Append => messages.push(message),

@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, merge_same_role_messages,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, merge_same_role_items,
     request_messages, request_messages_mut,
 };
 use async_trait::async_trait;
@@ -60,7 +60,7 @@ impl Transform for MergeConsecutiveRolesTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            *request_messages_mut(req) = merge_same_role_messages(request_messages(req));
+            *request_messages_mut(req) = merge_same_role_items(request_messages(req));
         }
         Ok(())
     }

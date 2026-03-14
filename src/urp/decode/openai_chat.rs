@@ -3,8 +3,9 @@ use crate::urp::decode::{
     parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
-    FinishReason, InputDetails, Message, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
-    UrpRequest, UrpResponse, Usage,
+    greedy::{Action, GreedyMerger},
+    FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -146,6 +147,21 @@ fn text_part_with_phase(
     }
 }
 
+fn item_message(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Item {
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), Value::String("message".to_string()));
+    obj.insert(
+        "role".to_string(),
+        serde_json::to_value(role).expect("role should serialize"),
+    );
+    obj.insert(
+        "parts".to_string(),
+        serde_json::to_value(parts).expect("parts should serialize"),
+    );
+    obj.extend(extra_body);
+    serde_json::from_value(Value::Object(obj)).expect("message item should deserialize")
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -180,68 +196,56 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         };
 
         if role == Role::Tool {
-            let mut tool_msg = Message {
-                role: Role::Tool,
-                parts: Vec::new(),
-                extra_body: split_extra(msg_obj, &["role", "tool_call_id", "content"]),
-            };
             let call_id = msg_obj
                 .get("tool_call_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if !call_id.is_empty() {
-                tool_msg.parts.push(Part::ToolResult {
-                    call_id,
-                    is_error: false,
-                    extra_body: HashMap::new(),
-                });
-            }
             let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
             let text = value_to_text(&content);
+            let mut tool_result_content = Vec::new();
             if !text.is_empty() {
-                tool_msg
-                    .parts
-                    .push(text_part_with_phase(text, None, HashMap::new()));
+                tool_result_content.push(ToolResultContent::Text { text });
             }
-            inputs.push(tool_msg);
+            inputs.push(Item::ToolResult {
+                call_id,
+                is_error: false,
+                content: tool_result_content,
+                extra_body: split_extra(msg_obj, &["role", "tool_call_id", "content"]),
+            });
             continue;
         }
 
         let message_phase = msg_obj.get("phase").and_then(|v| v.as_str());
-        let mut msg = Message {
-            role,
-            parts: Vec::new(),
-            extra_body: split_extra(
-                msg_obj,
-                &[
-                    "role",
-                    "content",
-                    "tool_calls",
-                    "reasoning",
-                    "reasoning_details",
-                    "reasoning_content",
-                    "reasoning_opaque",
-                    "refusal",
-                    "phase",
-                ],
-            ),
-        };
+        let mut parts = Vec::new();
+        let extra_body = split_extra(
+            msg_obj,
+            &[
+                "role",
+                "content",
+                "tool_calls",
+                "reasoning",
+                "reasoning_details",
+                "reasoning_content",
+                "reasoning_opaque",
+                "refusal",
+                "phase",
+            ],
+        );
 
-        parse_chat_reasoning_fields(msg_obj, &mut msg.parts);
+        parse_chat_reasoning_fields(msg_obj, &mut parts);
 
         if let Some(content) = msg_obj.get("content") {
             if let Some(s) = content.as_str() {
                 if !s.is_empty() {
-                    msg.parts
-                        .push(text_part_with_phase(s, message_phase, HashMap::new()));
+                    parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
                 }
             } else if let Some(arr) = content.as_array() {
                 for item in arr {
                     if let Some(item_obj) = item.as_object() {
                         if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
                             if !text.is_empty() {
-                                msg.parts.push(text_part_with_phase(
+                                parts.push(text_part_with_phase(
                                     text,
                                     message_phase,
                                     split_extra(item_obj, &["type", "text"]),
@@ -249,10 +253,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                             }
                         }
                         if let Some(image_part) = parse_image_part_from_obj(item_obj) {
-                            msg.parts.push(image_part);
+                            parts.push(image_part);
                         }
                         if let Some(file_part) = parse_file_part_from_obj(item_obj) {
-                            msg.parts.push(file_part);
+                            parts.push(file_part);
                         }
                     }
                 }
@@ -261,7 +265,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
         if let Some(refusal) = msg_obj.get("refusal").and_then(|v| v.as_str()) {
             if !refusal.is_empty() {
-                msg.parts.push(Part::Refusal {
+                parts.push(Part::Refusal {
                     content: refusal.to_string(),
                     extra_body: HashMap::new(),
                 });
@@ -297,7 +301,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
                 };
                 if !call_id.is_empty() && !name.is_empty() {
-                    msg.parts.push(Part::ToolCall {
+                    parts.push(Part::ToolCall {
                         call_id,
                         name,
                         arguments,
@@ -307,7 +311,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             }
         }
 
-        inputs.push(msg);
+        inputs.push(item_message(role, parts, extra_body));
     }
 
     let reasoning = extract_reasoning(obj);
@@ -375,41 +379,36 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .and_then(|v| v.as_object())
         .ok_or_else(|| "missing choices[0].message".to_string())?;
 
-    let mut message = Message {
-        role: Role::Assistant,
-        parts: Vec::new(),
-        extra_body: split_extra(
-            msg_obj,
-            &[
-                "role",
-                "content",
-                "reasoning",
-                "reasoning_details",
-                "reasoning_content",
-                "reasoning_opaque",
-                "tool_calls",
-                "refusal",
-                "phase",
-            ],
-        ),
-    };
+    let mut parts = Vec::new();
+    let message_extra_body = split_extra(
+        msg_obj,
+        &[
+            "role",
+            "content",
+            "reasoning",
+            "reasoning_details",
+            "reasoning_content",
+            "reasoning_opaque",
+            "tool_calls",
+            "refusal",
+            "phase",
+        ],
+    );
     let message_phase = msg_obj.get("phase").and_then(|v| v.as_str());
 
-    parse_chat_reasoning_fields(msg_obj, &mut message.parts);
+    parse_chat_reasoning_fields(msg_obj, &mut parts);
 
     if let Some(content) = msg_obj.get("content") {
         if let Some(s) = content.as_str() {
             if !s.is_empty() {
-                message
-                    .parts
-                    .push(text_part_with_phase(s, message_phase, HashMap::new()));
+                parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
             }
         } else if let Some(arr) = content.as_array() {
             for item in arr {
                 if let Some(item_obj) = item.as_object() {
                     if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
                         if !text.is_empty() {
-                            message.parts.push(text_part_with_phase(
+                            parts.push(text_part_with_phase(
                                 text,
                                 message_phase,
                                 split_extra(item_obj, &["type", "text"]),
@@ -417,10 +416,10 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         }
                     }
                     if let Some(image) = parse_image_part_from_obj(item_obj) {
-                        message.parts.push(image);
+                        parts.push(image);
                     }
                     if let Some(file) = parse_file_part_from_obj(item_obj) {
-                        message.parts.push(file);
+                        parts.push(file);
                     }
                 }
             }
@@ -456,7 +455,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                 serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
             };
             if !call_id.is_empty() && !name.is_empty() {
-                message.parts.push(Part::ToolCall {
+                parts.push(Part::ToolCall {
                     call_id,
                     name,
                     arguments,
@@ -468,11 +467,31 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
 
     if let Some(refusal) = msg_obj.get("refusal").and_then(|v| v.as_str()) {
         if !refusal.is_empty() {
-            message.parts.push(Part::Refusal {
+            parts.push(Part::Refusal {
                 content: refusal.to_string(),
                 extra_body: HashMap::new(),
             });
         }
+    }
+
+    let mut outputs = Vec::new();
+    let mut merger = GreedyMerger::new();
+    for part in parts {
+        match merger.feed(part, Role::Assistant) {
+            Action::Append => {}
+            Action::FlushAndNew(flushed_parts) => outputs.push(item_message(
+                Role::Assistant,
+                flushed_parts,
+                message_extra_body.clone(),
+            )),
+        }
+    }
+    if let Some(flushed_parts) = merger.finish() {
+        outputs.push(item_message(
+            Role::Assistant,
+            flushed_parts,
+            message_extra_body.clone(),
+        ));
     }
 
     let finish_reason = choice
@@ -496,7 +515,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        outputs: vec![message],
+        outputs,
         finish_reason,
         usage,
         extra_body: split_extra(
@@ -729,6 +748,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn output_parts(item: &Item) -> Vec<Part> {
+        serde_json::to_value(item)
+            .ok()
+            .and_then(|value| value.get("parts").cloned())
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
+    }
+
     #[test]
     fn decode_response_reads_openrouter_reasoning_details() {
         let value = json!({
@@ -756,8 +783,8 @@ mod tests {
         let decoded = decode_response(&value).expect("decode_response should succeed");
         let mut saw_reasoning = false;
         let mut saw_sig = false;
-        let message = &decoded.outputs[0];
-        for part in &message.parts {
+        let parts = output_parts(&decoded.outputs[0]);
+        for part in &parts {
             if let Part::Reasoning {
                 content, encrypted, ..
             } = part
@@ -792,8 +819,8 @@ mod tests {
         let decoded = decode_response(&value).expect("decode_response should succeed");
         let mut saw_reasoning = false;
         let mut saw_sig = false;
-        let message = &decoded.outputs[0];
-        for part in &message.parts {
+        let parts = output_parts(&decoded.outputs[0]);
+        for part in &parts {
             if let Part::Reasoning {
                 content, encrypted, ..
             } = part

@@ -33,7 +33,7 @@ DEC-2. Unknown wire fields MUST be preserved into URP `extra_body`.
 
 DEC-3. Tool calls MUST decode to `Part::ToolCall`.
 
-DEC-4. Tool result messages MUST decode to `Role::Tool` + `Part::ToolResult` with sibling content parts.
+DEC-4. Tool result messages MUST decode to `Role::Tool` + `Item::ToolResult` with sibling content parts.
 
 DEC-5. Reasoning fields from upstream/downstream wire formats MUST decode into `Part::Reasoning`, using `encrypted` when the provider requires opaque passthrough data.
 
@@ -51,11 +51,11 @@ ENC-4. Model rewrite MUST apply provider `models[requested].redirect` when prese
 
 STR-1. Internal streaming representation MUST use `UrpStreamEvent`.
 
-STR-2. `UrpStreamEvent` MUST support: `ResponseStart`, `MessageStart`, `PartStart`, `Delta`, `PartDone`, `MessageDone`, `ResponseDone`, `Error`.
+STR-2. `UrpStreamEvent` MUST support: `ResponseStart`, `ItemStart`, `PartStart`, `Delta`, `PartDone`, `ItemDone`, `ResponseDone`, `Error`.
 
 STR-3. `Delta` MUST be part-indexed and typed via `PartDelta` (text/reasoning/tool args/media/refusal/provider-item variants).
 
-STR-3a. `PartDone.part` MUST contain the complete terminal `Part`, `MessageDone.message` MUST contain the complete terminal `Message`, and `ResponseDone.outputs` MUST contain the complete terminal ordered `Vec<Message>`.
+STR-3a. `PartDone.part` MUST contain the complete terminal `Part`, `ItemDone.item` MUST contain the complete terminal `Item`, and `ResponseDone.outputs` MUST contain the complete terminal ordered `Vec<Item>`.
 
 STR-3b. `ResponseDone.outputs` is the authoritative final streamed response state for downstream response reconstruction.
 

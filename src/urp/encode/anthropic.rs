@@ -2,8 +2,8 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    merged_output_message, FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat,
-    Role, ToolDefinition, UrpRequest, UrpResponse,
+    merged_output_items, FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role,
+    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -12,40 +12,51 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut system_blocks: Vec<Value> = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
 
-    for message in &req.inputs {
-        match message.role {
-            Role::System | Role::Developer => {
-                for part in &message.parts {
-                    if let Part::Text {
-                        content: text,
-                        extra_body,
-                        ..
-                    } = part
-                    {
-                        if !text.is_empty() {
-                            let mut block = json!({ "type": "text", "text": text });
-                            if let Some(obj) = block.as_object_mut() {
-                                if let Some(phase) =
-                                    extra_body.get("phase").and_then(|v| v.as_str())
-                                {
-                                    obj.insert(
-                                        "phase".to_string(),
-                                        Value::String(phase.to_string()),
-                                    );
+    for item in &req.inputs {
+        match item {
+            Item::Message {
+                role,
+                parts,
+                extra_body: _,
+            } => match role {
+                Role::System | Role::Developer => {
+                    for part in parts {
+                        if let Part::Text {
+                            content: text,
+                            extra_body,
+                            ..
+                        } = part
+                        {
+                            if !text.is_empty() {
+                                let mut block = json!({ "type": "text", "text": text });
+                                if let Some(obj) = block.as_object_mut() {
+                                    if let Some(phase) =
+                                        extra_body.get("phase").and_then(|v| v.as_str())
+                                    {
+                                        obj.insert(
+                                            "phase".to_string(),
+                                            Value::String(phase.to_string()),
+                                        );
+                                    }
+                                    merge_extra(obj, extra_body);
                                 }
-                                merge_extra(obj, extra_body);
+                                system_blocks.push(block);
                             }
-                            system_blocks.push(block);
                         }
                     }
                 }
-            }
-            Role::Tool => {
-                if let Some(item) = encode_tool_result_message(message) {
-                    messages.push(item);
+                Role::User | Role::Assistant | Role::Tool => {
+                    messages.push(encode_regular_message(item))
                 }
-            }
-            Role::User | Role::Assistant => messages.push(encode_regular_message(message)),
+            },
+            Item::ToolResult {
+                call_id,
+                content,
+                is_error,
+                extra_body,
+            } => messages.push(encode_tool_result_message(
+                call_id, content, *is_error, extra_body,
+            )),
         }
     }
 
@@ -107,9 +118,17 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let merged = merged_output_message(&resp.outputs);
+    let merged = merged_output_items(&resp.outputs);
+    let Item::Message {
+        parts,
+        extra_body: _,
+        ..
+    } = &merged
+    else {
+        unreachable!("merged_output_items always returns a message item")
+    };
     let mut content = Vec::new();
-    let encrypted = merged.parts.iter().find_map(|part| match part {
+    let encrypted = parts.iter().find_map(|part| match part {
         Part::Reasoning {
             encrypted: Some(data),
             ..
@@ -117,7 +136,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         _ => None,
     });
 
-    for part in &merged.parts {
+    for part in parts {
         match part {
             Part::Reasoning {
                 content: Some(text),
@@ -193,7 +212,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 }
                 content.push(block);
             }
-            Part::Audio { .. } | Part::ToolResult { .. } | Part::Refusal { .. } => {}
+            Part::Audio { .. } | Part::Refusal { .. } => {}
             Part::Reasoning {
                 encrypted: Some(_), ..
             } => {
@@ -207,7 +226,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     // When the response contains encrypted reasoning but no plaintext reasoning
     // (e.g. Gemini returns only thoughtSignature), emit a standalone thinking
     // block so the downstream receives the encrypted data.
-    let has_reasoning_part = merged.parts.iter().any(|p| {
+    let has_reasoning_part = parts.iter().any(|p| {
         matches!(
             p,
             Part::Reasoning {
@@ -287,13 +306,21 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     body
 }
 
-fn encode_regular_message(message: &Message) -> Value {
-    let role = match message.role {
+fn encode_regular_message(message: &Item) -> Value {
+    let Item::Message {
+        role,
+        parts,
+        extra_body,
+    } = message
+    else {
+        unreachable!("encode_regular_message requires Item::Message")
+    };
+    let role = match role {
         Role::Assistant => "assistant",
         _ => "user",
     };
     let mut content = Vec::new();
-    let has_encrypted = message.parts.iter().any(|part| {
+    let has_encrypted = parts.iter().any(|part| {
         matches!(
             part,
             Part::Reasoning {
@@ -303,7 +330,7 @@ fn encode_regular_message(message: &Message) -> Value {
         )
     });
 
-    for part in &message.parts {
+    for part in parts {
         match part {
             Part::Text {
                 content: text,
@@ -387,78 +414,47 @@ fn encode_regular_message(message: &Message) -> Value {
                 }
                 content.push(block);
             }
-            Part::Audio { .. } | Part::ToolResult { .. } | Part::Refusal { .. } => {}
+            Part::Audio { .. } | Part::Refusal { .. } => {}
             Part::Reasoning { .. } => {}
         }
     }
     let mut msg = json!({ "role": role, "content": content });
     if let Some(obj) = msg.as_object_mut() {
-        merge_extra(obj, &message.extra_body);
+        merge_extra(obj, extra_body);
     }
     msg
 }
 
-fn encode_tool_result_message(message: &Message) -> Option<Value> {
-    let tool_result = message.parts.iter().find_map(|part| match part {
-        Part::ToolResult {
-            call_id,
-            is_error,
-            extra_body,
-        } => Some((call_id.clone(), *is_error, extra_body.clone())),
-        _ => None,
-    })?;
-
-    let mut content = Vec::new();
-    for part in &message.parts {
-        match part {
-            Part::Text {
-                content: text,
-                extra_body,
-                ..
-            } => {
-                let mut block = json!({ "type": "text", "text": text });
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::Image {
-                source, extra_body, ..
-            } => {
-                let mut block = encode_anthropic_image(source);
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::File {
-                source, extra_body, ..
-            } => {
-                let mut block = encode_anthropic_file(source);
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            _ => {}
-        }
-    }
+fn encode_tool_result_message(
+    call_id: &str,
+    content: &[ToolResultContent],
+    is_error: bool,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
+    let mut content: Vec<Value> = content
+        .iter()
+        .map(|item| match item {
+            ToolResultContent::Text { text } => json!({ "type": "text", "text": text }),
+            ToolResultContent::Image { source } => encode_anthropic_image(source),
+            ToolResultContent::File { source } => encode_anthropic_file(source),
+        })
+        .collect();
     if content.is_empty() {
         content.push(json!({ "type": "text", "text": "" }));
     }
     let mut tool_result_block = json!({
         "type": "tool_result",
-        "tool_use_id": tool_result.0,
-        "is_error": tool_result.1,
+        "tool_use_id": call_id,
+        "is_error": is_error,
         "content": content
     });
     if let Some(obj) = tool_result_block.as_object_mut() {
-        merge_extra(obj, &tool_result.2);
+        merge_extra(obj, extra_body);
     }
-    Some(json!({
+    json!({
         "role": "user",
         "content": [tool_result_block]
-    }))
+    })
 }
 
 fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
@@ -591,7 +587,7 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
 mod tests {
     use super::*;
     use crate::urp::decode::anthropic as decode_anthropic;
-    use crate::urp::{Message, OutputDetails, UrpResponse, Usage};
+    use crate::urp::{Item, OutputDetails, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
@@ -629,7 +625,7 @@ mod tests {
         let response = UrpResponse {
             id: "msg_usage".to_string(),
             model: "claude".to_string(),
-            outputs: vec![Message::new(Role::Assistant)],
+            outputs: vec![Item::new_message(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 11,

@@ -1,7 +1,7 @@
 use crate::urp::encode::{merge_extra, text_parts, usage_input_details, usage_output_details};
 use crate::urp::{
-    merged_output_message, AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource,
-    Part, Role, ToolChoice, ToolDefinition, UrpRequest, UrpResponse,
+    merged_output_items, AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource,
+    Item, Part, Role, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -9,24 +9,53 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut contents = Vec::new();
     let mut system_parts = Vec::new();
 
-    for message in &req.inputs {
-        match message.role {
-            Role::System | Role::Developer => {
-                let text = text_parts(&message.parts);
-                if !text.is_empty() {
-                    system_parts.push(json!({ "text": text }));
+    for item in &req.inputs {
+        match item {
+            Item::Message { role, parts, .. } => match role {
+                Role::System | Role::Developer => {
+                    let text = text_parts(parts);
+                    if !text.is_empty() {
+                        system_parts.push(json!({ "text": text }));
+                    }
                 }
-            }
-            _ => {
-                let role = if message.role == Role::Assistant {
-                    "model"
-                } else {
-                    "user"
-                };
-                let parts = encode_message_parts(message);
-                if !parts.is_empty() {
-                    contents.push(json!({ "role": role, "parts": parts }));
+                _ => {
+                    let role = if *role == Role::Assistant {
+                        "model"
+                    } else {
+                        "user"
+                    };
+                    let parts = encode_message_parts(item);
+                    if !parts.is_empty() {
+                        contents.push(json!({ "role": role, "parts": parts }));
+                    }
                 }
+            },
+            Item::ToolResult {
+                call_id,
+                content,
+                is_error,
+                ..
+            } => {
+                let result = content
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        ToolResultContent::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                contents.push(json!({
+                    "role": "user",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": call_id,
+                            "response": {
+                                "result": result,
+                                "is_error": is_error
+                            }
+                        }
+                    }]
+                }));
             }
         }
     }
@@ -97,9 +126,13 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let merged = merged_output_message(&resp.outputs);
+    let merged = merged_output_items(&resp.outputs);
     let mut parts = Vec::new();
-    for part in &merged.parts {
+    let merged_parts: &[Part] = match &merged {
+        Item::Message { parts, .. } => parts,
+        Item::ToolResult { .. } => &[],
+    };
+    for part in merged_parts {
         match part {
             Part::Text { content, .. } => parts.push(json!({ "text": content })),
             Part::Reasoning {
@@ -121,7 +154,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 arguments,
                 ..
             } => {
-                let args = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
+                let args = serde_json::from_str::<Value>(&arguments).unwrap_or_else(|_| json!({}));
                 parts.push(json!({
                     "functionCall": {
                         "id": call_id,
@@ -130,12 +163,11 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                     }
                 }));
             }
-            Part::Image { source, .. } => parts.push(encode_image_part(source)),
-            Part::File { source, .. } => parts.push(encode_file_part(source)),
-            Part::Audio { source, .. } => parts.push(encode_audio_part(source)),
+            Part::Image { source, .. } => parts.push(encode_image_part(&source)),
+            Part::File { source, .. } => parts.push(encode_file_part(&source)),
+            Part::Audio { source, .. } => parts.push(encode_audio_part(&source)),
             Part::Refusal { content, .. } => parts.push(json!({ "text": content })),
             Part::ProviderItem { body, .. } => parts.push(body.clone()),
-            Part::ToolResult { .. } => {}
         }
     }
 
@@ -259,9 +291,13 @@ fn encode_tool_choice(tc: &ToolChoice) -> Option<Value> {
     }
 }
 
-fn encode_message_parts(message: &crate::urp::Message) -> Vec<Value> {
+fn encode_message_parts(item: &Item) -> Vec<Value> {
     let mut out = Vec::new();
-    for part in &message.parts {
+    let parts = match item {
+        Item::Message { parts, .. } => parts,
+        Item::ToolResult { .. } => return out,
+    };
+    for part in parts {
         match part {
             Part::Text { content, .. } => out.push(json!({ "text": content })),
             Part::Image { source, .. } => out.push(encode_image_part(source)),
@@ -279,19 +315,6 @@ fn encode_message_parts(message: &crate::urp::Message) -> Vec<Value> {
                         "id": call_id,
                         "name": name,
                         "args": args
-                    }
-                }));
-            }
-            Part::ToolResult {
-                call_id, is_error, ..
-            } => {
-                out.push(json!({
-                    "functionResponse": {
-                        "name": call_id,
-                        "response": {
-                            "result": text_parts(&message.parts),
-                            "is_error": is_error
-                        }
                     }
                 }));
             }
@@ -372,7 +395,7 @@ fn finish_reason_to_gemini(finish_reason: Option<FinishReason>) -> &'static str 
 mod tests {
     use super::*;
     use crate::urp::decode::gemini as decode_gemini;
-    use crate::urp::{InputDetails, Message, OutputDetails, Role, UrpResponse, Usage};
+    use crate::urp::{InputDetails, Item, OutputDetails, Role, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
@@ -386,7 +409,7 @@ mod tests {
         let response = UrpResponse {
             id: "gem_resp".to_string(),
             model: "gemini-2.5-pro".to_string(),
-            outputs: vec![Message::new(Role::Assistant)],
+            outputs: vec![Item::new_message(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 14,

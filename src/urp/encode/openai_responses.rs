@@ -3,8 +3,8 @@ use crate::urp::encode::{
     usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Message, Part, ResponseFormat, Role, ToolDefinition,
-    UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -24,11 +24,20 @@ fn text_part_phase(part: &Part) -> Option<&str> {
     }
 }
 
-fn can_use_responses_instructions(message: &Message) -> bool {
-    matches!(message.role, Role::System | Role::Developer)
-        && !message.parts.is_empty()
-        && message.extra_body.is_empty()
-        && message.parts.iter().all(|part| {
+fn can_use_responses_instructions(item: &Item) -> bool {
+    let Item::Message {
+        role,
+        parts,
+        extra_body,
+    } = item
+    else {
+        return false;
+    };
+
+    matches!(role, Role::System | Role::Developer)
+        && !parts.is_empty()
+        && extra_body.is_empty()
+        && parts.iter().all(|part| {
             matches!(
                 part,
                 Part::Text {
@@ -207,16 +216,18 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut instructions: Option<String> = None;
     let mut consumed_instructions = false;
 
-    for message in &req.inputs {
-        if !consumed_instructions && can_use_responses_instructions(message) {
-            let text = text_parts(&message.parts);
-            if !text.is_empty() {
-                instructions = Some(text);
-                consumed_instructions = true;
-                continue;
+    for item in &req.inputs {
+        if !consumed_instructions && can_use_responses_instructions(item) {
+            if let Item::Message { parts, .. } = item {
+                let text = text_parts(parts);
+                if !text.is_empty() {
+                    instructions = Some(text);
+                    consumed_instructions = true;
+                    continue;
+                }
             }
         }
-        encode_message_to_input_items(message, &mut input_items);
+        encode_message_to_input_items(item, &mut input_items);
     }
 
     let mut body = json!({
@@ -268,54 +279,68 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let mut output = Vec::new();
-    for message in &resp.outputs {
-        let mut pending_message: Option<PendingResponsesMessageItem> = None;
-        for part in &message.parts {
-            if let Some(content_part) = encode_message_content_part(part, true) {
-                append_content_part_to_pending(
-                    &mut pending_message,
-                    &mut output,
-                    message.role,
-                    text_part_phase(part),
-                    &message.extra_body,
-                    content_part,
-                );
-                continue;
-            }
-
-            flush_pending_message_item(&mut pending_message, &mut output);
-
-            if let Some(reasoning_item) = encode_reasoning_item(part) {
-                output.push(reasoning_item);
-                continue;
-            }
-
-            if let Some(tool_call_item) = encode_tool_call_item(part) {
-                output.push(tool_call_item);
-                continue;
-            }
-
-            if let Part::ProviderItem {
-                item_type,
-                body,
+    for item in &resp.outputs {
+        match item {
+            Item::Message {
+                role,
+                parts,
                 extra_body,
-            } = part
-            {
-                let mut item = match body {
-                    Value::Object(obj) => obj.clone(),
-                    other => {
-                        let mut obj = Map::new();
-                        obj.insert("body".to_string(), other.clone());
-                        obj
+            } => {
+                let mut pending_message: Option<PendingResponsesMessageItem> = None;
+                for part in parts {
+                    if let Some(content_part) = encode_message_content_part(part, true) {
+                        append_content_part_to_pending(
+                            &mut pending_message,
+                            &mut output,
+                            *role,
+                            text_part_phase(part),
+                            extra_body,
+                            content_part,
+                        );
+                        continue;
                     }
-                };
-                item.entry("type".to_string())
-                    .or_insert_with(|| Value::String(item_type.clone()));
-                merge_extra(&mut item, extra_body);
-                output.push(Value::Object(item));
+
+                    flush_pending_message_item(&mut pending_message, &mut output);
+
+                    if let Some(reasoning_item) = encode_reasoning_item(part) {
+                        output.push(reasoning_item);
+                        continue;
+                    }
+
+                    if let Some(tool_call_item) = encode_tool_call_item(part) {
+                        output.push(tool_call_item);
+                        continue;
+                    }
+
+                    if let Part::ProviderItem {
+                        item_type,
+                        body,
+                        extra_body,
+                    } = part
+                    {
+                        let mut item = match body {
+                            Value::Object(obj) => obj.clone(),
+                            other => {
+                                let mut obj = Map::new();
+                                obj.insert("body".to_string(), other.clone());
+                                obj
+                            }
+                        };
+                        item.entry("type".to_string())
+                            .or_insert_with(|| Value::String(item_type.clone()));
+                        merge_extra(&mut item, extra_body);
+                        output.push(Value::Object(item));
+                    }
+                }
+                flush_pending_message_item(&mut pending_message, &mut output);
             }
+            Item::ToolResult {
+                call_id,
+                content,
+                is_error,
+                extra_body,
+            } => encode_tool_result_item(call_id, content, *is_error, extra_body, &mut output),
         }
-        flush_pending_message_item(&mut pending_message, &mut output);
     }
 
     let mut body = json!({
@@ -360,94 +385,107 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     body
 }
 
-fn encode_message_to_input_items(message: &Message, out: &mut Vec<Value>) {
-    if message.role == Role::Tool {
-        encode_tool_result_item(message, out);
-        return;
-    }
-    let encrypted_reasoning_present = has_encrypted_reasoning(&message.parts);
-    let mut pending_message: Option<PendingResponsesMessageItem> = None;
+fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
+    match item {
+        Item::Message {
+            role,
+            parts,
+            extra_body,
+        } => {
+            let encrypted_reasoning_present = has_encrypted_reasoning(parts);
+            let mut pending_message: Option<PendingResponsesMessageItem> = None;
 
-    for part in &message.parts {
-        if let Some(content_part) = encode_message_content_part(part, false) {
-            append_content_part_to_pending(
-                &mut pending_message,
-                out,
-                message.role,
-                text_part_phase(part),
-                &message.extra_body,
-                content_part,
-            );
-            continue;
-        }
+            for part in parts {
+                if let Some(content_part) = encode_message_content_part(part, false) {
+                    append_content_part_to_pending(
+                        &mut pending_message,
+                        out,
+                        *role,
+                        text_part_phase(part),
+                        extra_body,
+                        content_part,
+                    );
+                    continue;
+                }
 
-        flush_pending_message_item(&mut pending_message, out);
+                flush_pending_message_item(&mut pending_message, out);
 
-        match part {
-            Part::Reasoning {
-                content: Some(_),
-                encrypted: None,
-                ..
-            } if encrypted_reasoning_present => {}
-            _ => {
-                if let Some(item) =
-                    encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
-                {
-                    out.push(item);
+                match part {
+                    Part::Reasoning {
+                        content: Some(_),
+                        encrypted: None,
+                        ..
+                    } if encrypted_reasoning_present => {}
+                    _ => {
+                        if let Some(item) =
+                            encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
+                        {
+                            out.push(item);
+                        }
+                    }
                 }
             }
+            flush_pending_message_item(&mut pending_message, out);
         }
+        Item::ToolResult {
+            call_id,
+            content,
+            is_error,
+            extra_body,
+        } => encode_tool_result_item(call_id, content, *is_error, extra_body, out),
     }
-    flush_pending_message_item(&mut pending_message, out);
 }
 
-fn encode_tool_result_item(message: &Message, out: &mut Vec<Value>) {
-    let call_id = message.parts.iter().find_map(|part| match part {
-        Part::ToolResult { call_id, .. } => Some(call_id.clone()),
-        _ => None,
-    });
-    let Some(call_id) = call_id else {
-        return;
-    };
-
+fn encode_tool_result_item(
+    call_id: &str,
+    content: &[ToolResultContent],
+    _is_error: bool,
+    extra_body: &HashMap<String, Value>,
+    out: &mut Vec<Value>,
+) {
     let mut tool_content = Vec::new();
-    for part in &message.parts {
-        match part {
-            Part::Text { .. } => {
-                if let Some(value) = encode_message_content_part(part, false) {
-                    tool_content.push(value);
-                }
+    for item in content {
+        match item {
+            ToolResultContent::Text { text } => {
+                tool_content.push(json!({
+                    "type": "input_text",
+                    "text": text,
+                }));
             }
-            Part::Image { source, extra_body } => {
-                tool_content.push(encode_input_image(source, extra_body))
+            ToolResultContent::Image { source } => {
+                tool_content.push(encode_input_image(source, &HashMap::new()));
             }
-            Part::File { source, extra_body } => {
-                tool_content.push(encode_input_file(source, extra_body))
+            ToolResultContent::File { source } => {
+                tool_content.push(encode_input_file(source, &HashMap::new()));
             }
-            _ => {}
         }
     }
+
+    let mut obj = Map::new();
+    obj.insert(
+        "type".to_string(),
+        Value::String("function_call_output".to_string()),
+    );
+    obj.insert("call_id".to_string(), Value::String(call_id.to_string()));
+
     if tool_content.is_empty() {
-        out.push(json!({
-            "type": "function_call_output",
-            "call_id": call_id,
-            "output": ""
-        }));
+        obj.insert("output".to_string(), Value::String(String::new()));
     } else if tool_content.len() == 1
         && tool_content[0].get("type").and_then(|v| v.as_str()) == Some("input_text")
     {
-        out.push(json!({
-            "type": "function_call_output",
-            "call_id": call_id,
-            "output": tool_content[0].get("text").cloned().unwrap_or(Value::String(String::new()))
-        }));
+        obj.insert(
+            "output".to_string(),
+            tool_content[0]
+                .get("text")
+                .cloned()
+                .unwrap_or(Value::String(String::new())),
+        );
     } else {
-        out.push(json!({
-            "type": "function_call_output",
-            "call_id": call_id,
-            "output": Value::Array(tool_content)
-        }));
+        obj.insert("output".to_string(), Value::Array(tool_content));
     }
+
+    merge_extra(&mut obj, extra_body);
+    out.push(Value::Object(obj));
 }
 
 fn encode_input_image(
@@ -662,7 +700,7 @@ fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str 
 mod tests {
     use super::*;
     use crate::urp::decode::openai_responses as decode_responses;
-    use crate::urp::{InputDetails, Message, OutputDetails, Role, Usage};
+    use crate::urp::{InputDetails, Item, OutputDetails, Role, Usage};
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
@@ -673,7 +711,7 @@ mod tests {
         let resp = UrpResponse {
             id: "resp_1".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Message {
+            outputs: vec![Item::Message {
                 role: Role::Assistant,
                 parts: vec![
                     Part::Text {
@@ -772,7 +810,7 @@ mod tests {
     fn encode_request_keeps_phased_developer_message_as_input_message() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            inputs: vec![Message {
+            inputs: vec![Item::Message {
                 role: Role::Developer,
                 parts: vec![Part::Text {
                     content: "preface".to_string(),
@@ -809,7 +847,7 @@ mod tests {
         let response = UrpResponse {
             id: "resp_usage".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Message::new(Role::Assistant)],
+            outputs: vec![Item::new_message(Role::Assistant)],
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 30,

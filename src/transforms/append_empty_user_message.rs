@@ -3,7 +3,7 @@ use crate::transforms::{
     TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
 };
 use async_trait::async_trait;
-use crate::urp::{Message, Role};
+use crate::urp::{Item, Role};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::any::Any;
@@ -75,8 +75,8 @@ impl Transform for AppendEmptyUserMessageTransform {
         if let UrpData::Request(req) = data {
             let messages = request_messages_mut(req);
             if let Some(last) = messages.last() {
-                if last.role == Role::Assistant {
-                    messages.push(Message::text(Role::User, cfg.content.clone()));
+                if matches!(last, Item::Message { role: Role::Assistant, .. }) {
+                    messages.push(Item::text(Role::User, cfg.content.clone()));
                 }
             }
         }

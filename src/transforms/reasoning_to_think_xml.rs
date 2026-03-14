@@ -1,9 +1,9 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, response_output_messages_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, response_output_items_mut,
 };
 use async_trait::async_trait;
-use crate::urp::{Part, PartDelta, PartHeader, UrpStreamEvent};
+use crate::urp::{Item, Part, PartDelta, PartHeader, UrpStreamEvent};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -69,23 +69,25 @@ impl Transform for ReasoningToThinkXmlTransform {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
             UrpData::Response(resp) => {
-                for message in response_output_messages_mut(resp) {
-                    let mut next_parts = Vec::with_capacity(message.parts.len());
-                    for part in &message.parts {
-                        match part {
-                            Part::Reasoning {
-                                content: Some(content),
-                                ..
-                            } => {
-                                next_parts.push(Part::Text {
-                                    content: format!("<{0}>{1}</{0}>", cfg.tag, content),
-                                    extra_body: HashMap::new(),
-                                });
+                for message in response_output_items_mut(resp) {
+                    if let Item::Message { parts, .. } = message {
+                        let mut next_parts = Vec::with_capacity(parts.len());
+                        for part in parts.iter() {
+                            match part {
+                                Part::Reasoning {
+                                    content: Some(content),
+                                    ..
+                                } => {
+                                    next_parts.push(Part::Text {
+                                        content: format!("<{0}>{1}</{0}>", cfg.tag, content),
+                                        extra_body: HashMap::new(),
+                                    });
+                                }
+                                other => next_parts.push(other.clone()),
                             }
-                            other => next_parts.push(other.clone()),
                         }
+                        *parts = next_parts;
                     }
-                    message.parts = next_parts;
                 }
             }
             UrpData::Stream(event) => convert_stream_reasoning_to_xml(event, &cfg.tag),

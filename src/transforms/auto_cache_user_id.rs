@@ -4,6 +4,7 @@ use crate::transforms::{
     UrpData,
 };
 use async_trait::async_trait;
+use crate::urp::Item;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::any::Any;
@@ -99,10 +100,11 @@ impl Transform for AutoCacheUserIdTransform {
 }
 
 fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
-    req.inputs.iter().any(|msg| {
-        msg.parts
+    req.inputs.iter().any(|item| match item {
+        Item::Message { parts, .. } => parts
             .iter()
-            .any(|part| part_extra_body(part).is_some_and(|eb| eb.contains_key("cache_control")))
+            .any(|part| part_extra_body(part).is_some_and(|eb| eb.contains_key("cache_control"))),
+        Item::ToolResult { extra_body, .. } => extra_body.contains_key("cache_control"),
     })
 }
 
@@ -114,7 +116,6 @@ fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap
         | crate::urp::Part::File { extra_body, .. }
         | crate::urp::Part::Reasoning { extra_body, .. }
         | crate::urp::Part::ToolCall { extra_body, .. }
-        | crate::urp::Part::ToolResult { extra_body, .. }
         | crate::urp::Part::ProviderItem { extra_body, .. }
         | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
     }
