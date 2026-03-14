@@ -807,6 +807,53 @@ mod tests {
     }
 
     #[test]
+    fn responses_round_trip_content_content_boundary() {
+        let source = json!({
+            "id": "resp_cc",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "text": "hmm"
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{ "type": "output_text", "text": "phase A" }]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{ "type": "output_text", "text": "phase B" }]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_2",
+                    "name": "tool_b",
+                    "arguments": "{}"
+                }
+            ]
+        });
+
+        let decoded = decode_responses::decode_response(&source).expect("decode");
+        assert_eq!(decoded.outputs.len(), 2, "greedy merger must produce 2 items");
+
+        let reencoded = encode_response(&decoded, "gpt-5.4");
+        let output = reencoded["output"].as_array().expect("output array");
+
+        assert_eq!(output.len(), 4);
+        assert_eq!(output[0]["type"], json!("reasoning"));
+        assert_eq!(output[1]["type"], json!("message"));
+        assert_eq!(output[1]["phase"], json!("commentary"));
+        assert_eq!(output[2]["type"], json!("message"));
+        assert_eq!(output[2]["phase"], json!("final_answer"));
+        assert_eq!(output[3]["type"], json!("function_call"));
+    }
+
+    #[test]
     fn encode_request_keeps_phased_developer_message_as_input_message() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),

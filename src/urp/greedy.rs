@@ -52,7 +52,7 @@ impl GreedyMerger {
                 self.zone = PhaseZone::InReasoning;
             }
             PartKind::Content => {
-                if self.zone == PhaseZone::InAction {
+                if matches!(self.zone, PhaseZone::InContent | PhaseZone::InAction) {
                     let flushed = std::mem::take(&mut self.pending_parts);
                     self.zone = PhaseZone::InContent;
                     self.pending_parts.push(part);
@@ -89,9 +89,9 @@ impl GreedyMerger {
             | Part::Image { .. }
             | Part::Audio { .. }
             | Part::File { .. }
-            | Part::Refusal { .. }
-            | Part::ProviderItem { .. } => PartKind::Content,
-            Part::ToolCall { .. } => PartKind::Action,
+            | Part::Refusal { .. } => PartKind::Content,
+            Part::ToolCall { .. }
+            | Part::ProviderItem { .. } => PartKind::Action,
         }
     }
 
@@ -230,6 +230,14 @@ mod tests {
             Action::Append
         );
         assert_eq!(merger.finish(), Some(vec![provider_item()]));
+    }
+
+    #[test]
+    fn text_then_text_flushes() {
+        let mut merger = GreedyMerger::new();
+        assert_eq!(merger.feed(text("a"), Role::Assistant), Action::Append);
+        assert_flushes_to(merger.feed(text("b"), Role::Assistant), vec![text("a")]);
+        assert_eq!(merger.finish(), Some(vec![text("b")]));
     }
 
     fn text(content: &str) -> Part {
