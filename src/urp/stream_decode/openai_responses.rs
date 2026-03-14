@@ -401,19 +401,8 @@ fn map_responses_event_to_urp_events_with_state(
 ) -> Vec<UrpStreamEvent> {
     match event_name {
         "response.created" | "response.in_progress" => Vec::new(),
-        "response.output_item.added" => {
-            let mut events = Vec::new();
-            if let Some(event) = map_output_item_added(data_val.clone(), index_state) {
-                events.push(event);
-            }
-            if let Some(event) = map_output_item_added_part_start(data_val, index_state) {
-                events.push(event);
-            }
-            events
-        }
-        "response.content_part.added" => map_content_part_added(data_val, index_state)
-            .into_iter()
-            .collect(),
+        "response.output_item.added" => map_output_item_added(data_val, index_state),
+        "response.content_part.added" => map_content_part_added(data_val, index_state),
         "response.output_text.delta" => vec![UrpStreamEvent::Delta {
             part_index: urp_part_index_from_delta(&data_val, index_state),
             delta: PartDelta::Text {
@@ -466,13 +455,9 @@ fn map_responses_event_to_urp_events_with_state(
                 ],
             ),
         }],
-        "response.content_part.done" => map_content_part_done(data_val, index_state)
-            .into_iter()
-            .collect(),
-        "response.output_item.done" => map_output_item_done(data_val, index_state)
-            .into_iter()
-            .collect(),
-        "response.completed" => map_response_completed(data_val).into_iter().collect(),
+        "response.content_part.done" => map_content_part_done(data_val, index_state),
+        "response.output_item.done" => map_output_item_done(data_val, index_state),
+        "response.completed" => map_response_completed(data_val, index_state),
         "error" => vec![UrpStreamEvent::Error {
             code: data_val
                 .get("code")
@@ -493,21 +478,18 @@ fn map_responses_event_to_urp_events_with_state(
 struct ResponsesStreamIndexState {
     next_item_index: u32,
     next_part_index: u32,
-    item_index_by_output_index: HashMap<u64, u32>,
     part_index_by_content_key: HashMap<(u64, u64), u32>,
     synthetic_part_index_by_output_index: HashMap<u64, u32>,
+    output_state_by_index: HashMap<u64, OutputItemStreamState>,
+    active_assistant_item: Option<ActiveAssistantStreamItem>,
+    boundary_merger: GreedyMerger,
 }
 
 impl ResponsesStreamIndexState {
-    fn item_index_for_output(&mut self, output_index: u64) -> u32 {
-        *self
-            .item_index_by_output_index
-            .entry(output_index)
-            .or_insert_with(|| {
-                let next = self.next_item_index;
-                self.next_item_index += 1;
-                next
-            })
+    fn allocate_fresh_item_index(&mut self) -> u32 {
+        let next = self.next_item_index;
+        self.next_item_index += 1;
+        next
     }
 
     fn part_index_for_content(&mut self, output_index: u64, content_index: u64) -> u32 {
@@ -539,90 +521,200 @@ impl ResponsesStreamIndexState {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ActiveAssistantStreamItem {
+    item_index: u32,
+    role: Role,
+    parts: Vec<Part>,
+    extra_body: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct OutputItemStreamState {
+    merged_item_index: Option<u32>,
+    standalone_item_index: Option<u32>,
+    item_type: Option<String>,
+    role: Option<Role>,
+    item_extra_body: HashMap<String, Value>,
+    fed_to_merger: bool,
+    part_done_seen: bool,
+}
+
+fn flush_active_assistant_item(state: &mut ResponsesStreamIndexState, events: &mut Vec<UrpStreamEvent>) {
+    let Some(active_item) = state.active_assistant_item.take() else {
+        return;
+    };
+    events.push(UrpStreamEvent::ItemDone {
+        item_index: active_item.item_index,
+        item: build_message_item(active_item.role, active_item.parts, active_item.extra_body),
+        usage: None,
+        extra_body: HashMap::new(),
+    });
+}
+
+fn finish_assistant_stream_group(
+    state: &mut ResponsesStreamIndexState,
+    events: &mut Vec<UrpStreamEvent>,
+) {
+    let _ = state.boundary_merger.finish();
+    flush_active_assistant_item(state, events);
+}
+
+fn ensure_assistant_item_for_part(
+    state: &mut ResponsesStreamIndexState,
+    output_index: u64,
+    role: Role,
+    item_extra_body: HashMap<String, Value>,
+    boundary_part: Part,
+    events: &mut Vec<UrpStreamEvent>,
+) -> u32 {
+    let action = state.boundary_merger.feed(boundary_part, role);
+    let item_index = match action {
+        Action::Append => {
+            if let Some(active_item) = state.active_assistant_item.as_mut() {
+                merge_extra_body(&mut active_item.extra_body, item_extra_body.clone());
+                active_item.item_index
+            } else {
+                let item_index = state.allocate_fresh_item_index();
+                events.push(UrpStreamEvent::ItemStart {
+                    item_index,
+                    header: ItemHeader::Message { role },
+                    extra_body: item_extra_body.clone(),
+                });
+                state.active_assistant_item = Some(ActiveAssistantStreamItem {
+                    item_index,
+                    role,
+                    parts: Vec::new(),
+                    extra_body: item_extra_body.clone(),
+                });
+                item_index
+            }
+        }
+        Action::FlushAndNew(_) => {
+            flush_active_assistant_item(state, events);
+            let item_index = state.allocate_fresh_item_index();
+            events.push(UrpStreamEvent::ItemStart {
+                item_index,
+                header: ItemHeader::Message { role },
+                extra_body: item_extra_body.clone(),
+            });
+            state.active_assistant_item = Some(ActiveAssistantStreamItem {
+                item_index,
+                role,
+                parts: Vec::new(),
+                extra_body: item_extra_body.clone(),
+            });
+            item_index
+        }
+    };
+
+    let output_state = state.output_state_by_index.entry(output_index).or_default();
+    output_state.merged_item_index = Some(item_index);
+    output_state.role = Some(role);
+    output_state.item_extra_body = item_extra_body;
+    output_state.fed_to_merger = true;
+    item_index
+}
+
 fn map_output_item_added(
     data_val: Value,
     index_state: &mut ResponsesStreamIndexState,
-) -> Option<UrpStreamEvent> {
-    let item = data_val.get("item")?;
+) -> Vec<UrpStreamEvent> {
+    let Some(item) = data_val.get("item") else {
+        return Vec::new();
+    };
     let output_index = data_val
         .get("output_index")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let item_index = index_state.item_index_for_output(output_index);
-    match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
-        "message" => Some(UrpStreamEvent::ItemStart {
-            item_index,
-            header: ItemHeader::Message {
-                role: role_from_item(item),
-            },
-            extra_body: item_extra_body_from_value(item),
-        }),
-        "reasoning" | "function_call" => Some(UrpStreamEvent::ItemStart {
-            item_index,
-            header: ItemHeader::Message {
-                role: Role::Assistant,
-            },
-            extra_body: HashMap::new(),
-        }),
-        "function_call_output" => Some(UrpStreamEvent::ItemStart {
-            item_index,
-            header: ItemHeader::ToolResult {
-                call_id: item
-                    .get("call_id")
-                    .or_else(|| item.get("id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            },
-            extra_body: item_extra_body_from_value(item),
-        }),
-        _ => None,
-    }
-}
+    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let role = role_from_item(item);
+    let item_extra_body = item_extra_body_from_value(item);
+    let mut events = Vec::new();
 
-fn map_output_item_added_part_start(
-    data_val: Value,
-    index_state: &mut ResponsesStreamIndexState,
-) -> Option<UrpStreamEvent> {
-    let item = data_val.get("item")?;
-    let output_index = data_val
-        .get("output_index")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let item_index = index_state.item_index_for_output(output_index);
-    match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
-        "reasoning" => Some(UrpStreamEvent::PartStart {
-            part_index: index_state.synthetic_part_index_for_output(output_index),
-            item_index,
-            header: PartHeader::Reasoning,
-            extra_body: part_extra_body_from_value(item),
-        }),
-        "function_call" => Some(UrpStreamEvent::PartStart {
-            part_index: index_state.synthetic_part_index_for_output(output_index),
-            item_index,
-            header: PartHeader::ToolCall {
-                call_id: item
-                    .get("call_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                name: item
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            },
-            extra_body: part_extra_body_from_value(item),
-        }),
-        _ => None,
+    {
+        let output_state = index_state.output_state_by_index.entry(output_index).or_default();
+        output_state.item_type = Some(item_type.to_string());
+        output_state.role = Some(role);
+        output_state.item_extra_body = item_extra_body.clone();
     }
+
+    match item_type {
+        "reasoning" => {
+            let item_index = ensure_assistant_item_for_part(
+                index_state,
+                output_index,
+                Role::Assistant,
+                item_extra_body,
+                decode_part_from_value(item),
+                &mut events,
+            );
+            events.push(UrpStreamEvent::PartStart {
+                part_index: index_state.synthetic_part_index_for_output(output_index),
+                item_index,
+                header: PartHeader::Reasoning,
+                extra_body: part_extra_body_from_value(item),
+            });
+        }
+        "function_call" => {
+            let item_index = ensure_assistant_item_for_part(
+                index_state,
+                output_index,
+                Role::Assistant,
+                item_extra_body,
+                decode_part_from_value(item),
+                &mut events,
+            );
+            events.push(UrpStreamEvent::PartStart {
+                part_index: index_state.synthetic_part_index_for_output(output_index),
+                item_index,
+                header: PartHeader::ToolCall {
+                    call_id: item
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    name: item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                extra_body: part_extra_body_from_value(item),
+            });
+        }
+        "function_call_output" => {
+            finish_assistant_stream_group(index_state, &mut events);
+            let item_index = index_state.allocate_fresh_item_index();
+            if let Some(output_state) = index_state.output_state_by_index.get_mut(&output_index) {
+                output_state.standalone_item_index = Some(item_index);
+            }
+            events.push(UrpStreamEvent::ItemStart {
+                item_index,
+                header: ItemHeader::ToolResult {
+                    call_id: item
+                        .get("call_id")
+                        .or_else(|| item.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                extra_body: item_extra_body_from_value(item),
+            });
+        }
+        _ => {}
+    }
+
+    events
 }
 
 fn map_content_part_added(
     data_val: Value,
     index_state: &mut ResponsesStreamIndexState,
-) -> Option<UrpStreamEvent> {
-    let part = data_val.get("part")?;
+) -> Vec<UrpStreamEvent> {
+    let Some(part) = data_val.get("part") else {
+        return Vec::new();
+    };
     let output_index = data_val
         .get("output_index")
         .and_then(|v| v.as_u64())
@@ -633,7 +725,33 @@ fn map_content_part_added(
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let part_index = index_state.part_index_for_content(output_index, content_index);
-    let item_index = index_state.item_index_for_output(output_index);
+    let (fed_to_merger, role, item_extra_body) = {
+        let output_state = index_state.output_state_by_index.entry(output_index).or_default();
+        (
+            output_state.fed_to_merger,
+            output_state.role.unwrap_or(Role::Assistant),
+            output_state.item_extra_body.clone(),
+        )
+    };
+
+    let mut events = Vec::new();
+    let item_index = if fed_to_merger {
+        index_state
+            .output_state_by_index
+            .get(&output_index)
+            .and_then(|state| state.merged_item_index)
+            .unwrap_or(0)
+    } else {
+        ensure_assistant_item_for_part(
+            index_state,
+            output_index,
+            role,
+            item_extra_body,
+            decode_part_from_value(part),
+            &mut events,
+        )
+    };
+
     let header = match part.get("type").and_then(|v| v.as_str()).unwrap_or("") {
         "output_text" | "text" => PartHeader::Text,
         "reasoning" => PartHeader::Reasoning,
@@ -655,19 +773,22 @@ fn map_content_part_added(
             body: part.clone(),
         },
     };
-    Some(UrpStreamEvent::PartStart {
+    events.push(UrpStreamEvent::PartStart {
         part_index,
         item_index,
         header,
         extra_body: part_extra_body_from_value(part),
-    })
+    });
+    events
 }
 
 fn map_content_part_done(
     data_val: Value,
     index_state: &mut ResponsesStreamIndexState,
-) -> Option<UrpStreamEvent> {
-    let part = data_val.get("part")?;
+) -> Vec<UrpStreamEvent> {
+    let Some(part) = data_val.get("part") else {
+        return Vec::new();
+    };
     let output_index = data_val
         .get("output_index")
         .and_then(|v| v.as_u64())
@@ -678,38 +799,127 @@ fn map_content_part_done(
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let part_index = index_state.part_index_for_content(output_index, content_index);
-    Some(UrpStreamEvent::PartDone {
+    let decoded_part = decode_part_from_value(part);
+    if let Some(output_state) = index_state.output_state_by_index.get_mut(&output_index) {
+        output_state.part_done_seen = true;
+    }
+    if let Some(active_item) = index_state.active_assistant_item.as_mut() {
+        active_item.parts.push(decoded_part.clone());
+    }
+    vec![UrpStreamEvent::PartDone {
         part_index,
-        part: decode_part_from_value(part),
+        part: decoded_part,
         usage: None,
         extra_body: part_extra_body_from_value(part),
-    })
+    }]
 }
 
 fn map_output_item_done(
     data_val: Value,
     index_state: &mut ResponsesStreamIndexState,
-) -> Option<UrpStreamEvent> {
-    let item = data_val.get("item")?;
-    let item_index = data_val
+) -> Vec<UrpStreamEvent> {
+    let Some(item) = data_val.get("item") else {
+        return Vec::new();
+    };
+    let output_index = data_val
         .get("output_index")
         .and_then(|v| v.as_u64())
-        .map(|output_index| index_state.item_index_for_output(output_index))
         .unwrap_or(0);
-    Some(UrpStreamEvent::ItemDone {
-        item_index,
-        item: decode_item_from_value(item),
-        usage: None,
-        extra_body: item_extra_body_from_value(item),
-    })
+    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let mut events = Vec::new();
+
+    match item_type {
+        "function_call_output" => {
+            let item_index = index_state
+                .output_state_by_index
+                .get(&output_index)
+                .and_then(|state| state.standalone_item_index)
+                .unwrap_or(0);
+            events.push(UrpStreamEvent::ItemDone {
+                item_index,
+                item: decode_item_from_value(item),
+                usage: None,
+                extra_body: item_extra_body_from_value(item),
+            });
+        }
+        "reasoning" | "function_call" => {
+            let part = decode_part_from_value(item);
+            if let Some(active_item) = index_state.active_assistant_item.as_mut() {
+                active_item.parts.push(part.clone());
+            }
+            events.push(UrpStreamEvent::PartDone {
+                part_index: index_state.synthetic_part_index_for_output(output_index),
+                part,
+                usage: None,
+                extra_body: part_extra_body_from_value(item),
+            });
+        }
+        "message" => {
+            let part_done_seen = index_state
+                .output_state_by_index
+                .get(&output_index)
+                .map(|state| state.part_done_seen)
+                .unwrap_or(false);
+            if !part_done_seen {
+                let decoded_item = decode_item_from_value(item);
+                if let Item::Message { parts, .. } = decoded_item {
+                    if let Some(first_part) = parts.first().cloned() {
+                        let item_extra_body = index_state
+                            .output_state_by_index
+                            .get(&output_index)
+                            .map(|state| state.item_extra_body.clone())
+                            .unwrap_or_else(|| item_extra_body_from_value(item));
+                        let role = index_state
+                            .output_state_by_index
+                            .get(&output_index)
+                            .and_then(|state| state.role)
+                            .unwrap_or_else(|| role_from_item(item));
+                        let _ = ensure_assistant_item_for_part(
+                            index_state,
+                            output_index,
+                            role,
+                            item_extra_body,
+                            first_part,
+                            &mut events,
+                        );
+                    }
+                    if let Some(active_item) = index_state.active_assistant_item.as_mut() {
+                        active_item.parts.extend(parts);
+                    }
+                }
+            }
+        }
+        _ => {
+            let part = decode_part_from_value(item);
+            if let Some(active_item) = index_state.active_assistant_item.as_mut() {
+                active_item.parts.push(part.clone());
+            }
+            events.push(UrpStreamEvent::PartDone {
+                part_index: index_state.synthetic_part_index_for_output(output_index),
+                part,
+                usage: None,
+                extra_body: part_extra_body_from_value(item),
+            });
+        }
+    }
+
+    events
 }
 
-fn map_response_completed(data_val: Value) -> Option<UrpStreamEvent> {
+fn map_response_completed(
+    data_val: Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Vec<UrpStreamEvent> {
+    let mut events = Vec::new();
+    finish_assistant_stream_group(index_state, &mut events);
     let response_obj = data_val
         .get("response")
         .and_then(|v| v.as_object())
         .cloned()
-        .or_else(|| data_val.as_object().cloned())?;
+        .or_else(|| data_val.as_object().cloned());
+    let Some(response_obj) = response_obj else {
+        return events;
+    };
     let response_value = Value::Object(response_obj.clone());
     let decoded = crate::urp::decode::openai_responses::decode_response(&response_value).ok();
     let outputs = decoded
@@ -737,7 +947,7 @@ fn map_response_completed(data_val: Value) -> Option<UrpStreamEvent> {
                 _ => None,
             },
         );
-    Some(UrpStreamEvent::ResponseDone {
+    events.push(UrpStreamEvent::ResponseDone {
         finish_reason,
         usage: decoded
             .and_then(|resp| resp.usage)
@@ -749,7 +959,8 @@ fn map_response_completed(data_val: Value) -> Option<UrpStreamEvent> {
                 "id", "object", "created", "model", "status", "output", "usage", "error",
             ],
         ),
-    })
+    });
+    events
 }
 
 fn urp_part_index_from_delta(
@@ -1266,16 +1477,18 @@ mod tests {
             }
         });
 
+        let mut state = ResponsesStreamIndexState::default();
+        let completed_events = map_response_completed(event, &mut state);
         let Some(UrpStreamEvent::ResponseDone {
             finish_reason,
             outputs,
             ..
-        }) = map_response_completed(event)
+        }) = completed_events.last()
         else {
             panic!("expected response done event");
         };
 
-        assert_eq!(finish_reason, Some(FinishReason::ToolCalls));
+        assert_eq!(*finish_reason, Some(FinishReason::ToolCalls));
         assert_eq!(outputs.len(), 1);
         let Item::Message {
             parts, extra_body, ..
@@ -1300,7 +1513,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_reasoning_and_function_call_items_emit_item_and_part_starts_with_sequential_urp_indices() {
+    fn top_level_reasoning_and_function_call_items_share_greedy_merged_item_index() {
         let mut state = ResponsesStreamIndexState::default();
         let reasoning_events = map_responses_event_to_urp_events_with_state(
             "response.output_item.added",
@@ -1344,23 +1557,15 @@ mod tests {
             &HashMap::new(),
             &mut state,
         );
-        assert_eq!(function_events.len(), 2);
+        assert_eq!(function_events.len(), 1);
         assert!(matches!(
             &function_events[0],
-            UrpStreamEvent::ItemStart {
-                item_index,
-                header: ItemHeader::Message { role: Role::Assistant },
-                ..
-            } if *item_index == 1
-        ));
-        assert!(matches!(
-            &function_events[1],
             UrpStreamEvent::PartStart {
                 item_index,
                 part_index,
                 header: PartHeader::ToolCall { call_id, name },
                 ..
-            } if *item_index == 1 && *part_index == 1 && call_id == "call_1" && name == "lookup"
+            } if *item_index == 0 && *part_index == 1 && call_id == "call_1" && name == "lookup"
         ));
 
         let function_delta = map_responses_event_to_urp_events_with_state(
@@ -1398,6 +1603,14 @@ mod tests {
         );
         assert!(matches!(
             &added[0],
+            UrpStreamEvent::ItemStart {
+                item_index,
+                header: ItemHeader::Message { role: Role::Assistant },
+                ..
+            } if *item_index == 0
+        ));
+        assert!(matches!(
+            &added[1],
             UrpStreamEvent::PartStart {
                 part_index,
                 item_index,
@@ -1437,7 +1650,7 @@ mod tests {
             &HashMap::new(),
         );
         let mut state = ResponsesStreamIndexState::default();
-        assert_eq!(state.item_index_for_output(11), 0);
+        assert_eq!(state.allocate_fresh_item_index(), 0);
         assert_eq!(state.part_index_for_content(11, 4), 0);
         assert_eq!(state.synthetic_part_index_for_output(12), 1);
 

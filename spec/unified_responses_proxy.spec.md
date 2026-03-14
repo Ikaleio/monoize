@@ -333,7 +333,7 @@ GZ7. No decoder MUST preserve upstream item boundaries. Greedy merging always ap
 
 GZ8. For provider streaming decoders, the `ResponseDone.outputs` payload MUST satisfy GZ1-GZ7 exactly as the corresponding non-streaming decoder would for the same completed upstream response object.
 
-GZ9. For provider streaming decoders that forward granular upstream events before the terminal object is available, Monoize MAY emit intermediate `UrpStreamEvent` values that still reflect upstream event boundaries. This allowance applies only to pre-terminal stream events. It MUST NOT relax GZ8 for `ResponseDone.outputs`.
+GZ9. For provider streaming decoders, every intermediate assistant `UrpStreamEvent::ItemStart` and `UrpStreamEvent::ItemDone` boundary MUST satisfy GZ1-GZ8 at the time the boundary is emitted. Monoize MUST NOT preserve upstream output-item boundaries when those boundaries contradict greedy merging.
 
 ### 7.1.6 Encoder Splitting
 
