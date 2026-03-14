@@ -258,6 +258,8 @@ RSN2. `text` MUST represent human-readable reasoning text (if available).
 
 RSN3. `signature` MUST contain an opaque provider-supplied string that can be used to correlate or verify reasoning (if available).
 
+RSN4. Inside URP `Part::Reasoning`, the provider-supplied opaque reasoning signature MUST be stored in the typed field `encrypted`. Adapters MUST NOT move that value into `extra_body` under ad-hoc keys such as `signature` when the value semantically represents the reasoning signature payload.
+
 ### 7.1.2a URP-Proto text phase metadata
 
 TPH1. Every URP text part MAY carry optional field `phase`.
@@ -328,6 +330,10 @@ GZ5. A role change between consecutive upstream items MUST always trigger FLUSH,
 GZ6. After greedy merging, every assistant `Item::Message` MUST conform to the part-order constraint: `[Reasoning*] [ContentLike?] [ActionLike*]`.
 
 GZ7. No decoder MUST preserve upstream item boundaries. Greedy merging always applies; upstream message/item boundaries are discarded.
+
+GZ8. For provider streaming decoders, the `ResponseDone.outputs` payload MUST satisfy GZ1-GZ7 exactly as the corresponding non-streaming decoder would for the same completed upstream response object.
+
+GZ9. For provider streaming decoders that forward granular upstream events before the terminal object is available, Monoize MAY emit intermediate `UrpStreamEvent` values that still reflect upstream event boundaries. This allowance applies only to pre-terminal stream events. It MUST NOT relax GZ8 for `ResponseDone.outputs`.
 
 ### 7.1.6 Encoder Splitting
 
@@ -443,6 +449,13 @@ PR6b. Responses streaming phase preservation:
 - When Monoize emits Responses-style downstream SSE, it MUST NOT merge text across distinct `phase` values or across tool-call boundaries.
 - When Monoize synthesizes missing downstream events from `response.completed.output[]`, it MUST preserve both item order and `phase` metadata from the completed payload.
 - Unknown SSE event names, unknown item types, and unknown fields MUST NOT terminate streaming adaptation solely because they are unknown.
+
+PR6c. Final Responses-stream object synthesis:
+
+- If the upstream Responses stream terminates without a `response.completed` event, Monoize MUST synthesize exactly one terminal `UrpStreamEvent::ResponseDone` from the accumulated stream state.
+- If the upstream Responses stream already emitted `response.completed`, Monoize MUST forward at most one corresponding `UrpStreamEvent::ResponseDone`. Monoize MUST NOT emit a duplicate synthetic terminal response after forwarding the upstream terminal response.
+- The synthesized or forwarded `ResponseDone.outputs` value MUST use greedy regrouping per GZ8.
+- When the accumulated assistant text is empty, Monoize MUST NOT synthesize an empty assistant text `Item::Message` solely to carry that empty string.
 
 PR6a. For streaming translation from upstream `type=responses` (or `type=grok`, which uses Responses event shape) to downstream `POST /v1/chat/completions` or `POST /v1/messages`, Monoize MUST support completion-only fallback:
 

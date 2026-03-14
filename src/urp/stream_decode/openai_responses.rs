@@ -11,6 +11,7 @@ use crate::urp::stream_helpers::{
 };
 use crate::urp::{
     FinishReason, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
+    greedy::{Action, GreedyMerger},
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -37,6 +38,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut saw_text_delta = false;
+    let mut response_done_sent = false;
 
     let _ = tx
         .send(UrpStreamEvent::ResponseStart {
@@ -229,130 +231,116 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
 
-        if let Some(stream_event) = map_responses_event_to_urp_event(&ev.event, data_val, &message_phases_by_output_index) {
+        if let Some(stream_event) =
+            map_responses_event_to_urp_event(&ev.event, data_val, &message_phases_by_output_index)
+        {
+            response_done_sent |= matches!(stream_event, UrpStreamEvent::ResponseDone { .. });
             let _ = tx.send(stream_event).await;
         }
     }
 
-    let mut output_items: Vec<Item> = Vec::new();
-    if !reasoning_text.is_empty() || !reasoning_sig.is_empty() {
-        output_items.push(Item::Message {
-            role: Role::Assistant,
-            parts: vec![Part::Reasoning {
-                content: (!reasoning_text.is_empty()).then_some(reasoning_text.clone()),
-                encrypted: None,
-                summary: None,
-                source: None,
-                extra_body: (!reasoning_sig.is_empty())
-                    .then(|| HashMap::from([("signature".to_string(), json!(reasoning_sig.clone()))]))
-                    .unwrap_or_default(),
-            }],
-            extra_body: HashMap::new(),
-        });
-    }
-    for call_id in &call_order {
-        if let Some((name, args)) = calls.get(call_id) {
-            output_items.push(Item::Message {
-                role: Role::Assistant,
-                parts: vec![Part::ToolCall {
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                    arguments: args.clone(),
-                    extra_body: HashMap::new(),
-                }],
-                extra_body: HashMap::new(),
-            });
-        }
-    }
-    let message_extra_body = if let Some((_, phase)) = message_phases_by_output_index
-        .iter()
-        .min_by_key(|(idx, _)| *idx)
-    {
-        HashMap::from([("phase".to_string(), json!(phase))])
-    } else {
-        HashMap::new()
-    };
-    let output_item = Item::Message {
-        role: Role::Assistant,
-        parts: vec![Part::Text {
-            content: output_text.clone(),
-            extra_body: HashMap::new(),
-        }],
-        extra_body: message_extra_body,
-    };
-    output_items.push(output_item.clone());
+    if !response_done_sent {
+        let message_phase = message_phases_by_output_index
+            .iter()
+            .min_by_key(|(idx, _)| *idx)
+            .map(|(_, phase)| phase.as_str());
+        let output_items = build_accumulated_output_items(
+            &reasoning_text,
+            &reasoning_sig,
+            &output_text,
+            message_phase,
+            &call_order,
+            &calls,
+        );
+        let final_usage = latest_stream_usage_snapshot(&runtime_metrics).await;
 
-    let final_usage = latest_stream_usage_snapshot(&runtime_metrics).await;
-    let final_item_index = (output_items.len() - 1) as u32;
-
-    let _ = tx
-        .send(UrpStreamEvent::ItemStart {
-            item_index: final_item_index,
-            header: ItemHeader::Message {
-                role: Role::Assistant,
-            },
-            extra_body: item_extra_body_from_item(&output_item),
-        })
-        .await;
-    if !saw_text_delta {
-        if let Some(text) = output_item_text(&output_item) {
-            let _ = tx
-                .send(UrpStreamEvent::PartStart {
-                    item_index: final_item_index,
-                    part_index: final_item_index,
-                    header: PartHeader::Text,
-                    extra_body: HashMap::new(),
-                })
-                .await;
-            let _ = tx
-                .send(UrpStreamEvent::Delta {
-                    part_index: final_item_index,
-                    delta: PartDelta::Text {
-                        content: text.to_string(),
-                    },
-                    usage: final_usage.clone(),
-                    extra_body: HashMap::new(),
-                })
-                .await;
-            let _ = tx
-                .send(UrpStreamEvent::PartDone {
-                    part_index: final_item_index,
-                    part: Part::Text {
-                        content: text.to_string(),
+        if !saw_text_delta {
+            if let Some((final_item_index, output_item)) = output_items
+                .iter()
+                .enumerate()
+                .find(|(_, item)| output_item_text(item).is_some())
+                .map(|(idx, item)| (idx as u32, item))
+            {
+                let synthetic_text_item = Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Text {
+                        content: output_item_text(output_item)
+                            .expect("text item index must contain text")
+                            .to_string(),
                         extra_body: HashMap::new(),
-                    },
-                    usage: final_usage.clone(),
-                    extra_body: HashMap::new(),
-                })
-                .await;
+                    }],
+                    extra_body: item_extra_body_from_item(output_item),
+                };
+                let _ = tx
+                    .send(UrpStreamEvent::ItemStart {
+                        item_index: final_item_index,
+                        header: ItemHeader::Message {
+                            role: Role::Assistant,
+                        },
+                        extra_body: item_extra_body_from_item(&synthetic_text_item),
+                    })
+                    .await;
+                if let Some(text) = output_item_text(&synthetic_text_item) {
+                    let _ = tx
+                        .send(UrpStreamEvent::PartStart {
+                            item_index: final_item_index,
+                            part_index: final_item_index,
+                            header: PartHeader::Text,
+                            extra_body: HashMap::new(),
+                        })
+                        .await;
+                    let _ = tx
+                        .send(UrpStreamEvent::Delta {
+                            part_index: final_item_index,
+                            delta: PartDelta::Text {
+                                content: text.to_string(),
+                            },
+                            usage: final_usage.clone(),
+                            extra_body: HashMap::new(),
+                        })
+                        .await;
+                    let _ = tx
+                        .send(UrpStreamEvent::PartDone {
+                            part_index: final_item_index,
+                            part: Part::Text {
+                                content: text.to_string(),
+                                extra_body: HashMap::new(),
+                            },
+                            usage: final_usage.clone(),
+                            extra_body: HashMap::new(),
+                        })
+                        .await;
+                }
+                let _ = tx
+                    .send(UrpStreamEvent::ItemDone {
+                        item_index: final_item_index,
+                        item: synthetic_text_item,
+                        usage: final_usage.clone(),
+                        extra_body: HashMap::new(),
+                    })
+                    .await;
+            }
         }
+
+        let _ = tx
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(if outputs_have_tool_calls(&output_items) {
+                    FinishReason::ToolCalls
+                } else {
+                    FinishReason::Stop
+                }),
+                usage: final_usage,
+                outputs: output_items,
+                extra_body: HashMap::from([
+                    ("id".to_string(), json!(response_id)),
+                    ("object".to_string(), json!("response")),
+                    ("created".to_string(), json!(created)),
+                    ("model".to_string(), json!(urp.model.clone())),
+                    ("status".to_string(), json!("completed")),
+                ]),
+            })
+            .await;
     }
-    let _ = tx
-        .send(UrpStreamEvent::ItemDone {
-            item_index: final_item_index,
-            item: output_item,
-            usage: final_usage.clone(),
-            extra_body: HashMap::new(),
-        })
-        .await;
-    let _ = tx
-        .send(UrpStreamEvent::ResponseDone {
-            finish_reason: Some(if call_order.is_empty() {
-                FinishReason::Stop
-            } else {
-                FinishReason::ToolCalls
-            }),
-            usage: final_usage,
-            outputs: output_items,
-            extra_body: HashMap::from([
-                ("id".to_string(), json!(response_id)),
-                ("object".to_string(), json!("response")),
-                ("created".to_string(), json!(created)),
-                ("model".to_string(), json!(urp.model.clone())),
-                ("status".to_string(), json!("completed")),
-            ]),
-        })
-        .await;
     record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
@@ -395,7 +383,13 @@ fn map_responses_event_to_urp_event(
             usage: None,
             extra_body: split_known_fields(
                 data_val,
-                &["delta", "text", "output_index", "content_index", "part_index"],
+                &[
+                    "delta",
+                    "text",
+                    "output_index",
+                    "content_index",
+                    "part_index",
+                ],
             ),
         }),
         "response.function_call_arguments.delta" => Some(UrpStreamEvent::Delta {
@@ -415,7 +409,14 @@ fn map_responses_event_to_urp_event(
             usage: None,
             extra_body: split_known_fields(
                 data_val,
-                &["delta", "call_id", "name", "output_index", "content_index", "part_index"],
+                &[
+                    "delta",
+                    "call_id",
+                    "name",
+                    "output_index",
+                    "content_index",
+                    "part_index",
+                ],
             ),
         }),
         "response.content_part.done" => map_content_part_done(data_val),
@@ -439,7 +440,10 @@ fn map_responses_event_to_urp_event(
 
 fn map_output_item_added(data_val: Value) -> Option<UrpStreamEvent> {
     let item = data_val.get("item")?;
-    let item_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let item_index = data_val
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
     match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
         "message" => Some(UrpStreamEvent::ItemStart {
             item_index,
@@ -471,7 +475,10 @@ fn map_content_part_added(data_val: Value) -> Option<UrpStreamEvent> {
         .or_else(|| data_val.get("part_index"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
-    let item_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let item_index = data_val
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
     let header = match part.get("type").and_then(|v| v.as_str()).unwrap_or("") {
         "output_text" | "text" => PartHeader::Text,
         "reasoning" => PartHeader::Reasoning,
@@ -518,7 +525,10 @@ fn map_content_part_done(data_val: Value) -> Option<UrpStreamEvent> {
 
 fn map_output_item_done(data_val: Value) -> Option<UrpStreamEvent> {
     let item = data_val.get("item")?;
-    let item_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let item_index = data_val
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
     Some(UrpStreamEvent::ItemDone {
         item_index,
         item: decode_item_from_value(item),
@@ -534,32 +544,43 @@ fn map_response_completed(data_val: Value) -> Option<UrpStreamEvent> {
         .cloned()
         .or_else(|| data_val.as_object().cloned())?;
     let response_value = Value::Object(response_obj.clone());
-    let outputs: Vec<Item> = response_obj
-        .get("output")
-        .and_then(|v| v.as_array())
-        .map(|items| items.iter().map(decode_item_from_value).collect())
-        .unwrap_or_default();
-    let finish_reason = match response_obj.get("status").and_then(|v| v.as_str()) {
-        Some("completed") => Some(
-            if outputs.iter().any(|item| {
-                matches!(item, Item::Message { parts, .. } if parts.iter().any(|part| matches!(part, Part::ToolCall { .. })))
-            }) {
-                FinishReason::ToolCalls
-            } else {
-                FinishReason::Stop
+    let decoded = crate::urp::decode::openai_responses::decode_response(&response_value).ok();
+    let outputs = decoded
+        .as_ref()
+        .map(|resp| resp.outputs.clone())
+        .unwrap_or_else(|| {
+            response_obj
+                .get("output")
+                .and_then(|v| v.as_array())
+                .map(|items| items.iter().map(decode_item_from_value).collect())
+                .unwrap_or_default()
+        });
+    let finish_reason = decoded
+        .as_ref()
+        .and_then(|resp| resp.finish_reason)
+        .or_else(
+            || match response_obj.get("status").and_then(|v| v.as_str()) {
+                Some("completed") => Some(if outputs_have_tool_calls(&outputs) {
+                    FinishReason::ToolCalls
+                } else {
+                    FinishReason::Stop
+                }),
+                Some("incomplete") => Some(FinishReason::Length),
+                Some("failed") => Some(FinishReason::Other),
+                _ => None,
             },
-        ),
-        Some("incomplete") => Some(FinishReason::Length),
-        Some("failed") => Some(FinishReason::Other),
-        _ => None,
-    };
+        );
     Some(UrpStreamEvent::ResponseDone {
         finish_reason,
-        usage: parse_usage_from_responses_object(&response_value),
+        usage: decoded
+            .and_then(|resp| resp.usage)
+            .or_else(|| parse_usage_from_responses_object(&response_value)),
         outputs,
         extra_body: split_known_fields(
             response_value,
-            &["id", "object", "created", "model", "status", "output", "usage", "error"],
+            &[
+                "id", "object", "created", "model", "status", "output", "usage", "error",
+            ],
         ),
     })
 }
@@ -578,18 +599,31 @@ fn delta_extra_body_with_phase(
 ) -> HashMap<String, Value> {
     let mut extra = split_known_fields(
         data_val.clone(),
-        &["text", "delta", "output_index", "content_index", "part_index", "phase"],
+        &[
+            "text",
+            "delta",
+            "output_index",
+            "content_index",
+            "part_index",
+            "phase",
+        ],
     );
     if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
         if let Some(phase) = message_phases_by_output_index.get(&idx) {
-            extra.entry("phase".to_string()).or_insert_with(|| json!(phase));
+            extra
+                .entry("phase".to_string())
+                .or_insert_with(|| json!(phase));
         }
     }
     extra
 }
 
 fn role_from_item(item: &Value) -> Role {
-    match item.get("role").and_then(|v| v.as_str()).unwrap_or("assistant") {
+    match item
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("assistant")
+    {
         "system" => Role::System,
         "developer" => Role::Developer,
         "user" => Role::User,
@@ -705,7 +739,9 @@ fn decode_part_from_value(part: &Value) -> Part {
 
 fn item_extra_body_from_item(item: &Item) -> HashMap<String, Value> {
     match item {
-        Item::Message { extra_body, .. } | Item::ToolResult { extra_body, .. } => extra_body.clone(),
+        Item::Message { extra_body, .. } | Item::ToolResult { extra_body, .. } => {
+            extra_body.clone()
+        }
     }
 }
 
@@ -719,12 +755,163 @@ fn output_item_text(item: &Item) -> Option<&str> {
     }
 }
 
+fn outputs_have_tool_calls(items: &[Item]) -> bool {
+    items.iter().any(|item| {
+        matches!(item, Item::Message { parts, .. } if parts.iter().any(|part| matches!(part, Part::ToolCall { .. })))
+    })
+}
+
+fn build_message_item(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Item {
+    Item::Message {
+        role,
+        parts,
+        extra_body,
+    }
+}
+
+fn merge_extra_body(dst: &mut HashMap<String, Value>, src: HashMap<String, Value>) {
+    for (key, value) in src {
+        dst.entry(key).or_insert(value);
+    }
+}
+
+fn flush_assistant_merger(
+    merger: &mut GreedyMerger,
+    pending_extra_body: &mut HashMap<String, Value>,
+    outputs: &mut Vec<Item>,
+) {
+    if let Some(parts) = merger.finish() {
+        outputs.push(build_message_item(
+            Role::Assistant,
+            parts,
+            std::mem::take(pending_extra_body),
+        ));
+    }
+}
+
+fn feed_assistant_part(
+    merger: &mut GreedyMerger,
+    pending_extra_body: &mut HashMap<String, Value>,
+    outputs: &mut Vec<Item>,
+    part: Part,
+    item_extra_body: &HashMap<String, Value>,
+) {
+    match merger.feed(part, Role::Assistant) {
+        Action::Append => {
+            if pending_extra_body.is_empty() {
+                *pending_extra_body = item_extra_body.clone();
+            } else {
+                merge_extra_body(pending_extra_body, item_extra_body.clone());
+            }
+        }
+        Action::FlushAndNew(flushed_parts) => {
+            outputs.push(build_message_item(
+                Role::Assistant,
+                flushed_parts,
+                std::mem::take(pending_extra_body),
+            ));
+            *pending_extra_body = item_extra_body.clone();
+        }
+    }
+}
+
+fn build_accumulated_output_items(
+    reasoning_text: &str,
+    reasoning_sig: &str,
+    output_text: &str,
+    message_phase: Option<&str>,
+    call_order: &[String],
+    calls: &HashMap<String, (String, String)>,
+) -> Vec<Item> {
+    let mut outputs = Vec::new();
+    let mut merger = GreedyMerger::new();
+    let mut pending_assistant_extra_body = HashMap::new();
+
+    if !reasoning_text.is_empty() || !reasoning_sig.is_empty() {
+        feed_assistant_part(
+            &mut merger,
+            &mut pending_assistant_extra_body,
+            &mut outputs,
+            Part::Reasoning {
+                content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
+                encrypted: (!reasoning_sig.is_empty())
+                    .then(|| Value::String(reasoning_sig.to_string())),
+                summary: None,
+                source: None,
+                extra_body: HashMap::new(),
+            },
+            &HashMap::new(),
+        );
+    }
+
+    if !output_text.is_empty() {
+        let mut text_extra_body = HashMap::new();
+        if let Some(phase) = message_phase {
+            text_extra_body.insert("phase".to_string(), json!(phase));
+        }
+        feed_assistant_part(
+            &mut merger,
+            &mut pending_assistant_extra_body,
+            &mut outputs,
+            Part::Text {
+                content: output_text.to_string(),
+                extra_body: text_extra_body,
+            },
+            &HashMap::new(),
+        );
+    }
+
+    for call_id in call_order {
+        if let Some((name, arguments)) = calls.get(call_id) {
+            feed_assistant_part(
+                &mut merger,
+                &mut pending_assistant_extra_body,
+                &mut outputs,
+                Part::ToolCall {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    extra_body: HashMap::new(),
+                },
+                &HashMap::new(),
+            );
+        }
+    }
+
+    flush_assistant_merger(&mut merger, &mut pending_assistant_extra_body, &mut outputs);
+    outputs
+}
+
 fn item_extra_body_from_value(item: &Value) -> HashMap<String, Value> {
-    split_known_fields(item.clone(), &["type", "role", "content", "call_id", "id", "output", "name", "arguments"])
+    split_known_fields(
+        item.clone(),
+        &[
+            "type",
+            "role",
+            "content",
+            "call_id",
+            "id",
+            "output",
+            "name",
+            "arguments",
+        ],
+    )
 }
 
 fn part_extra_body_from_value(part: &Value) -> HashMap<String, Value> {
-    split_known_fields(part.clone(), &["type", "text", "refusal", "call_id", "name", "arguments", "source", "encrypted_content"])
+    split_known_fields(
+        part.clone(),
+        &[
+            "type",
+            "text",
+            "refusal",
+            "call_id",
+            "name",
+            "arguments",
+            "source",
+            "encrypted_content",
+        ],
+    )
 }
 
 fn split_known_fields(value: Value, known_fields: &[&str]) -> HashMap<String, Value> {
@@ -737,4 +924,155 @@ fn split_known_fields(value: Value, known_fields: &[&str]) -> HashMap<String, Va
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_accumulated_output_items_greedily_merges_reasoning_text_and_tool_calls() {
+        let calls = HashMap::from([(
+            "call_1".to_string(),
+            ("lookup".to_string(), "{}".to_string()),
+        )]);
+
+        let outputs = build_accumulated_output_items(
+            "think",
+            "sig_1",
+            "answer",
+            Some("analysis"),
+            &["call_1".to_string()],
+            &calls,
+        );
+
+        assert_eq!(outputs.len(), 1);
+        let Item::Message {
+            role,
+            parts,
+            extra_body,
+        } = &outputs[0]
+        else {
+            panic!("expected assistant message output");
+        };
+        assert_eq!(*role, Role::Assistant);
+        assert!(extra_body.is_empty());
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                content: Some(content),
+                encrypted: Some(Value::String(sig)),
+                ..
+            } if content == "think" && sig == "sig_1"
+        ));
+        assert!(matches!(
+            &parts[1],
+            Part::Text { content, extra_body } if content == "answer" && extra_body.get("phase") == Some(&json!("analysis"))
+        ));
+        assert!(matches!(
+            &parts[2],
+            Part::ToolCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } if call_id == "call_1" && name == "lookup" && arguments == "{}"
+        ));
+    }
+
+    #[test]
+    fn build_accumulated_output_items_omits_empty_text_message() {
+        let outputs = build_accumulated_output_items(
+            "",
+            "sig_only",
+            "",
+            Some("analysis"),
+            &[],
+            &HashMap::new(),
+        );
+
+        assert_eq!(outputs.len(), 1);
+        let Item::Message {
+            parts, extra_body, ..
+        } = &outputs[0]
+        else {
+            panic!("expected assistant message output");
+        };
+        assert!(extra_body.is_empty());
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                content: None,
+                encrypted: Some(Value::String(sig)),
+                ..
+            } if sig == "sig_only"
+        ));
+    }
+
+    #[test]
+    fn map_response_completed_uses_greedy_nonstream_decoder_shape() {
+        let event = json!({
+            "response": {
+                "id": "resp_test",
+                "object": "response",
+                "created": 1,
+                "model": "gpt-5.4",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "text": "think",
+                        "encrypted_content": "sig_1"
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "phase": "analysis",
+                        "content": [
+                            { "type": "output_text", "text": "answer" }
+                        ]
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "lookup",
+                        "arguments": "{}"
+                    }
+                ]
+            }
+        });
+
+        let Some(UrpStreamEvent::ResponseDone {
+            finish_reason,
+            outputs,
+            ..
+        }) = map_response_completed(event)
+        else {
+            panic!("expected response done event");
+        };
+
+        assert_eq!(finish_reason, Some(FinishReason::ToolCalls));
+        assert_eq!(outputs.len(), 1);
+        let Item::Message {
+            parts, extra_body, ..
+        } = &outputs[0]
+        else {
+            panic!("expected assistant message output");
+        };
+        assert!(extra_body.is_empty());
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                content: Some(content),
+                encrypted: Some(Value::String(sig)),
+                ..
+            } if content == "think" && sig == "sig_1"
+        ));
+        assert!(matches!(
+            &parts[1],
+            Part::Text { content, extra_body } if content == "answer" && extra_body.get("phase") == Some(&json!("analysis"))
+        ));
+        assert!(matches!(&parts[2], Part::ToolCall { call_id, .. } if call_id == "call_1"));
+    }
 }
