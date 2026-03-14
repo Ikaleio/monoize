@@ -341,6 +341,8 @@ ES1. The Responses encoder MUST split a merged `Item::Message` back into native 
 
 ES2. The Chat Completions encoder MUST prevent content/tool-call interleaving within a single chat message by splitting `Item::Message` items at content-to-action and action-to-content boundaries.
 
+ES2a. When rendering a non-streaming Chat Completions response, Monoize MUST merge all assistant `Item::Message` outputs back into one `choices[0].message` object. The merged object MUST preserve the full assistant content sequence, all tool calls, reasoning fields, and preserved unknown fields. Monoize MUST NOT silently discard later assistant message segments.
+
 ES3. The Anthropic Messages encoder MUST merge consecutive assistant `Item::Message` items into a single `messages[]` entry with `role="assistant"`, concatenating their content blocks.
 
 ### 7.7 Extra field forwarding

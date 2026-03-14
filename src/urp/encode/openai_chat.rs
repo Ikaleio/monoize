@@ -6,7 +6,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 struct PendingChatMessage {
@@ -257,28 +257,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         }
     }
 
-    let mut encoded_messages = encode_messages(&assistant_messages);
-    let message = match encoded_messages.len() {
-        0 => {
-            let mut fallback = Map::new();
-            fallback.insert("role".to_string(), Value::String("assistant".to_string()));
-            fallback.insert("content".to_string(), Value::String(String::new()));
-            if let Some(Item::Message { extra_body, .. }) = assistant_messages.first() {
-                merge_extra(&mut fallback, extra_body);
-            }
-            fallback
-        }
-        _ => encoded_messages
-            .drain(..1)
-            .next()
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_else(|| {
-                let mut fallback = Map::new();
-                fallback.insert("role".to_string(), Value::String("assistant".to_string()));
-                fallback.insert("content".to_string(), Value::String(String::new()));
-                fallback
-            }),
-    };
+    let message = merge_assistant_chat_messages(&assistant_messages);
 
     let finish_reason = resp
         .finish_reason
@@ -503,6 +482,99 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     }
 }
 
+fn merge_assistant_chat_messages(assistant_messages: &[Item]) -> Map<String, Value> {
+    let encoded_messages = encode_messages(assistant_messages);
+    if encoded_messages.is_empty() {
+        let mut fallback = Map::new();
+        fallback.insert("role".to_string(), Value::String("assistant".to_string()));
+        fallback.insert("content".to_string(), Value::String(String::new()));
+        if let Some(Item::Message { extra_body, .. }) = assistant_messages.first() {
+            merge_extra(&mut fallback, extra_body);
+        }
+        return fallback;
+    }
+
+    let mut merged = Map::new();
+    merged.insert("role".to_string(), Value::String("assistant".to_string()));
+
+    let mut merged_content_parts = Vec::new();
+    let mut merged_tool_calls = Vec::new();
+    let mut merged_reasoning_details = Vec::new();
+    let mut refusal: Option<String> = None;
+
+    for encoded in encoded_messages {
+        let Some(obj) = encoded.as_object() else {
+            continue;
+        };
+
+        merge_message_content_parts(obj.get("content"), &mut merged_content_parts);
+
+        if let Some(tool_calls) = obj.get("tool_calls").and_then(|v| v.as_array()) {
+            merged_tool_calls.extend(tool_calls.iter().cloned());
+        }
+
+        if let Some(details) = obj.get("reasoning_details").and_then(|v| v.as_array()) {
+            merged_reasoning_details.extend(details.iter().cloned());
+        }
+
+        if let Some(reasoning) = obj.get("reasoning") {
+            merged
+                .entry("reasoning".to_string())
+                .or_insert_with(|| reasoning.clone());
+        }
+
+        if refusal.is_none() {
+            refusal = obj
+                .get("refusal")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .map(str::to_string);
+        }
+
+        for (key, value) in obj {
+            if matches!(
+                key.as_str(),
+                "role" | "content" | "tool_calls" | "refusal" | "reasoning" | "reasoning_details"
+            ) {
+                continue;
+            }
+            merged.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+
+    finalize_chat_message_content(&mut merged, merged_content_parts);
+    if !merged_tool_calls.is_empty() {
+        merged.insert("tool_calls".to_string(), Value::Array(merged_tool_calls));
+    }
+    if let Some(refusal) = refusal {
+        merged.insert("refusal".to_string(), Value::String(refusal));
+    }
+    if !merged_reasoning_details.is_empty() {
+        merged.insert(
+            "reasoning_details".to_string(),
+            Value::Array(merged_reasoning_details),
+        );
+    }
+
+    merged
+}
+
+fn merge_message_content_parts(content: Option<&Value>, out: &mut Vec<Value>) {
+    let Some(content) = content else {
+        return;
+    };
+
+    match content {
+        Value::String(text) => {
+            if !text.is_empty() {
+                out.push(json!({ "type": "text", "text": text }));
+            }
+        }
+        Value::Array(parts) => out.extend(parts.iter().cloned()),
+        _ => {}
+    }
+}
+
 fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
     match finish_reason {
         FinishReason::Stop => "stop",
@@ -723,17 +795,87 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 4);
         assert_eq!(output.accepted_prediction_tokens, 5);
         assert_eq!(output.rejected_prediction_tokens, 6);
-        assert!(decoded_usage
-            .extra_body
-            .get("prompt_tokens_details")
-            .is_none());
-        assert!(decoded_usage
-            .extra_body
-            .get("completion_tokens_details")
-            .is_none());
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("prompt_tokens_details")
+                .is_none()
+        );
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("completion_tokens_details")
+                .is_none()
+        );
         assert_eq!(
             decoded_usage.extra_body.get("provider_specific"),
             Some(&json!(true))
         );
+    }
+
+    #[test]
+    fn encode_response_merges_multiple_assistant_segments_into_one_chat_message() {
+        let response = UrpResponse {
+            id: "chatcmpl_segments".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Text {
+                        content: "prep".to_string(),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: HashMap::from([("phase".to_string(), json!("analysis"))]),
+                },
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::ToolCall {
+                        call_id: "call_1".to_string(),
+                        name: "tool".to_string(),
+                        arguments: "{}".to_string(),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![
+                        Part::Reasoning {
+                            content: Some("think".to_string()),
+                            encrypted: Some(json!("sig_1")),
+                            summary: None,
+                            source: None,
+                            extra_body: empty_map(),
+                        },
+                        Part::Text {
+                            content: "answer".to_string(),
+                            extra_body: empty_map(),
+                        },
+                    ],
+                    extra_body: HashMap::from([("segment".to_string(), json!(3))]),
+                },
+            ],
+            finish_reason: Some(FinishReason::ToolCalls),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        let message = encoded["choices"][0]["message"]
+            .as_object()
+            .expect("chat message object");
+        let content = message
+            .get("content")
+            .and_then(|value| value.as_array())
+            .expect("content should be block array");
+
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["text"], json!("prep"));
+        assert_eq!(content[1]["text"], json!("answer"));
+        assert_eq!(message["tool_calls"][0]["function"]["name"], json!("tool"));
+        assert_eq!(message["reasoning"], json!("think"));
+        assert_eq!(message["reasoning_details"][0]["signature"], json!("sig_1"));
+        assert_eq!(message.get("phase"), Some(&json!("analysis")));
+        assert_eq!(message.get("segment"), Some(&json!(3)));
     }
 }
