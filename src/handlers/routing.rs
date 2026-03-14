@@ -552,7 +552,11 @@ pub(super) fn error_to_sse_stream(
     match downstream {
         DownstreamProtocol::Responses => {
             let mut seq: u64 = 1;
-            let payload = json!({ "sequence_number": seq, "data": error_json });
+            let payload = crate::urp::stream_helpers::normalize_responses_payload(
+                seq,
+                "error",
+                error_json,
+            );
             seq += 1;
             events.push(Event::default().event("error").data(payload.to_string()));
             let _ = seq;
@@ -571,10 +575,4 @@ pub(super) fn error_to_sse_stream(
     }
     events.push(Event::default().data("[DONE]"));
     futures_util::stream::iter(events.into_iter().map(Ok))
-}
-
-pub(crate) fn wrap_responses_event(seq: &mut u64, name: &str, data: Value) -> Event {
-    let payload = json!({ "sequence_number": *seq, "data": data });
-    *seq += 1;
-    Event::default().event(name).data(payload.to_string())
 }

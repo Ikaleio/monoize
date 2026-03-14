@@ -29,6 +29,7 @@ enum ResponsesOutputZone {
 struct ActiveResponsesOutputItem {
     zone: ResponsesOutputZone,
     output_index: usize,
+    item_id: String,
     item: Value,
 }
 
@@ -45,6 +46,7 @@ struct StreamedPartState {
     output_index: usize,
     zone: ResponsesOutputZone,
     content_index: Option<u32>,
+    item_id: String,
     call_id: Option<String>,
     name: Option<String>,
 }
@@ -97,7 +99,11 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.reasoning_text.delta",
-                        json!({}),
+                        json!({
+                            "response_id": response_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                        }),
                         "delta",
                         &text,
                         sse_max_frame_length,
@@ -109,7 +115,11 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.reasoning_signature.delta",
-                        json!({}),
+                        json!({
+                            "response_id": response_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                        }),
                         "delta",
                         &sig,
                         sse_max_frame_length,
@@ -127,6 +137,8 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &mut seq,
                         "response.function_call_arguments.delta",
                         json!({
+                            "response_id": response_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "call_id": call_id,
                             "name": name
@@ -146,7 +158,7 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.output_text.delta",
-                        responses_text_delta_payload("", phase.as_deref()),
+                        responses_text_delta_payload("", phase.as_deref(), &response_id, item),
                         "delta",
                         &text,
                         sse_max_frame_length,
@@ -277,16 +289,22 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     let active_output = pending_item.active_output.get_or_insert_with(|| {
                         let output_index = next_output_index;
                         next_output_index += 1;
+                        let item = stream_output_item_start_stub(
+                            zone,
+                            pending_item.role,
+                            &pending_item.item_extra_body,
+                            &header,
+                            &extra_body,
+                        );
                         ActiveResponsesOutputItem {
                             zone,
                             output_index,
-                            item: stream_output_item_start_stub(
-                                zone,
-                                pending_item.role,
-                                &pending_item.item_extra_body,
-                                &header,
-                                &extra_body,
-                            ),
+                            item_id: item
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            item,
                         }
                     });
 
@@ -325,6 +343,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             zone,
                             content_index: (zone == ResponsesOutputZone::Message)
                                 .then_some(part_index),
+                            item_id: active_output.item_id.clone(),
                             call_id: part_call_id_from_header(&header),
                             name: part_name_from_header(&header),
                         },
@@ -343,6 +362,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             output_index: 0,
                             zone: ResponsesOutputZone::Message,
                             content_index: Some(part_index),
+                            item_id: String::new(),
                             call_id: None,
                             name: None,
                         });
@@ -356,7 +376,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &tx,
                         &mut seq,
                         "response.output_text.delta",
-                        responses_text_delta_payload("", None)
+                        responses_text_delta_payload("", None, &response_id, &json!({ "id": part_state.item_id }))
                             .as_object()
                             .cloned()
                             .map(Value::Object)
@@ -394,6 +414,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             output_index: 0,
                             zone: ResponsesOutputZone::Reasoning,
                             content_index: None,
+                            item_id: String::new(),
                             call_id: None,
                             name: None,
                         });
@@ -408,6 +429,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &mut seq,
                         "response.reasoning_text.delta",
                         json!({
+                            "response_id": response_id,
+                            "item_id": part_state.item_id,
                             "output_index": part_state.output_index,
                         }),
                         "delta",
@@ -425,6 +448,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             output_index: 0,
                             zone: ResponsesOutputZone::FunctionCall,
                             content_index: None,
+                            item_id: String::new(),
                             call_id: Some(String::new()),
                             name: Some(String::new()),
                         });
@@ -439,6 +463,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &mut seq,
                         "response.function_call_arguments.delta",
                         json!({
+                            "response_id": response_id,
+                            "item_id": part_state.item_id,
                             "output_index": part_state.output_index,
                             "call_id": part_state.call_id.clone().unwrap_or_default(),
                             "name": part_state.name.clone().unwrap_or_default(),
@@ -458,6 +484,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             output_index: 0,
                             zone: ResponsesOutputZone::Message,
                             content_index: Some(part_index),
+                            item_id: String::new(),
                             call_id: None,
                             name: None,
                         });
@@ -472,6 +499,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &mut seq,
                         "response.output_text.delta",
                         json!({
+                            "response_id": response_id,
+                            "item_id": part_state.item_id,
                             "output_index": part_state.output_index,
                             "content_index": part_state.content_index.unwrap_or(part_index),
                             "delta": "",

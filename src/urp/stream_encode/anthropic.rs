@@ -6,6 +6,13 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+#[derive(Clone, Copy, Default)]
+struct StreamedDeltaState {
+    text_like_seen: bool,
+    reasoning_text_seen: bool,
+    tool_args_seen: bool,
+}
+
 pub(crate) async fn emit_synthetic_messages_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
@@ -37,7 +44,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
             }
         }
     });
-    send_plain_sse_data(&tx, start.to_string()).await?;
+    send_named_messages_event(&tx, start).await?;
 
     let mut index = 0u32;
     for item in &resp.outputs {
@@ -58,7 +65,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                 content.as_deref().filter(|content| !content.is_empty())
                             {
                                 let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": "" } });
-                                send_plain_sse_data(&tx, s.to_string()).await?;
+                                send_named_messages_event(&tx, s).await?;
                                 send_messages_delta_string(
                                     &tx,
                                     json!({ "type": "content_block_delta", "index": index, "delta": { "type": "thinking_delta", "thinking": "" } }),
@@ -68,7 +75,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                 )
                                 .await?;
                                 let e = json!({ "type": "content_block_stop", "index": index });
-                                send_plain_sse_data(&tx, e.to_string()).await?;
+                                send_named_messages_event(&tx, e).await?;
                                 index += 1;
                             }
                             if let Some(data) = encrypted {
@@ -78,7 +85,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                     .unwrap_or_else(|| data.to_string());
                                 if !sig.is_empty() {
                                     let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": "" } });
-                                    send_plain_sse_data(&tx, s.to_string()).await?;
+                                    send_named_messages_event(&tx, s).await?;
                                     send_messages_delta_string(
                                         &tx,
                                         json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": "" } }),
@@ -88,7 +95,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                     )
                                     .await?;
                                     let e = json!({ "type": "content_block_stop", "index": index });
-                                    send_plain_sse_data(&tx, e.to_string()).await?;
+                                    send_named_messages_event(&tx, e).await?;
                                     index += 1;
                                 }
                             }
@@ -105,7 +112,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                 "index": index,
                                 "content_block": { "type": "tool_use", "id": call_id, "name": name, "input": {} }
                             });
-                            send_plain_sse_data(&tx, start_tool.to_string()).await?;
+                            send_named_messages_event(&tx, start_tool).await?;
                             if !arguments.is_empty() {
                                 send_messages_delta_string(
                                     &tx,
@@ -121,7 +128,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                 .await?;
                             }
                             let stop_tool = json!({ "type": "content_block_stop", "index": index });
-                            send_plain_sse_data(&tx, stop_tool.to_string()).await?;
+                            send_named_messages_event(&tx, stop_tool).await?;
                             index += 1;
                         }
                         Part::Text { content, .. } | Part::Refusal { content, .. } => {
@@ -129,7 +136,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                 continue;
                             }
                             let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "text", "text": "" } });
-                            send_plain_sse_data(&tx, s.to_string()).await?;
+                            send_named_messages_event(&tx, s).await?;
                             send_messages_delta_string(
                                 &tx,
                                 json!({ "type": "content_block_delta", "index": index, "delta": { "type": "text_delta", "text": "" } }),
@@ -139,7 +146,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                             )
                             .await?;
                             let e = json!({ "type": "content_block_stop", "index": index });
-                            send_plain_sse_data(&tx, e.to_string()).await?;
+                            send_named_messages_event(&tx, e).await?;
                             index += 1;
                         }
                         _ => {}
@@ -162,8 +169,8 @@ pub(crate) async fn emit_synthetic_messages_stream(
             "output_tokens": usage.output_tokens
         }
     });
-    send_plain_sse_data(&tx, message_delta.to_string()).await?;
-    send_plain_sse_data(&tx, json!({ "type": "message_stop" }).to_string()).await?;
+    send_named_messages_event(&tx, message_delta).await?;
+    send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
     Ok(())
 }
 
@@ -175,7 +182,9 @@ pub(crate) async fn encode_urp_stream_as_messages(
 ) -> AppResult<()> {
     let mut next_content_block_index = 0u32;
     let mut part_index_to_block_index = HashMap::new();
+    let mut delta_state_by_part = HashMap::<u32, StreamedDeltaState>::new();
     let mut saw_tool_use = false;
+    let mut saw_stream_parts = false;
     let mut response_usage: Option<Usage> = None;
 
     while let Some(event) = rx.recv().await {
@@ -197,12 +206,13 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         }
                     }
                 });
-                send_plain_sse_data(&tx, start.to_string()).await?;
+                send_named_messages_event(&tx, start).await?;
             }
             UrpStreamEvent::ItemStart { .. } | UrpStreamEvent::ItemDone { .. } => {}
             UrpStreamEvent::PartStart {
                 part_index, header, ..
             } => {
+                saw_stream_parts = true;
                 let block_index = next_content_block_index;
                 let content_block = match header {
                     PartHeader::Text | PartHeader::Refusal => {
@@ -225,7 +235,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     "index": block_index,
                     "content_block": content_block
                 });
-                send_plain_sse_data(&tx, start.to_string()).await?;
+                send_named_messages_event(&tx, start).await?;
             }
             UrpStreamEvent::Delta {
                 part_index,
@@ -233,8 +243,22 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 usage,
                 ..
             } => {
+                saw_stream_parts = true;
                 if let Some(usage) = usage {
                     response_usage = Some(usage);
+                }
+                let part_state = delta_state_by_part.entry(part_index).or_default();
+                match &delta {
+                    PartDelta::Text { .. } | PartDelta::Refusal { .. } => {
+                        part_state.text_like_seen = true;
+                    }
+                    PartDelta::Reasoning { .. } => {
+                        part_state.reasoning_text_seen = true;
+                    }
+                    PartDelta::ToolCallArguments { .. } => {
+                        part_state.tool_args_seen = true;
+                    }
+                    _ => {}
                 }
 
                 let block_index = ensure_messages_block_started_for_delta(
@@ -294,6 +318,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 }
             }
             UrpStreamEvent::PartDone { part_index, part, .. } => {
+                saw_stream_parts = true;
                 let block_index = ensure_messages_block_started_for_part(
                     &tx,
                     &mut part_index_to_block_index,
@@ -304,17 +329,19 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 )
                 .await?;
 
+                let streamed_state = delta_state_by_part.remove(&part_index).unwrap_or_default();
                 emit_messages_part_done_payload(
                     &tx,
                     block_index,
                     &part,
                     sse_max_frame_length,
+                    streamed_state,
                 )
                 .await?;
 
                 part_index_to_block_index.remove(&part_index);
                 let stop = json!({ "type": "content_block_stop", "index": block_index });
-                send_plain_sse_data(&tx, stop.to_string()).await?;
+                send_named_messages_event(&tx, stop).await?;
             }
             UrpStreamEvent::ResponseDone {
                 finish_reason,
@@ -322,7 +349,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 outputs,
                 ..
             } => {
-                if part_index_to_block_index.is_empty() {
+                if !saw_stream_parts {
                     emit_messages_outputs_from_response_done(
                         &tx,
                         &mut next_content_block_index,
@@ -361,8 +388,8 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         "output_tokens": usage.output_tokens
                     }
                 });
-                send_plain_sse_data(&tx, message_delta.to_string()).await?;
-                send_plain_sse_data(&tx, json!({ "type": "message_stop" }).to_string()).await?;
+                send_named_messages_event(&tx, message_delta).await?;
+                send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
             }
             UrpStreamEvent::Error { code, message, .. } => {
                 let error = json!({
@@ -372,7 +399,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         "message": message
                     }
                 });
-                send_plain_sse_data(&tx, error.to_string()).await?;
+                send_named_messages_event(&tx, error).await?;
             }
         }
     }
@@ -414,7 +441,7 @@ async fn ensure_messages_block_started_for_delta(
         "index": block_index,
         "content_block": content_block
     });
-    send_plain_sse_data(tx, start.to_string()).await?;
+    send_named_messages_event(tx, start).await?;
     Ok(block_index)
 }
 
@@ -452,7 +479,7 @@ async fn ensure_messages_block_started_for_part(
         "index": block_index,
         "content_block": content_block
     });
-    send_plain_sse_data(tx, start.to_string()).await?;
+    send_named_messages_event(tx, start).await?;
     Ok(block_index)
 }
 
@@ -461,10 +488,11 @@ async fn emit_messages_part_done_payload(
     block_index: u32,
     part: &Part,
     sse_max_frame_length: Option<usize>,
+    streamed_state: StreamedDeltaState,
 ) -> AppResult<()> {
     match part {
         Part::Text { content, .. } | Part::Refusal { content, .. } => {
-            if !content.is_empty() {
+            if !streamed_state.text_like_seen && !content.is_empty() {
                 send_messages_delta_string(
                     tx,
                     json!({
@@ -485,7 +513,9 @@ async fn emit_messages_part_done_payload(
             extra_body,
             ..
         } => {
-            if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+            if !streamed_state.reasoning_text_seen
+                && let Some(content) = content.as_deref().filter(|content| !content.is_empty())
+            {
                 send_messages_delta_string(
                     tx,
                     json!({
@@ -526,7 +556,7 @@ async fn emit_messages_part_done_payload(
             }
         }
         Part::ToolCall { arguments, .. } => {
-            if !arguments.is_empty() {
+            if !streamed_state.tool_args_seen && !arguments.is_empty() {
                 send_messages_delta_string(
                     tx,
                     json!({
@@ -555,7 +585,7 @@ async fn close_open_message_blocks(
     remaining_blocks.sort_unstable();
     for block_index in remaining_blocks {
         let stop = json!({ "type": "content_block_stop", "index": block_index });
-        send_plain_sse_data(tx, stop.to_string()).await?;
+        send_named_messages_event(tx, stop).await?;
     }
     Ok(())
 }
@@ -591,12 +621,32 @@ async fn emit_messages_outputs_from_response_done(
                 "index": block_index,
                 "content_block": content_block
             });
-            send_plain_sse_data(tx, start.to_string()).await?;
-            emit_messages_part_done_payload(tx, block_index, part, sse_max_frame_length).await?;
+            send_named_messages_event(tx, start).await?;
+            emit_messages_part_done_payload(
+                tx,
+                block_index,
+                part,
+                sse_max_frame_length,
+                StreamedDeltaState::default(),
+            )
+            .await?;
             let stop = json!({ "type": "content_block_stop", "index": block_index });
-            send_plain_sse_data(tx, stop.to_string()).await?;
+            send_named_messages_event(tx, stop).await?;
         }
     }
 
     Ok(())
+}
+
+async fn send_named_messages_event(tx: &mpsc::Sender<Event>, payload: Value) -> AppResult<()> {
+    let event_name = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| crate::error::AppError::new(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "stream_encode_failed",
+            "messages stream payload missing type field",
+        ))?;
+    send_named_sse_json(tx, &event_name, payload).await
 }

@@ -786,6 +786,17 @@ DM5. Reasoning:
 
 DM6. For downstream `POST /v1/messages` streaming responses synthesized or translated from non-messages upstream event formats, Monoize MUST set `message_delta.usage` from cumulative stream usage counters when available.
 
+DM7. For downstream `POST /v1/messages` SSE streams, Monoize MUST emit an SSE `event:` line whose value exactly equals the payload `type` field for every named Messages event (`message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, `ping`, and `error`).
+
+DM8. For downstream `POST /v1/messages` SSE streams, every content block index MUST be emitted in strict non-interleaved lifecycle order:
+
+- exactly one `content_block_start` for that index;
+- zero or more `content_block_delta` events for that index;
+- exactly one `content_block_stop` for that index;
+- no events for a later-emitted block may appear between `content_block_start` and `content_block_stop` of an earlier-emitted block.
+
+DM9. For downstream `POST /v1/messages` SSE streams, Monoize MUST NOT emit duplicate `content_block_start`, duplicate `content_block_stop`, or duplicate final-content replays for a block whose streamed deltas already carried the same text / thinking / input-json bytes.
+
 ### 7.9 Downstream endpoint: `POST /v1/embeddings`
 
 DE1. Monoize MUST authenticate and apply pre-forward balance guard exactly as other forwarding endpoints.
@@ -856,15 +867,19 @@ When the downstream endpoint is `POST /v1/responses` with `stream=true`, Monoize
 - `response.output_item.done`
 - `response.completed` or `response.failed`
 
-STR1. Each SSE event `data` MUST be a JSON object containing:
+STR1. Each SSE event `data` MUST be one JSON object whose event metadata lives at the top level. Monoize MUST NOT wrap the protocol payload inside an extra `data` object.
 
 ```json
-{ "sequence_number": 1, "data": { ... } }
+{ "type": "response.created", "sequence_number": 1, ... }
 ```
 
 STR2. `sequence_number` MUST be monotonically increasing starting from 1 within a single response stream.
 
 STR3. For downstream `POST /v1/responses` streams synthesized from non-responses upstream event formats, Monoize MUST include a `usage` object in the terminal `response.completed` payload when cumulative stream usage counters are available.
+
+STR3a. For downstream `POST /v1/responses` streams, every SSE payload MUST include a top-level string field `type` whose value exactly equals the SSE `event:` name.
+
+STR3b. For downstream `POST /v1/responses` text / reasoning / function-call delta payloads, Monoize MUST include top-level `response_id` and `item_id` fields whenever the delta belongs to a concrete response output item.
 
 ### 8.1 Internal URP stream events
 

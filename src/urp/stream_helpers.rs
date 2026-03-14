@@ -1,5 +1,4 @@
 use crate::error::{AppError, AppResult};
-use crate::handlers::routing::wrap_responses_event;
 use axum::http::StatusCode;
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
@@ -7,6 +6,16 @@ use tokio::sync::mpsc;
 
 pub(crate) async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: String) -> AppResult<()> {
     tx.send(Event::default().data(data))
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
+}
+
+pub(crate) async fn send_named_sse_json(
+    tx: &mpsc::Sender<Event>,
+    name: &str,
+    data: Value,
+) -> AppResult<()> {
+    tx.send(Event::default().event(name).data(data.to_string()))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
 }
@@ -31,7 +40,14 @@ pub(crate) async fn send_responses_delta_string(
     content: &str,
     max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    for part in split_wrapped_responses_json_string_field(*seq, template, field, content, max_frame_length) {
+    for part in split_wrapped_responses_json_string_field(
+        *seq,
+        name,
+        template,
+        field,
+        content,
+        max_frame_length,
+    ) {
         send_responses_event(tx, seq, name, part).await?;
     }
     Ok(())
@@ -67,14 +83,24 @@ pub(crate) async fn send_messages_delta_string(
     content: &str,
     max_frame_length: Option<usize>,
 ) -> AppResult<()> {
+    let event_name = template
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "stream_encode_failed",
+            "messages stream payload missing type field",
+        ))?
+        .to_string();
     for chunk in split_json_value_by_string_patch(template, content, patch, max_frame_length) {
-        send_plain_sse_data(tx, chunk.to_string()).await?;
+        send_named_sse_json(tx, &event_name, chunk).await?;
     }
     Ok(())
 }
 
 pub(crate) fn split_wrapped_responses_json_string_field(
     seq: u64,
+    event_name: &str,
     mut template: Value,
     field: &str,
     content: &str,
@@ -83,7 +109,7 @@ pub(crate) fn split_wrapped_responses_json_string_field(
     if let Some(obj) = template.as_object_mut() {
         obj.insert(field.to_string(), Value::String(String::new()));
     }
-    let wrapped_template_len = responses_wrapped_payload_length(seq, &template);
+    let wrapped_template_len = responses_payload_length(seq, event_name, &template);
     split_json_by_estimated_limit(template, content, max_frame_length, wrapped_template_len, move |value, part| {
         if let Some(obj) = value.as_object_mut() {
             obj.insert(field.to_string(), Value::String(part.to_string()));
@@ -142,8 +168,31 @@ pub(crate) fn split_json_by_estimated_limit(
         .collect()
 }
 
-pub(crate) fn responses_wrapped_payload_length(seq: u64, data: &Value) -> usize {
-    json!({ "sequence_number": seq, "data": data })
+pub(crate) fn wrap_responses_event(seq: &mut u64, name: &str, data: Value) -> Event {
+    let payload = normalize_responses_payload(*seq, name, data);
+    *seq += 1;
+    Event::default().event(name).data(payload.to_string())
+}
+
+pub(crate) fn normalize_responses_payload(seq: u64, name: &str, data: Value) -> Value {
+    match data {
+        Value::Object(mut obj) => {
+            obj.insert("type".to_string(), Value::String(name.to_string()));
+            obj.insert("sequence_number".to_string(), json!(seq));
+            Value::Object(obj)
+        }
+        other => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String(name.to_string()));
+            obj.insert("sequence_number".to_string(), json!(seq));
+            obj.insert("data".to_string(), other);
+            Value::Object(obj)
+        }
+    }
+}
+
+pub(crate) fn responses_payload_length(seq: u64, name: &str, data: &Value) -> usize {
+    normalize_responses_payload(seq, name, data.clone())
         .to_string()
         .len()
 }
@@ -503,8 +552,20 @@ pub(crate) fn insert_phase_if_present(obj: &mut Map<String, Value>, phase: Optio
     }
 }
 
-pub(crate) fn responses_text_delta_payload(text: &str, phase: Option<&str>) -> Value {
+pub(crate) fn responses_text_delta_payload(
+    text: &str,
+    phase: Option<&str>,
+    response_id: &str,
+    item: &Value,
+) -> Value {
     let mut obj = Map::new();
+    obj.insert(
+        "response_id".to_string(),
+        Value::String(response_id.to_string()),
+    );
+    if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+        obj.insert("item_id".to_string(), Value::String(item_id.to_string()));
+    }
     obj.insert("text".to_string(), Value::String(text.to_string()));
     insert_phase_if_present(&mut obj, phase);
     Value::Object(obj)

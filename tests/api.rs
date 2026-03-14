@@ -1795,7 +1795,15 @@ async fn responses_streaming_emits_sse_events() {
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(text.contains("event: response.created"));
     assert!(text.contains("event: response.completed"));
-    assert!(text.contains("\"sequence_number\":"));
+    let frames = parse_responses_sse_json(&text);
+    assert!(!frames.is_empty(), "expected responses sse frames");
+    let created = frames
+        .iter()
+        .find(|(event, _)| event == "response.created")
+        .expect("response.created frame");
+    assert_eq!(created.1["type"].as_str(), Some("response.created"));
+    assert!(created.1.get("data").is_none(), "must not wrap payload in data field");
+    assert!(created.1["sequence_number"].as_u64().is_some());
 }
 
 #[tokio::test]
@@ -3028,6 +3036,66 @@ async fn responses_streaming_reencodes_greedy_merged_items_with_canonical_sse_bo
 }
 
 #[tokio::test]
+async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"stream tool"}]}],
+                "tools":[{ "type":"function","name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}],
+                "stream": true,
+                "stream_mode": "reasoning_text_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let text_delta = frames
+        .iter()
+        .find(|(event, _)| event == "response.output_text.delta")
+        .expect("output text delta");
+    assert_eq!(
+        text_delta.1["type"].as_str(),
+        Some("response.output_text.delta")
+    );
+    assert!(text_delta.1.get("data").is_none(), "must not nest payload under data");
+    assert!(text_delta.1["response_id"].as_str().is_some(), "text delta must include response_id");
+    assert!(text_delta.1["item_id"].as_str().is_some(), "text delta must include item_id");
+
+    let reasoning_delta = frames
+        .iter()
+        .find(|(event, _)| event == "response.reasoning_text.delta")
+        .expect("reasoning delta");
+    assert_eq!(
+        reasoning_delta.1["type"].as_str(),
+        Some("response.reasoning_text.delta")
+    );
+    assert!(reasoning_delta.1["response_id"].as_str().is_some());
+    assert!(reasoning_delta.1["item_id"].as_str().is_some());
+
+    let function_delta = frames
+        .iter()
+        .find(|(event, _)| event == "response.function_call_arguments.delta")
+        .expect("function call delta");
+    assert_eq!(
+        function_delta.1["type"].as_str(),
+        Some("response.function_call_arguments.delta")
+    );
+    assert!(function_delta.1["response_id"].as_str().is_some());
+    assert!(function_delta.1["item_id"].as_str().is_some());
+}
+
+#[tokio::test]
 async fn chat_streaming_maps_tool_calls_and_reasoning_from_responses_upstream() {
     let ctx = setup().await;
     let req = Request::builder()
@@ -3553,6 +3621,79 @@ async fn messages_streaming_from_responses_includes_message_delta_usage() {
 }
 
 #[tokio::test]
+async fn messages_streaming_emits_named_sse_events() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream text" }] }],
+            "stream": true
+        }),
+    )
+    .await;
+    let frames = parse_sse_frames(&text);
+    let first_json = frames
+        .iter()
+        .find_map(|(event, data)| {
+            if data == "[DONE]" {
+                return None;
+            }
+            Some((
+                event.clone().expect("messages frame should have event name"),
+                serde_json::from_str::<Value>(data).expect("messages frame should be json"),
+            ))
+        })
+        .expect("at least one messages frame");
+    assert_eq!(first_json.0, "message_start");
+    assert_eq!(first_json.1["type"].as_str(), Some("message_start"));
+    assert!(text.contains("event: message_start"));
+    assert!(text.contains("event: content_block_start"));
+    assert!(text.contains("event: content_block_delta"));
+    assert!(text.contains("event: message_delta"));
+    assert!(text.contains("event: message_stop"));
+}
+
+#[tokio::test]
+async fn messages_streaming_does_not_duplicate_text_deltas_or_blocks() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-chat",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream chat text" }] }],
+            "stream": true
+        }),
+    )
+    .await;
+
+    let text_deltas: Vec<String> = events
+        .iter()
+        .filter(|event| {
+            event["type"].as_str() == Some("content_block_delta")
+                && event["delta"]["type"].as_str() == Some("text_delta")
+        })
+        .filter_map(|event| event["delta"]["text"].as_str().map(|text| text.to_string()))
+        .collect();
+    assert_eq!(
+        text_deltas,
+        vec!["stream chat text".to_string()],
+        "text should stream once without full-content replay"
+    );
+
+    let text_block_starts = events
+        .iter()
+        .filter(|event| {
+            event["type"].as_str() == Some("content_block_start")
+                && event["content_block"]["type"].as_str() == Some("text")
+        })
+        .count();
+    assert_eq!(text_block_starts, 1, "text block should start exactly once");
+}
+
+#[tokio::test]
 async fn messages_upstream_sends_anthropic_version_header() {
     let ctx = setup().await;
     let (status, _body) = json_post(
@@ -3843,8 +3984,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
                 );
                 let value: Value = serde_json::from_str(payload).expect("delta payload json");
                 let piece = value
-                    .get("data")
-                    .and_then(|v| v.get("delta"))
+                    .get("delta")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 reconstructed.push_str(piece);
@@ -4191,6 +4331,59 @@ async fn collect_messages_stream_events(ctx: &TestContext, body: Value) -> Vec<V
         .collect()
 }
 
+async fn collect_messages_stream_text(ctx: &TestContext, body: Value) -> String {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+fn parse_sse_frames(text: &str) -> Vec<(Option<String>, String)> {
+    text.split("\n\n")
+        .filter_map(|frame| {
+            let frame = frame.trim();
+            if frame.is_empty() {
+                return None;
+            }
+            let mut event_name = None;
+            let mut data_lines = Vec::new();
+            for line in frame.lines() {
+                if let Some(value) = line.strip_prefix("event: ") {
+                    event_name = Some(value.to_string());
+                } else if let Some(value) = line.strip_prefix("data: ") {
+                    data_lines.push(value.to_string());
+                }
+            }
+            if data_lines.is_empty() {
+                return None;
+            }
+            Some((event_name, data_lines.join("\n")))
+        })
+        .collect()
+}
+
+fn parse_responses_sse_json(text: &str) -> Vec<(String, Value)> {
+    parse_sse_frames(text)
+        .into_iter()
+        .filter_map(|(event, data)| {
+            if data == "[DONE]" {
+                return None;
+            }
+            Some((
+                event.expect("responses frame should have event name"),
+                serde_json::from_str::<Value>(&data).expect("responses frame should be json"),
+            ))
+        })
+        .collect()
+}
+
 fn assert_messages_stream_invariants(events: &[Value], label: &str) {
     assert!(!events.is_empty(), "{label}: expected at least one event");
     assert_eq!(
@@ -4240,6 +4433,48 @@ fn assert_messages_stream_invariants(events: &[Value], label: &str) {
         assert!(
             stops.contains(idx),
             "{label}: content_block_start(index={idx}) has no matching stop"
+        );
+    }
+
+    for idx in starts {
+        let lifecycle: Vec<&str> = events
+            .iter()
+            .filter(|event| event["index"].as_u64() == Some(idx))
+            .filter_map(|event| event["type"].as_str())
+            .collect();
+        assert!(
+            !lifecycle.is_empty(),
+            "{label}: expected lifecycle events for block {idx}"
+        );
+        assert_eq!(
+            lifecycle.first().copied(),
+            Some("content_block_start"),
+            "{label}: block {idx} must start with content_block_start"
+        );
+        assert_eq!(
+            lifecycle.last().copied(),
+            Some("content_block_stop"),
+            "{label}: block {idx} must end with content_block_stop"
+        );
+        assert_eq!(
+            lifecycle.iter().filter(|ty| **ty == "content_block_start").count(),
+            1,
+            "{label}: block {idx} must have exactly one start"
+        );
+        assert_eq!(
+            lifecycle.iter().filter(|ty| **ty == "content_block_stop").count(),
+            1,
+            "{label}: block {idx} must have exactly one stop"
+        );
+        let stop_pos = lifecycle
+            .iter()
+            .position(|ty| *ty == "content_block_stop")
+            .expect("stop position");
+        assert!(
+            lifecycle[..stop_pos]
+                .iter()
+                .all(|ty| matches!(*ty, "content_block_start" | "content_block_delta")),
+            "{label}: block {idx} contains non-delta event before stop"
         );
     }
 }
