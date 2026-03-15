@@ -190,6 +190,7 @@ pub(crate) async fn emit_synthetic_responses_stream(
         json!({ "response": completed_response }),
     )
     .await?;
+    send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
     Ok(())
 }
 
@@ -640,6 +641,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     json!({ "response": completed_response }),
                 )
                 .await?;
+                send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
             }
             UrpStreamEvent::Error { code, message, .. } => {
                 send_responses_event(
@@ -733,6 +735,10 @@ fn stream_output_item_start_stub(
         ResponsesOutputZone::Reasoning => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("reasoning"));
+            obj.insert(
+                "id".to_string(),
+                json!(format!("rs_{}", uuid::Uuid::new_v4())),
+            );
             obj.insert("status".to_string(), json!("in_progress"));
             if let PartHeader::ProviderItem { body, .. } = header {
                 merge_json_extra_value(&mut obj, body);
@@ -848,12 +854,24 @@ fn apply_part_done_to_stream_output_item(active_output: &mut ActiveResponsesOutp
         }
         ResponsesOutputZone::Reasoning => {
             if let Some(reasoning_item) = encode_reasoning_output_item(part) {
-                active_output.item = mark_stream_output_item_in_progress(&reasoning_item);
+                let mut item = mark_stream_output_item_in_progress(&reasoning_item);
+                if let Some(existing_id) = active_output.item.get("id").cloned()
+                    && let Some(obj) = item.as_object_mut()
+                {
+                    obj.insert("id".to_string(), existing_id);
+                }
+                active_output.item = item;
             }
         }
         ResponsesOutputZone::FunctionCall => {
             if let Some(function_item) = encode_function_call_output_item(part) {
-                active_output.item = mark_stream_output_item_in_progress(&function_item);
+                let mut item = mark_stream_output_item_in_progress(&function_item);
+                if let Some(existing_id) = active_output.item.get("id").cloned()
+                    && let Some(obj) = item.as_object_mut()
+                {
+                    obj.insert("id".to_string(), existing_id);
+                }
+                active_output.item = item;
             }
         }
     }

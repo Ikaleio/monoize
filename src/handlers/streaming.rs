@@ -136,21 +136,20 @@ pub(super) async fn forward_stream_typed(
                     let logical_model_for_stream = logical_model.clone();
                     tokio::spawn(async move {
                         let tx_err = tx.clone();
-                        if let Err(err) = emit_synthetic_stream_from_urp_response(
+                        let stream_result = emit_synthetic_stream_from_urp_response(
                             downstream,
                             &logical_model_for_stream,
                             &resp,
                             sse_max_frame_length,
                             tx,
                         )
-                        .await
-                        {
+                        .await;
+                        if let Err(err) = stream_result {
                             tracing::warn!("synthetic stream failed: {}", err.message);
+                            if matches!(downstream, DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses) {
+                                let _ = tx_err.send(Event::default().data("[DONE]")).await;
+                            }
                         }
-                        // Always terminate the SSE stream.  emit_synthetic_chat_stream
-                        // already sends [DONE], but the responses and messages variants
-                        // do not — the duplicate is harmless.
-                        let _ = tx_err.send(Event::default().data("[DONE]")).await;
                     });
                     return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
                 }
@@ -357,7 +356,8 @@ pub(super) async fn forward_stream_typed(
                         tried_providers_for_log,
                     );
 
-                    if let Err(err) = stream_result {
+                    let stream_failed = stream_result.is_err();
+                    if let Err(ref err) = stream_result {
                         tracing::warn!("stream passthrough adapter failed: {}", err.message);
                         let error_json = json!({
                             "error": {
@@ -389,11 +389,11 @@ pub(super) async fn forward_stream_typed(
                             }
                         }
                     }
-                    // Always send [DONE] to terminate the SSE stream, whether the
-                    // adapter succeeded or failed.  Several adapter functions
-                    // (all *_as_responses and *_as_messages variants) do not emit
-                    // [DONE] themselves; the duplicate is harmless for those that do.
-                    let _ = tx_err.send(Event::default().data("[DONE]")).await;
+                    if stream_failed
+                        && matches!(downstream, DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses)
+                    {
+                        let _ = tx_err.send(Event::default().data("[DONE]")).await;
+                    }
                 });
                 return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
             }

@@ -1,17 +1,10 @@
 use crate::error::AppResult;
 use crate::urp::stream_helpers::*;
-use crate::urp::{self, FinishReason, Item, Part, PartDelta, PartHeader, Role, UrpStreamEvent, Usage};
+use crate::urp::{self, FinishReason, Item, Part, PartHeader, Role, UrpStreamEvent, Usage};
 use axum::response::sse::Event;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
-
-#[derive(Clone, Copy, Default)]
-struct StreamedDeltaState {
-    text_like_seen: bool,
-    reasoning_text_seen: bool,
-    tool_args_seen: bool,
-}
 
 pub(crate) async fn emit_synthetic_messages_stream(
     logical_model: &str,
@@ -181,8 +174,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     let mut next_content_block_index = 0u32;
-    let mut part_index_to_block_index = HashMap::new();
-    let mut delta_state_by_part = HashMap::<u32, StreamedDeltaState>::new();
     let mut saw_tool_use = false;
     let mut saw_stream_parts = false;
     let mut response_usage: Option<Usage> = None;
@@ -210,136 +201,36 @@ pub(crate) async fn encode_urp_stream_as_messages(
             }
             UrpStreamEvent::ItemStart { .. } | UrpStreamEvent::ItemDone { .. } => {}
             UrpStreamEvent::PartStart {
-                part_index, header, ..
+                header, ..
             } => {
                 saw_stream_parts = true;
+                if matches!(header, PartHeader::ToolCall { .. }) {
+                    saw_tool_use = true;
+                }
+            }
+            UrpStreamEvent::Delta {
+                delta: _,
+                usage,
+                ..
+            } => {
+                if let Some(usage) = usage {
+                    response_usage = Some(usage);
+                }
+            }
+            UrpStreamEvent::PartDone { part, .. } => {
+                saw_stream_parts = true;
                 let block_index = next_content_block_index;
-                let content_block = match header {
-                    PartHeader::Text | PartHeader::Refusal => {
-                        json!({ "type": "text", "text": "" })
-                    }
-                    PartHeader::Reasoning => {
-                        json!({ "type": "thinking", "thinking": "", "signature": "" })
-                    }
-                    PartHeader::ToolCall { call_id, name } => {
-                        saw_tool_use = true;
-                        json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })
-                    }
-                    _ => continue,
-                };
-
-                part_index_to_block_index.insert(part_index, block_index);
                 next_content_block_index += 1;
+                let content_block = content_block_from_part(&part, &mut saw_tool_use)?;
                 let start = json!({
                     "type": "content_block_start",
                     "index": block_index,
                     "content_block": content_block
                 });
                 send_named_messages_event(&tx, start).await?;
-            }
-            UrpStreamEvent::Delta {
-                part_index,
-                delta,
-                usage,
-                ..
-            } => {
-                saw_stream_parts = true;
-                if let Some(usage) = usage {
-                    response_usage = Some(usage);
-                }
-                let part_state = delta_state_by_part.entry(part_index).or_default();
-                match &delta {
-                    PartDelta::Text { .. } | PartDelta::Refusal { .. } => {
-                        part_state.text_like_seen = true;
-                    }
-                    PartDelta::Reasoning { .. } => {
-                        part_state.reasoning_text_seen = true;
-                    }
-                    PartDelta::ToolCallArguments { .. } => {
-                        part_state.tool_args_seen = true;
-                    }
-                    _ => {}
-                }
 
-                let block_index = ensure_messages_block_started_for_delta(
-                    &tx,
-                    &mut part_index_to_block_index,
-                    &mut next_content_block_index,
-                    &mut saw_tool_use,
-                    part_index,
-                    &delta,
-                )
-                .await?;
+                emit_messages_part_done_payload(&tx, block_index, &part, sse_max_frame_length).await?;
 
-                match delta {
-                    PartDelta::Text { content } | PartDelta::Refusal { content } => {
-                        send_messages_delta_string(
-                            &tx,
-                            json!({
-                                "type": "content_block_delta",
-                                "index": block_index,
-                                "delta": { "type": "text_delta", "text": "" }
-                            }),
-                            messages_delta_path_text,
-                            &content,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
-                    PartDelta::Reasoning { content } => {
-                        send_messages_delta_string(
-                            &tx,
-                            json!({
-                                "type": "content_block_delta",
-                                "index": block_index,
-                                "delta": { "type": "thinking_delta", "thinking": "" }
-                            }),
-                            messages_delta_path_thinking,
-                            &content,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
-                    PartDelta::ToolCallArguments { arguments } => {
-                        send_messages_delta_string(
-                            &tx,
-                            json!({
-                                "type": "content_block_delta",
-                                "index": block_index,
-                                "delta": { "type": "input_json_delta", "partial_json": "" }
-                            }),
-                            messages_delta_path_partial_json,
-                            &arguments,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
-                    _ => {}
-                }
-            }
-            UrpStreamEvent::PartDone { part_index, part, .. } => {
-                saw_stream_parts = true;
-                let block_index = ensure_messages_block_started_for_part(
-                    &tx,
-                    &mut part_index_to_block_index,
-                    &mut next_content_block_index,
-                    &mut saw_tool_use,
-                    part_index,
-                    &part,
-                )
-                .await?;
-
-                let streamed_state = delta_state_by_part.remove(&part_index).unwrap_or_default();
-                emit_messages_part_done_payload(
-                    &tx,
-                    block_index,
-                    &part,
-                    sse_max_frame_length,
-                    streamed_state,
-                )
-                .await?;
-
-                part_index_to_block_index.remove(&part_index);
                 let stop = json!({ "type": "content_block_stop", "index": block_index });
                 send_named_messages_event(&tx, stop).await?;
             }
@@ -358,8 +249,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         sse_max_frame_length,
                     )
                     .await?;
-                } else {
-                    close_open_message_blocks(&tx, &mut part_index_to_block_index).await?;
                 }
 
                 let usage = usage.or_else(|| response_usage.clone()).unwrap_or(Usage {
@@ -407,56 +296,10 @@ pub(crate) async fn encode_urp_stream_as_messages(
     Ok(())
 }
 
-async fn ensure_messages_block_started_for_delta(
-    tx: &mpsc::Sender<Event>,
-    part_index_to_block_index: &mut HashMap<u32, u32>,
-    next_content_block_index: &mut u32,
-    saw_tool_use: &mut bool,
-    part_index: u32,
-    delta: &PartDelta,
-) -> AppResult<u32> {
-    if let Some(&block_index) = part_index_to_block_index.get(&part_index) {
-        return Ok(block_index);
-    }
-
-    let content_block = match delta {
-        PartDelta::Text { .. } | PartDelta::Refusal { .. } => json!({ "type": "text", "text": "" }),
-        PartDelta::Reasoning { .. } => json!({ "type": "thinking", "thinking": "", "signature": "" }),
-        PartDelta::ToolCallArguments { .. } => {
-            *saw_tool_use = true;
-            json!({ "type": "tool_use", "id": format!("call_{part_index}"), "name": "", "input": {} })
-        }
-        _ => return Err(crate::error::AppError::new(
-            axum::http::StatusCode::BAD_GATEWAY,
-            "stream_encode_failed",
-            "unsupported URP delta for Anthropic messages stream",
-        )),
-    };
-
-    let block_index = *next_content_block_index;
-    *next_content_block_index += 1;
-    part_index_to_block_index.insert(part_index, block_index);
-    let start = json!({
-        "type": "content_block_start",
-        "index": block_index,
-        "content_block": content_block
-    });
-    send_named_messages_event(tx, start).await?;
-    Ok(block_index)
-}
-
-async fn ensure_messages_block_started_for_part(
-    tx: &mpsc::Sender<Event>,
-    part_index_to_block_index: &mut HashMap<u32, u32>,
-    next_content_block_index: &mut u32,
-    saw_tool_use: &mut bool,
-    part_index: u32,
+fn content_block_from_part(
     part: &Part,
-) -> AppResult<u32> {
-    if let Some(&block_index) = part_index_to_block_index.get(&part_index) {
-        return Ok(block_index);
-    }
-
+    saw_tool_use: &mut bool,
+) -> AppResult<Value> {
     let content_block = match part {
         Part::Text { .. } | Part::Refusal { .. } => json!({ "type": "text", "text": "" }),
         Part::Reasoning { .. } => json!({ "type": "thinking", "thinking": "", "signature": "" }),
@@ -470,17 +313,7 @@ async fn ensure_messages_block_started_for_part(
             "unsupported URP part for Anthropic messages stream",
         )),
     };
-
-    let block_index = *next_content_block_index;
-    *next_content_block_index += 1;
-    part_index_to_block_index.insert(part_index, block_index);
-    let start = json!({
-        "type": "content_block_start",
-        "index": block_index,
-        "content_block": content_block
-    });
-    send_named_messages_event(tx, start).await?;
-    Ok(block_index)
+    Ok(content_block)
 }
 
 async fn emit_messages_part_done_payload(
@@ -488,11 +321,10 @@ async fn emit_messages_part_done_payload(
     block_index: u32,
     part: &Part,
     sse_max_frame_length: Option<usize>,
-    streamed_state: StreamedDeltaState,
 ) -> AppResult<()> {
     match part {
         Part::Text { content, .. } | Part::Refusal { content, .. } => {
-            if !streamed_state.text_like_seen && !content.is_empty() {
+            if !content.is_empty() {
                 send_messages_delta_string(
                     tx,
                     json!({
@@ -513,9 +345,7 @@ async fn emit_messages_part_done_payload(
             extra_body,
             ..
         } => {
-            if !streamed_state.reasoning_text_seen
-                && let Some(content) = content.as_deref().filter(|content| !content.is_empty())
-            {
+            if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
                 send_messages_delta_string(
                     tx,
                     json!({
@@ -556,7 +386,7 @@ async fn emit_messages_part_done_payload(
             }
         }
         Part::ToolCall { arguments, .. } => {
-            if !streamed_state.tool_args_seen && !arguments.is_empty() {
+            if !arguments.is_empty() {
                 send_messages_delta_string(
                     tx,
                     json!({
@@ -574,19 +404,6 @@ async fn emit_messages_part_done_payload(
         _ => {}
     }
 
-    Ok(())
-}
-
-async fn close_open_message_blocks(
-    tx: &mpsc::Sender<Event>,
-    part_index_to_block_index: &mut HashMap<u32, u32>,
-) -> AppResult<()> {
-    let mut remaining_blocks: Vec<u32> = part_index_to_block_index.drain().map(|(_, block_index)| block_index).collect();
-    remaining_blocks.sort_unstable();
-    for block_index in remaining_blocks {
-        let stop = json!({ "type": "content_block_stop", "index": block_index });
-        send_named_messages_event(tx, stop).await?;
-    }
     Ok(())
 }
 
@@ -622,14 +439,7 @@ async fn emit_messages_outputs_from_response_done(
                 "content_block": content_block
             });
             send_named_messages_event(tx, start).await?;
-            emit_messages_part_done_payload(
-                tx,
-                block_index,
-                part,
-                sse_max_frame_length,
-                StreamedDeltaState::default(),
-            )
-            .await?;
+            emit_messages_part_done_payload(tx, block_index, part, sse_max_frame_length).await?;
             let stop = json!({ "type": "content_block_stop", "index": block_index });
             send_named_messages_event(tx, stop).await?;
         }

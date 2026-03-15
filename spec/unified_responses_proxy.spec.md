@@ -760,6 +760,8 @@ DC6. If the selected upstream provider type is `chat_completion` and the upstrea
 
 DC7. For downstream `POST /v1/chat/completions` streaming responses synthesized from non-chat upstream event formats, Monoize MUST include a `usage` object in the terminal chat chunk when cumulative stream usage counters are available.
 
+DC8. For downstream `POST /v1/chat/completions` streaming responses, Monoize MUST emit SSE as data-only frames: every assistant chunk MUST be encoded as `data: {json}` with no named `event:` line, and successful stream termination MUST emit exactly one terminal `data: [DONE]` sentinel.
+
 ### 7.8 Downstream adapter: `POST /v1/messages`
 
 DM1. Monoize MUST parse the downstream request as a Messages create request and convert it into URP-Proto.
@@ -796,6 +798,8 @@ DM8. For downstream `POST /v1/messages` SSE streams, every content block index M
 - no events for a later-emitted block may appear between `content_block_start` and `content_block_stop` of an earlier-emitted block.
 
 DM9. For downstream `POST /v1/messages` SSE streams, Monoize MUST NOT emit duplicate `content_block_start`, duplicate `content_block_stop`, or duplicate final-content replays for a block whose streamed deltas already carried the same text / thinking / input-json bytes.
+
+DM10. For downstream `POST /v1/messages` successful SSE streams, Monoize MUST terminate with `message_stop` and MUST NOT append any additional `data: [DONE]` sentinel.
 
 ### 7.9 Downstream endpoint: `POST /v1/embeddings`
 
@@ -881,6 +885,8 @@ STR3a. For downstream `POST /v1/responses` streams, every SSE payload MUST inclu
 
 STR3b. For downstream `POST /v1/responses` text / reasoning / function-call delta payloads, Monoize MUST include top-level `response_id` and `item_id` fields whenever the delta belongs to a concrete response output item.
 
+STR3c. For downstream `POST /v1/responses` successful SSE streams, Monoize MUST emit exactly one terminal `data: [DONE]` sentinel after the final JSON event payload. The sentinel MUST be a plain `data:` frame and MUST NOT be emitted as a named SSE event.
+
 ### 8.1 Internal URP stream events
 
 STR4. URP-Proto internally represents stream boundaries using `ItemStart` and `ItemDone` events:
@@ -904,7 +910,7 @@ STR6. Every `ItemStart` event MUST be followed by exactly one `ItemDone` event w
 When a streaming request (`stream=true`) encounters an error — either before any upstream data is received (e.g. no available provider) or mid-stream (e.g. upstream connection failure) — Monoize MUST:
 
 1. Emit a protocol-appropriate error event to the downstream client.
-2. Emit a final `data: [DONE]` SSE event.
+2. Emit the protocol-appropriate terminal sentinel for that downstream endpoint.
 3. Close the SSE connection.
 
 ### 9.1 Pre-stream errors
@@ -913,10 +919,13 @@ SE1. If an error occurs before any data has been streamed (e.g. routing failure,
 
 - For `POST /v1/chat/completions`: one `data` event with an OpenAI-compatible error JSON object, followed by `data: [DONE]`.
 - For `POST /v1/responses`: one named `event: error` with a sequence-numbered error payload, followed by `data: [DONE]`.
-- For `POST /v1/messages`: one named `event: error` with an Anthropic-compatible error object, followed by `data: [DONE]`.
+- For `POST /v1/messages`: one named `event: error` with an Anthropic-compatible error object, then close the SSE stream without appending `data: [DONE]`.
 
 ### 9.2 Mid-stream errors
 
-SE2. If an error occurs after streaming has begun (e.g. upstream disconnects, parse failure), Monoize MUST emit a protocol-appropriate error event followed by `data: [DONE]` on the existing SSE connection, then close it.
+SE2. If an error occurs after streaming has begun (e.g. upstream disconnects, parse failure), Monoize MUST emit a protocol-appropriate error event, then:
+
+- for downstream `POST /v1/chat/completions` and `POST /v1/responses`, emit exactly one terminal `data: [DONE]` sentinel and close the stream;
+- for downstream `POST /v1/messages`, close the stream without appending `data: [DONE]`.
 
 SE3. If the downstream channel sender is already closed (client disconnected), Monoize MAY silently discard the error event.

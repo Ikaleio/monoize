@@ -1804,6 +1804,7 @@ async fn responses_streaming_emits_sse_events() {
     assert_eq!(created.1["type"].as_str(), Some("response.created"));
     assert!(created.1.get("data").is_none(), "must not wrap payload in data field");
     assert!(created.1["sequence_number"].as_u64().is_some());
+    assert_eq!(count_done_sentinels(&text), 1, "responses stream must emit exactly one [DONE]");
 }
 
 #[tokio::test]
@@ -3080,8 +3081,31 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
         reasoning_delta.1["type"].as_str(),
         Some("response.reasoning_text.delta")
     );
-    assert!(reasoning_delta.1["response_id"].as_str().is_some());
-    assert!(reasoning_delta.1["item_id"].as_str().is_some());
+    let reasoning_response_id = reasoning_delta.1["response_id"]
+        .as_str()
+        .expect("reasoning delta response_id");
+    let reasoning_item_id = reasoning_delta.1["item_id"]
+        .as_str()
+        .expect("reasoning delta item_id");
+    assert!(!reasoning_response_id.is_empty(), "reasoning response_id must be non-empty");
+    assert!(!reasoning_item_id.is_empty(), "reasoning item_id must be non-empty");
+
+    let reasoning_done = frames
+        .iter()
+        .find(|(event, payload)| {
+            event == "response.output_item.done"
+                && payload
+                    .get("item")
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("reasoning")
+        })
+        .expect("reasoning output item done");
+    assert_eq!(
+        reasoning_done.1["item"]["id"].as_str(),
+        Some(reasoning_item_id),
+        "reasoning delta and done event must use same item id"
+    );
 
     let function_delta = frames
         .iter()
@@ -3093,6 +3117,65 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
     );
     assert!(function_delta.1["response_id"].as_str().is_some());
     assert!(function_delta.1["item_id"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn chat_streaming_emits_single_plain_done_and_no_named_events() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"hello"}],
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert_eq!(count_done_sentinels(&text), 1, "chat stream must emit one [DONE]");
+    assert!(
+        !text.lines().any(|line| line.starts_with("event: ")),
+        "chat completions stream must be data-only SSE: {text}"
+    );
+}
+
+#[tokio::test]
+async fn responses_streaming_emits_single_plain_done_sentinel() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"stream"}]}],
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert_eq!(count_done_sentinels(&text), 1, "responses stream must emit one [DONE]");
+    assert!(text.contains("\ndata: [DONE]\n"), "responses stream must terminate with plain data [DONE]: {text}");
+    assert!(
+        !text.contains("event: [DONE]") && !text.contains("event: done"),
+        "responses [DONE] must not be a named event: {text}"
+    );
 }
 
 #[tokio::test]
@@ -3653,6 +3736,7 @@ async fn messages_streaming_emits_named_sse_events() {
     assert!(text.contains("event: content_block_delta"));
     assert!(text.contains("event: message_delta"));
     assert!(text.contains("event: message_stop"));
+    assert_eq!(count_done_sentinels(&text), 0, "messages stream must not append [DONE]");
 }
 
 #[tokio::test]
@@ -3691,6 +3775,7 @@ async fn messages_streaming_does_not_duplicate_text_deltas_or_blocks() {
         })
         .count();
     assert_eq!(text_block_starts, 1, "text block should start exactly once");
+    assert_non_interleaved_message_blocks(&events, "chat→msg text stream");
 }
 
 #[tokio::test]
@@ -4384,6 +4469,77 @@ fn parse_responses_sse_json(text: &str) -> Vec<(String, Value)> {
         .collect()
 }
 
+fn count_done_sentinels(text: &str) -> usize {
+    text.lines().filter(|line| *line == "data: [DONE]").count()
+}
+
+fn message_block_event_sequence(events: &[Value]) -> Vec<(u64, String)> {
+    events
+        .iter()
+        .filter_map(|event| {
+            let index = event.get("index").and_then(Value::as_u64)?;
+            let event_type = event.get("type").and_then(Value::as_str)?;
+            if !matches!(
+                event_type,
+                "content_block_start" | "content_block_delta" | "content_block_stop"
+            ) {
+                return None;
+            }
+            Some((index, event_type.to_string()))
+        })
+        .collect()
+}
+
+fn assert_non_interleaved_message_blocks(events: &[Value], label: &str) {
+    let sequence = message_block_event_sequence(events);
+    let mut active_block: Option<u64> = None;
+    let mut seen_starts: HashMap<u64, usize> = HashMap::new();
+    let mut seen_stops: HashMap<u64, usize> = HashMap::new();
+
+    for (index, event_type) in sequence {
+        match event_type.as_str() {
+            "content_block_start" => {
+                assert!(
+                    active_block.is_none(),
+                    "{label}: block {index} started while block {:?} was still open",
+                    active_block
+                );
+                *seen_starts.entry(index).or_insert(0) += 1;
+                active_block = Some(index);
+            }
+            "content_block_delta" => {
+                assert_eq!(
+                    active_block,
+                    Some(index),
+                    "{label}: delta for block {index} appeared while active block was {:?}",
+                    active_block
+                );
+            }
+            "content_block_stop" => {
+                assert_eq!(
+                    active_block,
+                    Some(index),
+                    "{label}: stop for block {index} appeared while active block was {:?}",
+                    active_block
+                );
+                *seen_stops.entry(index).or_insert(0) += 1;
+                active_block = None;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    assert!(active_block.is_none(), "{label}: final block left open");
+    for (index, starts) in seen_starts {
+        assert_eq!(starts, 1, "{label}: block {index} started {starts} times");
+        assert_eq!(
+            seen_stops.get(&index).copied().unwrap_or_default(),
+            1,
+            "{label}: block {index} must stop exactly once"
+        );
+    }
+}
+
 fn assert_messages_stream_invariants(events: &[Value], label: &str) {
     assert!(!events.is_empty(), "{label}: expected at least one event");
     assert_eq!(
@@ -4782,6 +4938,54 @@ async fn messages_stream_parallel_tool_use_from_chat_upstream() {
         !tool_starts.is_empty(),
         "expected at least one tool_use block"
     );
+    assert_non_interleaved_message_blocks(&events, "chat→msg parallel tool stream");
+}
+
+#[tokio::test]
+async fn messages_streaming_from_chat_preserves_strict_block_order_in_raw_sse() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-chat",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "parallel tools" }] }],
+            "tools": [
+                { "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } },
+                { "name": "tool_b", "input_schema": { "type": "object", "additionalProperties": true } }
+            ],
+            "parallel_tool_calls": true,
+            "stream": true
+        }),
+    )
+    .await;
+    let events: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+    assert_non_interleaved_message_blocks(&events, "raw chat→msg mixed stream");
+}
+
+#[tokio::test]
+async fn messages_streaming_from_responses_preserves_strict_block_order_in_raw_sse() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "think stream" }] }],
+            "stream": true
+        }),
+    )
+    .await;
+    let events: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+    assert_non_interleaved_message_blocks(&events, "raw responses→msg mixed stream");
 }
 
 #[tokio::test]
