@@ -4286,6 +4286,288 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
 }
 
 #[tokio::test]
+async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events() {
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-transform-summary".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-transform-summary-ch1".to_string()),
+                name: "mono-transform-summary-ch1".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: vec![monoize::transforms::TransformRuleConfig {
+                transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: monoize::transforms::Phase::Response,
+                config: json!({}),
+            }],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"stream with reasoning"}]}],
+                "stream": true,
+                "reasoning": { "effort": "high" }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert!(text.contains("event: response.reasoning_summary_text.delta"));
+    assert!(!text.contains("event: response.reasoning.delta"));
+}
+
+#[tokio::test]
+async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdown() {
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-transform-markdown-images".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-transform-markdown-images-ch1".to_string()),
+                name: "mono-transform-markdown-images-ch1".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: vec![
+                monoize::transforms::TransformRuleConfig {
+                    transform: "assistant_markdown_images_to_output".to_string(),
+                    enabled: true,
+                    models: None,
+                    phase: monoize::transforms::Phase::Response,
+                    config: json!({}),
+                },
+                monoize::transforms::TransformRuleConfig {
+                    transform: "assistant_output_images_to_markdown".to_string(),
+                    enabled: true,
+                    models: None,
+                    phase: monoize::transforms::Phase::Response,
+                    config: json!({}),
+                },
+            ],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let image_markdown = "![chart](https://example.com/chart.png)";
+    let default_appended_markdown = "![image](https://example.com/chart.png)";
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": format!("see {image_markdown}") }]
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let output = v["output"].as_array().expect("output array");
+    assert_eq!(output.len(), 1);
+    let content = output[0]["content"].as_array().expect("content array");
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["type"].as_str(), Some("output_text"));
+    let text = content[0]["text"].as_str().expect("text content");
+    assert!(text.contains("see "));
+    assert!(text.contains(default_appended_markdown));
+    assert_eq!(content[1]["type"].as_str(), Some("output_image"));
+    assert_eq!(
+        content[1]["url"].as_str(),
+        Some("https://example.com/chart.png")
+    );
+}
+
+#[tokio::test]
+async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appended_markdown() {
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-transform-streaming-markdown-images".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-transform-streaming-markdown-images-ch1".to_string()),
+                name: "mono-transform-streaming-markdown-images-ch1".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: vec![
+                monoize::transforms::TransformRuleConfig {
+                    transform: "assistant_markdown_images_to_output".to_string(),
+                    enabled: true,
+                    models: None,
+                    phase: monoize::transforms::Phase::Response,
+                    config: json!({}),
+                },
+                monoize::transforms::TransformRuleConfig {
+                    transform: "assistant_output_images_to_markdown".to_string(),
+                    enabled: true,
+                    models: None,
+                    phase: monoize::transforms::Phase::Response,
+                    config: json!({}),
+                },
+            ],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let image_markdown = "![chart](https://example.com/chart.png)";
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text": format!("see {image_markdown}")}]}],
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(frames.iter().any(|(event, payload)| {
+        event == "response.output_text.delta"
+            && payload["delta"]
+                .as_str()
+                .is_some_and(|delta| delta.contains("![image](https://example.com/chart.png)"))
+    }));
+    assert!(frames.iter().any(|(event, payload)| {
+        event == "response.completed"
+            && payload["response"]["output"]
+                .as_array()
+                .is_some_and(|output| {
+                    output.iter().any(|item| {
+                        item["type"].as_str() == Some("message")
+                            && item["content"].as_array().is_some_and(|content| {
+                                content.iter().any(|part| {
+                                    part["type"].as_str() == Some("output_image")
+                                        && part["url"].as_str()
+                                            == Some("https://example.com/chart.png")
+                                })
+                            })
+                    })
+                })
+    }));
+}
+
+#[tokio::test]
 async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let ctx = setup().await;
     seed_test_model_pricing(&ctx.state, &["gpt-5-target"]).await;
@@ -5409,6 +5691,52 @@ async fn create_api_key_rejects_disallowed_transform() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+}
+
+#[tokio::test]
+async fn create_api_key_allows_new_response_transforms() {
+    let ctx = setup().await;
+    let cookie = dashboard_session_cookie(&ctx, "tenant-1", "test-password").await;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/dashboard/tokens")
+        .header(CONTENT_TYPE, "application/json")
+        .header("cookie", cookie)
+        .body(Body::from(
+            json!({
+                "name": "safe-transform-key",
+                "transforms": [
+                    {
+                        "transform": "plaintext_reasoning_to_summary",
+                        "enabled": true,
+                        "phase": "response",
+                        "config": {}
+                    },
+                    {
+                        "transform": "assistant_markdown_images_to_output",
+                        "enabled": true,
+                        "phase": "response",
+                        "config": {}
+                    },
+                    {
+                        "transform": "assistant_output_images_to_markdown",
+                        "enabled": true,
+                        "phase": "response",
+                        "config": { "template": "![preview]({{src}})" }
+                    }
+                ]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let transforms = v["transforms"].as_array().expect("transforms array");
+    assert_eq!(transforms.len(), 3);
 }
 
 #[tokio::test]

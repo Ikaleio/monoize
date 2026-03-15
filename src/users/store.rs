@@ -29,6 +29,9 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
     "reasoning_to_think_xml",
     "think_xml_to_reasoning",
     "split_sse_frames",
+    "plaintext_reasoning_to_summary",
+    "assistant_markdown_images_to_output",
+    "assistant_output_images_to_markdown",
 ];
 
 pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
@@ -106,6 +109,57 @@ mod tests {
         }];
 
         assert!(validate_api_key_transforms(&transforms, false).is_ok());
+    }
+
+    #[test]
+    fn validate_api_key_transforms_allows_new_response_transforms() {
+        let transforms = vec![
+            TransformRuleConfig {
+                transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "assistant_markdown_images_to_output".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "assistant_output_images_to_markdown".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+        ];
+
+        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+    }
+
+    #[test]
+    fn sanitize_api_key_transforms_preserves_disallowed_rules_for_admin() {
+        let transforms = vec![TransformRuleConfig {
+            transform: "set_field".to_string(),
+            enabled: true,
+            models: Some(vec!["gpt-5.4-fast".to_string()]),
+            phase: Phase::Request,
+            config: json!({
+                "path": "service_tier",
+                "value": "priority"
+            }),
+        }];
+
+        let sanitized = sanitize_api_key_transforms(transforms.clone(), true);
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].transform, transforms[0].transform);
+        assert_eq!(sanitized[0].enabled, transforms[0].enabled);
+        assert_eq!(sanitized[0].models, transforms[0].models);
+        assert_eq!(sanitized[0].phase as u8, transforms[0].phase as u8);
+        assert_eq!(sanitized[0].config, transforms[0].config);
     }
 }
 
@@ -563,7 +617,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
-            Ok(Some(self.row_to_api_key(&row)?))
+            Ok(Some(self.row_to_api_key(&row).await?))
         } else {
             Ok(None)
         }
@@ -578,7 +632,11 @@ impl UserStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        rows.iter().map(|row| self.row_to_api_key(row)).collect()
+        let mut api_keys = Vec::with_capacity(rows.len());
+        for row in &rows {
+            api_keys.push(self.row_to_api_key(row).await?);
+        }
+        Ok(api_keys)
     }
 
     pub async fn update_api_key_last_used(&self, id: &str) -> Result<(), String> {
@@ -711,7 +769,7 @@ impl UserStore {
         })
     }
 
-    pub(crate) fn row_to_api_key(&self, row: &QueryResult) -> Result<ApiKey, String> {
+    pub(crate) async fn row_to_api_key(&self, row: &QueryResult) -> Result<ApiKey, String> {
         let expires_at: Option<String> = row.try_get("", "expires_at").map_err(|e| e.to_string())?;
         let expires_at = expires_at
             .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
@@ -746,12 +804,17 @@ impl UserStore {
         let transforms_str: String = row
             .try_get("", "transforms")
             .unwrap_or_else(|_| "[]".to_string());
+        let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
+        let is_admin = self
+            .get_user_by_id(&user_id)
+            .await?
+            .is_some_and(|user| user.role.can_manage_system());
         let transforms: Vec<TransformRuleConfig> =
-            sanitize_api_key_transforms(serde_json::from_str(&transforms_str).unwrap_or_default(), false);
+            sanitize_api_key_transforms(serde_json::from_str(&transforms_str).unwrap_or_default(), is_admin);
 
         Ok(ApiKey {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
-            user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+            user_id,
             name: row.try_get("", "name").map_err(|e| e.to_string())?,
             key_prefix: row.try_get("", "key_prefix").map_err(|e| e.to_string())?,
             key: row.try_get("", "key").unwrap_or_else(|_| String::new()),
@@ -883,7 +946,7 @@ impl UserStore {
             .map_err(|e| e.to_string())?;
 
         if let Some(row) = row {
-            Ok(Some(self.row_to_api_key(&row)?))
+            Ok(Some(self.row_to_api_key(&row).await?))
         } else {
             Ok(None)
         }

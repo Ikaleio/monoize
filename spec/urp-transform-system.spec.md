@@ -111,6 +111,9 @@ TF-7. Built-ins that MUST exist:
 - `auto_cache_system`
 - `auto_cache_tool_use`
 - `compress_user_message_images`
+- `plaintext_reasoning_to_summary`
+- `assistant_markdown_images_to_output`
+- `assistant_output_images_to_markdown`
 
 TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include:
 
@@ -214,6 +217,72 @@ SSF-7. Failure handling:
 1. If `max_frame_length` is too small to encode even the minimal protocol wrapper for a required event, the runtime MAY emit the minimal unsplit event for that wrapper rather than fail the entire request.
 2. The transform MUST preserve event order.
 3. The transform MUST NOT change `usage`, `finish_reason`, `call_id`, `name`, `phase`, or role metadata except for emptying duplicated large snapshot strings under SSF-6.
+
+### 4.5 `plaintext_reasoning_to_summary`
+
+PRTS-1. Phase: `response` only.
+
+PRTS-2. Config MUST be an empty object.
+
+PRTS-3. Response behavior:
+1. The transform MUST inspect only `Part::Reasoning` parts.
+2. If a reasoning part carries `encrypted != None`, the transform MUST leave that part unchanged.
+3. If a reasoning part carries plaintext reasoning in `content` and `encrypted == None`, the transform MUST move the plaintext value into `summary` and clear `content`.
+4. If a reasoning part already has `summary`, the transform MUST replace `summary` with the plaintext `content` value when rule PRTS-3.3 applies.
+5. Empty plaintext content MUST NOT create a non-empty summary.
+
+PRTS-4. Streaming behavior:
+1. For `UrpStreamEvent::Delta` reasoning deltas that correspond to non-encrypted reasoning, the transform MUST mark the delta as summary reasoning by setting `extra_body.reasoning_delta_type = "summary"`.
+2. If a reasoning delta carries an encrypted signature in stream `extra_body.signature`, the transform MUST treat that reasoning part as encrypted and MUST NOT mark subsequent deltas for that part as summary deltas.
+3. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same plaintext-to-summary rewrite defined by PRTS-3.
+
+### 4.6 `assistant_markdown_images_to_output`
+
+AMIO-1. Phase: `response` only.
+
+AMIO-2. Config MUST be an empty object.
+
+AMIO-3. Extraction target:
+1. The transform MUST inspect only assistant `Item::Message` items.
+2. Within those items, the transform MUST inspect only `Part::Text` parts.
+3. The transform MUST recognize Markdown image syntax of the form `![alt](url)`.
+4. The transform MUST accept both ordinary URLs and `data:image/<subtype>;base64,<payload>` URLs.
+
+AMIO-4. Extraction behavior:
+1. Each recognized Markdown image block MUST be removed from the originating text content.
+2. Each recognized block MUST be converted into a `Part::Image` output part.
+3. Ordinary URLs MUST become `ImageSource::Url { url, detail: None }`.
+4. `data:image/...;base64,...` URLs MUST become `ImageSource::Base64 { media_type, data }`.
+5. Non-image `data:` URLs and malformed Markdown image blocks MUST remain in text unchanged.
+6. Extracted image parts MUST be inserted immediately after the originating text part, preserving original order.
+7. If removing Markdown image blocks leaves a text part empty, the transform MAY remove that empty text part.
+
+AMIO-5. Streaming behavior:
+1. For streaming requests executed through the response-transform fallback path defined in PIPE-1a, the transformed final `UrpResponse` MUST emit downstream text deltas for cleaned assistant text and MUST emit downstream image parts for extracted Markdown image blocks.
+2. For direct `UrpStreamEvent` application, the transform MUST update at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative streamed response state contains the cleaned text and the new image parts.
+
+### 4.7 `assistant_output_images_to_markdown`
+
+AOIM-1. Phase: `response` only.
+
+AOIM-2. Config MAY contain:
+- `template` (string, optional): string template used for each image appended to assistant text. Supported placeholders are `{{src}}`, `{{url}}`, `{{media_type}}`, and `{{data}}`.
+
+AOIM-3. Default formatting:
+1. If `template` is absent and the image source is `ImageSource::Url`, the transform MUST render `![image]({url})`.
+2. If `template` is absent and the image source is `ImageSource::Base64`, the transform MUST render `![image](data:{media_type};base64,{data})`.
+
+AOIM-4. Response behavior:
+1. The transform MUST inspect only assistant `Item::Message` items.
+2. For each `Part::Image` in such a message, the transform MUST format one Markdown image string according to AOIM-2 or AOIM-3.
+3. The transform MUST append the formatted Markdown strings to the end of assistant text output.
+4. If the assistant message already contains at least one `Part::Text`, the transform MUST append the formatted Markdown strings to the final text part in that message.
+5. If the assistant message contains no text part, the transform MUST create a new trailing `Part::Text` containing the formatted Markdown strings.
+6. The transform MUST NOT remove or rewrite the original `Part::Image` parts.
+
+AOIM-5. Streaming behavior:
+1. For streaming requests executed through the synthetic-stream response-transform path, the transformed final `UrpResponse` MUST produce downstream text deltas that include the appended Markdown image strings.
+2. For direct `UrpStreamEvent` application, the transform MUST update at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative final streamed response state includes the appended Markdown image strings.
 
 ### 4.1 `reasoning_effort_to_model_suffix`
 
