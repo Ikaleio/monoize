@@ -2,6 +2,7 @@ use crate::urp::encode::{
     merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
     usage_output_details,
 };
+use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
 use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
@@ -450,6 +451,12 @@ fn has_tool_calls(item: &Item) -> bool {
 
 fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part]) {
     let encrypted = super::extract_reasoning_encrypted(parts);
+    let format = parts.iter().find_map(|part| {
+        let Part::Reasoning { source, .. } = part else {
+            return None;
+        };
+        source.as_deref().filter(|format| !format.is_empty())
+    });
     let mut details = Vec::new();
     let mut reasoning_value: Option<String> = None;
     let mut reasoning_content_value: Option<String> = None;
@@ -457,7 +464,6 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     for part in parts {
         let Part::Reasoning {
             content,
-            encrypted: part_encrypted,
             summary,
             extra_body,
             ..
@@ -478,24 +484,20 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
             details.push(json!({
                 "type": "reasoning.summary",
                 "summary": summary,
-                "format": "unknown"
             }));
+            if let Some(format) = format {
+                details
+                    .last_mut()
+                    .and_then(Value::as_object_mut)
+                    .map(|obj| obj.insert("format".to_string(), Value::String(format.to_string())));
+            }
         }
 
         if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
             if reasoning_value.is_none() {
                 reasoning_value = Some(content.to_string());
             }
-            let signature = part_encrypted
-                .as_ref()
-                .or(encrypted.as_ref())
-                .and_then(|v| v.as_str());
-            details.push(json!({
-                "type": "reasoning.text",
-                "text": content,
-                "signature": signature,
-                "format": "unknown"
-            }));
+            details.push(reasoning_text_detail_value(content, None, format));
         }
     }
 
@@ -520,21 +522,13 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
                     return;
                 }
                 if !details.iter().any(|detail| {
-                    detail.get("type").and_then(Value::as_str) == Some("reasoning.text")
-                        && detail.get("signature").and_then(Value::as_str) == Some(s)
+                    detail.get("type").and_then(Value::as_str) == Some("reasoning.encrypted")
+                        && detail.get("data").and_then(Value::as_str) == Some(s)
                 }) {
-                    details.push(json!({
-                        "type": "reasoning.encrypted",
-                        "data": enc,
-                        "format": "unknown"
-                    }));
+                    details.push(reasoning_encrypted_detail_value(enc, format));
                 }
             } else {
-                details.push(json!({
-                    "type": "reasoning.encrypted",
-                    "data": enc,
-                    "format": "unknown"
-                }));
+                details.push(reasoning_encrypted_detail_value(enc, format));
             }
         }
     }
@@ -925,7 +919,11 @@ mod tests {
         assert_eq!(message.get("content"), Some(&json!("prep\n\nanswer")));
         assert_eq!(message["tool_calls"][0]["function"]["name"], json!("tool"));
         assert_eq!(message["reasoning"], json!("think"));
-        assert_eq!(message["reasoning_details"][0]["signature"], json!("sig_1"));
+        assert_eq!(
+            message["reasoning_details"][1]["type"],
+            json!("reasoning.encrypted")
+        );
+        assert_eq!(message["reasoning_details"][1]["data"], json!("sig_1"));
         assert_eq!(message.get("phase"), Some(&json!("analysis")));
         assert_eq!(message.get("segment"), Some(&json!(3)));
     }
@@ -973,7 +971,7 @@ mod tests {
                     content: Some("full reasoning".to_string()),
                     encrypted: Some(json!("sig_1")),
                     summary: Some("brief summary".to_string()),
-                    source: None,
+                    source: Some("openrouter".to_string()),
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
@@ -998,6 +996,19 @@ mod tests {
                 ..
             } if content == "full reasoning" && summary == "brief summary" && sig == "sig_1"
         ));
+        let message = &encoded["choices"][0]["message"];
+        assert_eq!(
+            message["reasoning_details"][0]["format"],
+            json!("openrouter")
+        );
+        assert_eq!(
+            message["reasoning_details"][1]["format"],
+            json!("openrouter")
+        );
+        assert_eq!(
+            message["reasoning_details"][2]["format"],
+            json!("openrouter")
+        );
     }
 
     #[test]

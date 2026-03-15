@@ -248,7 +248,7 @@ pub(crate) fn chat_delta_path_reasoning_text(value: &mut Value, content: &str) {
     {
         delta.insert(
             "reasoning_details".to_string(),
-            json!([{ "type": "reasoning.text", "text": content, "signature": Value::Null, "format": "unknown" }]),
+            Value::Array(vec![reasoning_text_detail_value(content, None, None)]),
         );
     }
 }
@@ -269,7 +269,7 @@ pub(crate) fn chat_delta_path_reasoning_summary(value: &mut Value, content: &str
     }
 }
 
-pub(crate) fn chat_delta_path_reasoning_signature(value: &mut Value, content: &str) {
+pub(crate) fn chat_delta_path_reasoning_encrypted(value: &mut Value, content: &str) {
     if let Some(delta) = value
         .get_mut("choices")
         .and_then(Value::as_array_mut)
@@ -280,7 +280,10 @@ pub(crate) fn chat_delta_path_reasoning_signature(value: &mut Value, content: &s
     {
         delta.insert(
             "reasoning_details".to_string(),
-            json!([{ "type": "reasoning.text", "text": "", "signature": content, "format": "unknown" }]),
+            Value::Array(vec![reasoning_encrypted_detail_value(
+                Value::String(content.to_string()),
+                None,
+            )]),
         );
     }
 }
@@ -433,21 +436,33 @@ pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) 
     (text, summary_text, signature)
 }
 
-pub(crate) fn reasoning_text_detail_value(text: &str, signature: Option<&str>) -> Value {
-    json!({
+pub(crate) fn reasoning_text_detail_value(
+    text: &str,
+    signature: Option<&str>,
+    format: Option<&str>,
+) -> Value {
+    let mut value = json!({
         "type": "reasoning.text",
         "text": text,
-        "signature": signature,
-        "format": "unknown"
-    })
+    });
+    if let Some(signature) = signature {
+        value["signature"] = Value::String(signature.to_string());
+    }
+    if let Some(format) = format {
+        value["format"] = Value::String(format.to_string());
+    }
+    value
 }
 
-pub(crate) fn reasoning_encrypted_detail_value(data: Value) -> Value {
-    json!({
+pub(crate) fn reasoning_encrypted_detail_value(data: Value, format: Option<&str>) -> Value {
+    let mut value = json!({
         "type": "reasoning.encrypted",
         "data": data,
-        "format": "unknown"
-    })
+    });
+    if let Some(format) = format {
+        value["format"] = Value::String(format.to_string());
+    }
+    value
 }
 
 pub(crate) fn extract_chat_reasoning_from_detail(
@@ -464,11 +479,6 @@ pub(crate) fn extract_chat_reasoning_from_detail(
             if let Some(t) = obj.get("text").and_then(|v| v.as_str()) {
                 if !t.is_empty() {
                     text_out.push(t.to_string());
-                }
-            }
-            if let Some(sig) = obj.get("signature").and_then(|v| v.as_str()) {
-                if !sig.is_empty() {
-                    sig_out.push(sig.to_string());
                 }
             }
         }
@@ -530,24 +540,28 @@ pub(crate) fn extract_chat_reasoning_deltas(delta: &Value) -> (Vec<String>, Vec<
     (text_parts, summary_parts, sig_parts)
 }
 
-pub(crate) fn chat_reasoning_delta_from_text(text: &str) -> Value {
+pub(crate) fn chat_reasoning_delta_from_text(text: &str, format: Option<&str>) -> Value {
     json!({
-        "reasoning_details": [reasoning_text_detail_value(text, None)]
+        "reasoning_details": [reasoning_text_detail_value(text, None, format)]
     })
 }
 
-pub(crate) fn chat_reasoning_delta_from_summary(summary: &str) -> Value {
+pub(crate) fn chat_reasoning_delta_from_summary(summary: &str, format: Option<&str>) -> Value {
+    let mut detail = json!({
+        "type": "reasoning.summary",
+        "summary": summary
+    });
+    if let Some(format) = format {
+        detail["format"] = Value::String(format.to_string());
+    }
     json!({
-        "reasoning_details": [{
-            "type": "reasoning.summary",
-            "summary": summary
-        }]
+        "reasoning_details": [detail]
     })
 }
 
-pub(crate) fn chat_reasoning_delta_from_signature(signature: &str) -> Value {
+pub(crate) fn chat_reasoning_delta_from_encrypted(signature: &str, format: Option<&str>) -> Value {
     json!({
-        "reasoning_details": [reasoning_encrypted_detail_value(Value::String(signature.to_string()))]
+        "reasoning_details": [reasoning_encrypted_detail_value(Value::String(signature.to_string()), format)]
     })
 }
 

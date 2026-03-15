@@ -557,11 +557,13 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
         content: Option<String>,
         encrypted: Option<Value>,
         summary: Option<String>,
+        source: Option<String>,
     ) {
         if let Some(Part::Reasoning {
             content: existing_content,
             encrypted: existing_encrypted,
             summary: existing_summary,
+            source: existing_source,
             ..
         }) = parts.last_mut()
         {
@@ -574,6 +576,9 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
             if existing_summary.is_none() && summary.is_some() {
                 *existing_summary = summary;
             }
+            if existing_source.is_none() && source.is_some() {
+                *existing_source = source;
+            }
             return;
         }
 
@@ -581,7 +586,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
             content,
             encrypted,
             summary,
-            source: None,
+            source,
             extra_body: HashMap::new(),
         });
     }
@@ -600,25 +605,30 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                 .unwrap_or("")
             {
                 "reasoning.text" => {
+                    let source = detail_obj
+                        .get("format")
+                        .and_then(|v| v.as_str())
+                        .filter(|format| !format.is_empty())
+                        .map(|format| format.to_string());
                     if let Some(text) = detail_obj.get("text").and_then(|v| v.as_str()) {
                         if !text.is_empty() {
-                            merge_reasoning_part(parts, Some(text.to_string()), None, None);
-                            saw_plain = true;
-                        }
-                    }
-                    if let Some(sig) = detail_obj.get("signature").and_then(|v| v.as_str()) {
-                        if !sig.is_empty() {
                             merge_reasoning_part(
                                 parts,
+                                Some(text.to_string()),
                                 None,
-                                Some(Value::String(sig.to_string())),
                                 None,
+                                source.clone(),
                             );
-                            saw_encrypted = true;
+                            saw_plain = true;
                         }
                     }
                 }
                 "reasoning.encrypted" => {
+                    let source = detail_obj
+                        .get("format")
+                        .and_then(|v| v.as_str())
+                        .filter(|format| !format.is_empty())
+                        .map(|format| format.to_string());
                     if let Some(data) = detail_obj.get("data") {
                         if !matches!(data, Value::Null) {
                             if let Some(s) = data.as_str() {
@@ -626,15 +636,26 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                                     continue;
                                 }
                             }
-                            merge_reasoning_part(parts, None, Some(data.clone()), None);
+                            merge_reasoning_part(parts, None, Some(data.clone()), None, source);
                             saw_encrypted = true;
                         }
                     }
                 }
                 "reasoning.summary" => {
+                    let source = detail_obj
+                        .get("format")
+                        .and_then(|v| v.as_str())
+                        .filter(|format| !format.is_empty())
+                        .map(|format| format.to_string());
                     if let Some(summary) = detail_obj.get("summary").and_then(|v| v.as_str()) {
                         if !summary.is_empty() {
-                            merge_reasoning_part(parts, None, None, Some(summary.to_string()));
+                            merge_reasoning_part(
+                                parts,
+                                None,
+                                None,
+                                Some(summary.to_string()),
+                                source,
+                            );
                             saw_plain = true;
                         }
                     }
@@ -647,7 +668,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
     if !saw_plain {
         if let Some(reasoning) = msg_obj.get("reasoning").and_then(|v| v.as_str()) {
             if !reasoning.is_empty() {
-                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None);
+                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None, None);
                 saw_plain = true;
             }
         }
@@ -656,7 +677,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
     if !saw_plain {
         if let Some(reasoning) = msg_obj.get("reasoning_content").and_then(|v| v.as_str()) {
             if !reasoning.is_empty() {
-                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None);
+                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None, None);
             }
         }
     }
@@ -664,7 +685,13 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
     if !saw_encrypted {
         if let Some(opaque) = msg_obj.get("reasoning_opaque").and_then(|v| v.as_str()) {
             if !opaque.is_empty() {
-                merge_reasoning_part(parts, None, Some(Value::String(opaque.to_string())), None);
+                merge_reasoning_part(
+                    parts,
+                    None,
+                    Some(Value::String(opaque.to_string())),
+                    None,
+                    None,
+                );
             }
         }
     }
@@ -768,12 +795,18 @@ mod tests {
                     "role": "assistant",
                     "content": "ok",
                     "reasoning": "new_reasoning",
-                    "reasoning_details": [{
-                        "type": "reasoning.text",
-                        "text": "new_reasoning",
-                        "signature": "new_sig",
-                        "format": "unknown"
-                    }],
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.text",
+                            "text": "new_reasoning",
+                            "format": "openrouter"
+                        },
+                        {
+                            "type": "reasoning.encrypted",
+                            "data": "new_sig",
+                            "format": "openrouter"
+                        }
+                    ],
                     "reasoning_content": "legacy_reasoning",
                     "reasoning_opaque": "legacy_sig"
                 }

@@ -31,9 +31,11 @@ pub(crate) async fn emit_synthetic_chat_stream(
                             content,
                             encrypted,
                             summary,
+                            source,
                             extra_body,
                             ..
                         } => {
+                            let format = source.as_deref().filter(|format| !format.is_empty());
                             if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
                                 if extra_body
                                     .get("openwebui_reasoning_content")
@@ -59,7 +61,7 @@ pub(crate) async fn emit_synthetic_chat_stream(
                                         &id,
                                         created,
                                         logical_model,
-                                        chat_reasoning_delta_from_summary(""),
+                                        chat_reasoning_delta_from_summary("", format),
                                         summary,
                                         chat_delta_path_reasoning_summary,
                                         sse_max_frame_length,
@@ -72,13 +74,13 @@ pub(crate) async fn emit_synthetic_chat_stream(
                             {
                                 send_chat_chunk_string(
                                     &tx,
-                                    &id,
-                                    created,
-                                    logical_model,
-                                    chat_reasoning_delta_from_text(""),
-                                    content,
-                                    chat_delta_path_reasoning_text,
-                                    sse_max_frame_length,
+                                        &id,
+                                        created,
+                                        logical_model,
+                                        chat_reasoning_delta_from_text("", format),
+                                        content,
+                                        chat_delta_path_reasoning_text,
+                                        sse_max_frame_length,
                                 )
                                 .await?;
                             }
@@ -93,9 +95,9 @@ pub(crate) async fn emit_synthetic_chat_stream(
                                         &id,
                                         created,
                                         logical_model,
-                                        chat_reasoning_delta_from_signature(""),
+                                        chat_reasoning_delta_from_encrypted("", format),
                                         &sig,
-                                        chat_delta_path_reasoning_signature,
+                                        chat_delta_path_reasoning_encrypted,
                                         sse_max_frame_length,
                                     )
                                     .await?;
@@ -282,6 +284,10 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 extra_body,
                 ..
             } => {
+                let format = extra_body
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .filter(|format| !format.is_empty());
                 if extra_body
                     .get("reasoning_delta_type")
                     .and_then(Value::as_str)
@@ -311,10 +317,10 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             &chat_id,
                             created,
                             logical_model,
-                            chat_reasoning_delta_from_summary(""),
-                            &content,
-                            chat_delta_path_reasoning_summary,
-                            sse_max_frame_length,
+                        chat_reasoning_delta_from_summary("", format),
+                        &content,
+                        chat_delta_path_reasoning_summary,
+                        sse_max_frame_length,
                         )
                         .await?;
                     }
@@ -324,7 +330,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         &chat_id,
                         created,
                         logical_model,
-                        chat_reasoning_delta_from_text(""),
+                        chat_reasoning_delta_from_text("", format),
                         &content,
                         chat_delta_path_reasoning_text,
                         sse_max_frame_length,
@@ -453,6 +459,10 @@ mod tests {
                     (
                         "reasoning_delta_type".to_string(),
                         Value::String("summary".to_string()),
+                    ),
+                    (
+                        "format".to_string(),
+                        Value::String("openrouter".to_string()),
                     ),
                     (
                         "openwebui_reasoning_content".to_string(),

@@ -600,14 +600,14 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                         "object": "chat.completion.chunk",
                         "created": 0,
                         "model": model,
-                        "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.summary", "summary": "mock_summary", "format": "unknown" }] }, "finish_reason": Value::Null }]
+                        "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.summary", "summary": "mock_summary", "format": "openrouter" }] }, "finish_reason": Value::Null }]
                     }).to_string())));
                     chunks.push(Ok(Event::default().data(json!({
                         "id": "chatcmpl_mock",
                         "object": "chat.completion.chunk",
                         "created": 0,
                         "model": model,
-                        "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }] }, "finish_reason": Value::Null }]
+                        "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "format": "openrouter" }, { "type": "reasoning.encrypted", "data": "mock_sig", "format": "openrouter" }] }, "finish_reason": Value::Null }]
                     }).to_string())));
                     chunks.push(Ok(Event::default().data(json!({
                         "id": "chatcmpl_mock",
@@ -674,14 +674,14 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     "object": "chat.completion.chunk",
                     "created": 0,
                     "model": model,
-                    "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.summary", "summary": "mock_summary", "format": "unknown" }] }, "finish_reason": Value::Null }]
+                    "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.summary", "summary": "mock_summary", "format": "openrouter" }] }, "finish_reason": Value::Null }]
                 }).to_string())));
                 chunks.push(Ok(Event::default().data(json!({
                     "id": "chatcmpl_mock",
                     "object": "chat.completion.chunk",
                     "created": 0,
                     "model": model,
-                    "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }] }, "finish_reason": Value::Null }]
+                    "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "format": "openrouter" }, { "type": "reasoning.encrypted", "data": "mock_sig", "format": "openrouter" }] }, "finish_reason": Value::Null }]
                 }).to_string())));
                 let calls: Vec<(usize, &str, &str, Vec<&str>)> = if parallel {
                     vec![
@@ -779,7 +779,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     "object": "chat.completion.chunk",
                     "created": 0,
                     "model": model,
-                    "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }] }, "finish_reason": Value::Null }]
+                    "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "format": "openrouter" }, { "type": "reasoning.encrypted", "data": "mock_sig", "format": "openrouter" }] }, "finish_reason": Value::Null }]
                 }).to_string())));
             }
             chunks.push(Ok::<_, Infallible>(
@@ -834,7 +834,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                         "content": "",
                         "tool_calls": calls,
                         "reasoning": "mock_reasoning",
-                        "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }]
+                        "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "format": "openrouter" }, { "type": "reasoning.encrypted", "data": "mock_sig", "format": "openrouter" }]
                     },
                     "finish_reason": "tool_calls"
                 }]
@@ -863,7 +863,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                 "role": "assistant",
                 "content": text,
                 "reasoning": "mock_reasoning",
-                "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }]
+                "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "format": "openrouter" }, { "type": "reasoning.encrypted", "data": "mock_sig", "format": "openrouter" }]
             })
         } else {
             json!({ "role": "assistant", "content": text })
