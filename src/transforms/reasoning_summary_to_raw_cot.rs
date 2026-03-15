@@ -1,0 +1,265 @@
+use crate::transforms::{
+    Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
+    TransformScope, TransformState, UrpData, response_output_items_mut,
+};
+use crate::urp::{Item, Part, UrpStreamEvent};
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::any::Any;
+
+#[derive(Debug, Deserialize)]
+struct Config {}
+
+impl TransformConfig for Config {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Default)]
+struct NoOpState;
+
+impl TransformState for NoOpState {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+pub struct ReasoningSummaryToRawCotTransform;
+
+#[async_trait]
+impl Transform for ReasoningSummaryToRawCotTransform {
+    fn type_id(&self) -> &'static str {
+        "reasoning_summary_to_raw_cot"
+    }
+
+    fn supported_phases(&self) -> &'static [Phase] {
+        &[Phase::Response]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
+    fn config_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
+        let cfg: Config =
+            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        Ok(Box::new(cfg))
+    }
+
+    fn init_state(&self) -> Box<dyn TransformState> {
+        Box::new(NoOpState)
+    }
+
+    async fn apply(
+        &self,
+        data: UrpData<'_>,
+        _phase: Phase,
+        _context: &TransformRuntimeContext,
+        _config: &dyn TransformConfig,
+        _state: &mut dyn TransformState,
+    ) -> Result<(), TransformError> {
+        match data {
+            UrpData::Response(resp) => {
+                for item in response_output_items_mut(resp) {
+                    mark_item(item);
+                }
+            }
+            UrpData::Stream(event) => mark_stream(event),
+            UrpData::Request(_) => {}
+        }
+        Ok(())
+    }
+}
+
+fn mark_item(item: &mut Item) {
+    let Item::Message { parts, .. } = item else {
+        return;
+    };
+    for part in parts {
+        let Part::Reasoning {
+            summary,
+            extra_body,
+            ..
+        } = part
+        else {
+            continue;
+        };
+        if summary.as_deref().is_some_and(|summary| !summary.is_empty()) {
+            extra_body.insert(
+                "openwebui_reasoning_content".to_string(),
+                Value::Bool(true),
+            );
+        }
+    }
+}
+
+fn mark_stream(event: &mut UrpStreamEvent) {
+    match event {
+        UrpStreamEvent::Delta { extra_body, .. } => {
+            if extra_body
+                .get("reasoning_delta_type")
+                .and_then(Value::as_str)
+                == Some("summary")
+            {
+                extra_body.insert(
+                    "openwebui_reasoning_content".to_string(),
+                    Value::Bool(true),
+                );
+            }
+        }
+        UrpStreamEvent::PartDone { part, .. } => {
+            let Part::Reasoning {
+                summary,
+                extra_body,
+                ..
+            } = part
+            else {
+                return;
+            };
+            if summary.as_deref().is_some_and(|summary| !summary.is_empty()) {
+                extra_body.insert(
+                    "openwebui_reasoning_content".to_string(),
+                    Value::Bool(true),
+                );
+            }
+        }
+        UrpStreamEvent::ItemDone { item, .. } => mark_item(item),
+        UrpStreamEvent::ResponseDone { outputs, .. } => {
+            for item in outputs {
+                mark_item(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+inventory::submit!(TransformEntry {
+    factory: || Box::new(ReasoningSummaryToRawCotTransform),
+});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image_transform_cache::ImageTransformCache;
+    use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
+    use crate::urp::{PartDelta, Role, UrpResponse};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    async fn context() -> TransformRuntimeContext {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cache = ImageTransformCache::new(
+            temp_dir.path().join("cache"),
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .expect("cache");
+        TransformRuntimeContext {
+            image_transform_cache: std::sync::Arc::new(cache),
+        }
+    }
+
+    #[tokio::test]
+    async fn marks_summary_reasoning_parts_for_openwebui_raw_cot() {
+        let registry = registry();
+        let rules = vec![crate::transforms::TransformRuleConfig {
+            transform: "reasoning_summary_to_raw_cot".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Response,
+            config: json!({}),
+        }];
+        let mut states = build_states_for_rules(&rules, &registry).expect("states");
+        let mut resp = UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-test".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: Some("full reasoning".to_string()),
+                    encrypted: None,
+                    summary: Some("brief summary".to_string()),
+                    source: None,
+                    extra_body: HashMap::new(),
+                }],
+                extra_body: HashMap::new(),
+            }],
+            finish_reason: None,
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        crate::transforms::apply_transforms(
+            UrpData::Response(&mut resp),
+            &rules,
+            &mut states,
+            "gpt-test",
+            Phase::Response,
+            &context().await,
+            &registry,
+        )
+        .await
+        .expect("apply");
+
+        let Item::Message { parts, .. } = &resp.outputs[0] else {
+            panic!("expected message");
+        };
+        let Part::Reasoning { extra_body, .. } = &parts[0] else {
+            panic!("expected reasoning");
+        };
+        assert_eq!(
+            extra_body
+                .get("openwebui_reasoning_content")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn marks_summary_reasoning_stream_deltas_for_openwebui_raw_cot() {
+        let transform = ReasoningSummaryToRawCotTransform;
+        let context = context().await;
+        let cfg = transform.parse_config(json!({})).expect("config");
+        let mut state = transform.init_state();
+        let mut event = UrpStreamEvent::Delta {
+            part_index: 7,
+            delta: PartDelta::Reasoning {
+                content: "brief summary".to_string(),
+            },
+            usage: None,
+            extra_body: HashMap::from([(
+                "reasoning_delta_type".to_string(),
+                Value::String("summary".to_string()),
+            )]),
+        };
+        transform
+            .apply(
+                UrpData::Stream(&mut event),
+                Phase::Response,
+                &context,
+                cfg.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+            panic!("expected delta");
+        };
+        assert_eq!(
+            extra_body
+                .get("openwebui_reasoning_content")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+}

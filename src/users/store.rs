@@ -30,6 +30,7 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
     "think_xml_to_reasoning",
     "split_sse_frames",
     "plaintext_reasoning_to_summary",
+    "reasoning_summary_to_raw_cot",
     "assistant_markdown_images_to_output",
     "assistant_output_images_to_markdown",
 ];
@@ -123,6 +124,13 @@ mod tests {
             },
             TransformRuleConfig {
                 transform: "assistant_markdown_images_to_output".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "reasoning_summary_to_raw_cot".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,

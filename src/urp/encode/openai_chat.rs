@@ -452,12 +452,14 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     let encrypted = super::extract_reasoning_encrypted(parts);
     let mut details = Vec::new();
     let mut reasoning_value: Option<String> = None;
+    let mut reasoning_content_value: Option<String> = None;
 
     for part in parts {
         let Part::Reasoning {
             content,
             encrypted: part_encrypted,
             summary,
+            extra_body,
             ..
         } = part
         else {
@@ -465,6 +467,14 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
         };
 
         if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+            if extra_body
+                .get("openwebui_reasoning_content")
+                .and_then(Value::as_bool)
+                == Some(true)
+                && reasoning_content_value.is_none()
+            {
+                reasoning_content_value = Some(summary.to_string());
+            }
             details.push(json!({
                 "type": "reasoning.summary",
                 "summary": summary,
@@ -491,6 +501,13 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
 
     if let Some(reasoning_text) = reasoning_value {
         message.insert("reasoning".to_string(), Value::String(reasoning_text));
+    }
+
+    if let Some(reasoning_content) = reasoning_content_value {
+        message.insert(
+            "reasoning_content".to_string(),
+            Value::String(reasoning_content),
+        );
     }
 
     if let Some(enc) = encrypted {
@@ -981,5 +998,38 @@ mod tests {
                 ..
             } if content == "full reasoning" && summary == "brief summary" && sig == "sig_1"
         ));
+    }
+
+    #[test]
+    fn chat_response_emits_reasoning_content_when_openwebui_transform_marks_summary() {
+        let response = UrpResponse {
+            id: "chatcmpl_reasoning_content".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: Some("full reasoning".to_string()),
+                    encrypted: None,
+                    summary: Some("brief summary".to_string()),
+                    source: None,
+                    extra_body: HashMap::from([(
+                        "openwebui_reasoning_content".to_string(),
+                        json!(true),
+                    )]),
+                }],
+                extra_body: empty_map(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        let message = &encoded["choices"][0]["message"];
+        assert_eq!(message["reasoning_content"].as_str(), Some("brief summary"));
+        assert_eq!(
+            message["reasoning_details"][0]["type"].as_str(),
+            Some("reasoning.summary")
+        );
     }
 }

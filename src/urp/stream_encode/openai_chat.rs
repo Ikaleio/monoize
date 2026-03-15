@@ -31,20 +31,41 @@ pub(crate) async fn emit_synthetic_chat_stream(
                             content,
                             encrypted,
                             summary,
+                            extra_body,
                             ..
                         } => {
                             if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
-                                send_chat_chunk_string(
-                                    &tx,
-                                    &id,
-                                    created,
-                                    logical_model,
-                                    chat_reasoning_delta_from_summary(""),
-                                    summary,
-                                    chat_delta_path_reasoning_summary,
-                                    sse_max_frame_length,
-                                )
-                                .await?;
+                                if extra_body
+                                    .get("openwebui_reasoning_content")
+                                    .and_then(Value::as_bool)
+                                    == Some(true)
+                                {
+                                    send_chat_chunk_string(
+                                        &tx,
+                                        &id,
+                                        created,
+                                        logical_model,
+                                        json!({ "reasoning_content": "" }),
+                                        summary,
+                                        |value, chunk| {
+                                            value["reasoning_content"] = Value::String(chunk.to_string());
+                                        },
+                                        sse_max_frame_length,
+                                    )
+                                    .await?;
+                                } else {
+                                    send_chat_chunk_string(
+                                        &tx,
+                                        &id,
+                                        created,
+                                        logical_model,
+                                        chat_reasoning_delta_from_summary(""),
+                                        summary,
+                                        chat_delta_path_reasoning_summary,
+                                        sse_max_frame_length,
+                                    )
+                                    .await?;
+                                }
                             }
                             if let Some(content) =
                                 content.as_deref().filter(|content| !content.is_empty())
@@ -266,17 +287,37 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     .and_then(Value::as_str)
                     == Some("summary")
                 {
-                    send_chat_chunk_string(
-                        &tx,
-                        &chat_id,
-                        created,
-                        logical_model,
-                        chat_reasoning_delta_from_summary(""),
-                        &content,
-                        chat_delta_path_reasoning_summary,
-                        sse_max_frame_length,
-                    )
-                    .await?;
+                    if extra_body
+                        .get("openwebui_reasoning_content")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        send_chat_chunk_string(
+                            &tx,
+                            &chat_id,
+                            created,
+                            logical_model,
+                            json!({ "reasoning_content": "" }),
+                            &content,
+                            |value, chunk| {
+                                value["reasoning_content"] = Value::String(chunk.to_string());
+                            },
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    } else {
+                        send_chat_chunk_string(
+                            &tx,
+                            &chat_id,
+                            created,
+                            logical_model,
+                            chat_reasoning_delta_from_summary(""),
+                            &content,
+                            chat_delta_path_reasoning_summary,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
                 } else {
                     send_chat_chunk_string(
                         &tx,
@@ -381,4 +422,67 @@ pub(crate) async fn encode_urp_stream_as_chat(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn encode_chat_stream_emits_reasoning_content_when_summary_is_marked_for_openwebui() {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (sse_tx, mut sse_rx) = mpsc::channel(16);
+
+        event_tx
+            .send(UrpStreamEvent::ResponseStart {
+                id: "resp_1".to_string(),
+                model: "gpt-5.4".to_string(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("response start");
+        event_tx
+            .send(UrpStreamEvent::Delta {
+                part_index: 0,
+                delta: PartDelta::Reasoning {
+                    content: "brief summary".to_string(),
+                },
+                usage: None,
+                extra_body: HashMap::from([
+                    (
+                        "reasoning_delta_type".to_string(),
+                        Value::String("summary".to_string()),
+                    ),
+                    (
+                        "openwebui_reasoning_content".to_string(),
+                        Value::Bool(true),
+                    ),
+                ]),
+            })
+            .await
+            .expect("reasoning delta");
+        event_tx
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                usage: None,
+                outputs: Vec::new(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("response done");
+        drop(event_tx);
+
+        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+            .await
+            .expect("encode stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            let debug = format!("{event:?}");
+            text.push_str(&debug);
+        }
+        assert!(text.contains("reasoning_content"));
+        assert!(text.contains("brief summary"));
+    }
 }

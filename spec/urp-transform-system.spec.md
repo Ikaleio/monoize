@@ -112,6 +112,7 @@ TF-7. Built-ins that MUST exist:
 - `auto_cache_tool_use`
 - `compress_user_message_images`
 - `plaintext_reasoning_to_summary`
+- `reasoning_summary_to_raw_cot`
 - `assistant_markdown_images_to_output`
 - `assistant_output_images_to_markdown`
 
@@ -235,6 +236,25 @@ PRTS-4. Streaming behavior:
 1. For `UrpStreamEvent::Delta` reasoning deltas that correspond to non-encrypted reasoning, the transform MUST mark the delta as summary reasoning by setting `extra_body.reasoning_delta_type = "summary"`.
 2. If a reasoning delta carries an encrypted signature in stream `extra_body.signature`, the transform MUST treat that reasoning part as encrypted and MUST NOT mark subsequent deltas for that part as summary deltas.
 3. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same plaintext-to-summary rewrite defined by PRTS-3.
+
+### 4.5a `reasoning_summary_to_raw_cot`
+
+RSRC-1. Phase: `response` only.
+
+RSRC-2. Config MUST be an empty object.
+
+RSRC-3. Response behavior:
+1. The transform MUST inspect only `Part::Reasoning` parts.
+2. If a reasoning part carries a non-empty `summary`, the transform MUST mark that part for OpenWebUI-compatible raw-CoT emission by setting `part.extra_body.openwebui_reasoning_content = true`.
+3. The transform MUST NOT modify `content`, `summary`, or `encrypted` field values.
+
+RSRC-4. Streaming behavior:
+1. For `UrpStreamEvent::Delta` reasoning deltas already marked as summary deltas (`extra_body.reasoning_delta_type = "summary"`), the transform MUST also set `extra_body.openwebui_reasoning_content = true`.
+2. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same part marking defined by RSRC-3.
+
+RSRC-5. Downstream Chat Completions compatibility:
+1. When a Chat Completions encoder sees `openwebui_reasoning_content = true` on a reasoning summary, it MUST emit that summary through OpenWebUI-compatible raw-CoT fields (`reasoning_content` for non-streaming, `delta.reasoning_content` for streaming).
+2. This transform MUST be optional. Without the transform enabled, the default Chat Completions behavior remains the existing OpenRouter-style `reasoning_details` summary extension.
 
 ### 4.6 `assistant_markdown_images_to_output`
 

@@ -13,6 +13,7 @@ pub mod inject_system_prompt;
 pub mod merge_consecutive_roles;
 pub mod override_max_tokens;
 pub mod plaintext_reasoning_to_summary;
+pub mod reasoning_summary_to_raw_cot;
 pub mod reasoning_effort_to_budget;
 pub mod reasoning_effort_to_model_suffix;
 pub mod reasoning_to_think_xml;
