@@ -75,7 +75,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                             {
                                 let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": signature.clone().unwrap_or_default() } });
                                 send_named_messages_event(&tx, s).await?;
-                                send_messages_delta_string(
+                                send_messages_delta_string_incremental(
                                     &tx,
                                     json!({ "type": "content_block_delta", "index": index, "delta": { "type": "thinking_delta", "thinking": "" } }),
                                     messages_delta_path_thinking,
@@ -84,7 +84,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                 )
                                 .await?;
                                 if let Some(sig) = signature.as_deref().filter(|sig| !sig.is_empty()) {
-                                    send_messages_delta_string(
+                                    send_messages_delta_string_incremental(
                                         &tx,
                                         json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": "" } }),
                                         messages_delta_path_signature,
@@ -99,7 +99,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
                             } else if let Some(sig) = signature.as_deref().filter(|sig| !sig.is_empty()) {
                                 let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": sig } });
                                 send_named_messages_event(&tx, s).await?;
-                                send_messages_delta_string(
+                                send_messages_delta_string_incremental(
                                     &tx,
                                     json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": "" } }),
                                     messages_delta_path_signature,
@@ -373,7 +373,7 @@ async fn emit_messages_part_done_payload(
             ..
         } => {
             if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
-                send_messages_delta_string(
+                send_messages_delta_string_incremental(
                     tx,
                     json!({
                         "type": "content_block_delta",

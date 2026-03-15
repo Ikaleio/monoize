@@ -98,13 +98,24 @@ pub(crate) async fn stream_responses_to_urp_events(
                 saw_text_delta = true;
             }
         }
-        if ev.event == "response.reasoning_text.delta" {
+        if ev.event == "response.reasoning.delta" {
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
                 .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
             {
                 reasoning_text.push_str(delta);
+            }
+        }
+        if ev.event == "response.reasoning.done" {
+            if let Some(text) = data_val
+                .get("text")
+                .and_then(|v| v.as_str())
+                .or_else(|| data_val.get("delta").and_then(|v| v.as_str()))
+            {
+                if reasoning_text.is_empty() {
+                    reasoning_text = text.to_string();
+                }
             }
         }
         if ev.event == "response.reasoning_summary_text.delta" {
@@ -437,7 +448,7 @@ fn map_responses_event_to_urp_events_with_state(
             usage: None,
             extra_body: delta_extra_body_with_phase(data_val, message_phases_by_output_index),
         }],
-        "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+        "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
             let mut extra_body = split_known_fields(
                 data_val.clone(),
                 &[
@@ -466,6 +477,22 @@ fn map_responses_event_to_urp_events_with_state(
                 extra_body,
             }]
         }
+        "response.reasoning.done" => vec![UrpStreamEvent::PartDone {
+            part_index: urp_part_index_from_delta(&data_val, index_state),
+            part: Part::Reasoning {
+                content: data_val
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .filter(|text| !text.is_empty())
+                    .map(|text| text.to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
+                extra_body: split_known_fields(data_val, &["text", "delta", "output_index", "content_index", "part_index"]),
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        }],
         "response.function_call_arguments.delta" => vec![UrpStreamEvent::Delta {
             part_index: urp_part_index_from_delta(&data_val, index_state),
             delta: PartDelta::ToolCallArguments {

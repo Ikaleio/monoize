@@ -128,7 +128,7 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     send_responses_delta_string(
                         &tx,
                         &mut seq,
-                        "response.reasoning_text.delta",
+                        "response.reasoning.delta",
                         json!({
                             "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
@@ -137,6 +137,18 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         "delta",
                         &text,
                         sse_max_frame_length,
+                    )
+                    .await?;
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.reasoning.done",
+                        json!({
+                            "response_id": response_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                            "text": text,
+                        }),
                     )
                     .await?;
                 }
@@ -478,7 +490,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     let event_name = if is_summary {
                         "response.reasoning_summary_text.delta"
                     } else {
-                        "response.reasoning_text.delta"
+                        "response.reasoning.delta"
                     };
                     let mut payload = json!({
                         "response_id": response_id,
@@ -639,7 +651,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 send_responses_event(
                                     &tx,
                                     &mut seq,
-                                    "response.reasoning_text.done",
+                                    "response.reasoning.done",
                                     json!({
                                         "response_id": response_id,
                                         "item_id": part_state.item_id,

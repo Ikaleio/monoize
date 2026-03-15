@@ -283,8 +283,8 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     .event("response.reasoning_summary_part.done")
                     .data(json!({ "type": "response.reasoning_summary_part.done", "item_id": "rs_mock", "output_index": 0, "summary_index": 0, "part": { "type": "summary_text", "text": "mock_summary" } }).to_string())));
                 events.push(Ok(Event::default()
-                    .event("response.reasoning_text.delta")
-                    .data(json!({ "type": "response.reasoning_text.delta", "item_id": "rs_mock", "output_index": 0, "delta": "mock_reasoning" }).to_string())));
+                    .event("response.reasoning.delta")
+                    .data(json!({ "type": "response.reasoning.delta", "item_id": "rs_mock", "output_index": 0, "delta": "mock_reasoning" }).to_string())));
                 events.push(Ok(Event::default()
                     .event("response.reasoning_signature.delta")
                     .data(json!({ "type": "response.reasoning_signature.delta", "item_id": "rs_mock", "output_index": 0, "delta": "mock_sig" }).to_string())));
@@ -377,8 +377,8 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             if reasoning_enabled {
                 events.push(Ok::<_, Infallible>(
                     Event::default()
-                        .event("response.reasoning_text.delta")
-                        .data(json!({ "delta": "mock_reasoning" }).to_string()),
+                    .event("response.reasoning.delta")
+                    .data(json!({ "delta": "mock_reasoning" }).to_string()),
                 ));
             }
             events.push(Ok::<_, Infallible>(
@@ -3135,8 +3135,8 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
 
     let reasoning_text_delta = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning_text.delta")
-        .expect("reasoning text delta");
+        .find(|(event, _)| event == "response.reasoning.delta")
+        .expect("reasoning delta");
     assert_eq!(reasoning_text_delta.1["item_id"].as_str(), Some(reasoning_item_id));
 
     let reasoning_done = frames
@@ -3196,7 +3196,8 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
     assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_text.delta"));
     assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_text.done"));
     assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_part.done"));
-    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_text.delta"));
+    assert!(frames.iter().any(|(event, _)| event == "response.reasoning.delta"));
+    assert!(frames.iter().any(|(event, _)| event == "response.reasoning.done"));
 
     let summary_delta = frames
         .iter()
@@ -3206,9 +3207,47 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
 
     let text_delta = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning_text.delta")
+        .find(|(event, _)| event == "response.reasoning.delta")
         .expect("text delta");
     assert_eq!(text_delta.1["delta"].as_str(), Some("mock_reasoning"));
+
+    let reasoning_done = frames
+        .iter()
+        .find(|(event, _)| event == "response.reasoning.done")
+        .expect("reasoning done");
+    assert_eq!(reasoning_done.1["text"].as_str(), Some("mock_reasoning"));
+}
+
+#[tokio::test]
+async fn messages_streaming_splits_thinking_into_multiple_deltas() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-chat",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "think stream chat" }] }],
+            "stream": true
+        }),
+    )
+    .await;
+    let frames = parse_sse_frames(&text);
+    let events: Vec<Value> = frames
+        .iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(data).ok())
+        .collect();
+
+    let thinking_deltas: Vec<&Value> = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
+        .collect();
+    assert!(thinking_deltas.len() > 1, "thinking should stream over multiple deltas: {text}");
+    let reconstructed = thinking_deltas
+        .iter()
+        .filter_map(|event| event["delta"]["thinking"].as_str())
+        .collect::<String>();
+    assert_eq!(reconstructed, "mock_reasoning");
 }
 
 #[tokio::test]

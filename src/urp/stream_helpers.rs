@@ -98,6 +98,42 @@ pub(crate) async fn send_messages_delta_string(
     Ok(())
 }
 
+pub(crate) async fn send_messages_delta_string_incremental(
+    tx: &mpsc::Sender<Event>,
+    template: Value,
+    patch: fn(&mut Value, &str),
+    content: &str,
+    max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let event_name = template
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "stream_encode_failed",
+            "messages stream payload missing type field",
+        ))?
+        .to_string();
+
+    let chunks = if let Some(max_frame_length) = max_frame_length {
+        split_json_value_by_string_patch(template, content, patch, Some(max_frame_length))
+    } else {
+        split_string_by_bytes(content, 1)
+            .into_iter()
+            .map(|part| {
+                let mut value = template.clone();
+                patch(&mut value, &part);
+                value
+            })
+            .collect()
+    };
+
+    for chunk in chunks {
+        send_named_sse_json(tx, &event_name, chunk).await?;
+    }
+    Ok(())
+}
+
 pub(crate) fn split_wrapped_responses_json_string_field(
     seq: u64,
     event_name: &str,

@@ -791,7 +791,7 @@ DM5. Reasoning:
   - `thinking = text`
   - `signature = signature`
 
-DM5a. For downstream `POST /v1/messages` streaming responses, a single URP reasoning part MUST be rendered as one Anthropic `thinking` block lifecycle. If both reasoning text and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index.
+DM5a. For downstream `POST /v1/messages` streaming responses, a single URP reasoning part MUST be rendered as one Anthropic `thinking` block lifecycle. If both reasoning text and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index. The reasoning text MUST be streamed incrementally across one or more `thinking_delta` events; Monoize MUST NOT collapse the entire thinking text into one synthetic full-content delta merely because no SSE frame-length cap is configured.
 
 DM5b. For downstream `POST /v1/messages` streaming responses, when a reasoning part carries a non-empty signature, Monoize MUST NOT emit `content_block_start.content_block.signature = ""`; the start payload and any later `signature_delta` MUST preserve the actual non-empty signature payload.
 
@@ -894,7 +894,7 @@ STR3a. For downstream `POST /v1/responses` streams, every SSE payload MUST inclu
 
 STR3b. For downstream `POST /v1/responses` text / reasoning / function-call delta payloads, Monoize MUST include top-level `response_id` and `item_id` fields whenever the delta belongs to a concrete response output item.
 
-STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST use official reasoning event names and preserve the distinction between reasoning summary text and full reasoning content. Summary deltas/done events MUST be emitted separately from content deltas/done events when both are present for the same reasoning item.
+STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST preserve the distinction between official reasoning summary events and Monoize-specific raw reasoning events. Official summary lifecycle events MUST use the OpenAI names `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done`, and `response.reasoning_summary_part.done`. Raw reasoning content is not an official OpenAI Responses event family; when Monoize emits it as an extension, it MUST use the custom event family `response.reasoning.delta` / `response.reasoning.done`, not an official-looking `response.reasoning_text.*` name.
 
 STR3c. For downstream `POST /v1/responses` successful SSE streams, Monoize MUST emit exactly one terminal `data: [DONE]` sentinel after the final JSON event payload. The sentinel MUST be a plain `data:` frame and MUST NOT be emitted as a named SSE event.
 
