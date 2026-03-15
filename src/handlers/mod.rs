@@ -560,13 +560,26 @@ pub(crate) struct StreamRuntimeMetrics {
 }
 
 async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::auth::AuthResult> {
-    let auth_header = headers
+    let token = if let Some(auth_header) = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "missing auth"))?;
-    let token = auth_header
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "invalid auth"))?;
+    {
+        auth_header
+            .strip_prefix("Bearer ")
+            .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "invalid auth"))?
+    } else if let Some(api_key) = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+    {
+        api_key
+    } else {
+        return Err(AppError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "missing auth",
+        ));
+    };
 
     let auth_result = state
         .auth

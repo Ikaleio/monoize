@@ -2,16 +2,17 @@
 
 ## 0. Status
 
-- **Purpose:** Define bearer-token authentication for forwarding endpoints.
+- **Purpose:** Define forwarding API-key authentication for forwarding endpoints.
 - **Scope:** Applies to all forwarding endpoints in `spec/unified_responses_proxy.spec.md` §2.2 (including `/api` aliases).
 
 ## 1. Token extraction
 
-AK1. Monoize MUST extract the bearer token from the HTTP header:
+AK1. Monoize MUST extract the forwarding API key token from one of these HTTP headers:
 
 - `Authorization: Bearer <token>`
+- `x-api-key: <token>`
 
-AK2. If the header is missing or does not use the `Bearer ` prefix, Monoize MUST return:
+AK2. If neither header is present, or if `Authorization` is present but does not use the `Bearer ` prefix, Monoize MUST return:
 
 - HTTP `401`
 - error code `unauthorized`

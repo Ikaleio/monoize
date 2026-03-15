@@ -3219,7 +3219,7 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
 }
 
 #[tokio::test]
-async fn messages_streaming_splits_thinking_into_multiple_deltas() {
+async fn messages_streaming_preserves_upstream_thinking_delta_granularity() {
     let ctx = setup().await;
     let text = collect_messages_stream_text(
         &ctx,
@@ -3238,16 +3238,12 @@ async fn messages_streaming_splits_thinking_into_multiple_deltas() {
         .filter_map(|(_, data)| serde_json::from_str::<Value>(data).ok())
         .collect();
 
-    let thinking_deltas: Vec<&Value> = events
+    let thinking_deltas: Vec<&str> = events
         .iter()
         .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
-        .collect();
-    assert!(thinking_deltas.len() > 1, "thinking should stream over multiple deltas: {text}");
-    let reconstructed = thinking_deltas
-        .iter()
         .filter_map(|event| event["delta"]["thinking"].as_str())
-        .collect::<String>();
-    assert_eq!(reconstructed, "mock_reasoning");
+        .collect();
+    assert_eq!(thinking_deltas, vec!["mock_reasoning"], "thinking delta should preserve upstream chunking: {text}");
 }
 
 #[tokio::test]
@@ -5486,6 +5482,26 @@ async fn auth_missing_authorization_header() {
     let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
     assert_eq!(v["error"]["code"].as_str(), Some("unauthorized"));
     assert_eq!(v["error"]["message"].as_str(), Some("missing auth"));
+}
+
+#[tokio::test]
+async fn auth_accepts_x_api_key_header() {
+    let ctx = setup().await;
+    let token = ctx.auth_header.strip_prefix("Bearer ").expect("bearer token");
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header("x-api-key", token)
+        .body(Body::from(
+            json!({"model":"gpt-5-mini","input":"hi"}).to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["output"][0]["content"][0]["text"].as_str(), Some("hi"));
 }
 
 #[tokio::test]

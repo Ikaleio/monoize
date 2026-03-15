@@ -477,6 +477,26 @@ fn map_responses_event_to_urp_events_with_state(
                 extra_body,
             }]
         }
+        "response.reasoning_signature.delta" => vec![UrpStreamEvent::Delta {
+            part_index: urp_part_index_from_delta(&data_val, index_state),
+            delta: PartDelta::Reasoning {
+                content: String::new(),
+            },
+            usage: None,
+            extra_body: {
+                let mut extra_body = split_known_fields(
+                    data_val.clone(),
+                    &["delta", "output_index", "content_index", "part_index"],
+                );
+                if let Some(signature) = data_val.get("delta").and_then(|v| v.as_str()) {
+                    extra_body.insert(
+                        "signature".to_string(),
+                        Value::String(signature.to_string()),
+                    );
+                }
+                extra_body
+            },
+        }],
         "response.reasoning.done" => vec![UrpStreamEvent::PartDone {
             part_index: urp_part_index_from_delta(&data_val, index_state),
             part: Part::Reasoning {
@@ -1930,6 +1950,30 @@ mod tests {
         }
 
         assert!(!(!saw_text_delta && !saw_text_part_done));
+    }
+
+    #[test]
+    fn reasoning_signature_delta_maps_to_live_reasoning_event_with_signature_extra() {
+        let mut state = ResponsesStreamIndexState::default();
+        let events = map_responses_event_to_urp_events_with_state(
+            "response.reasoning_signature.delta",
+            json!({
+                "output_index": 0,
+                "part_index": 0,
+                "delta": "sig_1"
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+
+        assert!(matches!(
+            &events[0],
+            UrpStreamEvent::Delta {
+                delta: PartDelta::Reasoning { content },
+                extra_body,
+                ..
+            } if content.is_empty() && extra_body.get("signature") == Some(&json!("sig_1"))
+        ));
     }
 
     #[test]

@@ -34,7 +34,7 @@
 
 ### 2.1 Authentication
 
-A1. Monoize MUST require `Authorization: Bearer <token>` for all non-dashboard endpoints listed in §2.2.
+A1. Monoize MUST require API-key authentication for all non-dashboard endpoints listed in §2.2. Monoize MUST accept either `Authorization: Bearer <token>` or `x-api-key: <token>` as the downstream authentication header.
 
 A2. Monoize MUST map `<token>` to a tenant identity using dashboard-managed database API keys only.
 
@@ -791,7 +791,7 @@ DM5. Reasoning:
   - `thinking = text`
   - `signature = signature`
 
-DM5a. For downstream `POST /v1/messages` streaming responses, a single URP reasoning part MUST be rendered as one Anthropic `thinking` block lifecycle. If both reasoning text and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index. The reasoning text MUST be streamed incrementally across one or more `thinking_delta` events; Monoize MUST NOT collapse the entire thinking text into one synthetic full-content delta merely because no SSE frame-length cap is configured.
+DM5a. For downstream `POST /v1/messages` streaming responses, a single URP reasoning part MUST be rendered as one Anthropic `thinking` block lifecycle. If both reasoning text and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index. Monoize MUST preserve the upstream delta granularity for reasoning text and signatures: it MUST NOT artificially split one upstream delta into smaller chunks, and it MUST NOT artificially merge multiple upstream deltas into one larger synthetic delta.
 
 DM5b. For downstream `POST /v1/messages` streaming responses, when a reasoning part carries a non-empty signature, Monoize MUST NOT emit `content_block_start.content_block.signature = ""`; the start payload and any later `signature_delta` MUST preserve the actual non-empty signature payload.
 
