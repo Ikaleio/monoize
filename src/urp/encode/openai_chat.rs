@@ -102,31 +102,17 @@ fn finalize_chat_message_content(m: &mut Map<String, Value>, content_parts: Vec<
 }
 
 fn finalize_chat_response_content(m: &mut Map<String, Value>, content_parts: Vec<Value>) {
-    let can_collapse_to_string = !content_parts.is_empty()
-        && content_parts.iter().all(|part| {
-            part.get("type").and_then(|v| v.as_str()) == Some("text")
-                && part
-                    .as_object()
-                    .map(|obj| obj.keys().all(|key| key == "type" || key == "text"))
-                    .unwrap_or(false)
-        });
-
-    if can_collapse_to_string {
-        let content = content_parts
-            .into_iter()
-            .filter_map(|part| {
-                part.get("text")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        m.insert("content".to_string(), Value::String(content));
-    } else if content_parts.is_empty() {
-        m.insert("content".to_string(), Value::String(String::new()));
-    } else {
-        m.insert("content".to_string(), Value::Array(content_parts));
-    }
+    let content = content_parts
+        .into_iter()
+        .filter_map(|part| {
+            (part.get("type").and_then(|v| v.as_str()) == Some("text"))
+                .then(|| part.get("text").and_then(|v| v.as_str()))
+                .flatten()
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    m.insert("content".to_string(), Value::String(content));
 }
 
 fn flush_pending_chat_message(pending: &mut Option<PendingChatMessage>, out: &mut Vec<Value>) {
@@ -928,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_response_keeps_chat_message_content_as_array_when_text_parts_have_phase() {
+    fn encode_response_keeps_chat_message_content_as_string_when_text_parts_have_phase() {
         let response = UrpResponse {
             id: "chatcmpl_phase_string".to_string(),
             model: "gpt-5.4".to_string(),
@@ -954,12 +940,9 @@ mod tests {
         let encoded = encode_response(&response, "gpt-5.4");
         assert_eq!(
             encoded["choices"][0]["message"]["content"],
-            json!([
-                { "type": "text", "text": "analysis", "phase": "commentary" },
-                { "type": "text", "text": "final", "phase": "final_answer" }
-            ])
+            json!("analysis\n\nfinal")
         );
-        assert!(encoded["choices"][0]["message"]["content"].is_array());
+        assert!(encoded["choices"][0]["message"]["content"].is_string());
     }
 
     #[test]
@@ -998,60 +981,5 @@ mod tests {
                 ..
             } if content == "full reasoning" && summary == "brief summary" && sig == "sig_1"
         ));
-    }
-
-    #[test]
-    fn chat_response_round_trip_preserves_array_content_when_part_metadata_would_be_lost() {
-        let response = UrpResponse {
-            id: "chatcmpl_roundtrip_content_array".to_string(),
-            model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
-                role: Role::Assistant,
-                parts: vec![
-                    Part::Text {
-                        content: "analysis".to_string(),
-                        extra_body: HashMap::from([("phase".to_string(), json!("commentary"))]),
-                    },
-                    Part::Image {
-                        source: ImageSource::Url {
-                            url: "https://example.com/image.png".to_string(),
-                            detail: None,
-                        },
-                        extra_body: empty_map(),
-                    },
-                ],
-                extra_body: empty_map(),
-            }],
-            finish_reason: Some(FinishReason::Stop),
-            usage: None,
-            extra_body: empty_map(),
-        };
-
-        let encoded = encode_response(&response, "gpt-5.4");
-        assert!(encoded["choices"][0]["message"]["content"].is_array());
-
-        let decoded = decode_chat::decode_response(&encoded).expect("decode response");
-        let decoded_parts = decoded
-            .outputs
-            .iter()
-            .filter_map(|item| match item {
-                Item::Message {
-                    role: Role::Assistant,
-                    parts,
-                    ..
-                } => Some(parts.iter().cloned()),
-                _ => None,
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-
-        assert!(decoded_parts.iter().any(|part| matches!(
-            part,
-            Part::Text { content, extra_body }
-                if content == "analysis" && extra_body.get("phase") == Some(&json!("commentary"))
-        )));
-        assert!(decoded_parts
-            .iter()
-            .any(|part| matches!(part, Part::Image { .. })));
     }
 }

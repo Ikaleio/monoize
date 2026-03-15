@@ -347,9 +347,9 @@ ES2. The Chat Completions encoder MUST prevent content/tool-call interleaving wi
 
 ES2a. When rendering a non-streaming Chat Completions response, Monoize MUST merge all assistant `Item::Message` outputs back into one `choices[0].message` object. The merged object MUST preserve the full assistant content sequence, all tool calls, reasoning fields, and preserved unknown fields. Monoize MUST NOT silently discard later assistant message segments.
 
-ES2b. In a non-streaming Chat Completions response, `choices[0].message.content` MUST be a JSON string when every assistant content part is a plain text block with no part-level metadata beyond `type="text"` and `text`. If multiple such plain text segments are merged into one response message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator.
+ES2b. In a non-streaming Chat Completions response, `choices[0].message.content` MUST always be a JSON string. If multiple assistant text segments are merged into one response message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator. Monoize MUST NOT emit assistant response `content` as an array of content blocks.
 
-ES2c. If any assistant response content part is non-text or carries part-level metadata that would be lost by string collapse, Monoize MUST emit `choices[0].message.content` as an array of content blocks so that the Chat Completions decoder can reconstruct the original URP content sequence losslessly. In this case Monoize MUST preserve part-local metadata such as `phase` on the emitted content blocks.
+ES2c. Internal URP `phase` metadata MAY influence how assistant text segments are merged, but Monoize MUST NOT serialize `phase` as a chat-completions response content-block field because Chat Completions response `choices[0].message.content` is emitted as a scalar string, not a content-block array.
 
 ES3. The Anthropic Messages encoder MUST merge consecutive assistant `Item::Message` items into a single `messages[]` entry with `role="assistant"`, concatenating their content blocks.
 
