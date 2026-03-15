@@ -814,9 +814,6 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
 }
 
 fn summary_to_text(item_obj: &Map<String, Value>) -> Option<String> {
-    if let Some(t) = item_obj.get("text").and_then(|v| v.as_str()) {
-        return Some(t.to_string());
-    }
     let mut out = String::new();
     if let Some(summary) = item_obj.get("summary").and_then(|v| v.as_array()) {
         for s in summary {

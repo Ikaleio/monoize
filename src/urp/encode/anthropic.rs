@@ -740,4 +740,47 @@ mod tests {
             Some(&json!(7))
         );
     }
+
+    #[test]
+    fn anthropic_response_round_trip_preserves_combined_thinking_block_shape() {
+        let response = UrpResponse {
+            id: "msg_roundtrip_reasoning".to_string(),
+            model: "claude".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: Some("full reasoning".to_string()),
+                    encrypted: Some(json!("sig_1")),
+                    summary: None,
+                    source: None,
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "claude");
+        let decoded = decode_anthropic::decode_response(&encoded).expect("decode response");
+        let Item::Message { parts, .. } = &decoded.outputs[0] else {
+            panic!("expected assistant output");
+        };
+
+        assert_eq!(
+            parts.len(),
+            1,
+            "thinking block should decode to one reasoning part"
+        );
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                content: Some(content),
+                encrypted: Some(Value::String(sig)),
+                summary: None,
+                ..
+            } if content == "full reasoning" && sig == "sig_1"
+        ));
+    }
 }

@@ -166,7 +166,7 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
         } => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
-            if let Some(summary) = summary.as_ref().or(content.as_ref()) {
+            if let Some(summary) = summary.as_ref() {
                 obj.insert(
                     "summary".to_string(),
                     Value::Array(vec![json!({ "type": "summary_text", "text": summary })]),
@@ -1027,6 +1027,87 @@ mod tests {
             decoded_usage.extra_body.get("upstream_counter"),
             Some(&json!(42))
         );
+    }
+
+    #[test]
+    fn responses_response_round_trip_preserves_reasoning_summary_separately_from_content() {
+        let response = UrpResponse {
+            id: "resp_roundtrip_reasoning".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: Some("full reasoning".to_string()),
+                    encrypted: Some(json!("sig_1")),
+                    summary: Some("brief summary".to_string()),
+                    source: None,
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        let decoded = decode_responses::decode_response(&encoded).expect("decode response");
+        let Item::Message { parts, .. } = &decoded.outputs[0] else {
+            panic!("expected assistant output");
+        };
+
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                content: Some(content),
+                summary: Some(summary),
+                encrypted: Some(Value::String(sig)),
+                ..
+            } if content == "full reasoning" && summary == "brief summary" && sig == "sig_1"
+        ));
+    }
+
+    #[test]
+    fn responses_response_round_trip_does_not_invent_summary_from_plain_reasoning_content() {
+        let response = UrpResponse {
+            id: "resp_roundtrip_plain_reasoning".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: Some("plain reasoning".to_string()),
+                    encrypted: None,
+                    summary: None,
+                    source: None,
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        let reasoning_item = encoded["output"]
+            .as_array()
+            .and_then(|items| items.first())
+            .expect("reasoning output item");
+        assert!(reasoning_item.get("summary").is_none());
+
+        let decoded = decode_responses::decode_response(&encoded).expect("decode response");
+        let Item::Message { parts, .. } = &decoded.outputs[0] else {
+            panic!("expected assistant output");
+        };
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                content: Some(content),
+                summary: None,
+                encrypted: None,
+                ..
+            } if content == "plain reasoning"
+        ));
     }
 
     #[test]

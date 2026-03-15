@@ -143,7 +143,42 @@ pub(crate) async fn stream_chat_to_urp_events(
             }
         }
 
-        let (reasoning_text_deltas, reasoning_sig_deltas) = extract_chat_reasoning_deltas(&delta);
+        let (reasoning_text_deltas, reasoning_summary_deltas, reasoning_sig_deltas) =
+            extract_chat_reasoning_deltas(&delta);
+        for summary in reasoning_summary_deltas {
+            if summary.is_empty() {
+                continue;
+            }
+            ensure_response_and_item_started(
+                &tx,
+                &response_id,
+                &urp.model,
+                &mut response_started,
+                &mut item_started,
+            )
+            .await?;
+            let part_index = ensure_part_started(
+                &tx,
+                0,
+                &mut reasoning_part_index,
+                &mut next_part_index,
+                PartHeader::Reasoning,
+            )
+            .await?;
+            send_event(
+                &tx,
+                UrpStreamEvent::Delta {
+                    part_index,
+                    delta: PartDelta::Reasoning { content: summary },
+                    usage: None,
+                    extra_body: HashMap::from([(
+                        "reasoning_delta_type".to_string(),
+                        Value::String("summary".to_string()),
+                    )]),
+                },
+            )
+            .await?;
+        }
         for t in reasoning_text_deltas {
             if t.is_empty() {
                 continue;

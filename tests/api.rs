@@ -133,21 +133,41 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                             .data(json!({
                                 "type": "response.output_item.added",
                                 "output_index": 0,
-                                "item": { "type": "reasoning", "text": "" }
+                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "" }], "text": "" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
-                            .event("response.reasoning_text.delta")
+                            .event("response.reasoning_summary_text.delta")
                             .data(json!({
-                                "type": "response.reasoning_text.delta",
+                                "type": "response.reasoning_summary_text.delta",
                                 "output_index": 0,
-                                "delta": "mock_reasoning"
+                                "item_id": "rs_mock",
+                                "summary_index": 0,
+                                "delta": "mock_summary"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.reasoning_summary_text.done")
+                            .data(json!({
+                                "type": "response.reasoning_summary_text.done",
+                                "output_index": 0,
+                                "item_id": "rs_mock",
+                                "summary_index": 0,
+                                "text": "mock_summary"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.reasoning_summary_part.done")
+                            .data(json!({
+                                "type": "response.reasoning_summary_part.done",
+                                "output_index": 0,
+                                "item_id": "rs_mock",
+                                "summary_index": 0,
+                                "part": { "type": "summary_text", "text": "mock_summary" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.output_item.done")
                             .data(json!({
                                 "type": "response.output_item.done",
                                 "output_index": 0,
-                                "item": { "type": "reasoning", "text": "mock_reasoning" }
+                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "mock_summary" }], "text": "mock_reasoning", "encrypted_content": "mock_sig" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.output_item.added")
@@ -254,11 +274,20 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
 
                 let mut events: Vec<Result<Event, Infallible>> = Vec::new();
                 events.push(Ok(Event::default()
+                    .event("response.reasoning_summary_text.delta")
+                    .data(json!({ "type": "response.reasoning_summary_text.delta", "item_id": "rs_mock", "output_index": 0, "summary_index": 0, "delta": "mock_summary" }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.reasoning_summary_text.done")
+                    .data(json!({ "type": "response.reasoning_summary_text.done", "item_id": "rs_mock", "output_index": 0, "summary_index": 0, "text": "mock_summary" }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.reasoning_summary_part.done")
+                    .data(json!({ "type": "response.reasoning_summary_part.done", "item_id": "rs_mock", "output_index": 0, "summary_index": 0, "part": { "type": "summary_text", "text": "mock_summary" } }).to_string())));
+                events.push(Ok(Event::default()
                     .event("response.reasoning_text.delta")
-                    .data(json!({ "delta": "mock_reasoning" }).to_string())));
+                    .data(json!({ "type": "response.reasoning_text.delta", "item_id": "rs_mock", "output_index": 0, "delta": "mock_reasoning" }).to_string())));
                 events.push(Ok(Event::default()
                     .event("response.reasoning_signature.delta")
-                    .data(json!({ "delta": "mock_sig" }).to_string())));
+                    .data(json!({ "type": "response.reasoning_signature.delta", "item_id": "rs_mock", "output_index": 0, "delta": "mock_sig" }).to_string())));
 
                 let calls = if parallel {
                     vec![
@@ -571,6 +600,13 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                         "object": "chat.completion.chunk",
                         "created": 0,
                         "model": model,
+                        "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.summary", "summary": "mock_summary", "format": "unknown" }] }, "finish_reason": Value::Null }]
+                    }).to_string())));
+                    chunks.push(Ok(Event::default().data(json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
                         "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.text", "text": "mock_reasoning", "signature": "mock_sig", "format": "unknown" }] }, "finish_reason": Value::Null }]
                     }).to_string())));
                     chunks.push(Ok(Event::default().data(json!({
@@ -632,6 +668,13 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     "created": 0,
                     "model": model,
                     "choices": [{ "index": 0, "delta": { "role": "assistant", "content": Value::Null }, "finish_reason": Value::Null }]
+                }).to_string())));
+                chunks.push(Ok(Event::default().data(json!({
+                    "id": "chatcmpl_mock",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": model,
+                    "choices": [{ "index": 0, "delta": { "reasoning_details": [{ "type": "reasoning.summary", "summary": "mock_summary", "format": "unknown" }] }, "finish_reason": Value::Null }]
                 }).to_string())));
                 chunks.push(Ok(Event::default().data(json!({
                     "id": "chatcmpl_mock",
@@ -2995,7 +3038,7 @@ async fn responses_streaming_includes_tool_calls_and_reasoning_when_upstream_is_
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(text.contains("event: response.function_call_arguments.delta"));
-    assert!(text.contains("event: response.reasoning_text.delta"));
+    assert!(text.contains("event: response.reasoning_summary_text.delta"));
 }
 
 #[tokio::test]
@@ -3073,22 +3116,28 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
     assert!(text_delta.1["response_id"].as_str().is_some(), "text delta must include response_id");
     assert!(text_delta.1["item_id"].as_str().is_some(), "text delta must include item_id");
 
-    let reasoning_delta = frames
+    let reasoning_summary_delta = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning_text.delta")
-        .expect("reasoning delta");
+        .find(|(event, _)| event == "response.reasoning_summary_text.delta")
+        .expect("reasoning summary delta");
     assert_eq!(
-        reasoning_delta.1["type"].as_str(),
-        Some("response.reasoning_text.delta")
+        reasoning_summary_delta.1["type"].as_str(),
+        Some("response.reasoning_summary_text.delta")
     );
-    let reasoning_response_id = reasoning_delta.1["response_id"]
+    let reasoning_response_id = reasoning_summary_delta.1["response_id"]
         .as_str()
         .expect("reasoning delta response_id");
-    let reasoning_item_id = reasoning_delta.1["item_id"]
+    let reasoning_item_id = reasoning_summary_delta.1["item_id"]
         .as_str()
         .expect("reasoning delta item_id");
     assert!(!reasoning_response_id.is_empty(), "reasoning response_id must be non-empty");
     assert!(!reasoning_item_id.is_empty(), "reasoning item_id must be non-empty");
+
+    let reasoning_text_delta = frames
+        .iter()
+        .find(|(event, _)| event == "response.reasoning_text.delta")
+        .expect("reasoning text delta");
+    assert_eq!(reasoning_text_delta.1["item_id"].as_str(), Some(reasoning_item_id));
 
     let reasoning_done = frames
         .iter()
@@ -3117,6 +3166,128 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
     );
     assert!(function_delta.1["response_id"].as_str().is_some());
     assert!(function_delta.1["item_id"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"stream tool"}]}],
+                "tools":[{ "type":"function","name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}],
+                "stream": true,
+                "stream_mode": "reasoning_text_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_text.delta"));
+    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_text.done"));
+    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_part.done"));
+    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_text.delta"));
+
+    let summary_delta = frames
+        .iter()
+        .find(|(event, _)| event == "response.reasoning_summary_text.delta")
+        .expect("summary delta");
+    assert_eq!(summary_delta.1["delta"].as_str(), Some("mock_summary"));
+
+    let text_delta = frames
+        .iter()
+        .find(|(event, _)| event == "response.reasoning_text.delta")
+        .expect("text delta");
+    assert_eq!(text_delta.1["delta"].as_str(), Some("mock_reasoning"));
+}
+
+#[tokio::test]
+async fn chat_streaming_preserves_summary_vs_reasoning_in_openrouter_extension() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true,
+                "stream_mode": "reasoning_text_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert!(text.contains("\"type\":\"reasoning.summary\""), "chat stream should expose reasoning summary detail: {text}");
+    assert!(text.contains("\"summary\":\"mock_summary\""), "chat stream should preserve summary field: {text}");
+    assert!(text.contains("\"type\":\"reasoning.text\""), "chat stream should expose reasoning text detail: {text}");
+    assert!(text.contains("\"text\":\"mock_reasoning\""), "chat stream should preserve reasoning text field: {text}");
+}
+
+#[tokio::test]
+async fn messages_streaming_keeps_signature_in_thinking_block_and_delta_order() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-chat",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "think stream chat" }] }],
+            "stream": true
+        }),
+    )
+    .await;
+    let frames = parse_sse_frames(&text);
+    let events: Vec<Value> = frames
+        .iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(data).ok())
+        .collect();
+
+    let thinking_start = events
+        .iter()
+        .find(|event| {
+            event["type"].as_str() == Some("content_block_start")
+                && event["content_block"]["type"].as_str() == Some("thinking")
+        })
+        .expect("thinking block start");
+    assert_eq!(thinking_start["content_block"]["signature"].as_str(), Some("mock_sig"));
+
+    let mut thinking_delta_pos = None;
+    let mut signature_delta_pos = None;
+    let mut stop_pos = None;
+    for (idx, event) in events.iter().enumerate() {
+        match event["delta"]["type"].as_str() {
+            Some("thinking_delta") if thinking_delta_pos.is_none() => thinking_delta_pos = Some(idx),
+            Some("signature_delta") if signature_delta_pos.is_none() => signature_delta_pos = Some(idx),
+            _ => {}
+        }
+        if event["type"].as_str() == Some("content_block_stop") && stop_pos.is_none() {
+            stop_pos = Some(idx);
+        }
+    }
+    let thinking_delta_pos = thinking_delta_pos.expect("thinking delta position");
+    let signature_delta_pos = signature_delta_pos.expect("signature delta position");
+    let stop_pos = stop_pos.expect("stop position");
+    assert!(thinking_delta_pos < signature_delta_pos, "thinking_delta must precede signature_delta: {text}");
+    assert!(signature_delta_pos < stop_pos, "signature_delta must precede content_block_stop: {text}");
 }
 
 #[tokio::test]

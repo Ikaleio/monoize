@@ -93,7 +93,37 @@ pub(crate) async fn emit_synthetic_responses_stream(
 
         match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
             "reasoning" => {
-                let (text, sig) = extract_reasoning_text_and_signature(item);
+                let (text, summary, sig) = extract_reasoning_parts(item);
+                if !summary.is_empty() {
+                    send_responses_delta_string(
+                        &tx,
+                        &mut seq,
+                        "response.reasoning_summary_text.delta",
+                        json!({
+                            "response_id": response_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                            "summary_index": 0,
+                        }),
+                        "delta",
+                        &summary,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.reasoning_summary_text.done",
+                        json!({
+                            "response_id": response_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                            "summary_index": 0,
+                            "text": summary,
+                        }),
+                    )
+                    .await?;
+                }
                 if !text.is_empty() {
                     send_responses_delta_string(
                         &tx,
@@ -110,8 +140,23 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     )
                     .await?;
                 }
+                if !summary.is_empty() {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.reasoning_summary_part.done",
+                        json!({
+                            "response_id": response_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                            "summary_index": 0,
+                            "part": { "type": "summary_text", "text": summary },
+                        }),
+                    )
+                    .await?;
+                }
                 if !sig.is_empty() {
-                    send_responses_delta_string(
+                    send_responses_event(
                         &tx,
                         &mut seq,
                         "response.reasoning_signature.delta",
@@ -119,10 +164,8 @@ pub(crate) async fn emit_synthetic_responses_stream(
                             "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
+                            "delta": sig,
                         }),
-                        "delta",
-                        &sig,
-                        sse_max_frame_length,
                     )
                     .await?;
                 }
@@ -352,7 +395,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
             }
             UrpStreamEvent::Delta {
-                part_index, delta, ..
+                part_index,
+                delta,
+                extra_body,
+                ..
             } => match delta {
                 PartDelta::Text { ref content } => {
                     let part_state = part_states
@@ -425,15 +471,28 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     {
                         append_delta_to_stream_output_item(active_output, &delta);
                     }
+                    let is_summary = extra_body
+                        .get("reasoning_delta_type")
+                        .and_then(Value::as_str)
+                        == Some("summary");
+                    let event_name = if is_summary {
+                        "response.reasoning_summary_text.delta"
+                    } else {
+                        "response.reasoning_text.delta"
+                    };
+                    let mut payload = json!({
+                        "response_id": response_id,
+                        "item_id": part_state.item_id,
+                        "output_index": part_state.output_index,
+                    });
+                    if is_summary {
+                        payload["summary_index"] = json!(0);
+                    }
                     send_responses_delta_string(
                         &tx,
                         &mut seq,
-                        "response.reasoning_text.delta",
-                        json!({
-                            "response_id": response_id,
-                            "item_id": part_state.item_id,
-                            "output_index": part_state.output_index,
-                        }),
+                        event_name,
+                        payload,
                         "delta",
                         content,
                         sse_max_frame_length,
@@ -541,6 +600,56 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             }),
                         )
                         .await?;
+                    } else if part_state.zone == ResponsesOutputZone::Reasoning {
+                        if let Part::Reasoning {
+                            content,
+                            summary,
+                            ..
+                        } = &part
+                        {
+                            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.reasoning_summary_text.done",
+                                    json!({
+                                        "response_id": response_id,
+                                        "item_id": part_state.item_id,
+                                        "output_index": part_state.output_index,
+                                        "summary_index": 0,
+                                        "text": summary,
+                                    }),
+                                )
+                                .await?;
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.reasoning_summary_part.done",
+                                    json!({
+                                        "response_id": response_id,
+                                        "item_id": part_state.item_id,
+                                        "output_index": part_state.output_index,
+                                        "summary_index": 0,
+                                        "part": { "type": "summary_text", "text": summary },
+                                    }),
+                                )
+                                .await?;
+                            }
+                            if content.as_deref().is_some_and(|content| !content.is_empty()) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.reasoning_text.done",
+                                    json!({
+                                        "response_id": response_id,
+                                        "item_id": part_state.item_id,
+                                        "output_index": part_state.output_index,
+                                        "text": content,
+                                    }),
+                                )
+                                .await?;
+                            }
+                        }
                     }
                 }
             }
@@ -1079,7 +1188,7 @@ fn encode_reasoning_output_item(part: &Part) -> Option<Value> {
 
     let mut obj = Map::new();
     obj.insert("type".to_string(), json!("reasoning"));
-    if let Some(text) = summary.as_ref().or(content.as_ref()) {
+    if let Some(text) = summary.as_ref() {
         obj.insert(
             "summary".to_string(),
             Value::Array(vec![json!({ "type": "summary_text", "text": text })]),

@@ -6,7 +6,7 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::stream_helpers::{
-    extract_reasoning_text_and_signature, extract_responses_message_phase,
+    extract_reasoning_parts, extract_responses_message_phase,
     extract_responses_message_text,
 };
 use crate::urp::{
@@ -33,6 +33,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut output_texts_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut message_phases_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut reasoning_text = String::new();
+    let mut reasoning_summary_text = String::new();
     let mut reasoning_sig = String::new();
     let mut reasoning_output_index: Option<u64> = None;
     let mut call_order: Vec<String> = Vec::new();
@@ -106,6 +107,15 @@ pub(crate) async fn stream_responses_to_urp_events(
                 reasoning_text.push_str(delta);
             }
         }
+        if ev.event == "response.reasoning_summary_text.delta" {
+            if let Some(delta) = data_val
+                .get("delta")
+                .and_then(|v| v.as_str())
+                .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
+            {
+                reasoning_summary_text.push_str(delta);
+            }
+        }
         if ev.event == "response.reasoning_signature.delta" {
             if let Some(delta) = data_val.get("delta").and_then(|v| v.as_str()) {
                 reasoning_sig.push_str(delta);
@@ -151,9 +161,12 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     reasoning_output_index.get_or_insert(idx);
                 }
-                let (text, sig) = extract_reasoning_text_and_signature(item);
+                let (text, summary, sig) = extract_reasoning_parts(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
+                }
+                if reasoning_summary_text.is_empty() && !summary.is_empty() {
+                    reasoning_summary_text = summary;
                 }
                 if reasoning_sig.is_empty() && !sig.is_empty() {
                     reasoning_sig = sig;
@@ -234,9 +247,12 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     reasoning_output_index.get_or_insert(idx);
                 }
-                let (text, sig) = extract_reasoning_text_and_signature(item);
+                let (text, summary, sig) = extract_reasoning_parts(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
+                }
+                if reasoning_summary_text.is_empty() && !summary.is_empty() {
+                    reasoning_summary_text = summary;
                 }
                 if reasoning_sig.is_empty() && !sig.is_empty() {
                     reasoning_sig = sig;
@@ -287,6 +303,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     if !response_done_sent {
         let output_items = build_accumulated_output_items(
             &reasoning_text,
+            &reasoning_summary_text,
             &reasoning_sig,
             reasoning_output_index,
             &output_texts_by_output_index,
@@ -420,28 +437,35 @@ fn map_responses_event_to_urp_events_with_state(
             usage: None,
             extra_body: delta_extra_body_with_phase(data_val, message_phases_by_output_index),
         }],
-        "response.reasoning_text.delta" => vec![UrpStreamEvent::Delta {
-            part_index: urp_part_index_from_delta(&data_val, index_state),
-            delta: PartDelta::Reasoning {
-                content: data_val
-                    .get("delta")
-                    .or_else(|| data_val.get("text"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            },
-            usage: None,
-            extra_body: split_known_fields(
-                data_val,
+        "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+            let mut extra_body = split_known_fields(
+                data_val.clone(),
                 &[
                     "delta",
                     "text",
                     "output_index",
                     "content_index",
                     "part_index",
+                    "summary_index",
                 ],
-            ),
-        }],
+            );
+            if event_name == "response.reasoning_summary_text.delta" {
+                extra_body.insert("reasoning_delta_type".to_string(), Value::String("summary".to_string()));
+            }
+            vec![UrpStreamEvent::Delta {
+                part_index: urp_part_index_from_delta(&data_val, index_state),
+                delta: PartDelta::Reasoning {
+                    content: data_val
+                        .get("delta")
+                        .or_else(|| data_val.get("text"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                usage: None,
+                extra_body,
+            }]
+        }
         "response.function_call_arguments.delta" => vec![UrpStreamEvent::Delta {
             part_index: urp_part_index_from_delta(&data_val, index_state),
             delta: PartDelta::ToolCallArguments {
@@ -853,11 +877,24 @@ fn map_output_item_done(
         }
         "reasoning" | "function_call" => {
             let part = decode_part_from_value(item);
+            let part_index = index_state.synthetic_part_index_for_output(output_index);
+            if let Part::Reasoning { content: Some(content), .. } = &part {
+                if !content.is_empty() {
+                    events.push(UrpStreamEvent::Delta {
+                        part_index,
+                        delta: PartDelta::Reasoning {
+                            content: content.clone(),
+                        },
+                        usage: None,
+                        extra_body: HashMap::new(),
+                    });
+                }
+            }
             if let Some(active_item) = index_state.active_assistant_item.as_mut() {
                 active_item.parts.push(part.clone());
             }
             events.push(UrpStreamEvent::PartDone {
-                part_index: index_state.synthetic_part_index_for_output(output_index),
+                part_index,
                 part,
                 usage: None,
                 extra_body: part_extra_body_from_value(item),
@@ -1100,7 +1137,21 @@ fn decode_part_from_value(part: &Value) -> Part {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             encrypted: part.get("encrypted_content").cloned(),
-            summary: None,
+            summary: part
+                .get("summary")
+                .and_then(|v| v.as_array())
+                .map(|summary| {
+                    summary
+                        .iter()
+                        .filter(|entry| {
+                            entry.get("type").and_then(|v| v.as_str()) == Some("summary_text")
+                        })
+                        .filter_map(|entry| entry.get("text").and_then(|v| v.as_str()))
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .filter(|summary| !summary.is_empty()),
             source: part
                 .get("source")
                 .and_then(|v| v.as_str())
@@ -1212,6 +1263,7 @@ fn feed_assistant_part(
 
 fn build_accumulated_output_items(
     reasoning_text: &str,
+    reasoning_summary_text: &str,
     reasoning_sig: &str,
     reasoning_output_index: Option<u64>,
     output_texts_by_output_index: &HashMap<u64, String>,
@@ -1232,7 +1284,7 @@ fn build_accumulated_output_items(
     }
 
     let mut ordered_kinds = Vec::new();
-    if !reasoning_text.is_empty() || !reasoning_sig.is_empty() {
+    if !reasoning_text.is_empty() || !reasoning_summary_text.is_empty() || !reasoning_sig.is_empty() {
         ordered_kinds.push(FallbackOutputKind::Reasoning(
             reasoning_output_index.unwrap_or(0),
         ));
@@ -1273,9 +1325,10 @@ fn build_accumulated_output_items(
                     &mut outputs,
                     Part::Reasoning {
                         content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
+                        summary: (!reasoning_summary_text.is_empty())
+                            .then(|| reasoning_summary_text.to_string()),
                         encrypted: (!reasoning_sig.is_empty())
                             .then(|| Value::String(reasoning_sig.to_string())),
-                        summary: None,
                         source: None,
                         extra_body: HashMap::new(),
                     },
@@ -1393,6 +1446,7 @@ mod tests {
 
         let outputs = build_accumulated_output_items(
             "think",
+            "summary",
             "sig_1",
             Some(0),
             &HashMap::from([(0, "answer".to_string())]),
@@ -1417,9 +1471,10 @@ mod tests {
             &parts[0],
             Part::Reasoning {
                 content: Some(content),
+                summary: Some(summary),
                 encrypted: Some(Value::String(sig)),
                 ..
-            } if content == "think" && sig == "sig_1"
+            } if content == "think" && summary == "summary" && sig == "sig_1"
         ));
         assert!(matches!(
             &parts[1],
@@ -1439,6 +1494,7 @@ mod tests {
     #[test]
     fn build_accumulated_output_items_omits_empty_text_message() {
         let outputs = build_accumulated_output_items(
+            "",
             "",
             "sig_only",
             Some(0),
@@ -1471,6 +1527,7 @@ mod tests {
     #[test]
     fn build_accumulated_output_items_preserves_multiple_output_text_phases() {
         let outputs = build_accumulated_output_items(
+            "",
             "",
             "",
             None,
@@ -1519,6 +1576,7 @@ mod tests {
 
         let outputs = build_accumulated_output_items(
             "think",
+            "summary",
             "",
             Some(2),
             &HashMap::from([(5, "answer".to_string())]),
@@ -1550,6 +1608,7 @@ mod tests {
                     {
                         "type": "reasoning",
                         "text": "think",
+                        "summary": [{ "type": "summary_text", "text": "summary" }],
                         "encrypted_content": "sig_1"
                     },
                     {
@@ -1594,9 +1653,10 @@ mod tests {
             &parts[0],
             Part::Reasoning {
                 content: Some(content),
+                summary: Some(summary),
                 encrypted: Some(Value::String(sig)),
                 ..
-            } if content == "think" && sig == "sig_1"
+            } if content == "think" && summary == "summary" && sig == "sig_1"
         ));
         assert!(matches!(
             &parts[1],
@@ -1737,6 +1797,7 @@ mod tests {
         let output_items = build_accumulated_output_items(
             "",
             "",
+            "",
             None,
             &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
             &HashMap::from([(0, "commentary".to_string()), (2, "final_answer".to_string())]),
@@ -1842,6 +1903,26 @@ mod tests {
         }
 
         assert!(!(!saw_text_delta && !saw_text_part_done));
+    }
+
+    #[test]
+    fn decode_reasoning_part_preserves_summary_separately_from_text() {
+        let part = decode_part_from_value(&json!({
+            "type": "reasoning",
+            "text": "full reasoning",
+            "summary": [{ "type": "summary_text", "text": "brief summary" }],
+            "encrypted_content": "sig_1"
+        }));
+
+        assert!(matches!(
+            part,
+            Part::Reasoning {
+                content: Some(content),
+                summary: Some(summary),
+                encrypted: Some(Value::String(sig)),
+                ..
+            } if content == "full reasoning" && summary == "brief summary" && sig == "sig_1"
+        ));
     }
 
     #[test]

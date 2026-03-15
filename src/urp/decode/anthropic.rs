@@ -415,28 +415,27 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     }
                 }
                 "thinking" => {
-                    let mut parts = Vec::new();
-                    if let Some(thinking) = bobj.get("thinking").and_then(|v| v.as_str()) {
-                        parts.push(Part::Reasoning {
-                            content: Some(thinking.to_string()),
-                            encrypted: None,
+                    let thinking = bobj
+                        .get("thinking")
+                        .and_then(|v| v.as_str())
+                        .filter(|thinking| !thinking.is_empty())
+                        .map(|thinking| thinking.to_string());
+                    let encrypted = bobj
+                        .get("signature")
+                        .and_then(|v| v.as_str())
+                        .filter(|signature| !signature.is_empty())
+                        .map(|signature| Value::String(signature.to_string()));
+                    if thinking.is_some() || encrypted.is_some() {
+                        vec![Part::Reasoning {
+                            content: thinking,
+                            encrypted,
                             summary: None,
                             source: None,
                             extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
-                        });
+                        }]
+                    } else {
+                        Vec::new()
                     }
-                    if let Some(signature) = bobj.get("signature").and_then(|v| v.as_str()) {
-                        if !signature.is_empty() {
-                            parts.push(Part::Reasoning {
-                                content: None,
-                                encrypted: Some(Value::String(signature.to_string())),
-                                summary: None,
-                                source: None,
-                                extra_body: HashMap::new(),
-                            });
-                        }
-                    }
-                    parts
                 }
                 "tool_use" => {
                     let call_id = bobj

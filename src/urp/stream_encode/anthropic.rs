@@ -52,12 +52,28 @@ pub(crate) async fn emit_synthetic_messages_stream(
                         Part::Reasoning {
                             content,
                             encrypted,
+                            extra_body,
                             ..
                         } => {
+                            let signature = encrypted
+                                .as_ref()
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                                .or_else(|| {
+                                    extra_body
+                                        .get("signature")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_owned)
+                                });
+                            if content.as_deref().is_none_or(|content| content.is_empty())
+                                && signature.as_deref().is_none_or(|signature| signature.is_empty())
+                            {
+                                continue;
+                            }
                             if let Some(content) =
                                 content.as_deref().filter(|content| !content.is_empty())
                             {
-                                let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": "" } });
+                                let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": signature.clone().unwrap_or_default() } });
                                 send_named_messages_event(&tx, s).await?;
                                 send_messages_delta_string(
                                     &tx,
@@ -67,30 +83,33 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                     sse_max_frame_length,
                                 )
                                 .await?;
-                                let e = json!({ "type": "content_block_stop", "index": index });
-                                send_named_messages_event(&tx, e).await?;
-                                index += 1;
-                            }
-                            if let Some(data) = encrypted {
-                                let sig = data
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| data.to_string());
-                                if !sig.is_empty() {
-                                    let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": "" } });
-                                    send_named_messages_event(&tx, s).await?;
+                                if let Some(sig) = signature.as_deref().filter(|sig| !sig.is_empty()) {
                                     send_messages_delta_string(
                                         &tx,
                                         json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": "" } }),
                                         messages_delta_path_signature,
-                                        &sig,
+                                        sig,
                                         sse_max_frame_length,
                                     )
                                     .await?;
-                                    let e = json!({ "type": "content_block_stop", "index": index });
-                                    send_named_messages_event(&tx, e).await?;
-                                    index += 1;
                                 }
+                                let e = json!({ "type": "content_block_stop", "index": index });
+                                send_named_messages_event(&tx, e).await?;
+                                index += 1;
+                            } else if let Some(sig) = signature.as_deref().filter(|sig| !sig.is_empty()) {
+                                let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": sig } });
+                                send_named_messages_event(&tx, s).await?;
+                                send_messages_delta_string(
+                                    &tx,
+                                    json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": "" } }),
+                                    messages_delta_path_signature,
+                                    sig,
+                                    sse_max_frame_length,
+                                )
+                                .await?;
+                                let e = json!({ "type": "content_block_stop", "index": index });
+                                send_named_messages_event(&tx, e).await?;
+                                index += 1;
                             }
                         }
                         Part::ToolCall {
@@ -302,7 +321,15 @@ fn content_block_from_part(
 ) -> AppResult<Value> {
     let content_block = match part {
         Part::Text { .. } | Part::Refusal { .. } => json!({ "type": "text", "text": "" }),
-        Part::Reasoning { .. } => json!({ "type": "thinking", "thinking": "", "signature": "" }),
+        Part::Reasoning { encrypted, extra_body, .. } => json!({
+            "type": "thinking",
+            "thinking": "",
+            "signature": encrypted
+                .as_ref()
+                .and_then(Value::as_str)
+                .or_else(|| extra_body.get("signature").and_then(Value::as_str))
+                .unwrap_or("")
+        }),
         Part::ToolCall { call_id, name, .. } => {
             *saw_tool_use = true;
             json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })
@@ -425,7 +452,15 @@ async fn emit_messages_outputs_from_response_done(
 
             let content_block = match part {
                 Part::Text { .. } | Part::Refusal { .. } => json!({ "type": "text", "text": "" }),
-                Part::Reasoning { .. } => json!({ "type": "thinking", "thinking": "", "signature": "" }),
+                Part::Reasoning { encrypted, extra_body, .. } => json!({
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": encrypted
+                        .as_ref()
+                        .and_then(Value::as_str)
+                        .or_else(|| extra_body.get("signature").and_then(Value::as_str))
+                        .unwrap_or("")
+                }),
                 Part::ToolCall { call_id, name, .. } => {
                     *saw_tool_use = true;
                     json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })

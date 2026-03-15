@@ -253,6 +253,22 @@ pub(crate) fn chat_delta_path_reasoning_text(value: &mut Value, content: &str) {
     }
 }
 
+pub(crate) fn chat_delta_path_reasoning_summary(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert(
+            "reasoning_details".to_string(),
+            json!([{ "type": "reasoning.summary", "summary": content }]),
+        );
+    }
+}
+
 pub(crate) fn chat_delta_path_reasoning_signature(value: &mut Value, content: &str) {
     if let Some(delta) = value
         .get_mut("choices")
@@ -380,27 +396,26 @@ pub(crate) fn sanitize_responses_completed_for_frame_limit(encoded: &Value, max_
     sanitized
 }
 
-pub(crate) fn extract_reasoning_text_and_signature(item: &Value) -> (String, String) {
-    let mut text = item
+pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) {
+    let text = item
         .get("text")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    if text.is_empty() {
-        if let Some(summary) = item.get("summary").and_then(|v| v.as_array()) {
-            let mut parts = Vec::new();
-            for s in summary {
-                if s.get("type").and_then(|v| v.as_str()) == Some("summary_text") {
-                    if let Some(t) = s.get("text").and_then(|v| v.as_str()) {
-                        if !t.is_empty() {
-                            parts.push(t);
-                        }
+    let mut summary_text = String::new();
+    if let Some(summary) = item.get("summary").and_then(|v| v.as_array()) {
+        let mut parts = Vec::new();
+        for s in summary {
+            if s.get("type").and_then(|v| v.as_str()) == Some("summary_text") {
+                if let Some(t) = s.get("text").and_then(|v| v.as_str()) {
+                    if !t.is_empty() {
+                        parts.push(t);
                     }
                 }
             }
-            if !parts.is_empty() {
-                text = parts.join("\n");
-            }
+        }
+        if !parts.is_empty() {
+            summary_text = parts.join("\n");
         }
     }
     let mut signature = item
@@ -415,7 +430,7 @@ pub(crate) fn extract_reasoning_text_and_signature(item: &Value) -> (String, Str
             .unwrap_or("")
             .to_string();
     }
-    (text, signature)
+    (text, summary_text, signature)
 }
 
 pub(crate) fn reasoning_text_detail_value(text: &str, signature: Option<&str>) -> Value {
@@ -438,6 +453,7 @@ pub(crate) fn reasoning_encrypted_detail_value(data: Value) -> Value {
 pub(crate) fn extract_chat_reasoning_from_detail(
     detail: &Value,
     text_out: &mut Vec<String>,
+    summary_out: &mut Vec<String>,
     sig_out: &mut Vec<String>,
 ) {
     let Some(obj) = detail.as_object() else {
@@ -468,7 +484,7 @@ pub(crate) fn extract_chat_reasoning_from_detail(
         "reasoning.summary" => {
             if let Some(summary) = obj.get("summary").and_then(|v| v.as_str()) {
                 if !summary.is_empty() {
-                    text_out.push(summary.to_string());
+                    summary_out.push(summary.to_string());
                 }
             }
         }
@@ -476,13 +492,19 @@ pub(crate) fn extract_chat_reasoning_from_detail(
     }
 }
 
-pub(crate) fn extract_chat_reasoning_deltas(delta: &Value) -> (Vec<String>, Vec<String>) {
+pub(crate) fn extract_chat_reasoning_deltas(delta: &Value) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut text_parts = Vec::new();
+    let mut summary_parts = Vec::new();
     let mut sig_parts = Vec::new();
 
     if let Some(details) = delta.get("reasoning_details").and_then(|v| v.as_array()) {
         for detail in details {
-            extract_chat_reasoning_from_detail(detail, &mut text_parts, &mut sig_parts);
+            extract_chat_reasoning_from_detail(
+                detail,
+                &mut text_parts,
+                &mut summary_parts,
+                &mut sig_parts,
+            );
         }
     }
 
@@ -505,12 +527,21 @@ pub(crate) fn extract_chat_reasoning_deltas(delta: &Value) -> (Vec<String>, Vec<
         }
     }
 
-    (text_parts, sig_parts)
+    (text_parts, summary_parts, sig_parts)
 }
 
 pub(crate) fn chat_reasoning_delta_from_text(text: &str) -> Value {
     json!({
         "reasoning_details": [reasoning_text_detail_value(text, None)]
+    })
+}
+
+pub(crate) fn chat_reasoning_delta_from_summary(summary: &str) -> Value {
+    json!({
+        "reasoning_details": [{
+            "type": "reasoning.summary",
+            "summary": summary
+        }]
     })
 }
 

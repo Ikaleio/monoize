@@ -335,6 +335,10 @@ GZ8. For provider streaming decoders, the `ResponseDone.outputs` payload MUST sa
 
 GZ9. For provider streaming decoders, every intermediate assistant `UrpStreamEvent::ItemStart` and `UrpStreamEvent::ItemDone` boundary MUST satisfy GZ1-GZ8 at the time the boundary is emitted. Monoize MUST NOT preserve upstream output-item boundaries when those boundaries contradict greedy merging.
 
+GZ10. For each downstream response protocol implemented by Monoize (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`), the protocol decoder MUST be able to parse the canonical non-stream response object emitted by the matching protocol encoder back into an equivalent URP response without inventing, discarding, or reclassifying protocol-visible reasoning/text/tool-call structure.
+
+GZ11. The round-trip requirement in GZ10 applies in particular to reasoning structure. If an encoder emits distinct reasoning summary text, full reasoning content, encrypted/signature payloads, or phase metadata, the matching decoder MUST reconstruct those fields into the same URP part shape rather than collapsing them into a different field or splitting one encoded block into multiple URP parts unless the encoded protocol itself distinguishes those parts separately.
+
 ### 7.1.6 Encoder Splitting
 
 ES1. The Responses encoder MUST split a merged `Item::Message` back into native Responses output items: `reasoning` items for Reasoning-like parts, `message` items for Content-like parts, and `function_call` items for Action-like parts. A single merged `Item::Message` with reasoning, text, and tool calls produces three or more native Responses items.
@@ -343,9 +347,9 @@ ES2. The Chat Completions encoder MUST prevent content/tool-call interleaving wi
 
 ES2a. When rendering a non-streaming Chat Completions response, Monoize MUST merge all assistant `Item::Message` outputs back into one `choices[0].message` object. The merged object MUST preserve the full assistant content sequence, all tool calls, reasoning fields, and preserved unknown fields. Monoize MUST NOT silently discard later assistant message segments.
 
-ES2b. In a non-streaming Chat Completions response, `choices[0].message.content` MUST always be a JSON string. If multiple assistant text segments are merged into one response message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator. Monoize MUST NOT emit assistant response `content` as an array of content blocks.
+ES2b. In a non-streaming Chat Completions response, `choices[0].message.content` MUST be a JSON string when every assistant content part is a plain text block with no part-level metadata beyond `type="text"` and `text`. If multiple such plain text segments are merged into one response message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator.
 
-ES2c. Internal URP `phase` metadata MAY influence how assistant text segments are merged, but Monoize MUST NOT serialize `phase` as a chat-completions response content-block field because Chat Completions response `choices[0].message.content` is emitted as a scalar string, not a content-block array.
+ES2c. If any assistant response content part is non-text or carries part-level metadata that would be lost by string collapse, Monoize MUST emit `choices[0].message.content` as an array of content blocks so that the Chat Completions decoder can reconstruct the original URP content sequence losslessly. In this case Monoize MUST preserve part-local metadata such as `phase` on the emitted content blocks.
 
 ES3. The Anthropic Messages encoder MUST merge consecutive assistant `Item::Message` items into a single `messages[]` entry with `role="assistant"`, concatenating their content blocks.
 
@@ -752,6 +756,7 @@ DC5. Reasoning:
   - render non-stream output to Chat Completions as:
     - `choices[0].message.reasoning` from URP reasoning `text`; and
     - `choices[0].message.reasoning_details[]` using OpenRouter reasoning item types (`reasoning.text` and/or `reasoning.encrypted`).
+  - when URP reasoning carries both `summary` and `text`, Monoize MUST preserve that distinction in the OpenRouter extension by rendering summary text as `type="reasoning.summary"` detail entries and full reasoning content as `type="reasoning.text"` detail entries, rather than collapsing both into one field.
   - for streaming, emit `choices[0].delta.reasoning_details[]` chunks as reasoning deltas become available.
   - preserve reasoning stream lifecycle: each reasoning delta MUST be emitted as one chat chunk in arrival order, MAY interleave with text/tool-call chunks, and MUST terminate with the final finish chunk and `[DONE]`.
 - Backward compatibility for downstream Chat Completions requests: Monoize MUST parse assistant-message reasoning from both OpenRouter fields (`reasoning`, `reasoning_details`) and legacy fields (`reasoning_content`, `reasoning_opaque`).
@@ -785,6 +790,10 @@ DM5. Reasoning:
 - If URP-Proto `output` contains a `type="reasoning"` item, Monoize MUST render it as a Messages `thinking` content block with:
   - `thinking = text`
   - `signature = signature`
+
+DM5a. For downstream `POST /v1/messages` streaming responses, a single URP reasoning part MUST be rendered as one Anthropic `thinking` block lifecycle. If both reasoning text and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index.
+
+DM5b. For downstream `POST /v1/messages` streaming responses, when a reasoning part carries a non-empty signature, Monoize MUST NOT emit `content_block_start.content_block.signature = ""`; the start payload and any later `signature_delta` MUST preserve the actual non-empty signature payload.
 
 DM6. For downstream `POST /v1/messages` streaming responses synthesized or translated from non-messages upstream event formats, Monoize MUST set `message_delta.usage` from cumulative stream usage counters when available.
 
@@ -884,6 +893,8 @@ STR3. For downstream `POST /v1/responses` streams synthesized from non-responses
 STR3a. For downstream `POST /v1/responses` streams, every SSE payload MUST include a top-level string field `type` whose value exactly equals the SSE `event:` name.
 
 STR3b. For downstream `POST /v1/responses` text / reasoning / function-call delta payloads, Monoize MUST include top-level `response_id` and `item_id` fields whenever the delta belongs to a concrete response output item.
+
+STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST use official reasoning event names and preserve the distinction between reasoning summary text and full reasoning content. Summary deltas/done events MUST be emitted separately from content deltas/done events when both are present for the same reasoning item.
 
 STR3c. For downstream `POST /v1/responses` successful SSE streams, Monoize MUST emit exactly one terminal `data: [DONE]` sentinel after the final JSON event payload. The sentinel MUST be a plain `data:` frame and MUST NOT be emitted as a named SSE event.
 

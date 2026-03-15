@@ -30,8 +30,22 @@ pub(crate) async fn emit_synthetic_chat_stream(
                         Part::Reasoning {
                             content,
                             encrypted,
+                            summary,
                             ..
                         } => {
+                            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                                send_chat_chunk_string(
+                                    &tx,
+                                    &id,
+                                    created,
+                                    logical_model,
+                                    chat_reasoning_delta_from_summary(""),
+                                    summary,
+                                    chat_delta_path_reasoning_summary,
+                                    sse_max_frame_length,
+                                )
+                                .await?;
+                            }
                             if let Some(content) =
                                 content.as_deref().filter(|content| !content.is_empty())
                             {
@@ -244,19 +258,38 @@ pub(crate) async fn encode_urp_stream_as_chat(
             }
             UrpStreamEvent::Delta {
                 delta: PartDelta::Reasoning { content },
+                extra_body,
                 ..
             } => {
-                send_chat_chunk_string(
-                    &tx,
-                    &chat_id,
-                    created,
-                    logical_model,
-                    chat_reasoning_delta_from_text(""),
-                    &content,
-                    chat_delta_path_reasoning_text,
-                    sse_max_frame_length,
-                )
-                .await?;
+                if extra_body
+                    .get("reasoning_delta_type")
+                    .and_then(Value::as_str)
+                    == Some("summary")
+                {
+                    send_chat_chunk_string(
+                        &tx,
+                        &chat_id,
+                        created,
+                        logical_model,
+                        chat_reasoning_delta_from_summary(""),
+                        &content,
+                        chat_delta_path_reasoning_summary,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                } else {
+                    send_chat_chunk_string(
+                        &tx,
+                        &chat_id,
+                        created,
+                        logical_model,
+                        chat_reasoning_delta_from_text(""),
+                        &content,
+                        chat_delta_path_reasoning_text,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
             }
             UrpStreamEvent::Delta {
                 part_index,
