@@ -782,6 +782,7 @@ DC5. Reasoning:
     - `choices[0].message.reasoning` from URP reasoning `text` when present, otherwise from URP reasoning `summary`; and
     - `choices[0].message.reasoning_details[]` using OpenRouter reasoning item types (`reasoning.summary`, `reasoning.text`, and/or `reasoning.encrypted`).
   - when URP reasoning carries both `summary` and `text`, Monoize MUST preserve that distinction in the OpenRouter extension by rendering summary text as `type="reasoning.summary"` detail entries and full reasoning content as `type="reasoning.text"` detail entries, rather than collapsing both into one field.
+  - when non-stream Chat Completions output is assembled from multiple assistant reasoning segments, Monoize MUST preserve every distinct encrypted reasoning payload as its own `type="reasoning.encrypted"` entry in `choices[0].message.reasoning_details[]`; Monoize MUST NOT collapse those entries to only the first encrypted payload.
   - for streaming, emit `choices[0].delta.reasoning_details[]` chunks as reasoning deltas become available.
   - preserve reasoning stream lifecycle: each reasoning delta MUST be emitted as one chat chunk in arrival order, MAY interleave with text/tool-call chunks, and MUST terminate with the final finish chunk and `[DONE]`.
 - Backward compatibility for downstream Chat Completions requests: Monoize MUST parse assistant-message reasoning from both OpenRouter fields (`reasoning`, `reasoning_details`) and legacy fields (`reasoning_content`, `reasoning_opaque`).

@@ -2810,6 +2810,43 @@ async fn chat_reasoning_effort_maps_to_messages_upstream_thinking() {
 }
 
 #[tokio::test]
+async fn chat_reasoning_effort_maps_to_chat_upstream_encrypted_reasoning() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "reasoning_effort": "high",
+            "messages": [{ "role": "user", "content": "show reasoning" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["choices"][0]["message"]["reasoning"]
+            .as_str()
+            .unwrap_or(""),
+        "mock_reasoning"
+    );
+    let details = v["choices"][0]["message"]["reasoning_details"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(details.iter().any(|detail| {
+        detail["type"].as_str() == Some("reasoning.text")
+            && detail["text"].as_str() == Some("mock_reasoning")
+            && detail["format"].as_str() == Some("openrouter")
+    }));
+    assert!(details.iter().any(|detail| {
+        detail["type"].as_str() == Some("reasoning.encrypted")
+            && detail["data"].as_str() == Some("mock_sig")
+            && detail["format"].as_str() == Some("openrouter")
+    }));
+}
+
+#[tokio::test]
 async fn messages_thinking_maps_to_chat_upstream_reasoning_effort() {
     let ctx = setup().await;
     let (status, body) = json_post(

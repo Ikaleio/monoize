@@ -450,13 +450,6 @@ fn has_tool_calls(item: &Item) -> bool {
 }
 
 fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part]) {
-    let encrypted = super::extract_reasoning_encrypted(parts);
-    let format = parts.iter().find_map(|part| {
-        let Part::Reasoning { source, .. } = part else {
-            return None;
-        };
-        source.as_deref().filter(|format| !format.is_empty())
-    });
     let mut details = Vec::new();
     let mut reasoning_value: Option<String> = None;
     let mut reasoning_summary_value: Option<String> = None;
@@ -465,13 +458,15 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     for part in parts {
         let Part::Reasoning {
             content,
+            encrypted,
             summary,
+            source,
             extra_body,
-            ..
         } = part
         else {
             continue;
         };
+        let format = source.as_deref().filter(|format| !format.is_empty());
 
         if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
             if reasoning_summary_value.is_none() {
@@ -503,6 +498,21 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
             }
             details.push(reasoning_text_detail_value(content, format));
         }
+
+        if let Some(enc) = encrypted {
+            if !matches!(enc, Value::Null) {
+                if let Some(s) = enc.as_str() {
+                    if s.is_empty() {
+                        continue;
+                    }
+                }
+
+                let detail = reasoning_encrypted_detail_value(enc.clone(), format);
+                if !details.iter().any(|existing| existing == &detail) {
+                    details.push(detail);
+                }
+            }
+        }
     }
 
     if let Some(reasoning_text) = reasoning_value.or(reasoning_summary_value) {
@@ -514,27 +524,6 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
             "reasoning_content".to_string(),
             Value::String(reasoning_content),
         );
-    }
-
-    if let Some(enc) = encrypted {
-        if !matches!(enc, Value::Null) {
-            if let Some(s) = enc.as_str() {
-                if s.is_empty() {
-                    if !details.is_empty() {
-                        message.insert("reasoning_details".to_string(), Value::Array(details));
-                    }
-                    return;
-                }
-                if !details.iter().any(|detail| {
-                    detail.get("type").and_then(Value::as_str) == Some("reasoning.encrypted")
-                        && detail.get("data").and_then(Value::as_str) == Some(s)
-                }) {
-                    details.push(reasoning_encrypted_detail_value(enc, format));
-                }
-            } else {
-                details.push(reasoning_encrypted_detail_value(enc, format));
-            }
-        }
     }
 
     if !details.is_empty() {
@@ -1101,6 +1090,61 @@ mod tests {
         assert!(details.iter().any(|detail| {
             detail["type"].as_str() == Some("reasoning.encrypted")
                 && detail["data"].as_str() == Some("sig_merged")
+        }));
+    }
+
+    #[test]
+    fn chat_response_keeps_encrypted_reasoning_from_multiple_segments() {
+        let response = UrpResponse {
+            id: "chatcmpl_multi_encrypted".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Reasoning {
+                        content: Some("segment reasoning".to_string()),
+                        encrypted: Some(json!("sig_first")),
+                        summary: None,
+                        source: Some("openrouter".to_string()),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Reasoning {
+                        content: None,
+                        encrypted: Some(json!("sig_second")),
+                        summary: None,
+                        source: Some("openrouter".to_string()),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+            ],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        let details = encoded["choices"][0]["message"]["reasoning_details"]
+            .as_array()
+            .expect("reasoning details");
+
+        let encrypted = details
+            .iter()
+            .filter(|detail| detail["type"].as_str() == Some("reasoning.encrypted"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(encrypted.len(), 2);
+        assert!(encrypted.iter().any(|detail| {
+            detail["data"].as_str() == Some("sig_first")
+                && detail["format"].as_str() == Some("openrouter")
+        }));
+        assert!(encrypted.iter().any(|detail| {
+            detail["data"].as_str() == Some("sig_second")
+                && detail["format"].as_str() == Some("openrouter")
         }));
     }
 
