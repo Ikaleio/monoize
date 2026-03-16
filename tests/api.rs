@@ -4506,6 +4506,104 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
 }
 
 #[tokio::test]
+async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reasoning() {
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-transform-summary-chat-encrypted".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-transform-summary-chat-encrypted-ch1".to_string()),
+                name: "mono-transform-summary-chat-encrypted-ch1".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: vec![monoize::transforms::TransformRuleConfig {
+                transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: monoize::transforms::Phase::Response,
+                config: json!({}),
+            }],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "parallel_tool_calls": true,
+                "stream": true,
+                "reasoning": { "effort": "high" }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert!(
+        text.contains("\"type\":\"reasoning.summary\""),
+        "chat stream should expose reasoning summary detail: {text}"
+    );
+    assert!(
+        text.contains("\"summary\":\"mock_reasoning\""),
+        "chat stream should move plaintext reasoning into summary: {text}"
+    );
+    assert!(
+        !text.contains("\"type\":\"reasoning.text\""),
+        "chat stream should not emit reasoning.text after summary transform: {text}"
+    );
+    assert!(
+        text.contains("\"type\":\"reasoning.encrypted\""),
+        "chat stream should preserve encrypted reasoning detail: {text}"
+    );
+    assert!(
+        text.contains("\"data\":\"mock_sig\""),
+        "chat stream should preserve encrypted reasoning payload: {text}"
+    );
+}
+
+#[tokio::test]
 async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_delta() {
     let ctx = setup().await;
     let (upstream_addr, _) = start_upstream().await;

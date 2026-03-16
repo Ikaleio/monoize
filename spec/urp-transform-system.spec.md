@@ -227,10 +227,11 @@ PRTS-2. Config MUST be an empty object.
 
 PRTS-3. Response behavior:
 1. The transform MUST inspect only `Part::Reasoning` parts.
-2. If a reasoning part carries `encrypted != None`, the transform MUST leave that part unchanged.
-3. If a reasoning part carries plaintext reasoning in `content` and `encrypted == None`, the transform MUST move the plaintext value into `summary` and clear `content`.
-4. If a reasoning part already has `summary`, the transform MUST replace `summary` with the plaintext `content` value when rule PRTS-3.3 applies.
-5. Empty plaintext content MUST NOT create a non-empty summary.
+2. If a reasoning part carries plaintext reasoning in `content`, the transform MUST move the plaintext value into `summary` and clear `content`.
+3. Rule PRTS-3.2 applies regardless of whether the same reasoning part also carries `encrypted != None`.
+4. If a reasoning part already has `summary`, the transform MUST replace `summary` with the plaintext `content` value when rule PRTS-3.2 applies.
+5. The transform MUST preserve `encrypted`, `source`, and `extra_body` exactly.
+6. Empty plaintext content MUST NOT create a non-empty summary.
 
 PRTS-4. Streaming behavior:
 1. For `UrpStreamEvent::Delta` reasoning deltas that correspond to non-encrypted reasoning, the transform MUST mark the delta as summary reasoning by setting `extra_body.reasoning_delta_type = "summary"`.

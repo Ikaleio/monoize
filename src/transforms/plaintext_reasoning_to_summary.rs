@@ -143,16 +143,12 @@ fn rewrite_item_reasoning(item: &mut Item) {
 fn rewrite_reasoning_part(part: &mut Part) {
     let Part::Reasoning {
         content,
-        encrypted,
         summary,
         ..
     } = part
     else {
         return;
     };
-    if encrypted.is_some() {
-        return;
-    }
     let Some(text) = content.take() else {
         return;
     };
@@ -243,6 +239,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preserves_encrypted_reasoning_while_summarizing_plaintext_in_response() {
+        let registry = registry();
+        let rules = vec![crate::transforms::TransformRuleConfig {
+            transform: "plaintext_reasoning_to_summary".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Response,
+            config: json!({}),
+        }];
+        let mut states = build_states_for_rules(&rules, &registry).expect("states");
+        let mut resp = UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-test".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: Some("plain reasoning".to_string()),
+                    encrypted: Some(Value::String("ciphertext".to_string())),
+                    summary: None,
+                    source: Some("openrouter".to_string()),
+                    extra_body: HashMap::from([(
+                        "preserved".to_string(),
+                        Value::String("yes".to_string()),
+                    )]),
+                }],
+                extra_body: HashMap::new(),
+            }],
+            finish_reason: None,
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        crate::transforms::apply_transforms(
+            UrpData::Response(&mut resp),
+            &rules,
+            &mut states,
+            "gpt-test",
+            Phase::Response,
+            &context().await,
+            &registry,
+        )
+        .await
+        .expect("apply");
+
+        let Item::Message { parts, .. } = &resp.outputs[0] else {
+            panic!("expected message");
+        };
+        let Part::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source,
+            extra_body,
+        } = &parts[0]
+        else {
+            panic!("expected reasoning");
+        };
+        assert_eq!(content, &None);
+        assert_eq!(summary.as_deref(), Some("plain reasoning"));
+        assert_eq!(encrypted, &Some(Value::String("ciphertext".to_string())));
+        assert_eq!(source.as_deref(), Some("openrouter"));
+        assert_eq!(
+            extra_body.get("preserved").and_then(Value::as_str),
+            Some("yes")
+        );
+    }
+
+    #[tokio::test]
     async fn marks_stream_reasoning_delta_as_summary_when_not_encrypted() {
         let transform = PlaintextReasoningToSummaryTransform;
         let context = context().await;
@@ -273,6 +336,61 @@ mod tests {
         assert_eq!(
             extra_body.get("reasoning_delta_type").and_then(Value::as_str),
             Some("summary")
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_encrypted_reasoning_while_summarizing_stream_part_done() {
+        let transform = PlaintextReasoningToSummaryTransform;
+        let context = context().await;
+        let cfg = transform.parse_config(json!({})).expect("config");
+        let mut state = transform.init_state();
+        let mut event = UrpStreamEvent::PartDone {
+            part_index: 2,
+            part: Part::Reasoning {
+                content: Some("plain".to_string()),
+                encrypted: Some(Value::String("ciphertext".to_string())),
+                summary: None,
+                source: Some("openrouter".to_string()),
+                extra_body: HashMap::from([(
+                    "preserved".to_string(),
+                    Value::String("yes".to_string()),
+                )]),
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        transform
+            .apply(
+                UrpData::Stream(&mut event),
+                Phase::Response,
+                &context,
+                cfg.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        let UrpStreamEvent::PartDone { part, .. } = event else {
+            panic!("expected part done");
+        };
+        let Part::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source,
+            extra_body,
+        } = part
+        else {
+            panic!("expected reasoning");
+        };
+        assert_eq!(content, None);
+        assert_eq!(summary.as_deref(), Some("plain"));
+        assert_eq!(encrypted, Some(Value::String("ciphertext".to_string())));
+        assert_eq!(source.as_deref(), Some("openrouter"));
+        assert_eq!(
+            extra_body.get("preserved").and_then(Value::as_str),
+            Some("yes")
         );
     }
 }
