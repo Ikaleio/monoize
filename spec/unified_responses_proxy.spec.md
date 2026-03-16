@@ -153,10 +153,17 @@ FP5c. `stream_upstream_to_urp_events` MUST dispatch by `provider_type` to exactl
 
 FP6. **Render downstream:** Convert URP-Proto output into the downstream endpoint’s response shape (Responses / Chat Completions / Messages), streaming or non-streaming.
 
-FP6a. For pass-through streaming on `/v1/responses`, `/v1/chat/completions`, and `/v1/messages`, Monoize MUST implement the downstream adapter as a two-stage pipeline connected by an in-memory channel of `UrpStreamEvent` values:
+FP6a. For pass-through streaming on `/v1/responses`, `/v1/chat/completions`, and `/v1/messages`, Monoize MUST implement the downstream adapter as a three-stage pipeline connected by in-memory channels of `UrpStreamEvent` values:
 
 - stage 1: provider-specific decoder consumes upstream SSE and emits `UrpStreamEvent` values;
-- stage 2: downstream-specific encoder consumes `UrpStreamEvent` values and emits downstream SSE frames.
+- stage 2: response-transform stage consumes `UrpStreamEvent` values, applies any matching response-phase transforms incrementally, and emits transformed `UrpStreamEvent` values;
+- stage 3: downstream-specific encoder consumes transformed `UrpStreamEvent` values and emits downstream SSE frames.
+
+FP6a1. If a streaming request matches only response-phase transform rules that support incremental `UrpStreamEvent` rewriting, Monoize MUST keep the request in pass-through streaming mode and apply those response transforms to each `UrpStreamEvent` after stage 1 decoding and before stage 2 encoding.
+
+FP6a2. The pass-through streaming runtime in FP6a1 MUST preserve transform rule order and scope semantics already used for non-streaming responses: provider response-phase rules run before API-key response-phase rules, using one mutable transform-state vector per rule chain for the lifetime of the request.
+
+FP6a3. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, Monoize MUST use buffered synthetic streaming for that request: fetch upstream non-stream response, apply response transforms on `UrpResponse`, then emit protocol-correct synthetic downstream SSE.
 
 FP6b. The pass-through streaming pipeline in FP6a MUST preserve existing routing, billing, logging, and terminal-stream observability semantics. The change in internal streaming representation MUST NOT by itself permit provider fallback after the first downstream byte.
 
@@ -168,10 +175,11 @@ FP6d. `encode_urp_stream` MUST dispatch by downstream protocol to exactly these 
 - `ChatCompletions` → Chat Completions encoder;
 - `AnthropicMessages` → Anthropic Messages encoder.
 
-FP6e. The forwarding handler MUST spawn exactly two asynchronous tasks for pass-through streaming after upstream response headers are accepted:
+FP6e. The forwarding handler MUST spawn exactly three asynchronous tasks for pass-through streaming after upstream response headers are accepted:
 
 - one decode task that runs `stream_upstream_to_urp_events` and sends `UrpStreamEvent` values into an in-memory channel;
-- one encode task that runs `encode_urp_stream` and reads the same channel to emit downstream SSE.
+- one transform task that applies matching response-phase transforms to each `UrpStreamEvent` and sends the transformed event into a second in-memory channel;
+- one encode task that runs `encode_urp_stream` and reads the transformed-event channel to emit downstream SSE.
 
 FP6f. The decode task and encode task in FP6e MUST be joined before request-final logging and billing finalization.
 

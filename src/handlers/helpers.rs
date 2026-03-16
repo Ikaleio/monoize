@@ -276,6 +276,84 @@ pub(super) async fn apply_transform_rules_response(
     })
 }
 
+pub(super) async fn transform_urp_stream(
+    state: &AppState,
+    mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
+    tx: mpsc::Sender<urp::UrpStreamEvent>,
+    provider_rules: &[TransformRuleConfig],
+    auth_rules: &[TransformRuleConfig],
+    model: &str,
+) -> AppResult<()> {
+    let mut provider_states = transforms::build_states_for_rules(
+        provider_rules,
+        state.transform_registry.as_ref(),
+    )
+    .map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "transform_init_failed",
+            e.to_string(),
+        )
+    })?;
+    let mut auth_states = transforms::build_states_for_rules(auth_rules, state.transform_registry.as_ref())
+        .map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "transform_init_failed",
+            e.to_string(),
+        )
+    })?;
+    let context = transforms::TransformRuntimeContext {
+        image_transform_cache: state.image_transform_cache.clone(),
+    };
+
+    while let Some(mut event) = rx.recv().await {
+        transforms::apply_transforms(
+            transforms::UrpData::Stream(&mut event),
+            provider_rules,
+            &mut provider_states,
+            model,
+            Phase::Response,
+            &context,
+            state.transform_registry.as_ref(),
+        )
+        .await
+        .map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transform_apply_failed",
+                e.to_string(),
+            )
+        })?;
+        transforms::apply_transforms(
+            transforms::UrpData::Stream(&mut event),
+            auth_rules,
+            &mut auth_states,
+            model,
+            Phase::Response,
+            &context,
+            state.transform_registry.as_ref(),
+        )
+        .await
+        .map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transform_apply_failed",
+                e.to_string(),
+            )
+        })?;
+        tx.send(event).await.map_err(|_| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "stream_transform_failed",
+                "failed to forward transformed stream event",
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn typed_request_to_legacy(
     req: &urp::UrpRequest,
     max_multiplier: Option<f64>,
@@ -341,18 +419,6 @@ pub(super) fn resolve_max_multiplier_for_embeddings(
     }
 }
 
-pub(super) fn has_enabled_response_rules(rules: &[TransformRuleConfig], model: &str) -> bool {
-    rules
-        .iter()
-        .filter(|rule| rule.enabled && rule.phase == Phase::Response)
-        .any(|rule| match &rule.models {
-            None => true,
-            Some(patterns) => patterns
-                .iter()
-                .any(|pattern| model_glob_match(pattern, model)),
-        })
-}
-
 pub(super) fn effective_sse_max_frame_length(
     provider_rules: &[TransformRuleConfig],
     auth_rules: &[TransformRuleConfig],
@@ -384,6 +450,27 @@ fn resolve_sse_max_frame_length_from_rules(
                 .and_then(|v| usize::try_from(v).ok())
                 .filter(|v| *v > 0)
                 .unwrap_or(DEFAULT_MAX_FRAME_LENGTH)
+        })
+}
+
+pub(super) fn requires_buffered_response_stream(
+    provider_rules: &[TransformRuleConfig],
+    auth_rules: &[TransformRuleConfig],
+    model: &str,
+) -> bool {
+    provider_rules
+        .iter()
+        .chain(auth_rules.iter())
+        .filter(|rule| rule.enabled && rule.phase == Phase::Response)
+        .filter(|rule| match &rule.models {
+            None => true,
+            Some(patterns) => patterns.iter().any(|pattern| model_glob_match(pattern, model)),
+        })
+        .any(|rule| {
+            matches!(
+                rule.transform.as_str(),
+                "assistant_markdown_images_to_output" | "assistant_output_images_to_markdown"
+            )
         })
 }
 

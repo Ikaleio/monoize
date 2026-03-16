@@ -6,6 +6,18 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+fn reasoning_display_text(part: &Part) -> Option<&str> {
+    let Part::Reasoning {
+        content, summary, ..
+    } = part else {
+        return None;
+    };
+    content
+        .as_deref()
+        .filter(|content| !content.is_empty())
+        .or_else(|| summary.as_deref().filter(|summary| !summary.is_empty()))
+}
+
 pub(crate) async fn emit_synthetic_messages_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
@@ -50,11 +62,11 @@ pub(crate) async fn emit_synthetic_messages_stream(
                 for part in parts {
                     match part {
                         Part::Reasoning {
-                            content,
                             encrypted,
                             extra_body,
                             ..
                         } => {
+                            let display_text = reasoning_display_text(part);
                             let signature = encrypted
                                 .as_ref()
                                 .and_then(Value::as_str)
@@ -65,14 +77,12 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                         .and_then(Value::as_str)
                                         .map(str::to_owned)
                                 });
-                            if content.as_deref().is_none_or(|content| content.is_empty())
+                            if display_text.is_none()
                                 && signature.as_deref().is_none_or(|signature| signature.is_empty())
                             {
                                 continue;
                             }
-                            if let Some(content) =
-                                content.as_deref().filter(|content| !content.is_empty())
-                            {
+                            if let Some(content) = display_text {
                                 let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": signature.clone().unwrap_or_default() } });
                                 send_named_messages_event(&tx, s).await?;
                                 send_messages_delta_string(
@@ -367,12 +377,11 @@ async fn emit_messages_part_done_payload(
             }
         }
         Part::Reasoning {
-            content,
             encrypted,
             extra_body,
             ..
         } => {
-            if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+            if let Some(content) = reasoning_display_text(part) {
                 send_messages_delta_string(
                     tx,
                     json!({

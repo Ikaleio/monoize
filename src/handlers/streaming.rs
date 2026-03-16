@@ -1,6 +1,6 @@
 use super::*;
 use crate::urp::stream_decode::stream_upstream_to_urp_events;
-use crate::urp::stream_encode::{emit_synthetic_stream_from_urp_response, encode_urp_stream};
+use crate::urp::stream_encode::encode_urp_stream;
 
 pub(super) async fn forward_stream_typed(
     state: AppState,
@@ -47,16 +47,18 @@ pub(super) async fn forward_stream_typed(
         )
         .await?;
         ensure_stream_usage_requested(&mut req_attempt, attempt.provider_type);
-        let need_response_transform_stream =
-            has_enabled_response_rules(&attempt.provider_transforms, &logical_model)
-                || has_enabled_response_rules(&auth.transforms, &logical_model);
         let sse_max_frame_length = effective_sse_max_frame_length(
             &attempt.provider_transforms,
             &auth.transforms,
             &logical_model,
         );
+        let requires_buffered_stream = requires_buffered_response_stream(
+            &attempt.provider_transforms,
+            &auth.transforms,
+            &logical_model,
+        );
 
-        if need_response_transform_stream {
+        if requires_buffered_stream {
             let mut nonstream_req = req_attempt.clone();
             nonstream_req.stream = Some(false);
             let upstream_body = encode_request_for_provider(&nonstream_req, &attempt)?;
@@ -136,7 +138,7 @@ pub(super) async fn forward_stream_typed(
                     let logical_model_for_stream = logical_model.clone();
                     tokio::spawn(async move {
                         let tx_err = tx.clone();
-                        let stream_result = emit_synthetic_stream_from_urp_response(
+                        let stream_result = crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
                             downstream,
                             &logical_model_for_stream,
                             &resp,
@@ -254,15 +256,20 @@ pub(super) async fn forward_stream_typed(
                 let attempt_for_log = attempt.clone();
                 let model_for_log = logical_model.clone();
                 let model_for_encode = logical_model.clone();
+                let model_for_transform = logical_model.clone();
                 let request_id_for_log = request_id.clone();
                 let request_ip_for_log = request_ip.clone();
                 let channel_id_for_log = attempt.channel_id.clone();
                 let reasoning_effort_for_log =
                     req.reasoning.as_ref().and_then(|r| r.effort.clone());
                 let tried_providers_for_log = tried_providers.clone();
+                let state_for_transform = state.clone();
+                let provider_rules_for_transform = attempt.provider_transforms.clone();
+                let auth_rules_for_transform = auth.transforms.clone();
                 tokio::spawn(async move {
                     let tx_err = tx.clone();
-                    let (urp_tx, urp_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                    let (decoded_tx, decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                    let (transformed_tx, transformed_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
 
                     let decode_handle = {
                         let metrics = metrics_for_stream.clone();
@@ -271,7 +278,7 @@ pub(super) async fn forward_stream_typed(
                                 &legacy,
                                 provider_type,
                                 upstream_resp,
-                                urp_tx,
+                                decoded_tx,
                                 Some(started_at),
                                 Some(metrics),
                             )
@@ -279,12 +286,24 @@ pub(super) async fn forward_stream_typed(
                         })
                     };
 
+                    let transform_handle = tokio::spawn(async move {
+                        transform_urp_stream(
+                            &state_for_transform,
+                            decoded_rx,
+                            transformed_tx,
+                            &provider_rules_for_transform,
+                            &auth_rules_for_transform,
+                            &model_for_transform,
+                        )
+                        .await
+                    });
+
                     let encode_handle = {
                         let tx = tx;
                         tokio::spawn(async move {
                             encode_urp_stream(
                                 downstream,
-                                urp_rx,
+                                transformed_rx,
                                 tx,
                                 &model_for_encode,
                                 sse_max_frame_length,
@@ -293,7 +312,8 @@ pub(super) async fn forward_stream_typed(
                         })
                     };
 
-                    let (decode_result, encode_result) = tokio::join!(decode_handle, encode_handle);
+                    let (decode_result, transform_result, encode_result) =
+                        tokio::join!(decode_handle, transform_handle, encode_handle);
                     let stream_result = decode_result
                         .unwrap_or_else(|e| {
                             Err(AppError::new(
@@ -302,6 +322,13 @@ pub(super) async fn forward_stream_typed(
                                 e.to_string(),
                             ))
                         })
+                        .and(transform_result.unwrap_or_else(|e| {
+                            Err(AppError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "task_panic",
+                                e.to_string(),
+                            ))
+                        }))
                         .and(encode_result.unwrap_or_else(|e| {
                             Err(AppError::new(
                                 StatusCode::INTERNAL_SERVER_ERROR,

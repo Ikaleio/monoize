@@ -477,42 +477,59 @@ fn map_responses_event_to_urp_events_with_state(
                 extra_body,
             }]
         }
-        "response.reasoning_signature.delta" => vec![UrpStreamEvent::Delta {
-            part_index: urp_part_index_from_delta(&data_val, index_state),
-            delta: PartDelta::Reasoning {
-                content: String::new(),
-            },
-            usage: None,
-            extra_body: {
-                let mut extra_body = split_known_fields(
-                    data_val.clone(),
-                    &["delta", "output_index", "content_index", "part_index"],
-                );
-                if let Some(signature) = data_val.get("delta").and_then(|v| v.as_str()) {
-                    extra_body.insert(
-                        "signature".to_string(),
-                        Value::String(signature.to_string()),
+        "response.reasoning_signature.delta" => {
+            let part_index = urp_part_index_from_delta(&data_val, index_state);
+            if let Some(signature) = data_val.get("delta").and_then(|v| v.as_str()) {
+                index_state
+                    .reasoning_signature_by_part_index
+                    .entry(part_index)
+                    .or_default()
+                    .push_str(signature);
+            }
+            vec![UrpStreamEvent::Delta {
+                part_index,
+                delta: PartDelta::Reasoning {
+                    content: String::new(),
+                },
+                usage: None,
+                extra_body: {
+                    let mut extra_body = split_known_fields(
+                        data_val.clone(),
+                        &["delta", "output_index", "content_index", "part_index"],
                     );
-                }
-                extra_body
-            },
-        }],
-        "response.reasoning.done" => vec![UrpStreamEvent::PartDone {
-            part_index: urp_part_index_from_delta(&data_val, index_state),
-            part: Part::Reasoning {
-                content: data_val
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .filter(|text| !text.is_empty())
-                    .map(|text| text.to_string()),
-                encrypted: None,
-                summary: None,
-                source: None,
-                extra_body: split_known_fields(data_val, &["text", "delta", "output_index", "content_index", "part_index"]),
-            },
-            usage: None,
-            extra_body: HashMap::new(),
-        }],
+                    if let Some(signature) = data_val.get("delta").and_then(|v| v.as_str()) {
+                        extra_body.insert(
+                            "signature".to_string(),
+                            Value::String(signature.to_string()),
+                        );
+                    }
+                    extra_body
+                },
+            }]
+        }
+        "response.reasoning.done" => {
+            let part_index = urp_part_index_from_delta(&data_val, index_state);
+            vec![UrpStreamEvent::PartDone {
+                part_index,
+                part: Part::Reasoning {
+                    content: data_val
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .filter(|text| !text.is_empty())
+                        .map(|text| text.to_string()),
+                    encrypted: index_state
+                        .reasoning_signature_by_part_index
+                        .remove(&part_index)
+                        .filter(|signature| !signature.is_empty())
+                        .map(Value::String),
+                    summary: None,
+                    source: None,
+                    extra_body: split_known_fields(data_val, &["text", "delta", "output_index", "content_index", "part_index"]),
+                },
+                usage: None,
+                extra_body: HashMap::new(),
+            }]
+        }
         "response.function_call_arguments.delta" => vec![UrpStreamEvent::Delta {
             part_index: urp_part_index_from_delta(&data_val, index_state),
             delta: PartDelta::ToolCallArguments {
@@ -560,6 +577,7 @@ struct ResponsesStreamIndexState {
     next_part_index: u32,
     part_index_by_content_key: HashMap<(u64, u64), u32>,
     synthetic_part_index_by_output_index: HashMap<u64, u32>,
+    reasoning_signature_by_part_index: HashMap<u32, String>,
     output_state_by_index: HashMap<u64, OutputItemStreamState>,
     active_assistant_item: Option<ActiveAssistantStreamItem>,
     boundary_merger: GreedyMerger,

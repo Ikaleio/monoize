@@ -4361,6 +4361,185 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
 
     assert!(text.contains("event: response.reasoning_summary_text.delta"));
     assert!(!text.contains("event: response.reasoning.delta"));
+    assert!(text.contains("event: response.output_text.delta"));
+}
+
+#[tokio::test]
+async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events() {
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-transform-summary-chat".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-transform-summary-chat-ch1".to_string()),
+                name: "mono-transform-summary-chat-ch1".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: vec![monoize::transforms::TransformRuleConfig {
+                transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: monoize::transforms::Phase::Response,
+                config: json!({}),
+            }],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream with reasoning"}],
+                "stream": true,
+                "reasoning": { "effort": "high" }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert!(
+        text.contains("\"type\":\"reasoning.summary\""),
+        "chat stream should expose reasoning summary detail: {text}"
+    );
+    assert!(
+        text.contains("\"summary\":\"mock_reasoning\""),
+        "chat stream should move plaintext reasoning into summary: {text}"
+    );
+    assert!(
+        !text.contains("\"type\":\"reasoning.text\""),
+        "chat stream should not emit reasoning.text after summary transform: {text}"
+    );
+}
+
+#[tokio::test]
+async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_delta() {
+    let ctx = setup().await;
+    let (upstream_addr, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-transform-summary-messages".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-transform-summary-messages-ch1".to_string()),
+                name: "mono-transform-summary-messages-ch1".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: vec![monoize::transforms::TransformRuleConfig {
+                transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: monoize::transforms::Phase::Response,
+                config: json!({}),
+            }],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream with reasoning" }] }],
+            "stream": true
+        }),
+    )
+    .await;
+    let events: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+
+    let thinking_deltas: Vec<&str> = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
+        .filter_map(|event| event["delta"]["thinking"].as_str())
+        .collect();
+    assert_eq!(
+        thinking_deltas,
+        vec!["mock_reasoning"],
+        "messages stream should preserve the transformed reasoning summary as thinking text: {text}"
+    );
+
+    assert!(
+        events.iter().any(|event| {
+            event["type"].as_str() == Some("content_block_start")
+                && event["content_block"]["type"].as_str() == Some("thinking")
+        }),
+        "expected a thinking block after summary transform: {text}"
+    );
 }
 
 #[tokio::test]
