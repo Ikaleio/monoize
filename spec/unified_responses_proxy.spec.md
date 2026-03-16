@@ -165,6 +165,11 @@ FP6a2. The pass-through streaming runtime in FP6a1 MUST preserve transform rule 
 
 FP6a3. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, Monoize MUST use buffered synthetic streaming for that request: fetch upstream non-stream response, apply response transforms on `UrpResponse`, then emit protocol-correct synthetic downstream SSE.
 
+FP6a4. On pass-through streaming adapted from Responses upstream events, if the upstream emits reasoning signature data via `response.reasoning_signature.delta`, Monoize MUST preserve that signature through URP and surface it on downstream live streams as soon as the downstream protocol supports a live signature delta. At minimum:
+
+- `/v1/messages` MUST emit `content_block_delta` with `delta.type = "signature_delta"` for live reasoning signature deltas;
+- `/v1/chat/completions` MUST emit OpenRouter-compatible `reasoning_details` entries with `type = "reasoning.encrypted"` for live reasoning signature deltas.
+
 FP6b. The pass-through streaming pipeline in FP6a MUST preserve existing routing, billing, logging, and terminal-stream observability semantics. The change in internal streaming representation MUST NOT by itself permit provider fallback after the first downstream byte.
 
 FP6c. The pass-through streaming encoder entrypoint MUST be `encode_urp_stream(downstream, rx, tx, logical_model, sse_max_frame_length)`.
@@ -358,6 +363,18 @@ ES2a. When rendering a non-streaming Chat Completions response, Monoize MUST mer
 ES2b. In a non-streaming Chat Completions response, `choices[0].message.content` MUST always be a JSON string. If multiple assistant text segments are merged into one response message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator. Monoize MUST NOT emit assistant response `content` as an array of content blocks.
 
 ES2c. Internal URP `phase` metadata MAY influence how assistant text segments are merged, but Monoize MUST NOT serialize `phase` as a chat-completions response content-block field because Chat Completions response `choices[0].message.content` is emitted as a scalar string, not a content-block array.
+
+ES2d. In a non-streaming Chat Completions response, Monoize MUST encode the simple plaintext reasoning field, when present, as `choices[0].message.reasoning` with JSON type string.
+
+ES2e. In a Chat Completions response, structured reasoning payloads MUST be encoded in `reasoning_details`, not in `reasoning`. For non-streaming responses the field is `choices[0].message.reasoning_details`; for streaming responses the field is `choices[0].delta.reasoning_details`.
+
+ES2f. Monoize MUST encode `reasoning_details[]` entries using the OpenRouter-compatible discriminated union:
+
+- `{ "type": "reasoning.summary", "summary": "..." }`
+- `{ "type": "reasoning.encrypted", "data": "<opaque...>" }`
+- `{ "type": "reasoning.text", "text": "..." }`
+
+ES2g. Monoize MUST encode opaque encrypted reasoning payloads only in `reasoning_details[]` entries with `type = "reasoning.encrypted"` and field `data`. Monoize MUST NOT encode those payloads under `message.reasoning.encrypted`, `message.reasoning.signature`, `delta.reasoning`, or `delta.reasoning.signature`.
 
 ES3. The Anthropic Messages encoder MUST merge consecutive assistant `Item::Message` items into a single `messages[]` entry with `role="assistant"`, concatenating their content blocks.
 
@@ -588,9 +605,9 @@ PC8. Reasoning (non-stream and stream):
 
 - Monoize MUST parse upstream Chat Completions reasoning from `choices[0].message.reasoning_details[]` and `choices[0].message.reasoning`.
 - For `reasoning_details[]`, Monoize MUST interpret entries as follows:
-  - `type="reasoning.text"`: `text` contributes to reasoning text; `signature` contributes to reasoning signature when present.
-  - `type="reasoning.encrypted"`: `data` contributes to reasoning signature payload.
-  - `type="reasoning.summary"`: `summary` contributes to reasoning text when no `reasoning.text` content is available.
+- `type="reasoning.text"`: `text` contributes to reasoning text.
+- `type="reasoning.encrypted"`: `data` contributes to reasoning signature payload.
+- `type="reasoning.summary"`: `summary` contributes to reasoning summary and to the simple `reasoning` alias when no `reasoning.text` content is available.
 - For streaming, Monoize MUST apply the same mapping to `choices[0].delta.reasoning_details[]` deltas in arrival order.
 - Monoize MUST store parsed reasoning in URP-Proto as a `type="reasoning"` output item (§7.1.2).
 - Backward compatibility: if `reasoning` / `reasoning_details` are absent, Monoize MUST still accept legacy `reasoning_content` / `reasoning_opaque` from upstream chat outputs.
@@ -762,8 +779,8 @@ DC5. Reasoning:
 
 - If URP-Proto `output` contains a `type="reasoning"` item, Monoize MUST:
   - render non-stream output to Chat Completions as:
-    - `choices[0].message.reasoning` from URP reasoning `text`; and
-    - `choices[0].message.reasoning_details[]` using OpenRouter reasoning item types (`reasoning.text` and/or `reasoning.encrypted`).
+    - `choices[0].message.reasoning` from URP reasoning `text` when present, otherwise from URP reasoning `summary`; and
+    - `choices[0].message.reasoning_details[]` using OpenRouter reasoning item types (`reasoning.summary`, `reasoning.text`, and/or `reasoning.encrypted`).
   - when URP reasoning carries both `summary` and `text`, Monoize MUST preserve that distinction in the OpenRouter extension by rendering summary text as `type="reasoning.summary"` detail entries and full reasoning content as `type="reasoning.text"` detail entries, rather than collapsing both into one field.
   - for streaming, emit `choices[0].delta.reasoning_details[]` chunks as reasoning deltas become available.
   - preserve reasoning stream lifecycle: each reasoning delta MUST be emitted as one chat chunk in arrival order, MAY interleave with text/tool-call chunks, and MUST terminate with the final finish chunk and `[DONE]`.

@@ -459,6 +459,7 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     });
     let mut details = Vec::new();
     let mut reasoning_value: Option<String> = None;
+    let mut reasoning_summary_value: Option<String> = None;
     let mut reasoning_content_value: Option<String> = None;
 
     for part in parts {
@@ -473,6 +474,9 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
         };
 
         if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+            if reasoning_summary_value.is_none() {
+                reasoning_summary_value = Some(summary.to_string());
+            }
             if extra_body
                 .get("openwebui_reasoning_content")
                 .and_then(Value::as_bool)
@@ -497,11 +501,11 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
             if reasoning_value.is_none() {
                 reasoning_value = Some(content.to_string());
             }
-            details.push(reasoning_text_detail_value(content, None, format));
+            details.push(reasoning_text_detail_value(content, format));
         }
     }
 
-    if let Some(reasoning_text) = reasoning_value {
+    if let Some(reasoning_text) = reasoning_value.or(reasoning_summary_value) {
         message.insert("reasoning".to_string(), Value::String(reasoning_text));
     }
 
@@ -997,6 +1001,7 @@ mod tests {
             } if content == "full reasoning" && summary == "brief summary" && sig == "sig_1"
         ));
         let message = &encoded["choices"][0]["message"];
+        assert_eq!(message["reasoning"], json!("full reasoning"));
         assert_eq!(
             message["reasoning_details"][0]["format"],
             json!("openrouter")
@@ -1009,6 +1014,94 @@ mod tests {
             message["reasoning_details"][2]["format"],
             json!("openrouter")
         );
+        assert!(message["reasoning_details"][1].get("signature").is_none());
+    }
+
+    #[test]
+    fn chat_response_uses_summary_as_reasoning_alias_when_text_is_absent() {
+        let response = UrpResponse {
+            id: "chatcmpl_summary_alias".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: None,
+                    encrypted: Some(json!("sig_only_summary")),
+                    summary: Some("brief summary only".to_string()),
+                    source: Some("openrouter".to_string()),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        let message = &encoded["choices"][0]["message"];
+        assert_eq!(message["reasoning"], json!("brief summary only"));
+        let details = message["reasoning_details"]
+            .as_array()
+            .expect("details array");
+        assert!(details.iter().any(|detail| {
+            detail["type"].as_str() == Some("reasoning.summary")
+                && detail["summary"].as_str() == Some("brief summary only")
+        }));
+        assert!(details.iter().any(|detail| {
+            detail["type"].as_str() == Some("reasoning.encrypted")
+                && detail["data"].as_str() == Some("sig_only_summary")
+        }));
+    }
+
+    #[test]
+    fn merge_assistant_chat_messages_preserves_reasoning_details_across_segments() {
+        let response = UrpResponse {
+            id: "chatcmpl_merge_reasoning_parts".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Reasoning {
+                        content: Some("segment reasoning".to_string()),
+                        encrypted: None,
+                        summary: None,
+                        source: None,
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Reasoning {
+                        content: None,
+                        encrypted: Some(json!("sig_merged")),
+                        summary: None,
+                        source: None,
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+            ],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        let message = &encoded["choices"][0]["message"];
+        assert_eq!(message["reasoning"], json!("segment reasoning"));
+        let details = message["reasoning_details"]
+            .as_array()
+            .expect("reasoning details");
+        assert!(details.iter().any(|detail| {
+            detail["type"].as_str() == Some("reasoning.text")
+                && detail["text"].as_str() == Some("segment reasoning")
+        }));
+        assert!(details.iter().any(|detail| {
+            detail["type"].as_str() == Some("reasoning.encrypted")
+                && detail["data"].as_str() == Some("sig_merged")
+        }));
     }
 
     #[test]

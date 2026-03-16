@@ -288,6 +288,26 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     .get("format")
                     .and_then(Value::as_str)
                     .filter(|format| !format.is_empty());
+                if let Some(signature) = extra_body
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .filter(|signature| !signature.is_empty())
+                {
+                    send_chat_chunk_string(
+                        &tx,
+                        &chat_id,
+                        created,
+                        logical_model,
+                        chat_reasoning_delta_from_encrypted("", format),
+                        signature,
+                        chat_delta_path_reasoning_encrypted,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                if content.is_empty() {
+                    continue;
+                }
                 if extra_body
                     .get("reasoning_delta_type")
                     .and_then(Value::as_str)
@@ -494,5 +514,66 @@ mod tests {
         }
         assert!(text.contains("reasoning_content"));
         assert!(text.contains("brief summary"));
+    }
+
+    #[tokio::test]
+    async fn encode_chat_stream_maps_live_signature_delta_to_reasoning_encrypted_detail() {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (sse_tx, mut sse_rx) = mpsc::channel(16);
+
+        event_tx
+            .send(UrpStreamEvent::ResponseStart {
+                id: "resp_1".to_string(),
+                model: "gpt-5.4".to_string(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("response start");
+        event_tx
+            .send(UrpStreamEvent::Delta {
+                part_index: 0,
+                delta: PartDelta::Reasoning {
+                    content: String::new(),
+                },
+                usage: None,
+                extra_body: HashMap::from([
+                    (
+                        "signature".to_string(),
+                        Value::String("live_sig".to_string()),
+                    ),
+                    (
+                        "format".to_string(),
+                        Value::String("openrouter".to_string()),
+                    ),
+                ]),
+            })
+            .await
+            .expect("reasoning signature delta");
+        event_tx
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                usage: None,
+                outputs: Vec::new(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("response done");
+        drop(event_tx);
+
+        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+            .await
+            .expect("encode stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            let debug = format!("{event:?}");
+            text.push_str(&debug);
+        }
+
+        assert!(text.contains("reasoning_details"));
+        assert!(text.contains("reasoning.encrypted"));
+        assert!(text.contains("live_sig"));
+        assert!(!text.contains("\"reasoning\":"));
+        assert!(!text.contains("signature"));
     }
 }

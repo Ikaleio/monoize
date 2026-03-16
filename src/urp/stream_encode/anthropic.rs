@@ -1,10 +1,17 @@
 use crate::error::AppResult;
 use crate::urp::stream_helpers::*;
-use crate::urp::{self, FinishReason, Item, Part, PartHeader, Role, UrpStreamEvent, Usage};
+use crate::urp::{self, FinishReason, Item, Part, PartDelta, PartHeader, Role, UrpStreamEvent, Usage};
 use axum::response::sse::Event;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LiveReasoningBlockState {
+    block_index: u32,
+    sent_thinking: bool,
+    sent_signature: bool,
+}
 
 fn reasoning_display_text(part: &Part) -> Option<&str> {
     let Part::Reasoning {
@@ -206,6 +213,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
     let mut saw_tool_use = false;
     let mut saw_stream_parts = false;
     let mut response_usage: Option<Usage> = None;
+    let mut reasoning_block_state_by_part: HashMap<u32, LiveReasoningBlockState> = HashMap::new();
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -230,35 +238,164 @@ pub(crate) async fn encode_urp_stream_as_messages(
             }
             UrpStreamEvent::ItemStart { .. } | UrpStreamEvent::ItemDone { .. } => {}
             UrpStreamEvent::PartStart {
-                header, ..
+                part_index,
+                item_index: _,
+                header,
+                extra_body,
+                ..
             } => {
                 saw_stream_parts = true;
-                if matches!(header, PartHeader::ToolCall { .. }) {
+                if matches!(header, PartHeader::Reasoning) {
+                    let signature = extra_body
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let block_index = next_content_block_index;
+                    next_content_block_index += 1;
+                    reasoning_block_state_by_part.insert(
+                        part_index,
+                        LiveReasoningBlockState {
+                            block_index,
+                            sent_thinking: false,
+                            sent_signature: !signature.is_empty(),
+                        },
+                    );
+                    let start = json!({
+                        "type": "content_block_start",
+                        "index": block_index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": signature
+                        }
+                    });
+                    send_named_messages_event(&tx, start).await?;
+                }
+                if let PartHeader::ToolCall { .. } = &header {
                     saw_tool_use = true;
                 }
             }
             UrpStreamEvent::Delta {
-                delta: _,
+                part_index,
+                delta,
                 usage,
+                extra_body,
                 ..
             } => {
                 if let Some(usage) = usage {
                     response_usage = Some(usage);
                 }
+                if let PartDelta::Reasoning { content } = delta {
+                    let Some(block_state) = reasoning_block_state_by_part.get_mut(&part_index) else {
+                        continue;
+                    };
+                    if !content.is_empty() {
+                        send_messages_delta_string(
+                            &tx,
+                            json!({
+                                "type": "content_block_delta",
+                                "index": block_state.block_index,
+                                "delta": { "type": "thinking_delta", "thinking": "" }
+                            }),
+                            messages_delta_path_thinking,
+                            &content,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                        block_state.sent_thinking = true;
+                    }
+                    if let Some(signature) = extra_body
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .filter(|signature| !signature.is_empty())
+                    {
+                        if block_state.sent_thinking {
+                            send_messages_delta_string(
+                                &tx,
+                                json!({
+                                    "type": "content_block_delta",
+                                    "index": block_state.block_index,
+                                    "delta": { "type": "signature_delta", "signature": "" }
+                                }),
+                                messages_delta_path_signature,
+                                signature,
+                                sse_max_frame_length,
+                            )
+                            .await?;
+                            block_state.sent_signature = true;
+                        }
+                    }
+                }
             }
-            UrpStreamEvent::PartDone { part, .. } => {
+            UrpStreamEvent::PartDone { part_index, part, .. } => {
                 saw_stream_parts = true;
-                let block_index = next_content_block_index;
-                next_content_block_index += 1;
-                let content_block = content_block_from_part(&part, &mut saw_tool_use)?;
-                let start = json!({
-                    "type": "content_block_start",
-                    "index": block_index,
-                    "content_block": content_block
-                });
-                send_named_messages_event(&tx, start).await?;
-
-                emit_messages_part_done_payload(&tx, block_index, &part, sse_max_frame_length).await?;
+                let mut started_live_reasoning_block = false;
+                let block_index = if let Part::Reasoning {
+                    encrypted,
+                    extra_body,
+                    ..
+                } = &part
+                {
+                    if let Some(block_state) = reasoning_block_state_by_part.remove(&part_index) {
+                        started_live_reasoning_block = true;
+                        if !block_state.sent_thinking {
+                            if let Some(content) = reasoning_display_text(&part) {
+                                send_messages_delta_string(
+                                    &tx,
+                                    json!({
+                                        "type": "content_block_delta",
+                                        "index": block_state.block_index,
+                                        "delta": { "type": "thinking_delta", "thinking": "" }
+                                    }),
+                                    messages_delta_path_thinking,
+                                    content,
+                                    sse_max_frame_length,
+                                )
+                                .await?;
+                            }
+                        }
+                        if !block_state.sent_signature {
+                            if let Some(signature) = encrypted
+                                .as_ref()
+                                .and_then(Value::as_str)
+                                .or_else(|| extra_body.get("signature").and_then(Value::as_str))
+                                .filter(|signature| !signature.is_empty())
+                            {
+                                send_messages_delta_string(
+                                    &tx,
+                                    json!({
+                                        "type": "content_block_delta",
+                                        "index": block_state.block_index,
+                                        "delta": { "type": "signature_delta", "signature": "" }
+                                    }),
+                                    messages_delta_path_signature,
+                                    signature,
+                                    sse_max_frame_length,
+                                )
+                                .await?;
+                            }
+                        }
+                        block_state.block_index
+                    } else {
+                        let block_index = next_content_block_index;
+                        next_content_block_index += 1;
+                        block_index
+                    }
+                } else {
+                    let block_index = next_content_block_index;
+                    next_content_block_index += 1;
+                    block_index
+                };
+                if !started_live_reasoning_block {
+                    let content_block = content_block_from_part(&part, &mut saw_tool_use)?;
+                    let start = json!({
+                        "type": "content_block_start",
+                        "index": block_index,
+                        "content_block": content_block
+                    });
+                    send_named_messages_event(&tx, start).await?;
+                    emit_messages_part_done_payload(&tx, block_index, &part, sse_max_frame_length).await?;
+                }
 
                 let stop = json!({ "type": "content_block_stop", "index": block_index });
                 send_named_messages_event(&tx, stop).await?;

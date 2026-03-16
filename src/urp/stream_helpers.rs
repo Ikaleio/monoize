@@ -248,7 +248,7 @@ pub(crate) fn chat_delta_path_reasoning_text(value: &mut Value, content: &str) {
     {
         delta.insert(
             "reasoning_details".to_string(),
-            Value::Array(vec![reasoning_text_detail_value(content, None, None)]),
+            Value::Array(vec![reasoning_text_detail_value(content, None)]),
         );
     }
 }
@@ -436,18 +436,11 @@ pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) 
     (text, summary_text, signature)
 }
 
-pub(crate) fn reasoning_text_detail_value(
-    text: &str,
-    signature: Option<&str>,
-    format: Option<&str>,
-) -> Value {
+pub(crate) fn reasoning_text_detail_value(text: &str, format: Option<&str>) -> Value {
     let mut value = json!({
         "type": "reasoning.text",
         "text": text,
     });
-    if let Some(signature) = signature {
-        value["signature"] = Value::String(signature.to_string());
-    }
     if let Some(format) = format {
         value["format"] = Value::String(format.to_string());
     }
@@ -542,7 +535,7 @@ pub(crate) fn extract_chat_reasoning_deltas(delta: &Value) -> (Vec<String>, Vec<
 
 pub(crate) fn chat_reasoning_delta_from_text(text: &str, format: Option<&str>) -> Value {
     json!({
-        "reasoning_details": [reasoning_text_detail_value(text, None, format)]
+        "reasoning_details": [reasoning_text_detail_value(text, format)]
     })
 }
 

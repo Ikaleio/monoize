@@ -427,7 +427,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                 ]
             };
             let mut output = vec![
-                json!({ "type": "reasoning", "text": "mock_reasoning", "signature": "mock_sig" }),
+                json!({ "type": "reasoning", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
             ];
             output.extend(calls);
             return Json(json!({
@@ -461,7 +461,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         let mut output = Vec::new();
         if reasoning_enabled {
             output.push(
-                json!({ "type": "reasoning", "text": "mock_reasoning", "signature": "mock_sig" }),
+                json!({ "type": "reasoning", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
             );
         }
         output.push(json!({
@@ -2776,6 +2776,10 @@ async fn chat_reasoning_effort_maps_to_responses_upstream_reasoning() {
             .unwrap_or(""),
         "mock_reasoning"
     );
+    assert_eq!(
+        v["choices"][0]["message"]["reasoning_details"][1]["data"],
+        json!("mock_sig")
+    );
 }
 
 #[tokio::test]
@@ -2798,6 +2802,10 @@ async fn chat_reasoning_effort_maps_to_messages_upstream_thinking() {
             .as_str()
             .unwrap_or(""),
         "mock_reasoning"
+    );
+    assert_eq!(
+        v["choices"][0]["message"]["reasoning_details"][1]["data"],
+        json!("mock_sig")
     );
 }
 
@@ -2882,6 +2890,10 @@ async fn chat_tool_call_flow_nonstream_via_responses_upstream_parallel() {
             .as_str()
             .unwrap_or(""),
         "mock_reasoning"
+    );
+    assert_eq!(
+        v["choices"][0]["message"]["reasoning_details"][1]["data"],
+        json!("mock_sig")
     );
 
     // Send tool results back.
@@ -3274,6 +3286,8 @@ async fn chat_streaming_preserves_summary_vs_reasoning_in_openrouter_extension()
     assert!(text.contains("\"summary\":\"mock_summary\""), "chat stream should preserve summary field: {text}");
     assert!(text.contains("\"type\":\"reasoning.text\""), "chat stream should expose reasoning text detail: {text}");
     assert!(text.contains("\"text\":\"mock_reasoning\""), "chat stream should preserve reasoning text field: {text}");
+    assert!(!text.contains("\"delta\":{\"reasoning\":"), "chat stream should keep structured reasoning out of delta.reasoning: {text}");
+    assert!(!text.contains("\"signature\":"), "OpenRouter reasoning.text details should not carry signature: {text}");
 }
 
 #[tokio::test]
@@ -3303,7 +3317,7 @@ async fn messages_streaming_keeps_signature_in_thinking_block_and_delta_order() 
                 && event["content_block"]["type"].as_str() == Some("thinking")
         })
         .expect("thinking block start");
-    assert_eq!(thinking_start["content_block"]["signature"].as_str(), Some("mock_sig"));
+    assert_eq!(thinking_start["content_block"]["thinking"].as_str(), Some(""));
 
     let mut thinking_delta_pos = None;
     let mut signature_delta_pos = None;
@@ -3409,6 +3423,8 @@ async fn chat_streaming_maps_tool_calls_and_reasoning_from_responses_upstream() 
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(text.contains("\"tool_calls\""));
     assert!(text.contains("\"reasoning_details\""));
+    assert!(text.contains("\"type\":\"reasoning.encrypted\""));
+    assert!(text.contains("\"data\":\"mock_sig\""));
     assert!(text.contains("[DONE]"));
 }
 
@@ -5418,7 +5434,9 @@ async fn messages_stream_thinking_from_responses_upstream() {
             "max_tokens": 64,
             "thinking": { "type": "enabled", "budget_tokens": 2048 },
             "messages": [{ "role": "user", "content": [{ "type": "text", "text": "think stream" }] }],
-            "stream": true
+            "stream": true,
+            "stream_mode": "reasoning_text_tool",
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }]
         }),
     )
     .await;
@@ -5436,7 +5454,22 @@ async fn messages_stream_thinking_from_responses_upstream() {
     let has_text_delta = events
         .iter()
         .any(|e| e.get("delta").and_then(|d| d["type"].as_str()) == Some("text_delta"));
-    assert!(has_text_delta, "expected text_delta alongside thinking");
+    let has_tool_use_start = events.iter().any(|e| {
+        e["type"].as_str() == Some("content_block_start")
+            && e["content_block"]["type"].as_str() == Some("tool_use")
+    });
+    assert!(
+        has_text_delta || has_tool_use_start,
+        "expected downstream content or tool_use block alongside thinking"
+    );
+
+    let has_signature_delta = events
+        .iter()
+        .any(|e| e.get("delta").and_then(|d| d["type"].as_str()) == Some("signature_delta"));
+    assert!(
+        has_signature_delta,
+        "expected signature_delta from responses upstream"
+    );
 }
 
 #[tokio::test]
@@ -5470,6 +5503,38 @@ async fn messages_stream_thinking_from_chat_upstream() {
     assert!(
         has_signature_delta,
         "expected signature_delta from chat upstream"
+    );
+}
+
+#[tokio::test]
+async fn messages_stream_signature_delta_does_not_precede_thinking_delta() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "think stream" }] }],
+            "stream": true,
+            "stream_mode": "reasoning_text_tool",
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }]
+        }),
+    )
+    .await;
+
+    let thinking_delta_pos = events.iter().position(|event| {
+        event["delta"]["type"].as_str() == Some("thinking_delta")
+    });
+    let signature_delta_pos = events.iter().position(|event| {
+        event["delta"]["type"].as_str() == Some("signature_delta")
+    });
+
+    let thinking_delta_pos = thinking_delta_pos.expect("thinking delta position");
+    let signature_delta_pos = signature_delta_pos.expect("signature delta position");
+    assert!(
+        thinking_delta_pos < signature_delta_pos,
+        "signature_delta must not precede thinking_delta"
     );
 }
 
