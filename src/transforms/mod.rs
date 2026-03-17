@@ -136,14 +136,68 @@ inventory::collect!(TransformEntry);
 
 pub type TransformRegistry = HashMap<&'static str, Arc<dyn Transform>>;
 
+fn builtin_transforms() -> Vec<Box<dyn Transform>> {
+    vec![
+        Box::new(append_empty_user_message::AppendEmptyUserMessageTransform),
+        Box::new(force_stream::ForceStreamTransform),
+        Box::new(inject_system_prompt::InjectSystemPromptTransform),
+        Box::new(merge_consecutive_roles::MergeConsecutiveRolesTransform),
+        Box::new(override_max_tokens::OverrideMaxTokensTransform),
+        Box::new(plaintext_reasoning_to_summary::PlaintextReasoningToSummaryTransform),
+        Box::new(reasoning_content_delta::ReasoningContentDeltaTransform),
+        Box::new(reasoning_summary_to_raw_cot::ReasoningSummaryToRawCotTransform),
+        Box::new(reasoning_effort_to_budget::ReasoningEffortToBudgetTransform),
+        Box::new(reasoning_effort_to_model_suffix::ReasoningEffortToModelSuffixTransform),
+        Box::new(reasoning_to_think_xml::ReasoningToThinkXmlTransform),
+        Box::new(remove_field::RemoveFieldTransform),
+        Box::new(set_field::SetFieldTransform),
+        Box::new(split_sse_frames::SplitSseFramesTransform),
+        Box::new(strip_reasoning::StripReasoningTransform),
+        Box::new(system_to_developer_role::SystemToDeveloperRoleTransform),
+        Box::new(think_xml_to_reasoning::ThinkXmlToReasoningTransform),
+        Box::new(assistant_markdown_images_to_output::AssistantMarkdownImagesToOutputTransform),
+        Box::new(assistant_output_images_to_markdown::AssistantOutputImagesToMarkdownTransform),
+        Box::new(auto_cache_system::AutoCacheSystemTransform),
+        Box::new(auto_cache_tool_use::AutoCacheToolUseTransform),
+        Box::new(auto_cache_user_id::AutoCacheUserIdTransform),
+        Box::new(compress_user_message_images::CompressUserMessageImagesTransform),
+    ]
+}
+
 pub fn registry() -> TransformRegistry {
     let mut map = HashMap::new();
+    for transform in builtin_transforms() {
+        let type_id = Transform::type_id(&*transform);
+        map.insert(type_id, Arc::<dyn Transform>::from(transform));
+    }
     for entry in inventory::iter::<TransformEntry> {
         let transform = (entry.factory)();
         let type_id = Transform::type_id(&*transform);
         map.insert(type_id, Arc::<dyn Transform>::from(transform));
     }
     map
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::registry;
+
+    #[test]
+    fn registry_contains_reasoning_content_delta_and_api_key_scope_metadata() {
+        let registry = registry();
+        let transform = registry
+            .get("reasoning_content_delta")
+            .expect("reasoning_content_delta should be registered");
+
+        assert!(transform
+            .supported_phases()
+            .iter()
+            .any(|phase| matches!(phase, super::Phase::Response)));
+        assert!(transform
+            .supported_scopes()
+            .iter()
+            .any(|scope| matches!(scope, super::TransformScope::ApiKey)));
+    }
 }
 
 pub fn build_states_for_rules(
