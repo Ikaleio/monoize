@@ -438,16 +438,16 @@ pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) 
         }
     }
     let mut signature = item
-        .get("signature")
+        .get("encrypted_content")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
     if signature.is_empty() {
         signature = item
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     }
     (text, summary_text, signature)
 }
@@ -607,20 +607,18 @@ pub(crate) fn insert_phase_if_present(obj: &mut Map<String, Value>, phase: Optio
 }
 
 pub(crate) fn responses_text_delta_payload(
-    text: &str,
     phase: Option<&str>,
-    response_id: &str,
     item: &Value,
+    output_index: u64,
+    content_index: u64,
 ) -> Value {
     let mut obj = Map::new();
-    obj.insert(
-        "response_id".to_string(),
-        Value::String(response_id.to_string()),
-    );
     if let Some(item_id) = item.get("id").and_then(Value::as_str) {
         obj.insert("item_id".to_string(), Value::String(item_id.to_string()));
     }
-    obj.insert("text".to_string(), Value::String(text.to_string()));
+    obj.insert("output_index".to_string(), Value::from(output_index));
+    obj.insert("content_index".to_string(), Value::from(content_index));
+    obj.insert("logprobs".to_string(), Value::Null);
     insert_phase_if_present(&mut obj, phase);
     Value::Object(obj)
 }

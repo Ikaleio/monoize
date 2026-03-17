@@ -50,7 +50,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             model: urp.model.clone(),
             extra_body: HashMap::from([
                 ("object".to_string(), json!("response")),
-                ("created".to_string(), json!(created)),
+                ("created_at".to_string(), json!(created)),
                 ("status".to_string(), json!("in_progress")),
                 ("output".to_string(), json!([])),
             ]),
@@ -82,11 +82,7 @@ pub(crate) async fn stream_responses_to_urp_events(
         .await;
 
         if ev.event == "response.output_text.delta" {
-            if let Some(text) = data_val
-                .get("text")
-                .and_then(|v| v.as_str())
-                .or_else(|| data_val.get("delta").and_then(|v| v.as_str()))
-            {
+            if let Some(text) = data_val.get("delta").and_then(|v| v.as_str()) {
                 let output_index = data_val
                     .get("output_index")
                     .and_then(|v| v.as_u64())
@@ -125,11 +121,6 @@ pub(crate) async fn stream_responses_to_urp_events(
                 .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
             {
                 reasoning_summary_text.push_str(delta);
-            }
-        }
-        if ev.event == "response.reasoning_signature.delta" {
-            if let Some(delta) = data_val.get("delta").and_then(|v| v.as_str()) {
-                reasoning_sig.push_str(delta);
             }
         }
         if ev.event == "response.output_item.added" {
@@ -419,7 +410,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 extra_body: HashMap::from([
                     ("id".to_string(), json!(response_id)),
                     ("object".to_string(), json!("response")),
-                    ("created".to_string(), json!(created)),
+                    ("created_at".to_string(), json!(created)),
                     ("model".to_string(), json!(urp.model.clone())),
                     ("status".to_string(), json!("completed")),
                 ]),
@@ -449,6 +440,14 @@ fn map_responses_event_to_urp_events_with_state(
             extra_body: delta_extra_body_with_phase(data_val, message_phases_by_output_index),
         }],
         "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
+            if let Some(output_index) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                let output_state = index_state.output_state_by_index.entry(output_index).or_default();
+                if event_name == "response.reasoning_summary_text.delta" {
+                    output_state.reasoning_summary_delta_seen = true;
+                } else {
+                    output_state.reasoning_text_delta_seen = true;
+                }
+            }
             let extra_body = split_known_fields(
                 data_val.clone(),
                 &[
@@ -490,34 +489,6 @@ fn map_responses_event_to_urp_events_with_state(
                 extra_body,
             }]
         }
-        "response.reasoning_signature.delta" => {
-            let part_index = urp_part_index_from_delta(&data_val, index_state);
-            if let Some(signature) = data_val.get("delta").and_then(|v| v.as_str()) {
-                index_state
-                    .reasoning_signature_by_part_index
-                    .entry(part_index)
-                    .or_default()
-                    .push_str(signature);
-            }
-            vec![UrpStreamEvent::Delta {
-                part_index,
-                delta: PartDelta::Reasoning {
-                    content: None,
-                    encrypted: data_val
-                        .get("delta")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| Value::String(s.to_string())),
-                    summary: None,
-                    source: None,
-                },
-                usage: None,
-                extra_body: split_known_fields(
-                    data_val.clone(),
-                    &["delta", "output_index", "content_index", "part_index"],
-                ),
-            }]
-        }
         "response.reasoning.done" => {
             let part_index = urp_part_index_from_delta(&data_val, index_state);
             vec![UrpStreamEvent::PartDone {
@@ -528,11 +499,7 @@ fn map_responses_event_to_urp_events_with_state(
                         .and_then(|v| v.as_str())
                         .filter(|text| !text.is_empty())
                         .map(|text| text.to_string()),
-                    encrypted: index_state
-                        .reasoning_signature_by_part_index
-                        .remove(&part_index)
-                        .filter(|signature| !signature.is_empty())
-                        .map(Value::String),
+                    encrypted: None,
                     summary: None,
                     source: None,
                     extra_body: split_known_fields(data_val, &["text", "delta", "output_index", "content_index", "part_index"]),
@@ -555,8 +522,6 @@ fn map_responses_event_to_urp_events_with_state(
                 data_val,
                 &[
                     "delta",
-                    "call_id",
-                    "name",
                     "output_index",
                     "content_index",
                     "part_index",
@@ -588,7 +553,6 @@ struct ResponsesStreamIndexState {
     next_part_index: u32,
     part_index_by_content_key: HashMap<(u64, u64), u32>,
     synthetic_part_index_by_output_index: HashMap<u64, u32>,
-    reasoning_signature_by_part_index: HashMap<u32, String>,
     output_state_by_index: HashMap<u64, OutputItemStreamState>,
     active_assistant_item: Option<ActiveAssistantStreamItem>,
     boundary_merger: GreedyMerger,
@@ -647,6 +611,8 @@ struct OutputItemStreamState {
     item_extra_body: HashMap<String, Value>,
     fed_to_merger: bool,
     part_done_seen: bool,
+    reasoning_text_delta_seen: bool,
+    reasoning_summary_delta_seen: bool,
 }
 
 fn flush_active_assistant_item(state: &mut ResponsesStreamIndexState, events: &mut Vec<UrpStreamEvent>) {
@@ -954,15 +920,42 @@ fn map_output_item_done(
         "reasoning" | "function_call" => {
             let part = decode_part_from_value(item);
             let part_index = index_state.synthetic_part_index_for_output(output_index);
-            if let Part::Reasoning { content: Some(content), .. } = &part {
-                if !content.is_empty() {
+            let reasoning_text_delta_seen = index_state
+                .output_state_by_index
+                .get(&output_index)
+                .map(|state| state.reasoning_text_delta_seen)
+                .unwrap_or(false);
+            let reasoning_summary_delta_seen = index_state
+                .output_state_by_index
+                .get(&output_index)
+                .map(|state| state.reasoning_summary_delta_seen)
+                .unwrap_or(false);
+            if let Part::Reasoning {
+                content,
+                encrypted,
+                summary,
+                source,
+                ..
+            } = &part
+            {
+                let fallback_content = (!reasoning_text_delta_seen)
+                    .then(|| content.clone())
+                    .flatten();
+                let fallback_summary = (!reasoning_summary_delta_seen)
+                    .then(|| summary.clone())
+                    .flatten();
+                let fallback_encrypted = encrypted.clone();
+                if fallback_content.as_deref().is_some_and(|content| !content.is_empty())
+                    || fallback_summary.as_deref().is_some_and(|summary| !summary.is_empty())
+                    || fallback_encrypted.is_some()
+                {
                     events.push(UrpStreamEvent::Delta {
                         part_index,
                         delta: PartDelta::Reasoning {
-                            content: Some(content.clone()),
-                            encrypted: None,
-                            summary: None,
-                            source: None,
+                            content: fallback_content,
+                            encrypted: fallback_encrypted,
+                            summary: fallback_summary,
+                            source: source.clone(),
                         },
                         usage: None,
                         extra_body: HashMap::new(),
@@ -1081,7 +1074,7 @@ fn map_response_completed(
         extra_body: split_known_fields(
             response_value,
             &[
-                "id", "object", "created", "model", "status", "output", "usage", "error",
+                "id", "object", "created", "created_at", "model", "status", "output", "usage", "error",
             ],
         ),
     });
@@ -1108,9 +1101,9 @@ fn urp_part_index_from_delta(
 
 fn output_text_delta_content<'a>(data_val: &'a Value) -> &'a str {
     data_val
-        .get("text")
+        .get("delta")
         .and_then(|v| v.as_str())
-        .or_else(|| data_val.get("delta").and_then(|v| v.as_str()))
+        .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
         .unwrap_or_default()
 }
 
@@ -1121,11 +1114,13 @@ fn delta_extra_body_with_phase(
     let mut extra = split_known_fields(
         data_val.clone(),
         &[
-            "text",
             "delta",
+            "text",
             "output_index",
             "content_index",
             "part_index",
+            "item_id",
+            "logprobs",
             "phase",
         ],
     );
@@ -1982,37 +1977,6 @@ mod tests {
         }
 
         assert!(!(!saw_text_delta && !saw_text_part_done));
-    }
-
-    #[test]
-    fn reasoning_signature_delta_maps_to_live_reasoning_event_with_signature_extra() {
-        let mut state = ResponsesStreamIndexState::default();
-        let events = map_responses_event_to_urp_events_with_state(
-            "response.reasoning_signature.delta",
-            json!({
-                "output_index": 0,
-                "part_index": 0,
-                "delta": "sig_1"
-            }),
-            &HashMap::new(),
-            &mut state,
-        );
-
-        assert!(matches!(
-            &events[0],
-            UrpStreamEvent::Delta {
-                delta: PartDelta::Reasoning {
-                    content,
-                    encrypted,
-                    summary,
-                    source,
-                },
-                ..
-            } if content.is_none()
-                && encrypted == &Some(json!("sig_1"))
-                && summary.is_none()
-                && source.is_none()
-        ));
     }
 
     #[test]

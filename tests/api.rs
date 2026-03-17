@@ -136,6 +136,15 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                                 "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "" }], "text": "" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
+                            .event("response.reasoning_summary_part.added")
+                            .data(json!({
+                                "type": "response.reasoning_summary_part.added",
+                                "output_index": 0,
+                                "item_id": "rs_mock",
+                                "summary_index": 0,
+                                "part": { "type": "summary_text", "text": "" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
                             .event("response.reasoning_summary_text.delta")
                             .data(json!({
                                 "type": "response.reasoning_summary_text.delta",
@@ -182,7 +191,8 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                                 "type": "response.content_part.added",
                                 "output_index": 1,
                                 "content_index": 0,
-                                "part": { "type": "output_text", "text": "" }
+                                "item_id": "msg_mock",
+                                "part": { "type": "output_text", "text": "", "annotations": [] }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.output_text.delta")
@@ -190,7 +200,19 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                                 "type": "response.output_text.delta",
                                 "output_index": 1,
                                 "content_index": 0,
+                                "item_id": "msg_mock",
+                                "logprobs": Value::Null,
                                 "delta": "answer"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.output_text.done")
+                            .data(json!({
+                                "type": "response.output_text.done",
+                                "output_index": 1,
+                                "content_index": 0,
+                                "item_id": "msg_mock",
+                                "logprobs": Value::Null,
+                                "text": "answer"
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.content_part.done")
@@ -198,7 +220,8 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                                 "type": "response.content_part.done",
                                 "output_index": 1,
                                 "content_index": 0,
-                                "part": { "type": "output_text", "text": "answer" }
+                                "item_id": "msg_mock",
+                                "part": { "type": "output_text", "text": "answer", "annotations": [] }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.output_item.done")
@@ -207,6 +230,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                                 "output_index": 1,
                                 "item": {
                                     "type": "message",
+                                    "id": "msg_mock",
                                     "role": "assistant",
                                     "phase": "analysis",
                                     "content": [{ "type": "output_text", "text": "answer" }]
@@ -224,16 +248,24 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                             .data(json!({
                                 "type": "response.function_call_arguments.delta",
                                 "output_index": 2,
+                                "delta": "{\"a\":1}"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.function_call_arguments.done")
+                            .data(json!({
+                                "type": "response.function_call_arguments.done",
+                                "output_index": 2,
+                                "item_id": "fc_mock",
                                 "call_id": "call_1",
                                 "name": "tool_a",
-                                "delta": "{\"a\":1}"
+                                "arguments": "{\"a\":1}"
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.output_item.done")
                             .data(json!({
                                 "type": "response.output_item.done",
                                 "output_index": 2,
-                                "item": { "type": "function_call", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }
+                                "item": { "type": "function_call", "id": "fc_mock", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default().data("[DONE]")),
                     ]);
@@ -258,7 +290,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                                     "response": {
                                         "id": "resp_mock",
                                         "object": "response",
-                                        "created": 0,
+                                        "created_at": 0,
                                         "model": model,
                                         "status": "completed",
                                         "output": calls
@@ -274,6 +306,16 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
 
                 let mut events: Vec<Result<Event, Infallible>> = Vec::new();
                 events.push(Ok(Event::default()
+                    .event("response.output_item.added")
+                    .data(json!({
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "" }], "text": "" }
+                    }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.reasoning_summary_part.added")
+                    .data(json!({ "type": "response.reasoning_summary_part.added", "item_id": "rs_mock", "output_index": 0, "summary_index": 0, "part": { "type": "summary_text", "text": "" } }).to_string())));
+                events.push(Ok(Event::default()
                     .event("response.reasoning_summary_text.delta")
                     .data(json!({ "type": "response.reasoning_summary_text.delta", "item_id": "rs_mock", "output_index": 0, "summary_index": 0, "delta": "mock_summary" }).to_string())));
                 events.push(Ok(Event::default()
@@ -286,8 +328,21 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     .event("response.reasoning.delta")
                     .data(json!({ "type": "response.reasoning.delta", "item_id": "rs_mock", "output_index": 0, "delta": "mock_reasoning" }).to_string())));
                 events.push(Ok(Event::default()
-                    .event("response.reasoning_signature.delta")
-                    .data(json!({ "type": "response.reasoning_signature.delta", "item_id": "rs_mock", "output_index": 0, "delta": "mock_sig" }).to_string())));
+                    .event("response.reasoning.done")
+                    .data(json!({ "type": "response.reasoning.done", "item_id": "rs_mock", "output_index": 0, "text": "mock_reasoning" }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.output_item.done")
+                    .data(json!({
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "reasoning",
+                            "id": "rs_mock",
+                            "summary": [{ "type": "summary_text", "text": "mock_summary" }],
+                            "text": "mock_reasoning",
+                            "encrypted_content": "mock_sig"
+                        }
+                    }).to_string())));
 
                 let calls = if parallel {
                     vec![
@@ -321,6 +376,9 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                             json!({
                                 "type": "response.function_call_arguments.done",
                                 "output_index": idx + 1,
+                                "item_id": format!("fc_{}", idx + 1),
+                                "call_id": call_id,
+                                "name": name,
                                 "arguments": args
                             })
                             .to_string(),
@@ -330,7 +388,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                         .data(json!({
                             "type": "response.output_item.done",
                             "output_index": idx + 1,
-                            "item": { "type": "function_call", "call_id": call_id, "name": name, "arguments": args }
+                            "item": { "type": "function_call", "id": format!("fc_{}", idx + 1), "call_id": call_id, "name": name, "arguments": args }
                         }).to_string())));
                 }
                 events.push(Ok(Event::default().data("[DONE]")));
@@ -394,7 +452,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                             "response": {
                                 "id": "resp_mock",
                                 "object": "response",
-                                "created": 0,
+                                "created_at": 0,
                                 "model": model,
                                 "status": "completed",
                                 "output": [],
@@ -433,7 +491,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             return Json(json!({
                 "id": "resp_mock",
                 "object": "response",
-                "created": 0,
+                "created_at": 0,
                 "model": model,
                 "status": "completed",
                 "output": output
@@ -446,7 +504,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             return Json(json!({
                 "id": "resp_mock",
                 "object": "response",
-                "created": 0,
+                "created_at": 0,
                 "model": model,
                 "status": "completed",
                 "output": [{
@@ -472,7 +530,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
         Json(json!({
             "id": "resp_mock",
             "object": "response",
-            "created": 0,
+            "created_at": 0,
             "model": model,
             "status": "completed",
             "output": output
@@ -3123,7 +3181,7 @@ async fn responses_streaming_reencodes_greedy_merged_items_with_canonical_sse_bo
     assert!(text.contains("\"type\":\"function_call\""));
     assert!(text.contains("\"phase\":\"analysis\""));
     assert!(text.contains("event: response.content_part.added"));
-    assert!(text.contains("\"part\":{\"text\":\"\",\"type\":\"output_text\"}"));
+    assert!(text.contains("\"part\":{\"annotations\":[],\"text\":\"\",\"type\":\"output_text\"}"));
     assert!(!text.contains("\"part\":{\"text\":\"\",\"type\":\"reasoning\"}"));
     assert!(!text.contains("event: response.content_part.added\ndata: {\"content_index\":2"));
 }
@@ -3162,8 +3220,8 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
         Some("response.output_text.delta")
     );
     assert!(text_delta.1.get("data").is_none(), "must not nest payload under data");
-    assert!(text_delta.1["response_id"].as_str().is_some(), "text delta must include response_id");
     assert!(text_delta.1["item_id"].as_str().is_some(), "text delta must include item_id");
+    assert_eq!(text_delta.1["logprobs"], Value::Null);
 
     let reasoning_summary_delta = frames
         .iter()
@@ -3173,13 +3231,9 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
         reasoning_summary_delta.1["type"].as_str(),
         Some("response.reasoning_summary_text.delta")
     );
-    let reasoning_response_id = reasoning_summary_delta.1["response_id"]
-        .as_str()
-        .expect("reasoning delta response_id");
     let reasoning_item_id = reasoning_summary_delta.1["item_id"]
         .as_str()
         .expect("reasoning delta item_id");
-    assert!(!reasoning_response_id.is_empty(), "reasoning response_id must be non-empty");
     assert!(!reasoning_item_id.is_empty(), "reasoning item_id must be non-empty");
 
     let reasoning_text_delta = frames
@@ -3213,8 +3267,13 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
         function_delta.1["type"].as_str(),
         Some("response.function_call_arguments.delta")
     );
-    assert!(function_delta.1["response_id"].as_str().is_some());
     assert!(function_delta.1["item_id"].as_str().is_some());
+
+    let function_done = frames
+        .iter()
+        .find(|(event, _)| event == "response.function_call_arguments.done")
+        .expect("function call done");
+    assert_eq!(function_done.1["arguments"].as_str(), Some("{\"a\":1}"));
 }
 
 #[tokio::test]

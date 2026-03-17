@@ -31,6 +31,8 @@ struct ActiveResponsesOutputItem {
     output_index: usize,
     item_id: String,
     item: Value,
+    next_content_index: u64,
+    summary_part_added_sent: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +40,7 @@ struct PendingResponsesAssistantItem {
     role: Role,
     item_extra_body: HashMap<String, Value>,
     active_output: Option<ActiveResponsesOutputItem>,
+    staged_outputs: Vec<ActiveResponsesOutputItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,17 +73,10 @@ pub(crate) async fn emit_synthetic_responses_stream(
         .unwrap_or("resp")
         .to_string();
     let created = encoded
-        .get("created")
+        .get("created_at")
         .and_then(|v| v.as_i64())
         .unwrap_or_else(now_ts);
-    let base_response = json!({
-        "id": response_id,
-        "object": "response",
-        "created": created,
-        "model": logical_model,
-        "status": "in_progress",
-        "output": []
-    });
+    let base_response = response_envelope_payload(&response_id, created, logical_model, "in_progress", Value::Array(Vec::new()));
     send_responses_event(&tx, &mut seq, "response.created", base_response.clone()).await?;
     send_responses_event(&tx, &mut seq, "response.in_progress", base_response).await?;
 
@@ -95,12 +91,23 @@ pub(crate) async fn emit_synthetic_responses_stream(
             "reasoning" => {
                 let (text, summary, sig) = extract_reasoning_parts(item);
                 if !summary.is_empty() {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.reasoning_summary_part.added",
+                        json!({
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                            "summary_index": 0,
+                            "part": { "type": "summary_text", "text": "" },
+                        }),
+                    )
+                    .await?;
                     send_responses_delta_string(
                         &tx,
                         &mut seq,
                         "response.reasoning_summary_text.delta",
                         json!({
-                            "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "summary_index": 0,
@@ -115,7 +122,6 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &mut seq,
                         "response.reasoning_summary_text.done",
                         json!({
-                            "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "summary_index": 0,
@@ -130,7 +136,6 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &mut seq,
                         "response.reasoning.delta",
                         json!({
-                            "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                         }),
@@ -144,7 +149,6 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &mut seq,
                         "response.reasoning.done",
                         json!({
-                            "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "text": text,
@@ -158,7 +162,6 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &mut seq,
                         "response.reasoning_summary_part.done",
                         json!({
-                            "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "summary_index": 0,
@@ -167,20 +170,7 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     )
                     .await?;
                 }
-                if !sig.is_empty() {
-                    send_responses_event(
-                        &tx,
-                        &mut seq,
-                        "response.reasoning_signature.delta",
-                        json!({
-                            "response_id": response_id,
-                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                            "output_index": output_index,
-                            "delta": sig,
-                        }),
-                    )
-                    .await?;
-                }
+                let _ = sig;
             }
             "function_call" => {
                 let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -192,34 +182,77 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &mut seq,
                         "response.function_call_arguments.delta",
                         json!({
-                            "response_id": response_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
-                            "call_id": call_id,
-                            "name": name
                         }),
                         "delta",
                         arguments,
                         sse_max_frame_length,
                     )
                     .await?;
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.function_call_arguments.done",
+                        json!({
+                            "arguments": arguments,
+                            "call_id": call_id,
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "name": name,
+                            "output_index": output_index,
+                        }),
+                    )
+                    .await?;
                 }
             }
             "message" => {
                 let text = extract_responses_message_text(item);
+                let phase = extract_responses_message_phase(item);
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "response.content_part.added",
+                    json!({
+                        "output_index": output_index,
+                        "content_index": 0,
+                        "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                        "part": { "type": "output_text", "text": "", "annotations": [] },
+                    }),
+                )
+                .await?;
                 if !text.is_empty() {
-                    let phase = extract_responses_message_phase(item);
                     send_responses_delta_string(
                         &tx,
                         &mut seq,
                         "response.output_text.delta",
-                        responses_text_delta_payload("", phase.as_deref(), &response_id, item),
+                        responses_text_delta_payload(phase.as_deref(), item, output_index as u64, 0),
                         "delta",
                         &text,
                         sse_max_frame_length,
                     )
                     .await?;
                 }
+                let mut done_payload = responses_text_delta_payload(phase.as_deref(), item, output_index as u64, 0);
+                if let Some(obj) = done_payload.as_object_mut() {
+                    obj.insert("text".to_string(), json!(text));
+                }
+                send_responses_event(&tx, &mut seq, "response.output_text.done", done_payload).await?;
+                send_responses_event(
+                    &tx,
+                    &mut seq,
+                    "response.content_part.done",
+                    json!({
+                        "output_index": output_index,
+                        "content_index": 0,
+                        "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                        "part": {
+                            "type": "output_text",
+                            "text": text,
+                            "annotations": [],
+                        },
+                    }),
+                )
+                .await?;
             }
             _ => {}
         }
@@ -236,7 +269,6 @@ pub(crate) async fn emit_synthetic_responses_stream(
         )
         .await?;
     }
-    send_responses_event(&tx, &mut seq, "response.output_text.done", json!({})).await?;
     let completed_response = sanitize_responses_completed_for_frame_limit(&encoded, sse_max_frame_length);
     send_responses_event(
         &tx,
@@ -269,19 +301,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 response_id = id.clone();
                 created = Some(
                     extra_body
-                        .get("created")
+                        .get("created_at")
+                        .or_else(|| extra_body.get("created"))
                         .and_then(|v| v.as_i64())
                         .unwrap_or_else(now_ts),
                 );
 
-                let payload = json!({
-                    "id": id,
-                    "object": "response",
-                    "created": created.expect("response.created timestamp set from response start"),
-                    "model": logical_model,
-                    "status": "in_progress",
-                    "output": []
-                });
+                let payload = response_envelope_payload(
+                    &id,
+                    created.expect("response.created timestamp set from response start"),
+                    logical_model,
+                    "in_progress",
+                    Value::Array(Vec::new()),
+                );
                 send_responses_event(&tx, &mut seq, "response.created", payload.clone()).await?;
                 send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
             }
@@ -298,6 +330,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 role,
                                 item_extra_body: extra_body,
                                 active_output: None,
+                                staged_outputs: Vec::new(),
                             },
                         );
                     }
@@ -327,19 +360,24 @@ pub(crate) async fn encode_urp_stream_as_responses(
             } => {
                 if let Some(pending_item) = pending_assistant_items.get_mut(&item_index) {
                     let zone = zone_from_part_header(&header);
+                    let content_index = if zone == ResponsesOutputZone::Message {
+                        let next = pending_item
+                            .active_output
+                            .as_ref()
+                            .filter(|active| active.zone == zone)
+                            .map(|active| active.next_content_index)
+                            .unwrap_or(0);
+                        Some(next)
+                    } else {
+                        None
+                    };
                     let needs_new_output = pending_item.active_output.as_ref().is_none_or(|active| {
                         active.zone != zone
                             || matches!(zone, ResponsesOutputZone::FunctionCall)
                     });
 
                     if needs_new_output {
-                        maybe_flush_active_stream_output(
-                            &tx,
-                            &mut seq,
-                            &mut pending_item.active_output,
-                            sse_max_frame_length,
-                        )
-                        .await?;
+                        stage_active_stream_output(&mut pending_item.active_output, &mut pending_item.staged_outputs);
                     }
 
                     let active_output = pending_item.active_output.get_or_insert_with(|| {
@@ -361,6 +399,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 .unwrap_or_default()
                                 .to_string(),
                             item,
+                            next_content_index: 0,
+                            summary_part_added_sent: false,
                         }
                     });
 
@@ -378,13 +418,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     }
 
                     if zone == ResponsesOutputZone::Message {
+                        active_output.next_content_index += 1;
                         send_responses_event(
                             &tx,
                             &mut seq,
                             "response.content_part.added",
                             json!({
                                 "output_index": active_output.output_index,
-                                "content_index": part_index,
+                                "content_index": content_index.unwrap_or(0),
+                                "item_id": active_output.item_id,
                                 "part": encode_part_start_header(&header),
                             }),
                         )
@@ -397,8 +439,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             item_index,
                             output_index: active_output.output_index,
                             zone,
-                            content_index: (zone == ResponsesOutputZone::Message)
-                                .then_some(part_index),
+                            content_index: content_index.map(|v| v as u32),
                             item_id: active_output.item_id.clone(),
                             call_id: part_call_id_from_header(&header),
                             name: part_name_from_header(&header),
@@ -426,7 +467,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         });
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
-                        .and_then(|pending| pending.active_output.as_mut())
+                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
                     {
                         append_delta_to_stream_output_item(active_output, &delta);
                     }
@@ -434,29 +475,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &tx,
                         &mut seq,
                         "response.output_text.delta",
-                        responses_text_delta_payload("", None, &response_id, &json!({ "id": part_state.item_id }))
-                            .as_object()
-                            .cloned()
-                            .map(Value::Object)
-                            .map(|mut value| {
-                                if let Some(obj) = value.as_object_mut() {
-                                    obj.insert(
-                                        "output_index".to_string(),
-                                        json!(part_state.output_index),
-                                    );
-                                    obj.insert(
-                                        "content_index".to_string(),
-                                        json!(part_state.content_index.unwrap_or(part_index)),
-                                    );
-                                }
-                                value
-                            })
-                            .unwrap_or_else(|| {
-                                json!({
-                                    "output_index": part_state.output_index,
-                                    "content_index": part_state.content_index.unwrap_or(part_index)
-                                })
-                            }),
+                        responses_text_delta_payload(
+                            None,
+                            &json!({ "id": part_state.item_id }),
+                            part_state.output_index as u64,
+                            part_state.content_index.unwrap_or(part_index) as u64,
+                        ),
                         "delta",
                         content,
                         sse_max_frame_length,
@@ -483,7 +507,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         });
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
-                        .and_then(|pending| pending.active_output.as_mut())
+                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
                     {
                         append_delta_to_stream_output_item(active_output, &delta);
                     }
@@ -493,7 +517,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             &mut seq,
                             "response.reasoning.delta",
                             json!({
-                                "response_id": response_id,
                                 "item_id": part_state.item_id,
                                 "output_index": part_state.output_index,
                             }),
@@ -504,12 +527,37 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .await?;
                     }
                     if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                        let should_emit_added = pending_assistant_items
+                            .get_mut(&part_state.item_index)
+                            .and_then(|pending| stream_output_mut(pending, part_state.output_index))
+                            .map(|output| {
+                                if output.summary_part_added_sent {
+                                    false
+                                } else {
+                                    output.summary_part_added_sent = true;
+                                    true
+                                }
+                            })
+                            .unwrap_or(true);
+                        if should_emit_added {
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.reasoning_summary_part.added",
+                                json!({
+                                    "item_id": part_state.item_id,
+                                    "output_index": part_state.output_index,
+                                    "summary_index": 0,
+                                    "part": { "type": "summary_text", "text": "" },
+                                }),
+                            )
+                            .await?;
+                        }
                         send_responses_delta_string(
                             &tx,
                             &mut seq,
                             "response.reasoning_summary_text.delta",
                             json!({
-                                "response_id": response_id,
                                 "item_id": part_state.item_id,
                                 "output_index": part_state.output_index,
                                 "summary_index": 0,
@@ -520,30 +568,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         )
                         .await?;
                     }
-                    if let Some(signature) = encrypted
-                        .as_ref()
-                        .and_then(Value::as_str)
-                        .filter(|signature| !signature.is_empty())
-                    {
-                        let mut payload = json!({
-                            "response_id": response_id,
-                            "item_id": part_state.item_id,
-                            "output_index": part_state.output_index,
-                        });
-                        if let Some(source) = source.as_deref().filter(|source| !source.is_empty()) {
-                            payload["source"] = Value::String(source.to_string());
-                        }
-                        send_responses_delta_string(
-                            &tx,
-                            &mut seq,
-                            "response.reasoning_signature.delta",
-                            payload,
-                            "delta",
-                            signature,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
+                    let _ = encrypted;
+                    let _ = source;
                 }
                 PartDelta::ToolCallArguments { ref arguments } => {
                     let part_state = part_states
@@ -560,7 +586,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         });
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
-                        .and_then(|pending| pending.active_output.as_mut())
+                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
                     {
                         append_delta_to_stream_output_item(active_output, &delta);
                     }
@@ -569,11 +595,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &mut seq,
                         "response.function_call_arguments.delta",
                         json!({
-                            "response_id": response_id,
                             "item_id": part_state.item_id,
                             "output_index": part_state.output_index,
-                            "call_id": part_state.call_id.clone().unwrap_or_default(),
-                            "name": part_state.name.clone().unwrap_or_default(),
                         }),
                         "delta",
                         arguments,
@@ -605,11 +628,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &mut seq,
                         "response.output_text.delta",
                         json!({
-                            "response_id": response_id,
                             "item_id": part_state.item_id,
                             "output_index": part_state.output_index,
                             "content_index": part_state.content_index.unwrap_or(part_index),
-                            "delta": "",
+                            "logprobs": Value::Null,
                             "type": "refusal"
                         }),
                         "delta",
@@ -627,14 +649,42 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 part_index, part, ..
             } => {
                 if let Some(part_state) = part_states.get(&part_index).cloned() {
+                    let is_staged_message = pending_assistant_items
+                        .get(&part_state.item_index)
+                        .is_some_and(|pending| is_staged_output(pending, part_state.output_index));
+
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
-                        .and_then(|pending| pending.active_output.as_mut())
+                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
                     {
                         apply_part_done_to_stream_output_item(active_output, &part);
                     }
 
                     if part_state.zone == ResponsesOutputZone::Message {
+                        if matches!(part, Part::Text { .. }) {
+                            let mut done_payload = responses_text_delta_payload(
+                                None,
+                                &json!({ "id": part_state.item_id }),
+                                part_state.output_index as u64,
+                                part_state.content_index.unwrap_or(part_index) as u64,
+                            );
+                            if let Some(obj) = done_payload.as_object_mut() {
+                                obj.insert(
+                                    "text".to_string(),
+                                    json!(match &part {
+                                        Part::Text { content, .. } => content,
+                                        _ => "",
+                                    }),
+                                );
+                            }
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.output_text.done",
+                                done_payload,
+                            )
+                            .await?;
+                        }
                         send_responses_event(
                             &tx,
                             &mut seq,
@@ -642,10 +692,44 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             json!({
                                 "output_index": part_state.output_index,
                                 "content_index": part_state.content_index.unwrap_or(part_index),
+                                "item_id": part_state.item_id,
                                 "part": encode_part_value(&part),
                             }),
                         )
                         .await?;
+                        if is_staged_message
+                            && let Some(output) = pending_assistant_items
+                                .get_mut(&part_state.item_index)
+                                .and_then(|pending| take_stream_output(pending, part_state.output_index))
+                        {
+                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length).await?;
+                        }
+                    } else if part_state.zone == ResponsesOutputZone::FunctionCall {
+                        if let Part::ToolCall {
+                            arguments,
+                            ..
+                        } = &part
+                        {
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.function_call_arguments.done",
+                                json!({
+                                    "arguments": arguments,
+                                    "call_id": part_state.call_id.clone().unwrap_or_default(),
+                                    "item_id": part_state.item_id,
+                                    "name": part_state.name.clone().unwrap_or_default(),
+                                    "output_index": part_state.output_index,
+                                }),
+                            )
+                            .await?;
+                        }
+                        if let Some(output) = pending_assistant_items
+                            .get_mut(&part_state.item_index)
+                            .and_then(|pending| take_stream_output(pending, part_state.output_index))
+                        {
+                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length).await?;
+                        }
                     } else if part_state.zone == ResponsesOutputZone::Reasoning {
                         if let Part::Reasoning {
                             content,
@@ -659,7 +743,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     &mut seq,
                                     "response.reasoning_summary_text.done",
                                     json!({
-                                        "response_id": response_id,
                                         "item_id": part_state.item_id,
                                         "output_index": part_state.output_index,
                                         "summary_index": 0,
@@ -672,7 +755,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     &mut seq,
                                     "response.reasoning_summary_part.done",
                                     json!({
-                                        "response_id": response_id,
                                         "item_id": part_state.item_id,
                                         "output_index": part_state.output_index,
                                         "summary_index": 0,
@@ -687,7 +769,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     &mut seq,
                                     "response.reasoning.done",
                                     json!({
-                                        "response_id": response_id,
                                         "item_id": part_state.item_id,
                                         "output_index": part_state.output_index,
                                         "text": content,
@@ -695,6 +776,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 )
                                 .await?;
                             }
+                        }
+                        if let Some(output) = pending_assistant_items
+                            .get_mut(&part_state.item_index)
+                            .and_then(|pending| take_stream_output(pending, part_state.output_index))
+                        {
+                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length).await?;
                         }
                     }
                 }
@@ -733,10 +820,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             .await?;
                         }
                     } else {
-                        maybe_flush_active_stream_output(
-                            &tx,
+                        flush_pending_stream_outputs(
+                            tx.clone(),
                             &mut seq,
-                            &mut pending_item.active_output,
+                            &mut pending_item,
                             sse_max_frame_length,
                         )
                         .await?;
@@ -772,7 +859,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 outputs,
                 ..
             } => {
-                send_responses_event(&tx, &mut seq, "response.output_text.done", json!({})).await?;
                 let mut response = urp::encode::openai_responses::encode_response(
                     &urp::UrpResponse {
                         id: response_id.clone(),
@@ -785,7 +871,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     logical_model,
                 );
                 if let Some(created) = created {
-                    response["created"] = json!(created);
+                    response["created_at"] = json!(created);
                 }
                 let completed_response =
                     sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length);
@@ -1088,21 +1174,67 @@ fn mark_stream_output_item_in_progress(item: &Value) -> Value {
     item
 }
 
-async fn maybe_flush_active_stream_output(
-    tx: &mpsc::Sender<Event>,
-    seq: &mut u64,
+fn stage_active_stream_output(
     active_output: &mut Option<ActiveResponsesOutputItem>,
+    staged_outputs: &mut Vec<ActiveResponsesOutputItem>,
+) {
+    if let Some(active_output) = active_output.take() {
+        staged_outputs.push(active_output);
+    }
+}
+
+fn stream_output_mut(
+    pending: &mut PendingResponsesAssistantItem,
+    output_index: usize,
+) -> Option<&mut ActiveResponsesOutputItem> {
+    if pending
+        .active_output
+        .as_ref()
+        .is_some_and(|output| output.output_index == output_index)
+    {
+        return pending.active_output.as_mut();
+    }
+    pending
+        .staged_outputs
+        .iter_mut()
+        .find(|output| output.output_index == output_index)
+}
+
+fn is_staged_output(pending: &PendingResponsesAssistantItem, output_index: usize) -> bool {
+    pending
+        .staged_outputs
+        .iter()
+        .any(|output| output.output_index == output_index)
+}
+
+fn take_stream_output(
+    pending: &mut PendingResponsesAssistantItem,
+    output_index: usize,
+) -> Option<ActiveResponsesOutputItem> {
+    if pending
+        .active_output
+        .as_ref()
+        .is_some_and(|output| output.output_index == output_index)
+    {
+        return pending.active_output.take();
+    }
+    let idx = pending
+        .staged_outputs
+        .iter()
+        .position(|output| output.output_index == output_index)?;
+    Some(pending.staged_outputs.remove(idx))
+}
+
+async fn flush_stream_output(
+    tx: mpsc::Sender<Event>,
+    seq: &mut u64,
+    active_output: ActiveResponsesOutputItem,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    let Some(active_output) = active_output.take() else {
-        return Ok(());
-    };
-    let done_item = sanitize_responses_output_item_for_frame_limit(
-        &complete_stream_output_item(active_output.item),
-        sse_max_frame_length,
-    );
+    let completed_item = complete_stream_output_item(active_output.item);
+    let done_item = sanitize_responses_output_item_for_frame_limit(&completed_item, sse_max_frame_length);
     send_responses_event(
-        tx,
+        &tx,
         seq,
         "response.output_item.done",
         json!({
@@ -1111,6 +1243,40 @@ async fn maybe_flush_active_stream_output(
         }),
     )
     .await
+}
+
+async fn flush_pending_stream_outputs(
+    tx: mpsc::Sender<Event>,
+    seq: &mut u64,
+    pending_item: &mut PendingResponsesAssistantItem,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    while let Some(output) = pending_item.staged_outputs.pop() {
+        flush_stream_output(tx.clone(), seq, output, sse_max_frame_length).await?;
+    }
+    if let Some(output) = pending_item.active_output.take() {
+        flush_stream_output(tx, seq, output, sse_max_frame_length).await?;
+    }
+    Ok(())
+}
+
+fn response_envelope_payload(
+    id: &str,
+    created_at: i64,
+    model: &str,
+    status: &str,
+    output: Value,
+) -> Value {
+    json!({
+        "response": {
+            "id": id,
+            "object": "response",
+            "created_at": created_at,
+            "model": model,
+            "status": status,
+            "output": output,
+        }
+    })
 }
 
 fn complete_stream_output_item(mut item: Value) -> Value {
@@ -1328,7 +1494,7 @@ fn encode_function_call_output_item(part: &Part) -> Option<Value> {
 
 fn encode_part_start_header(header: &PartHeader) -> Value {
     match header {
-        PartHeader::Text => json!({ "type": "output_text", "text": "" }),
+        PartHeader::Text => json!({ "type": "output_text", "text": "", "annotations": [] }),
         PartHeader::Reasoning => json!({ "type": "reasoning", "text": "" }),
         PartHeader::Refusal => json!({ "type": "refusal", "refusal": "" }),
         PartHeader::ToolCall { call_id, name } => json!({

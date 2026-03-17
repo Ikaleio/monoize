@@ -165,10 +165,9 @@ FP6a2. The pass-through streaming runtime in FP6a1 MUST preserve transform rule 
 
 FP6a3. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, Monoize MUST use buffered synthetic streaming for that request: fetch upstream non-stream response, apply response transforms on `UrpResponse`, then emit protocol-correct synthetic downstream SSE.
 
-FP6a4. On pass-through streaming adapted from Responses upstream events, if the upstream emits reasoning signature data via `response.reasoning_signature.delta`, Monoize MUST preserve that signature through URP and surface it on downstream live streams as soon as the downstream protocol supports a live signature delta. At minimum:
+FP6a4. `response.reasoning_signature.delta` is not part of the OpenAI Responses downstream event set. Monoize MUST NOT emit that event on downstream `/v1/responses` streams.
 
-- `/v1/messages` MUST emit `content_block_delta` with `delta.type = "signature_delta"` for live reasoning signature deltas;
-- `/v1/chat/completions` MUST emit OpenRouter-compatible `reasoning_details` entries with `type = "reasoning.encrypted"` for live reasoning signature deltas.
+FP6a4a. If an upstream protocol exposes reasoning-signature state separately from final reasoning items, Monoize MAY preserve that state internally through URP. Downstream `/v1/responses` SSE MUST surface such state only through canonical completed reasoning items and completed response objects, not through a custom signature-delta event.
 
 FP6b. The pass-through streaming pipeline in FP6a MUST preserve existing routing, billing, logging, and terminal-stream observability semantics. The change in internal streaming representation MUST NOT by itself permit provider fallback after the first downstream byte.
 
@@ -918,11 +917,33 @@ STR3. For downstream `POST /v1/responses` streams synthesized from non-responses
 
 STR3a. For downstream `POST /v1/responses` streams, every SSE payload MUST include a top-level string field `type` whose value exactly equals the SSE `event:` name.
 
-STR3b. For downstream `POST /v1/responses` text / reasoning / function-call delta payloads, Monoize MUST include top-level `response_id` and `item_id` fields whenever the delta belongs to a concrete response output item.
+STR3b. For downstream `POST /v1/responses` SSE, Monoize MUST emit the canonical OpenAI event fields for the selected event family plus Monoize-required top-level `type` and `sequence_number`. Monoize MUST NOT add ad-hoc top-level fields such as wrapper `data`, `response_id`, or duplicate text aliases when those fields are not part of the canonical event schema.
 
 STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST preserve the distinction between official reasoning summary events and Monoize-specific raw reasoning events. Official summary lifecycle events MUST use the OpenAI names `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done`, and `response.reasoning_summary_part.done`. Raw reasoning content is not an official OpenAI Responses event family; when Monoize emits it as an extension, it MUST use the custom event family `response.reasoning.delta` / `response.reasoning.done`, not an official-looking `response.reasoning_text.*` name.
 
 STR3c. For downstream `POST /v1/responses` successful SSE streams, Monoize MUST emit exactly one terminal `data: [DONE]` sentinel after the final JSON event payload. The sentinel MUST be a plain `data:` frame and MUST NOT be emitted as a named SSE event.
+
+STR3e. `response.created` and `response.in_progress` payloads MUST carry the Responses object under top-level field `response`. The nested response object MUST use field name `created_at`, not `created`.
+
+STR3f. Every downstream `/v1/responses` SSE payload that contains a Responses object (`response.created`, `response.in_progress`, `response.completed`, and `response.failed` when present) MUST encode that nested object with canonical Responses object field names. In particular, the timestamp field MUST be `created_at`.
+
+STR3g. For downstream `/v1/responses` message text streaming:
+
+- `response.content_part.added` MUST include `output_index`, `content_index`, `item_id`, and `part`.
+- The first content part in a message item MUST use `content_index = 0`.
+- For `part.type = "output_text"`, the added-event part payload MUST include `annotations: []` and `text: ""`.
+- `response.output_text.delta` MUST include `output_index`, `content_index`, `item_id`, `delta`, and `logprobs`, where `logprobs` is `null` when unavailable.
+- `response.output_text.done` MUST include `output_index`, `content_index`, `item_id`, `text`, and `logprobs`, where `text` is the full aggregated content for that output-text part.
+
+STR3h. For downstream `/v1/responses` function-call streaming, after the last `response.function_call_arguments.delta` for a function-call item and before that item's `response.output_item.done`, Monoize MUST emit exactly one `response.function_call_arguments.done` containing the full aggregated `arguments` plus `call_id`, `item_id`, `name`, and `output_index`.
+
+STR3i. For downstream `/v1/responses` reasoning-summary streaming, Monoize MUST emit `response.reasoning_summary_part.added` before the first `response.reasoning_summary_text.delta` for that summary part.
+
+STR3j. Downstream `/v1/responses` SSE MUST obey nested lifecycle ordering. For each `output_index`, every child lifecycle belonging to that output item MUST close before Monoize emits `response.output_item.done` for that same `output_index`. In particular:
+
+- reasoning summary `.done` events MUST precede the reasoning item's `response.output_item.done`;
+- message `response.output_text.done` and `response.content_part.done` MUST precede the message item's `response.output_item.done`;
+- function-call `response.function_call_arguments.done` MUST precede the function-call item's `response.output_item.done`.
 
 ### 8.1 Internal URP stream events
 

@@ -807,7 +807,15 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         extra_body: split_extra(
             obj,
             &[
-                "id", "object", "created", "model", "status", "output", "usage", "error",
+                "id",
+                "object",
+                "created",
+                "created_at",
+                "model",
+                "status",
+                "output",
+                "usage",
+                "error",
             ],
         ),
     })

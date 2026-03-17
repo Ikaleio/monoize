@@ -346,7 +346,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let mut body = json!({
         "id": resp.id,
         "object": "response",
-        "created": chrono::Utc::now().timestamp(),
+        "created_at": chrono::Utc::now().timestamp(),
         "model": logical_model,
         "status": finish_reason_to_status(resp.finish_reason),
         "output": output

@@ -271,11 +271,8 @@ async function responsesStream(model: Model): Promise<ReasoningResult> {
     if (evt.event === "response.reasoning_text.delta") {
       reasoning += d?.delta ?? "";
     }
-    if (evt.event === "response.reasoning_signature.delta") {
-      encrypted += d?.delta ?? "";
-    }
     if (evt.event === "response.output_text.delta") {
-      content += d?.delta ?? d?.text ?? "";
+      content += d?.delta ?? "";
     }
     // fallback: extract from completed event if nothing streamed
     if (evt.event === "response.completed") {
