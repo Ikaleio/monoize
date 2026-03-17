@@ -1,0 +1,360 @@
+use crate::transforms::{
+    Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
+    TransformScope, TransformState, UrpData, response_output_items_mut,
+};
+use crate::urp::{Item, Part, PartDelta, UrpStreamEvent};
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::any::Any;
+
+#[derive(Debug, Deserialize)]
+struct Config {}
+
+impl TransformConfig for Config {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Default)]
+struct NoOpState;
+
+impl TransformState for NoOpState {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+pub struct ReasoningContentDeltaTransform;
+
+#[async_trait]
+impl Transform for ReasoningContentDeltaTransform {
+    fn type_id(&self) -> &'static str {
+        "reasoning_content_delta"
+    }
+
+    fn supported_phases(&self) -> &'static [Phase] {
+        &[Phase::Response]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
+    fn config_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
+        let cfg: Config =
+            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        Ok(Box::new(cfg))
+    }
+
+    fn init_state(&self) -> Box<dyn TransformState> {
+        Box::new(NoOpState)
+    }
+
+    async fn apply(
+        &self,
+        data: UrpData<'_>,
+        _phase: Phase,
+        _context: &TransformRuntimeContext,
+        _config: &dyn TransformConfig,
+        _state: &mut dyn TransformState,
+    ) -> Result<(), TransformError> {
+        match data {
+            UrpData::Response(resp) => {
+                for item in response_output_items_mut(resp) {
+                    mark_item(item);
+                }
+            }
+            UrpData::Stream(event) => mark_stream(event),
+            UrpData::Request(_) => {}
+        }
+        Ok(())
+    }
+}
+
+fn extract_reasoning_content(encrypted: &Option<Value>, summary: &Option<String>) -> Option<String> {
+    if let Some(enc) = encrypted {
+        let s = enc
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| enc.to_string());
+        if !s.is_empty() {
+            return Some(s);
+        }
+    }
+    if let Some(sum) = summary {
+        if !sum.is_empty() {
+            return Some(sum.clone());
+        }
+    }
+    None
+}
+
+fn mark_item(item: &mut Item) {
+    let Item::Message { parts, .. } = item else {
+        return;
+    };
+    for part in parts {
+        let Part::Reasoning {
+            encrypted,
+            summary,
+            extra_body,
+            ..
+        } = part
+        else {
+            continue;
+        };
+        if let Some(value) = extract_reasoning_content(encrypted, summary) {
+            extra_body.insert(
+                "inject_reasoning_content".to_string(),
+                Value::String(value),
+            );
+        }
+    }
+}
+
+fn mark_stream(event: &mut UrpStreamEvent) {
+    match event {
+        UrpStreamEvent::Delta {
+            delta, extra_body, ..
+        } => {
+            if let PartDelta::Reasoning {
+                encrypted, summary, ..
+            } = delta
+            {
+                if let Some(value) = extract_reasoning_content(encrypted, summary) {
+                    extra_body.insert(
+                        "inject_reasoning_content".to_string(),
+                        Value::String(value),
+                    );
+                }
+            }
+        }
+        UrpStreamEvent::PartDone { part, .. } => {
+            let Part::Reasoning {
+                encrypted,
+                summary,
+                extra_body,
+                ..
+            } = part
+            else {
+                return;
+            };
+            if let Some(value) = extract_reasoning_content(encrypted, summary) {
+                extra_body.insert(
+                    "inject_reasoning_content".to_string(),
+                    Value::String(value),
+                );
+            }
+        }
+        UrpStreamEvent::ItemDone { item, .. } => mark_item(item),
+        UrpStreamEvent::ResponseDone { outputs, .. } => {
+            for item in outputs {
+                mark_item(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+inventory::submit!(TransformEntry {
+    factory: || Box::new(ReasoningContentDeltaTransform),
+});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image_transform_cache::ImageTransformCache;
+    use crate::transforms::TransformRuntimeContext;
+    use crate::urp::PartDelta;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    async fn context() -> TransformRuntimeContext {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cache = ImageTransformCache::new(
+            temp_dir.path().join("cache"),
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .expect("cache");
+        TransformRuntimeContext {
+            image_transform_cache: std::sync::Arc::new(cache),
+        }
+    }
+
+    #[tokio::test]
+    async fn injects_encrypted_as_reasoning_content_when_present() {
+        let transform = ReasoningContentDeltaTransform;
+        let ctx = context().await;
+        let cfg = transform.parse_config(json!({})).expect("config");
+        let mut state = transform.init_state();
+        let mut event = UrpStreamEvent::Delta {
+            part_index: 0,
+            delta: PartDelta::Reasoning {
+                content: None,
+                encrypted: Some(Value::String("encrypted_data".to_string())),
+                summary: Some("summary_text".to_string()),
+                source: None,
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        transform
+            .apply(
+                UrpData::Stream(&mut event),
+                Phase::Response,
+                &ctx,
+                cfg.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+            panic!("expected delta");
+        };
+        assert_eq!(
+            extra_body
+                .get("inject_reasoning_content")
+                .and_then(Value::as_str),
+            Some("encrypted_data"),
+            "should prefer encrypted over summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_summary_when_no_encrypted() {
+        let transform = ReasoningContentDeltaTransform;
+        let ctx = context().await;
+        let cfg = transform.parse_config(json!({})).expect("config");
+        let mut state = transform.init_state();
+        let mut event = UrpStreamEvent::Delta {
+            part_index: 0,
+            delta: PartDelta::Reasoning {
+                content: Some("plaintext".to_string()),
+                encrypted: None,
+                summary: Some("summary_fallback".to_string()),
+                source: None,
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        transform
+            .apply(
+                UrpData::Stream(&mut event),
+                Phase::Response,
+                &ctx,
+                cfg.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+            panic!("expected delta");
+        };
+        assert_eq!(
+            extra_body
+                .get("inject_reasoning_content")
+                .and_then(Value::as_str),
+            Some("summary_fallback"),
+            "should fall back to summary when encrypted is absent"
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_inject_when_neither_encrypted_nor_summary() {
+        let transform = ReasoningContentDeltaTransform;
+        let ctx = context().await;
+        let cfg = transform.parse_config(json!({})).expect("config");
+        let mut state = transform.init_state();
+        let mut event = UrpStreamEvent::Delta {
+            part_index: 0,
+            delta: PartDelta::Reasoning {
+                content: Some("plaintext only".to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        transform
+            .apply(
+                UrpData::Stream(&mut event),
+                Phase::Response,
+                &ctx,
+                cfg.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+            panic!("expected delta");
+        };
+        assert!(
+            extra_body.get("inject_reasoning_content").is_none(),
+            "should not inject when neither encrypted nor summary is present"
+        );
+    }
+
+    #[tokio::test]
+    async fn marks_response_parts_with_encrypted() {
+        let transform = ReasoningContentDeltaTransform;
+        let ctx = context().await;
+        let cfg = transform.parse_config(json!({})).expect("config");
+        let mut state = transform.init_state();
+        let mut resp = crate::urp::UrpResponse {
+            id: "resp_1".to_string(),
+            model: "test".to_string(),
+            outputs: vec![Item::Message {
+                role: crate::urp::Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: None,
+                    encrypted: Some(Value::String("enc_resp".to_string())),
+                    summary: Some("sum_resp".to_string()),
+                    source: None,
+                    extra_body: HashMap::new(),
+                }],
+                extra_body: HashMap::new(),
+            }],
+            finish_reason: None,
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        transform
+            .apply(
+                UrpData::Response(&mut resp),
+                Phase::Response,
+                &ctx,
+                cfg.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        let Item::Message { parts, .. } = &resp.outputs[0] else {
+            panic!("expected message");
+        };
+        let Part::Reasoning { extra_body, .. } = &parts[0] else {
+            panic!("expected reasoning");
+        };
+        assert_eq!(
+            extra_body
+                .get("inject_reasoning_content")
+                .and_then(Value::as_str),
+            Some("enc_resp"),
+        );
+    }
+}
