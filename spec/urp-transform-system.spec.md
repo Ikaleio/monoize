@@ -115,6 +115,7 @@ TF-7. Built-ins that MUST exist:
 - `compress_user_message_images`
 - `plaintext_reasoning_to_summary`
 - `reasoning_summary_to_raw_cot`
+- `reasoning_content_delta`
 - `assistant_markdown_images_to_output`
 - `assistant_output_images_to_markdown`
 
@@ -258,6 +259,32 @@ RSRC-4. Streaming behavior:
 RSRC-5. Downstream Chat Completions compatibility:
 1. When a Chat Completions encoder sees `openwebui_reasoning_content = true` on a reasoning summary, it MUST emit that summary through OpenWebUI-compatible raw-CoT fields (`reasoning_content` for non-streaming, `delta.reasoning_content` for streaming).
 2. This transform MUST be optional. Without the transform enabled, the default Chat Completions behavior remains the existing OpenRouter-style `reasoning_details` summary extension.
+
+### 4.5b `reasoning_content_delta`
+
+RCD-1. Phase: `response` only.
+
+RCD-2. Config MUST be an empty object.
+
+RCD-3. Value resolution:
+1. For each `Part::Reasoning` (response) or `PartDelta::Reasoning` (stream delta), the transform MUST resolve a `reasoning_content` value as follows:
+   - If `encrypted` is present and non-empty (stringified), use that value.
+   - Else if `summary` is present and non-empty, use that value.
+   - Else no value is resolved; the transform MUST NOT inject anything.
+2. The transform MUST NOT modify `content`, `summary`, or `encrypted` field values.
+
+RCD-4. Response behavior:
+1. If a value is resolved per RCD-3, the transform MUST set `part.extra_body.inject_reasoning_content = Value::String(resolved_value)`.
+2. Parts where no value is resolved MUST remain unchanged.
+
+RCD-5. Streaming behavior:
+1. For `UrpStreamEvent::Delta` with `PartDelta::Reasoning`, the transform MUST resolve per RCD-3 and, if a value is found, set `event.extra_body.inject_reasoning_content = Value::String(resolved_value)`.
+2. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same logic as RCD-4.
+
+RCD-6. Downstream Chat Completions compatibility:
+1. When a Chat Completions encoder (streaming or synthetic) sees `inject_reasoning_content` as a non-empty string in `extra_body`, it MUST emit an additional `delta.reasoning_content` SSE chunk containing that string value, before emitting the standard `reasoning_details` fields.
+2. This provides DeepSeek-style `reasoning_content` field injection for downstream clients that only recognize that field.
+3. This transform MUST be independent of `reasoning_summary_to_raw_cot`. Both MAY be enabled simultaneously without conflict.
 
 ### 4.6 `assistant_markdown_images_to_output`
 

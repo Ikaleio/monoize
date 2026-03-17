@@ -35,6 +35,25 @@ pub(crate) async fn emit_synthetic_chat_stream(
                             extra_body,
                             ..
                         } => {
+                            if let Some(rc_value) = extra_body
+                                .get("inject_reasoning_content")
+                                .and_then(Value::as_str)
+                                .filter(|s| !s.is_empty())
+                            {
+                                send_chat_chunk_string(
+                                    &tx,
+                                    &id,
+                                    created,
+                                    logical_model,
+                                    json!({ "reasoning_content": "" }),
+                                    rc_value,
+                                    |value, chunk| {
+                                        value["reasoning_content"] = Value::String(chunk.to_string());
+                                    },
+                                    sse_max_frame_length,
+                                )
+                                .await?;
+                            }
                             let format = source.as_deref().filter(|format| !format.is_empty());
                             if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
                                 if extra_body
@@ -290,6 +309,25 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 extra_body,
                 ..
             } => {
+                if let Some(rc_value) = extra_body
+                    .get("inject_reasoning_content")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    send_chat_chunk_string(
+                        &tx,
+                        &chat_id,
+                        created,
+                        logical_model,
+                        json!({ "reasoning_content": "" }),
+                        rc_value,
+                        |value, chunk| {
+                            value["reasoning_content"] = Value::String(chunk.to_string());
+                        },
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
                 let format = source
                     .as_deref()
                     .filter(|format| !format.is_empty())
