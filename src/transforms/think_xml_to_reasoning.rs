@@ -197,7 +197,10 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                         *in_reasoning = false;
                     }
                     *delta = PartDelta::Reasoning {
-                        content: s,
+                        content: Some(s),
+                        encrypted: None,
+                        summary: None,
+                        source: None,
                     };
                 }
             }

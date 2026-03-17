@@ -2,7 +2,7 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData, response_output_items_mut,
 };
-use crate::urp::{Item, Part, UrpStreamEvent};
+use crate::urp::{Item, Part, PartDelta, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -105,11 +105,9 @@ fn mark_item(item: &mut Item) {
 
 fn mark_stream(event: &mut UrpStreamEvent) {
     match event {
-        UrpStreamEvent::Delta { extra_body, .. } => {
-            if extra_body
-                .get("reasoning_delta_type")
-                .and_then(Value::as_str)
-                == Some("summary")
+        UrpStreamEvent::Delta { delta, extra_body, .. } => {
+            if let PartDelta::Reasoning { summary, .. } = delta
+                && summary.as_deref().is_some_and(|summary| !summary.is_empty())
             {
                 extra_body.insert(
                     "openwebui_reasoning_content".to_string(),
@@ -233,13 +231,13 @@ mod tests {
         let mut event = UrpStreamEvent::Delta {
             part_index: 7,
             delta: PartDelta::Reasoning {
-                content: "brief summary".to_string(),
+                content: None,
+                encrypted: None,
+                summary: Some("brief summary".to_string()),
+                source: None,
             },
             usage: None,
-            extra_body: HashMap::from([(
-                "reasoning_delta_type".to_string(),
-                Value::String("summary".to_string()),
-            )]),
+            extra_body: HashMap::new(),
         };
         transform
             .apply(

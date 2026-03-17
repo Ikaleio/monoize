@@ -105,7 +105,13 @@ fn convert_stream_reasoning_to_xml(event: &mut UrpStreamEvent, tag: &str) {
             }
         }
         UrpStreamEvent::Delta { delta, .. } => {
-            if let PartDelta::Reasoning { content } = delta {
+            if let PartDelta::Reasoning {
+                content: Some(content),
+                encrypted: None,
+                summary: None,
+                ..
+            } = delta
+            {
                 *delta = PartDelta::Text {
                     content: format!("<{tag}>{content}</{tag}>"),
                 };

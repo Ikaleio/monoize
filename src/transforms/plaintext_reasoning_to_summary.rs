@@ -94,21 +94,25 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
         UrpStreamEvent::Delta {
             part_index,
             delta,
-            extra_body,
             ..
         } => {
-            if !matches!(delta, PartDelta::Reasoning { .. }) {
+            let PartDelta::Reasoning {
+                content,
+                encrypted,
+                summary,
+                ..
+            } = delta
+            else {
                 return;
-            }
-            if extra_body.contains_key("signature") {
+            };
+            if encrypted.is_some() {
                 state.encrypted_parts.insert(*part_index);
                 return;
             }
             if !state.encrypted_parts.contains(part_index) {
-                extra_body.insert(
-                    "reasoning_delta_type".to_string(),
-                    Value::String("summary".to_string()),
-                );
+                if let Some(text) = content.take().filter(|text| !text.is_empty()) {
+                    *summary = Some(text);
+                }
             }
         }
         UrpStreamEvent::PartDone {
@@ -314,7 +318,10 @@ mod tests {
         let mut event = UrpStreamEvent::Delta {
             part_index: 7,
             delta: PartDelta::Reasoning {
-                content: "plain".to_string(),
+                content: Some("plain".to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
             },
             usage: None,
             extra_body: HashMap::new(),
@@ -330,13 +337,22 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+        let UrpStreamEvent::Delta { delta, .. } = event else {
             panic!("expected delta");
         };
-        assert_eq!(
-            extra_body.get("reasoning_delta_type").and_then(Value::as_str),
-            Some("summary")
-        );
+        let PartDelta::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source,
+        } = delta
+        else {
+            panic!("expected reasoning delta");
+        };
+        assert_eq!(content, None);
+        assert_eq!(encrypted, None);
+        assert_eq!(summary.as_deref(), Some("plain"));
+        assert_eq!(source, None);
     }
 
     #[tokio::test]
