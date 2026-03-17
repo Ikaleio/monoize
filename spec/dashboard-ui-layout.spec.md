@@ -219,6 +219,8 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 - The editor MUST continue filtering by `supported_phases` within the API-key-scoped subset.
 - Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
 
+AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_content_delta` for response-phase rules.
+
 ## 5. Dashboard Home Page
 
 DH1. `/dashboard` MUST render a dark themed overview shell containing exactly 3 visual rows:
