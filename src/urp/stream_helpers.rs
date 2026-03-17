@@ -288,6 +288,22 @@ pub(crate) fn chat_delta_path_reasoning_encrypted(value: &mut Value, content: &s
     }
 }
 
+pub(crate) fn chat_delta_path_reasoning_content(value: &mut Value, content: &str) {
+    if let Some(delta) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+    {
+        delta.insert(
+            "reasoning_content".to_string(),
+            Value::String(content.to_string()),
+        );
+    }
+}
+
 pub(crate) fn chat_delta_path_tool_arguments(value: &mut Value, content: &str) {
     if let Some(function) = value
         .get_mut("choices")

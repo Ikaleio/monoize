@@ -47,9 +47,7 @@ pub(crate) async fn emit_synthetic_chat_stream(
                                     logical_model,
                                     json!({ "reasoning_content": "" }),
                                     rc_value,
-                                    |value, chunk| {
-                                        value["reasoning_content"] = Value::String(chunk.to_string());
-                                    },
+                                    chat_delta_path_reasoning_content,
                                     sse_max_frame_length,
                                 )
                                 .await?;
@@ -68,9 +66,7 @@ pub(crate) async fn emit_synthetic_chat_stream(
                                         logical_model,
                                         json!({ "reasoning_content": "" }),
                                         summary,
-                                        |value, chunk| {
-                                            value["reasoning_content"] = Value::String(chunk.to_string());
-                                        },
+                                        chat_delta_path_reasoning_content,
                                         sse_max_frame_length,
                                     )
                                     .await?;
@@ -321,9 +317,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         logical_model,
                         json!({ "reasoning_content": "" }),
                         rc_value,
-                        |value, chunk| {
-                            value["reasoning_content"] = Value::String(chunk.to_string());
-                        },
+                        chat_delta_path_reasoning_content,
                         sse_max_frame_length,
                     )
                     .await?;
@@ -380,9 +374,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             logical_model,
                             json!({ "reasoning_content": "" }),
                             summary,
-                            |value, chunk| {
-                                value["reasoning_content"] = Value::String(chunk.to_string());
-                            },
+                            chat_delta_path_reasoning_content,
                             sse_max_frame_length,
                         )
                         .await?;
@@ -556,6 +548,48 @@ mod tests {
         }
         assert!(text.contains("reasoning_content"));
         assert!(text.contains("brief summary"));
+        assert!(text.contains("\\\"delta\\\":{\\\"reasoning_content\\\":\\\"brief summary\\\"}"));
+        assert!(!text.contains("data: {\"reasoning_content\":\"brief summary\"}"));
+    }
+
+    #[tokio::test]
+    async fn synthetic_chat_stream_emits_reasoning_content_inside_delta() {
+        let (sse_tx, mut sse_rx) = mpsc::channel(16);
+        let response = urp::UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-5.4".to_string(),
+            outputs: vec![Item::Message {
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    content: None,
+                    encrypted: Some(Value::String("enc_reasoning".to_string())),
+                    summary: Some("brief summary".to_string()),
+                    source: Some("openrouter".to_string()),
+                    extra_body: HashMap::from([(
+                        "inject_reasoning_content".to_string(),
+                        Value::String("enc_reasoning".to_string()),
+                    )]),
+                }],
+                extra_body: HashMap::new(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+
+        emit_synthetic_chat_stream("gpt-5.4", &response, None, sse_tx)
+            .await
+            .expect("emit synthetic chat stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            let debug = format!("{event:?}");
+            text.push_str(&debug);
+        }
+
+        assert!(text.contains("enc_reasoning"));
+        assert!(text.contains("\\\"delta\\\":{\\\"reasoning_content\\\":\\\"enc_reasoning\\\"}"));
+        assert!(!text.contains("data: {\"reasoning_content\":\"enc_reasoning\"}"));
     }
 
     #[tokio::test]

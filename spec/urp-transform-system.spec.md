@@ -282,7 +282,7 @@ RCD-5. Streaming behavior:
 2. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same logic as RCD-4.
 
 RCD-6. Downstream Chat Completions compatibility:
-1. When a Chat Completions encoder (streaming or synthetic) sees `inject_reasoning_content` as a non-empty string in `extra_body`, it MUST emit an additional `delta.reasoning_content` SSE chunk containing that string value, before emitting the standard `reasoning_details` fields.
+1. When a Chat Completions encoder (streaming or synthetic) sees `inject_reasoning_content` as a non-empty string in `extra_body`, it MUST emit an additional SSE chunk whose JSON payload places that value at `choices[0].delta.reasoning_content`, before emitting the standard `reasoning_details` fields.
 2. This provides DeepSeek-style `reasoning_content` field injection for downstream clients that only recognize that field.
 3. This transform MUST be independent of `reasoning_summary_to_raw_cot`. Both MAY be enabled simultaneously without conflict.
 
