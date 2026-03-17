@@ -184,7 +184,10 @@ pub(crate) async fn stream_messages_to_urp_events(
                                 .send(UrpStreamEvent::Delta {
                                     part_index,
                                     delta: PartDelta::Reasoning {
-                                        content: text.to_string(),
+                                        content: Some(text.to_string()),
+                                        encrypted: None,
+                                        summary: None,
+                                        source: None,
                                     },
                                     usage: None,
                                     extra_body: HashMap::new(),
@@ -197,6 +200,19 @@ pub(crate) async fn stream_messages_to_urp_events(
                             && !sig.is_empty()
                         {
                             reasoning_sig.push_str(sig);
+                            let _ = tx
+                                .send(UrpStreamEvent::Delta {
+                                    part_index,
+                                    delta: PartDelta::Reasoning {
+                                        content: None,
+                                        encrypted: Some(Value::String(sig.to_string())),
+                                        summary: None,
+                                        source: None,
+                                    },
+                                    usage: None,
+                                    extra_body: HashMap::new(),
+                                })
+                                .await;
                         }
                     }
                     "input_json_delta" => {

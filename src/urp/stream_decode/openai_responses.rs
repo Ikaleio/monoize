@@ -466,12 +466,28 @@ fn map_responses_event_to_urp_events_with_state(
             vec![UrpStreamEvent::Delta {
                 part_index: urp_part_index_from_delta(&data_val, index_state),
                 delta: PartDelta::Reasoning {
-                    content: data_val
-                        .get("delta")
-                        .or_else(|| data_val.get("text"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
+                    content: if event_name == "response.reasoning_summary_text.delta" {
+                        None
+                    } else {
+                        data_val
+                            .get("delta")
+                            .or_else(|| data_val.get("text"))
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                    },
+                    encrypted: None,
+                    summary: if event_name == "response.reasoning_summary_text.delta" {
+                        data_val
+                            .get("delta")
+                            .or_else(|| data_val.get("text"))
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    },
+                    source: None,
                 },
                 usage: None,
                 extra_body,
@@ -489,22 +505,20 @@ fn map_responses_event_to_urp_events_with_state(
             vec![UrpStreamEvent::Delta {
                 part_index,
                 delta: PartDelta::Reasoning {
-                    content: String::new(),
+                    content: None,
+                    encrypted: data_val
+                        .get("delta")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| Value::String(s.to_string())),
+                    summary: None,
+                    source: None,
                 },
                 usage: None,
-                extra_body: {
-                    let mut extra_body = split_known_fields(
-                        data_val.clone(),
-                        &["delta", "output_index", "content_index", "part_index"],
-                    );
-                    if let Some(signature) = data_val.get("delta").and_then(|v| v.as_str()) {
-                        extra_body.insert(
-                            "signature".to_string(),
-                            Value::String(signature.to_string()),
-                        );
-                    }
-                    extra_body
-                },
+                extra_body: split_known_fields(
+                    data_val.clone(),
+                    &["delta", "output_index", "content_index", "part_index"],
+                ),
             }]
         }
         "response.reasoning.done" => {
@@ -948,7 +962,10 @@ fn map_output_item_done(
                     events.push(UrpStreamEvent::Delta {
                         part_index,
                         delta: PartDelta::Reasoning {
-                            content: content.clone(),
+                            content: Some(content.clone()),
+                            encrypted: None,
+                            summary: None,
+                            source: None,
                         },
                         usage: None,
                         extra_body: HashMap::new(),
@@ -1987,10 +2004,17 @@ mod tests {
         assert!(matches!(
             &events[0],
             UrpStreamEvent::Delta {
-                delta: PartDelta::Reasoning { content },
-                extra_body,
+                delta: PartDelta::Reasoning {
+                    content,
+                    encrypted,
+                    summary,
+                    source,
+                },
                 ..
-            } if content.is_empty() && extra_body.get("signature") == Some(&json!("sig_1"))
+            } if content.is_none()
+                && encrypted == &Some(json!("sig_1"))
+                && summary.is_none()
+                && source.is_none()
         ));
     }
 

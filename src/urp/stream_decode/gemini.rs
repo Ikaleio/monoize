@@ -194,7 +194,12 @@ pub(crate) async fn stream_gemini_to_urp_events(
                 let _ = tx
                     .send(UrpStreamEvent::Delta {
                         part_index: 1,
-                        delta: PartDelta::Reasoning { content: delta },
+                        delta: PartDelta::Reasoning {
+                            content: Some(delta),
+                            encrypted: None,
+                            summary: None,
+                            source: None,
+                        },
                         usage: None,
                         extra_body: HashMap::new(),
                     })

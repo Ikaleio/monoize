@@ -169,12 +169,14 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &tx,
                 UrpStreamEvent::Delta {
                     part_index,
-                    delta: PartDelta::Reasoning { content: summary },
+                    delta: PartDelta::Reasoning {
+                        content: None,
+                        encrypted: None,
+                        summary: Some(summary),
+                        source: Some("openrouter".to_string()),
+                    },
                     usage: None,
-                    extra_body: HashMap::from([(
-                        "reasoning_delta_type".to_string(),
-                        Value::String("summary".to_string()),
-                    )]),
+                    extra_body: HashMap::new(),
                 },
             )
             .await?;
@@ -204,7 +206,12 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &tx,
                 UrpStreamEvent::Delta {
                     part_index,
-                    delta: PartDelta::Reasoning { content: t },
+                    delta: PartDelta::Reasoning {
+                        content: Some(t),
+                        encrypted: None,
+                        summary: None,
+                        source: Some("openrouter".to_string()),
+                    },
                     usage: None,
                     extra_body: HashMap::new(),
                 },
@@ -230,6 +237,21 @@ pub(crate) async fn stream_chat_to_urp_events(
                 )
                 .await?;
                 reasoning_sig.push_str(&sig);
+                send_event(
+                    &tx,
+                    UrpStreamEvent::Delta {
+                        part_index: reasoning_part_index.expect("reasoning part index must exist"),
+                        delta: PartDelta::Reasoning {
+                            content: None,
+                            encrypted: Some(Value::String(sig.clone())),
+                            summary: None,
+                            source: Some("openrouter".to_string()),
+                        },
+                        usage: None,
+                        extra_body: HashMap::new(),
+                    },
+                )
+                .await?;
             }
         }
 
