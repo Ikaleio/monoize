@@ -420,7 +420,16 @@ pub enum PartHeader {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PartDelta {
     Text { content: String },
-    Reasoning { content: String },
+    Reasoning {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encrypted: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
     Refusal { content: String },
     ToolCallArguments { arguments: String },
     Image { source: ImageSource },
