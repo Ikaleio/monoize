@@ -334,11 +334,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
             UrpStreamEvent::PartDone { part_index, part, .. } => {
                 saw_stream_parts = true;
                 let mut started_live_reasoning_block = false;
-                let block_index = if let Part::Reasoning {
-                    encrypted,
-                    extra_body,
-                    ..
-                } = &part
+                let block_index = if let Part::Reasoning { encrypted, .. } = &part
                 {
                     if let Some(block_state) = reasoning_block_state_by_part.remove(&part_index) {
                         started_live_reasoning_block = true;
@@ -362,7 +358,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                             if let Some(signature) = encrypted
                                 .as_ref()
                                 .and_then(Value::as_str)
-                                .or_else(|| extra_body.get("signature").and_then(Value::as_str))
                                 .filter(|signature| !signature.is_empty())
                             {
                                 send_messages_delta_string(
@@ -472,13 +467,12 @@ fn content_block_from_part(
 ) -> AppResult<Value> {
     let content_block = match part {
         Part::Text { .. } | Part::Refusal { .. } => json!({ "type": "text", "text": "" }),
-        Part::Reasoning { encrypted, extra_body, .. } => json!({
+        Part::Reasoning { encrypted, .. } => json!({
             "type": "thinking",
             "thinking": "",
             "signature": encrypted
                 .as_ref()
                 .and_then(Value::as_str)
-                .or_else(|| extra_body.get("signature").and_then(Value::as_str))
                 .unwrap_or("")
         }),
         Part::ToolCall { call_id, name, .. } => {
@@ -519,7 +513,6 @@ async fn emit_messages_part_done_payload(
         }
         Part::Reasoning {
             encrypted,
-            extra_body,
             ..
         } => {
             if let Some(content) = reasoning_display_text(part) {
@@ -540,13 +533,7 @@ async fn emit_messages_part_done_payload(
             let signature = encrypted
                 .as_ref()
                 .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    extra_body
-                        .get("signature")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                });
+                .map(str::to_owned);
             if let Some(signature) = signature.filter(|signature| !signature.is_empty()) {
                 send_messages_delta_string(
                     tx,
@@ -602,13 +589,12 @@ async fn emit_messages_outputs_from_response_done(
 
             let content_block = match part {
                 Part::Text { .. } | Part::Refusal { .. } => json!({ "type": "text", "text": "" }),
-                Part::Reasoning { encrypted, extra_body, .. } => json!({
+                Part::Reasoning { encrypted, .. } => json!({
                     "type": "thinking",
                     "thinking": "",
                     "signature": encrypted
                         .as_ref()
                         .and_then(Value::as_str)
-                        .or_else(|| extra_body.get("signature").and_then(Value::as_str))
                         .unwrap_or("")
                 }),
                 Part::ToolCall { call_id, name, .. } => {

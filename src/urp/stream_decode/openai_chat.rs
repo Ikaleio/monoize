@@ -28,6 +28,8 @@ pub(crate) async fn stream_chat_to_urp_events(
     let mut assistant_message_phase: Option<String> = None;
     let mut reasoning_text = String::new();
     let mut reasoning_sig = String::new();
+    let mut reasoning_summary = String::new();
+    let mut reasoning_source: Option<String> = None;
     let mut call_order: Vec<String> = Vec::new();
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut call_id_by_index: HashMap<usize, String> = HashMap::new();
@@ -149,6 +151,10 @@ pub(crate) async fn stream_chat_to_urp_events(
             if summary.is_empty() {
                 continue;
             }
+            if reasoning_source.is_none() {
+                reasoning_source = Some("openrouter".to_string());
+            }
+            reasoning_summary.push_str(&summary);
             ensure_response_and_item_started(
                 &tx,
                 &response_id,
@@ -185,6 +191,9 @@ pub(crate) async fn stream_chat_to_urp_events(
             if t.is_empty() {
                 continue;
             }
+            if reasoning_source.is_none() {
+                reasoning_source = Some("openrouter".to_string());
+            }
             ensure_response_and_item_started(
                 &tx,
                 &response_id,
@@ -220,6 +229,9 @@ pub(crate) async fn stream_chat_to_urp_events(
         }
         for sig in reasoning_sig_deltas {
             if !sig.is_empty() {
+                if reasoning_source.is_none() {
+                    reasoning_source = Some("openrouter".to_string());
+                }
                 ensure_response_and_item_started(
                     &tx,
                     &response_id,
@@ -367,7 +379,13 @@ pub(crate) async fn stream_chat_to_urp_events(
         }
     }
 
-    if response_started || item_started || !output_text.is_empty() || !reasoning_text.is_empty() || !call_order.is_empty() {
+    if response_started
+        || item_started
+        || !output_text.is_empty()
+        || !reasoning_text.is_empty()
+        || !reasoning_summary.is_empty()
+        || !call_order.is_empty()
+    {
         ensure_response_and_item_started(
             &tx,
             &response_id,
@@ -385,7 +403,9 @@ pub(crate) async fn stream_chat_to_urp_events(
         &output_text,
         reasoning_part_index,
         &reasoning_text,
+        &reasoning_summary,
         &reasoning_sig,
+        reasoning_source.as_deref(),
         &call_order,
         &calls,
         &tool_part_index_by_call_id,
@@ -397,7 +417,9 @@ pub(crate) async fn stream_chat_to_urp_events(
             &output_text,
             reasoning_part_index,
             &reasoning_text,
+            &reasoning_summary,
             &reasoning_sig,
+            reasoning_source.as_deref(),
             &call_order,
             &calls,
             &tool_part_index_by_call_id,
@@ -524,7 +546,9 @@ fn build_assistant_item(
     output_text: &str,
     reasoning_part_index: Option<u32>,
     reasoning_text: &str,
+    reasoning_summary: &str,
     reasoning_sig: &str,
+    reasoning_source: Option<&str>,
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
     tool_part_index_by_call_id: &HashMap<String, u32>,
@@ -536,7 +560,9 @@ fn build_assistant_item(
             output_text,
             reasoning_part_index,
             reasoning_text,
+            reasoning_summary,
             reasoning_sig,
+            reasoning_source,
             call_order,
             calls,
             tool_part_index_by_call_id,
@@ -553,7 +579,9 @@ fn sorted_parts(
     output_text: &str,
     reasoning_part_index: Option<u32>,
     reasoning_text: &str,
+    reasoning_summary: &str,
     reasoning_sig: &str,
+    reasoning_source: Option<&str>,
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
     tool_part_index_by_call_id: &HashMap<String, u32>,
@@ -576,8 +604,8 @@ fn sorted_parts(
             Part::Reasoning {
                 content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
                 encrypted: (!reasoning_sig.is_empty()).then(|| Value::String(reasoning_sig.to_string())),
-                summary: None,
-                source: None,
+                summary: (!reasoning_summary.is_empty()).then(|| reasoning_summary.to_string()),
+                source: reasoning_source.map(|source| source.to_string()),
                 extra_body: HashMap::new(),
             },
         ));
