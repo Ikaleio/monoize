@@ -279,17 +279,21 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 part_index,
                 delta,
                 usage,
-                extra_body,
                 ..
             } => {
                 if let Some(usage) = usage {
                     response_usage = Some(usage);
                 }
-                if let PartDelta::Reasoning { content } = delta {
+                if let PartDelta::Reasoning {
+                    content,
+                    encrypted,
+                    ..
+                } = delta
+                {
                     let Some(block_state) = reasoning_block_state_by_part.get_mut(&part_index) else {
                         continue;
                     };
-                    if !content.is_empty() {
+                    if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
                         send_messages_delta_string(
                             &tx,
                             json!({
@@ -304,8 +308,8 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         .await?;
                         block_state.sent_thinking = true;
                     }
-                    if let Some(signature) = extra_body
-                        .get("signature")
+                    if let Some(signature) = encrypted
+                        .as_ref()
                         .and_then(Value::as_str)
                         .filter(|signature| !signature.is_empty())
                     {

@@ -280,16 +280,27 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 .await?;
             }
             UrpStreamEvent::Delta {
-                delta: PartDelta::Reasoning { content },
+                delta:
+                    PartDelta::Reasoning {
+                        content,
+                        encrypted,
+                        summary,
+                        source,
+                    },
                 extra_body,
                 ..
             } => {
-                let format = extra_body
-                    .get("format")
-                    .and_then(Value::as_str)
-                    .filter(|format| !format.is_empty());
-                if let Some(signature) = extra_body
-                    .get("signature")
+                let format = source
+                    .as_deref()
+                    .filter(|format| !format.is_empty())
+                    .or_else(|| {
+                        extra_body
+                            .get("format")
+                            .and_then(Value::as_str)
+                            .filter(|format| !format.is_empty())
+                    });
+                if let Some(signature) = encrypted
+                    .as_ref()
                     .and_then(Value::as_str)
                     .filter(|signature| !signature.is_empty())
                 {
@@ -305,14 +316,20 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     )
                     .await?;
                 }
-                if content.is_empty() {
-                    continue;
+                if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                    send_chat_chunk_string(
+                        &tx,
+                        &chat_id,
+                        created,
+                        logical_model,
+                        chat_reasoning_delta_from_text("", format),
+                        content,
+                        chat_delta_path_reasoning_text,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                 }
-                if extra_body
-                    .get("reasoning_delta_type")
-                    .and_then(Value::as_str)
-                    == Some("summary")
-                {
+                if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
                     if extra_body
                         .get("openwebui_reasoning_content")
                         .and_then(Value::as_bool)
@@ -324,7 +341,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             created,
                             logical_model,
                             json!({ "reasoning_content": "" }),
-                            &content,
+                            summary,
                             |value, chunk| {
                                 value["reasoning_content"] = Value::String(chunk.to_string());
                             },
@@ -337,25 +354,13 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             &chat_id,
                             created,
                             logical_model,
-                        chat_reasoning_delta_from_summary("", format),
-                        &content,
-                        chat_delta_path_reasoning_summary,
-                        sse_max_frame_length,
+                            chat_reasoning_delta_from_summary("", format),
+                            summary,
+                            chat_delta_path_reasoning_summary,
+                            sse_max_frame_length,
                         )
                         .await?;
                     }
-                } else {
-                    send_chat_chunk_string(
-                        &tx,
-                        &chat_id,
-                        created,
-                        logical_model,
-                        chat_reasoning_delta_from_text("", format),
-                        &content,
-                        chat_delta_path_reasoning_text,
-                        sse_max_frame_length,
-                    )
-                    .await?;
                 }
             }
             UrpStreamEvent::Delta {
@@ -472,14 +477,13 @@ mod tests {
             .send(UrpStreamEvent::Delta {
                 part_index: 0,
                 delta: PartDelta::Reasoning {
-                    content: "brief summary".to_string(),
+                    content: None,
+                    encrypted: None,
+                    summary: Some("brief summary".to_string()),
+                    source: Some("openrouter".to_string()),
                 },
                 usage: None,
                 extra_body: HashMap::from([
-                    (
-                        "reasoning_delta_type".to_string(),
-                        Value::String("summary".to_string()),
-                    ),
                     (
                         "format".to_string(),
                         Value::String("openrouter".to_string()),
@@ -533,19 +537,16 @@ mod tests {
             .send(UrpStreamEvent::Delta {
                 part_index: 0,
                 delta: PartDelta::Reasoning {
-                    content: String::new(),
+                    content: None,
+                    encrypted: Some(Value::String("live_sig".to_string())),
+                    summary: None,
+                    source: Some("openrouter".to_string()),
                 },
                 usage: None,
-                extra_body: HashMap::from([
-                    (
-                        "signature".to_string(),
-                        Value::String("live_sig".to_string()),
-                    ),
-                    (
+                extra_body: HashMap::from([(
                         "format".to_string(),
                         Value::String("openrouter".to_string()),
-                    ),
-                ]),
+                    )]),
             })
             .await
             .expect("reasoning signature delta");
@@ -574,6 +575,6 @@ mod tests {
         assert!(text.contains("reasoning.encrypted"));
         assert!(text.contains("live_sig"));
         assert!(!text.contains("\"reasoning\":"));
-        assert!(!text.contains("signature"));
+        assert!(!text.contains("\"signature\":"));
     }
 }

@@ -409,7 +409,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
             UrpStreamEvent::Delta {
                 part_index,
                 delta,
-                extra_body,
                 ..
             } => match delta {
                 PartDelta::Text { ref content } => {
@@ -464,7 +463,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     )
                     .await?;
                 }
-                PartDelta::Reasoning { ref content } => {
+                PartDelta::Reasoning {
+                    ref content,
+                    ref encrypted,
+                    ref summary,
+                    ref source,
+                } => {
                     let part_state = part_states
                         .get(&part_index)
                         .cloned()
@@ -483,33 +487,63 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     {
                         append_delta_to_stream_output_item(active_output, &delta);
                     }
-                    let is_summary = extra_body
-                        .get("reasoning_delta_type")
-                        .and_then(Value::as_str)
-                        == Some("summary");
-                    let event_name = if is_summary {
-                        "response.reasoning_summary_text.delta"
-                    } else {
-                        "response.reasoning.delta"
-                    };
-                    let mut payload = json!({
-                        "response_id": response_id,
-                        "item_id": part_state.item_id,
-                        "output_index": part_state.output_index,
-                    });
-                    if is_summary {
-                        payload["summary_index"] = json!(0);
+                    if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                        send_responses_delta_string(
+                            &tx,
+                            &mut seq,
+                            "response.reasoning.delta",
+                            json!({
+                                "response_id": response_id,
+                                "item_id": part_state.item_id,
+                                "output_index": part_state.output_index,
+                            }),
+                            "delta",
+                            content,
+                            sse_max_frame_length,
+                        )
+                        .await?;
                     }
-                    send_responses_delta_string(
-                        &tx,
-                        &mut seq,
-                        event_name,
-                        payload,
-                        "delta",
-                        content,
-                        sse_max_frame_length,
-                    )
-                    .await?;
+                    if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                        send_responses_delta_string(
+                            &tx,
+                            &mut seq,
+                            "response.reasoning_summary_text.delta",
+                            json!({
+                                "response_id": response_id,
+                                "item_id": part_state.item_id,
+                                "output_index": part_state.output_index,
+                                "summary_index": 0,
+                            }),
+                            "delta",
+                            summary,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                    if let Some(signature) = encrypted
+                        .as_ref()
+                        .and_then(Value::as_str)
+                        .filter(|signature| !signature.is_empty())
+                    {
+                        let mut payload = json!({
+                            "response_id": response_id,
+                            "item_id": part_state.item_id,
+                            "output_index": part_state.output_index,
+                        });
+                        if let Some(source) = source.as_deref().filter(|source| !source.is_empty()) {
+                            payload["source"] = Value::String(source.to_string());
+                        }
+                        send_responses_delta_string(
+                            &tx,
+                            &mut seq,
+                            "response.reasoning_signature.delta",
+                            payload,
+                            "delta",
+                            signature,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
                 }
                 PartDelta::ToolCallArguments { ref arguments } => {
                     let part_state = part_states
@@ -900,8 +934,33 @@ fn append_delta_to_stream_output_item(active_output: &mut ActiveResponsesOutputI
         (ResponsesOutputZone::Message, PartDelta::Refusal { content }) => {
             append_string_field_to_message_content(&mut active_output.item, "refusal", "refusal", content);
         }
-        (ResponsesOutputZone::Reasoning, PartDelta::Reasoning { content }) => {
-            append_string_field(&mut active_output.item, "text", content);
+        (
+            ResponsesOutputZone::Reasoning,
+            PartDelta::Reasoning {
+                content,
+                encrypted,
+                summary,
+                source,
+            },
+        ) => {
+            if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                append_string_field(&mut active_output.item, "text", content);
+            }
+            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                append_reasoning_summary_field(&mut active_output.item, summary);
+            }
+            if let Some(encrypted) = encrypted.as_ref().filter(|encrypted| !encrypted.is_null()) {
+                let Some(obj) = active_output.item.as_object_mut() else {
+                    return;
+                };
+                obj.insert("encrypted_content".to_string(), encrypted.clone());
+            }
+            if let Some(source) = source.as_deref().filter(|source| !source.is_empty()) {
+                let Some(obj) = active_output.item.as_object_mut() else {
+                    return;
+                };
+                obj.insert("source".to_string(), Value::String(source.to_string()));
+            }
         }
         (ResponsesOutputZone::FunctionCall, PartDelta::ToolCallArguments { arguments }) => {
             append_string_field(&mut active_output.item, "arguments", arguments);
@@ -943,6 +1002,29 @@ fn append_string_field(item: &mut Value, field_name: &str, delta: &str) {
         .and_then(Value::as_str)
         .unwrap_or_default();
     obj.insert(field_name.to_string(), json!(format!("{current}{delta}")));
+}
+
+fn append_reasoning_summary_field(item: &mut Value, delta: &str) {
+    let Some(obj) = item.as_object_mut() else {
+        return;
+    };
+    let summary = obj
+        .entry("summary".to_string())
+        .or_insert_with(|| Value::Array(vec![json!({ "type": "summary_text", "text": "" })]));
+    let Some(entries) = summary.as_array_mut() else {
+        return;
+    };
+    if entries.is_empty() {
+        entries.push(json!({ "type": "summary_text", "text": "" }));
+    }
+    let Some(last) = entries.last_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+    let current = last
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    last.insert("text".to_string(), json!(format!("{current}{delta}")));
 }
 
 fn apply_part_done_to_stream_output_item(active_output: &mut ActiveResponsesOutputItem, part: &Part) {
