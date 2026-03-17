@@ -870,4 +870,55 @@ mod tests {
         assert!(saw_reasoning);
         assert!(saw_sig);
     }
+
+    #[test]
+    fn decode_response_accepts_real_upstream_gpt5_reasoning_payload_shape() {
+        let value = json!({
+            "id": "resp_real_shape",
+            "object": "chat.completion",
+            "created": 1773667800i64,
+            "model": "gpt-5.4-2026-03-05",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "One valid combination is 8 packs of pencils and 4 packs of pens.",
+                    "reasoning": "plain reasoning",
+                    "reasoning_content": "plain reasoning",
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.text",
+                            "text": "plain reasoning"
+                        },
+                        {
+                            "type": "reasoning.encrypted",
+                            "data": "opaque_sig_payload"
+                        }
+                    ],
+                    "reasoning_opaque": "opaque_sig_payload"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 52,
+                "completion_tokens": 287,
+                "total_tokens": 339,
+                "prompt_tokens_details": { "cached_tokens": 0 },
+                "completion_tokens_details": { "reasoning_tokens": 210 }
+            }
+        });
+
+        let decoded = decode_response(&value).expect("decode_response should succeed");
+        let parts = output_parts(&decoded.outputs[0]);
+        assert!(parts.iter().any(|part| {
+            matches!(
+                part,
+                Part::Reasoning {
+                    content: Some(content),
+                    encrypted: Some(Value::String(sig)),
+                    ..
+                } if content == "plain reasoning" && sig == "opaque_sig_payload"
+            )
+        }));
+    }
 }

@@ -62,6 +62,8 @@ STR-3b. `ResponseDone.outputs` is the authoritative final streamed response stat
 
 STR-3c. Pass-through streaming MUST follow an `upstream SSE -> decoder -> UrpStreamEvent channel -> downstream encoder` architecture. Provider-specific stream decoders emit `UrpStreamEvent`; downstream-specific stream encoders consume `UrpStreamEvent` and produce SSE.
 
+STR-3d. If an upstream streaming protocol emits reasoning opaque payload incrementally (for example encrypted/signature reasoning metadata separated from plaintext reasoning text), the stream decoder MUST emit ordered `UrpStreamEvent::Delta` events that preserve that opaque payload before terminal `PartDone` / `ResponseDone` reconstruction. Downstream stream encoders MUST NOT rely on terminal reconstruction alone to surface opaque reasoning data during pass-through streaming.
+
 STR-4. Transform engine MUST be able to process stream events incrementally with per-request mutable state.
 
 STR-5. If a streaming request matches any enabled response-phase transform rule, the runtime MAY execute upstream in non-stream mode, apply response transforms on `UrpResponse`, and emit a synthesized downstream stream. In this mode, downstream still receives protocol-correct streaming events (`SSE` for Chat/Responses/Messages), but event timing is buffered.

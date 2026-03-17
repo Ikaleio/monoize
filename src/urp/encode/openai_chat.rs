@@ -1180,4 +1180,57 @@ mod tests {
             Some("reasoning.summary")
         );
     }
+
+    #[test]
+    fn round_trip_real_upstream_gpt5_chat_payload_keeps_encrypted_reasoning() {
+        let upstream = json!({
+            "id": "resp_real_shape",
+            "object": "chat.completion",
+            "created": 1773667800i64,
+            "model": "gpt-5.4-2026-03-05",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "One valid combination is 8 packs of pencils and 4 packs of pens.",
+                    "reasoning": "plain reasoning",
+                    "reasoning_content": "plain reasoning",
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.text",
+                            "text": "plain reasoning"
+                        },
+                        {
+                            "type": "reasoning.encrypted",
+                            "data": "opaque_sig_payload"
+                        }
+                    ],
+                    "reasoning_opaque": "opaque_sig_payload"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 52,
+                "completion_tokens": 287,
+                "total_tokens": 339,
+                "prompt_tokens_details": { "cached_tokens": 0 },
+                "completion_tokens_details": { "reasoning_tokens": 210 }
+            }
+        });
+
+        let decoded = decode_chat::decode_response(&upstream).expect("decode response");
+        let reencoded = encode_response(&decoded, "gpt-5.4");
+        let details = reencoded["choices"][0]["message"]["reasoning_details"]
+            .as_array()
+            .expect("reasoning details array");
+
+        assert!(details.iter().any(|detail| {
+            detail["type"].as_str() == Some("reasoning.text")
+                && detail["text"].as_str() == Some("plain reasoning")
+        }));
+        assert!(details.iter().any(|detail| {
+            detail["type"].as_str() == Some("reasoning.encrypted")
+                && detail["data"].as_str() == Some("opaque_sig_payload")
+        }));
+    }
 }

@@ -3328,6 +3328,47 @@ async fn chat_streaming_preserves_summary_vs_reasoning_in_openrouter_extension()
 }
 
 #[tokio::test]
+async fn chat_streaming_preserves_encrypted_reasoning_from_chat_upstream() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream encrypted reasoning"}],
+                "reasoning": { "effort": "high" },
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert!(
+        text.contains("\"type\":\"reasoning.text\""),
+        "chat stream should preserve reasoning text detail from chat upstream: {text}"
+    );
+    assert!(
+        text.contains("\"text\":\"mock_reasoning\""),
+        "chat stream should preserve reasoning text payload from chat upstream: {text}"
+    );
+    assert!(
+        text.contains("\"type\":\"reasoning.encrypted\""),
+        "chat stream should preserve encrypted reasoning detail from chat upstream: {text}"
+    );
+    assert!(
+        text.contains("\"data\":\"mock_sig\""),
+        "chat stream should preserve encrypted reasoning payload from chat upstream: {text}"
+    );
+}
+
+#[tokio::test]
 async fn messages_streaming_keeps_signature_in_thinking_block_and_delta_order() {
     let ctx = setup().await;
     let text = collect_messages_stream_text(
