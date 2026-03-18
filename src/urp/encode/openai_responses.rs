@@ -195,9 +195,17 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     if obj.get("type").and_then(Value::as_str) != Some("reasoning") {
         return;
     }
+    let summary_present = obj.get("summary").is_some();
+    let text_value = obj.remove("text");
     obj.remove("source");
-    obj.entry("summary".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
+    if !summary_present {
+        let summary = text_value
+            .and_then(|value| value.as_str().map(|text| text.to_string()))
+            .filter(|text| !text.is_empty())
+            .map(|text| Value::Array(vec![json!({ "type": "summary_text", "text": text })]))
+            .unwrap_or_else(|| Value::Array(Vec::new()));
+        obj.insert("summary".to_string(), summary);
+    }
 }
 
 fn encode_tool_call_item(part: &Part) -> Option<Value> {
@@ -421,33 +429,11 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
 
                 flush_pending_message_item(&mut pending_message, out);
 
-                match part {
-                    Part::Reasoning {
-                        content: Some(_),
-                        encrypted: Some(_),
-                        ..
-                    } => {
-                        let mut reasoning_part = part.clone();
-                        if let Part::Reasoning {
-                            content, summary, ..
-                        } = &mut reasoning_part
-                        {
-                            *content = None;
-                            *summary = None;
-                        }
-                        if let Some(mut item) = encode_reasoning_item(&reasoning_part) {
-                            sanitize_reasoning_request_item(&mut item);
-                            out.push(item);
-                        }
-                    }
-                    _ => {
-                        if let Some(mut item) =
-                            encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
-                        {
-                            sanitize_reasoning_request_item(&mut item);
-                            out.push(item);
-                        }
-                    }
+                if let Some(mut item) =
+                    encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
+                {
+                    sanitize_reasoning_request_item(&mut item);
+                    out.push(item);
                 }
             }
             flush_pending_message_item(&mut pending_message, out);
@@ -958,11 +944,17 @@ mod tests {
         assert_eq!(input[0]["type"], json!("reasoning"));
         assert_eq!(input[0]["encrypted_content"], json!("sig_1"));
         assert!(input[0].get("text").is_none());
-        assert_eq!(input[0]["summary"], json!([]));
+        assert_eq!(
+            input[0]["summary"],
+            json!([{ "type": "summary_text", "text": "signed summary" }])
+        );
         assert!(input[0].get("source").is_none());
         assert_eq!(input[1]["type"], json!("reasoning"));
-        assert_eq!(input[1]["text"], json!("plain think"));
-        assert_eq!(input[1]["summary"], json!([]));
+        assert!(input[1].get("text").is_none());
+        assert_eq!(
+            input[1]["summary"],
+            json!([{ "type": "summary_text", "text": "plain think" }])
+        );
         assert!(input[1].get("source").is_none());
     }
 

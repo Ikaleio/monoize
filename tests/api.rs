@@ -84,14 +84,32 @@ fn maybe_reasoning_summary_validation_error(body: &Value) -> Option<axum::respon
     let unknown_source_index = input.iter().position(|item| {
         item.get("type").and_then(|v| v.as_str()) == Some("reasoning")
             && item.get("source").is_some()
+    });
+    if let Some(unknown_source_index) = unknown_source_index {
+        return Some((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": format!("Unknown parameter: 'input[{unknown_source_index}].source'."),
+                    "type": "invalid_request_error",
+                    "param": format!("input[{unknown_source_index}].source"),
+                    "code": "unknown_parameter"
+                }
+            })),
+        )
+            .into_response());
+    }
+    let unknown_text_index = input.iter().position(|item| {
+        item.get("type").and_then(|v| v.as_str()) == Some("reasoning")
+            && item.get("text").is_some()
     })?;
     Some((
         StatusCode::BAD_REQUEST,
         Json(json!({
             "error": {
-                "message": format!("Unknown parameter: 'input[{unknown_source_index}].source'."),
+                "message": format!("Unknown parameter: 'input[{unknown_text_index}].text'."),
                 "type": "invalid_request_error",
-                "param": format!("input[{unknown_source_index}].source"),
+                "param": format!("input[{unknown_text_index}].text"),
                 "code": "unknown_parameter"
             }
         })),
