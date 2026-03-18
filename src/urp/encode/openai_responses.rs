@@ -188,6 +188,17 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
     }
 }
 
+fn ensure_reasoning_request_summary(item: &mut Value) {
+    let Some(obj) = item.as_object_mut() else {
+        return;
+    };
+    if obj.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return;
+    }
+    obj.entry("summary".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+}
+
 fn encode_tool_call_item(part: &Part) -> Option<Value> {
     match part {
         Part::ToolCall {
@@ -423,14 +434,16 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
                             *content = None;
                             *summary = None;
                         }
-                        if let Some(item) = encode_reasoning_item(&reasoning_part) {
+                        if let Some(mut item) = encode_reasoning_item(&reasoning_part) {
+                            ensure_reasoning_request_summary(&mut item);
                             out.push(item);
                         }
                     }
                     _ => {
-                        if let Some(item) =
+                        if let Some(mut item) =
                             encode_reasoning_item(part).or_else(|| encode_tool_call_item(part))
                         {
+                            ensure_reasoning_request_summary(&mut item);
                             out.push(item);
                         }
                     }
@@ -944,8 +957,10 @@ mod tests {
         assert_eq!(input[0]["type"], json!("reasoning"));
         assert_eq!(input[0]["encrypted_content"], json!("sig_1"));
         assert!(input[0].get("text").is_none());
+        assert_eq!(input[0]["summary"], json!([]));
         assert_eq!(input[1]["type"], json!("reasoning"));
         assert_eq!(input[1]["text"], json!("plain think"));
+        assert_eq!(input[1]["summary"], json!([]));
     }
 
     #[test]

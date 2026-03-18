@@ -475,6 +475,12 @@ PR4a. Responses `phase` mapping:
 - When encoding Responses `message` items from URP text parts, Monoize MUST write `phase` on the generated `message` item when the contiguous run of text parts shares the same non-null `phase`.
 - If a contiguous Responses `message` item contains no URP text parts, Monoize MUST NOT invent a `phase` value.
 
+PR4c. When encoding URP reasoning parts into upstream `POST /v1/responses` request `input[]` items with `type="reasoning"`, Monoize MUST always include field `summary`.
+
+- If the URP reasoning part carries summary text, Monoize MUST encode `summary` as an array containing one `{ "type": "summary_text", "text": <summary> }` object.
+- If the URP reasoning part carries no summary text, Monoize MUST encode `summary` as `[]`.
+- This request-side requirement applies even when the same reasoning item also carries `text` and/or `encrypted_content`.
+
 PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Responses event payloads where:
 
 - text deltas are carried in `delta` for `response.output_text.delta`;

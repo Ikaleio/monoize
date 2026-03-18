@@ -54,6 +54,33 @@ fn maybe_forced_upstream_error(body: &Value) -> Option<axum::response::Response>
     )
 }
 
+fn maybe_reasoning_summary_validation_error(body: &Value) -> Option<axum::response::Response> {
+    if body
+        .get("require_reasoning_input_summary")
+        .and_then(|v| v.as_bool())
+        != Some(true)
+    {
+        return None;
+    }
+    let input = body.get("input").and_then(|v| v.as_array())?;
+    let missing_index = input.iter().position(|item| {
+        item.get("type").and_then(|v| v.as_str()) == Some("reasoning")
+            && item.get("summary").is_none()
+    })?;
+    Some((
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": {
+                "message": format!("Missing required parameter: 'input[{missing_index}].summary'."),
+                "type": "invalid_request_error",
+                "param": format!("input[{missing_index}].summary"),
+                "code": "missing_required_parameter"
+            }
+        })),
+    )
+        .into_response())
+}
+
 async fn maybe_forced_upstream_delay(body: &Value) {
     let Some(delay_ms) = body.get("force_upstream_delay_ms").and_then(|v| v.as_u64()) else {
         return;
@@ -84,6 +111,9 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             }
         }
         if let Some(resp) = maybe_forced_upstream_error(&body) {
+            return resp;
+        }
+        if let Some(resp) = maybe_reasoning_summary_validation_error(&body) {
             return resp;
         }
         maybe_forced_upstream_delay(&body).await;
@@ -2135,6 +2165,35 @@ async fn responses_forward_nonstream_and_preserves_unknown_fields() {
     let v: Value = serde_json::from_str(&body).unwrap();
     let text = v["output"][0]["content"][0]["text"].as_str().unwrap_or("");
     assert!(text.contains("ping|extra_echo=E1"));
+}
+
+#[tokio::test]
+async fn chat_to_responses_upstream_reasoning_inputs_always_include_summary() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model":"gpt-5-mini",
+            "messages":[
+                {"role":"user","content":"start"},
+                {
+                    "role":"assistant",
+                    "content":"",
+                    "reasoning_details":[
+                        {"type":"reasoning.text","text":"plain think","format":"openrouter"},
+                        {"type":"reasoning.encrypted","data":"sig_1","format":"openrouter"}
+                    ]
+                },
+                {"role":"user","content":"continue"}
+            ],
+            "require_reasoning_input_summary": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: Value = serde_json::from_str(&body).expect("chat response json");
+    assert_eq!(v["choices"][0]["message"]["content"], json!("startcontinue"));
 }
 
 #[tokio::test]
