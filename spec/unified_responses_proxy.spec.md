@@ -567,6 +567,17 @@ PC2.2. Content-block extra preservation for chat adapter:
 - Monoize MAY collapse a single text block to scalar string `content` only when that block has no extra fields beyond adapter-generated keys.
 - If a single text block contains any extra field (for example `cache_control`), Monoize MUST keep array/block form and MUST preserve that extra field in the encoded block.
 
+PC2.3. Chat content-block compatibility decode:
+
+- For upstream `type=chat_completion` request/response bodies, Monoize MUST accept assistant `content` encoded as an array of block objects instead of scalar string text.
+- When an assistant `content[]` block has `type="text"` or `type="output_text"` and non-empty `text`, Monoize MUST decode that block into a URP assistant text part in array order.
+- When an assistant `content[]` block has `type="tool_call"` or `type="function_call"`, Monoize MUST decode that block into a URP assistant tool-call part in array order.
+- For a `tool_call` / `function_call` content block, Monoize MUST resolve fields as follows:
+  - `call_id` from `call_id`, else `id`;
+  - `name` from `name`, else `function.name`;
+  - `arguments` from `arguments`, else `function.arguments`, else `input`, else `args`.
+- If the resolved `arguments` value is not a string, Monoize MUST serialize it as JSON.
+
 PC3. Tool descriptor normalization:
 
 - For `type=chat_completion` upstreams, Monoize MUST ensure upstream `tools[]` contains only `type=function` tool descriptors.
@@ -599,6 +610,11 @@ PC7b. If an upstream `type=chat_completion` stream emits any tool-call presence 
 PC7c. For downstream `POST /v1/chat/completions` translated from upstream `type=chat_completion` streaming, every non-terminal downstream chunk that carries assistant deltas (including `content`, `reasoning_details`, and `tool_calls`) MUST emit `choices[0].finish_reason = null`.
 
 PC7d. For downstream `POST /v1/chat/completions` translated from upstream `type=chat_completion` streaming, Monoize MUST emit at most one downstream chunk with non-null `choices[0].finish_reason`, and that terminal chunk MUST be emitted only after the last downstream assistant delta of the turn.
+
+PC7e. For upstream `type=chat_completion` streaming deltas encoded as `choices[0].delta.content[]` block arrays:
+
+- Monoize MUST decode text blocks and tool-call blocks in block-array order using the same field mapping as PC2.3.
+- If one streamed assistant turn contains both text blocks and at least one tool-call block, downstream `POST /v1/chat/completions` streaming MUST preserve the assistant text deltas that precede the tool-call deltas, MUST emit the tool-call deltas after those text deltas, and MUST terminate the turn with `finish_reason="tool_calls"`.
 
 PC8. Reasoning (non-stream and stream):
 

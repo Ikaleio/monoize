@@ -109,6 +109,82 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
     })
 }
 
+pub fn parse_tool_call_arguments_value(obj: &Map<String, Value>) -> Option<Value> {
+    obj.get("arguments")
+        .cloned()
+        .or_else(|| obj.get("input").cloned())
+        .or_else(|| obj.get("args").cloned())
+        .or_else(|| {
+            obj.get("function")
+                .and_then(|value| value.as_object())
+                .and_then(|function| {
+                    function
+                        .get("arguments")
+                        .cloned()
+                        .or_else(|| function.get("input").cloned())
+                        .or_else(|| function.get("args").cloned())
+                })
+        })
+}
+
+pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+    let tool_type = obj.get("type").and_then(|v| v.as_str())?;
+    if !matches!(tool_type, "tool_call" | "function_call") {
+        return None;
+    }
+
+    let call_id = obj
+        .get("call_id")
+        .or_else(|| obj.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let name = obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            obj.get("function")
+                .and_then(|value| value.as_object())
+                .and_then(|function| function.get("name"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("")
+        .to_string();
+    let arguments = parse_tool_call_arguments_value(obj)
+        .map(|value| {
+            value
+                .as_str()
+                .map(|text| text.to_string())
+                .unwrap_or_else(|| {
+                    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+                })
+        })
+        .unwrap_or_else(|| "{}".to_string());
+
+    if call_id.is_empty() || name.is_empty() {
+        return None;
+    }
+
+    Some(Part::ToolCall {
+        call_id,
+        name,
+        arguments,
+        extra_body: split_extra(
+            obj,
+            &[
+                "type",
+                "call_id",
+                "id",
+                "name",
+                "arguments",
+                "input",
+                "args",
+                "function",
+            ],
+        ),
+    })
+}
+
 pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     let t = obj.get("type")?.as_str()?;
     match t {

@@ -1,11 +1,11 @@
 use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
-    parse_tool_definition, split_extra, value_to_text,
+    parse_tool_call_part_from_obj, parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
-    greedy::{Action, GreedyMerger},
     FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     ToolResultContent, UrpRequest, UrpResponse, Usage,
+    greedy::{Action, GreedyMerger},
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -162,6 +162,52 @@ fn item_message(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>
     serde_json::from_value(Value::Object(obj)).expect("message item should deserialize")
 }
 
+fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase: Option<&str>) {
+    if let Some(s) = content.as_str() {
+        if !s.is_empty() {
+            parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
+        }
+        return;
+    }
+
+    let Some(arr) = content.as_array() else {
+        return;
+    };
+
+    for item in arr {
+        if let Some(s) = item.as_str() {
+            if !s.is_empty() {
+                parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
+            }
+            continue;
+        }
+        let Some(item_obj) = item.as_object() else {
+            continue;
+        };
+        if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
+            let item_type = item_obj.get("type").and_then(|v| v.as_str());
+            if !text.is_empty() && !matches!(item_type, Some("tool_call" | "function_call")) {
+                parts.push(text_part_with_phase(
+                    text,
+                    message_phase,
+                    split_extra(item_obj, &["type", "text"]),
+                ));
+            }
+        }
+        if let Some(image_part) = parse_image_part_from_obj(item_obj) {
+            parts.push(image_part);
+            continue;
+        }
+        if let Some(file_part) = parse_file_part_from_obj(item_obj) {
+            parts.push(file_part);
+            continue;
+        }
+        if let Some(tool_call_part) = parse_tool_call_part_from_obj(item_obj) {
+            parts.push(tool_call_part);
+        }
+    }
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -236,31 +282,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         parse_chat_reasoning_fields(msg_obj, &mut parts);
 
         if let Some(content) = msg_obj.get("content") {
-            if let Some(s) = content.as_str() {
-                if !s.is_empty() {
-                    parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
-                }
-            } else if let Some(arr) = content.as_array() {
-                for item in arr {
-                    if let Some(item_obj) = item.as_object() {
-                        if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
-                            if !text.is_empty() {
-                                parts.push(text_part_with_phase(
-                                    text,
-                                    message_phase,
-                                    split_extra(item_obj, &["type", "text"]),
-                                ));
-                            }
-                        }
-                        if let Some(image_part) = parse_image_part_from_obj(item_obj) {
-                            parts.push(image_part);
-                        }
-                        if let Some(file_part) = parse_file_part_from_obj(item_obj) {
-                            parts.push(file_part);
-                        }
-                    }
-                }
-            }
+            push_chat_content_parts(&mut parts, content, message_phase);
         }
 
         if let Some(refusal) = msg_obj.get("refusal").and_then(|v| v.as_str()) {
@@ -399,31 +421,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     parse_chat_reasoning_fields(msg_obj, &mut parts);
 
     if let Some(content) = msg_obj.get("content") {
-        if let Some(s) = content.as_str() {
-            if !s.is_empty() {
-                parts.push(text_part_with_phase(s, message_phase, HashMap::new()));
-            }
-        } else if let Some(arr) = content.as_array() {
-            for item in arr {
-                if let Some(item_obj) = item.as_object() {
-                    if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
-                        if !text.is_empty() {
-                            parts.push(text_part_with_phase(
-                                text,
-                                message_phase,
-                                split_extra(item_obj, &["type", "text"]),
-                            ));
-                        }
-                    }
-                    if let Some(image) = parse_image_part_from_obj(item_obj) {
-                        parts.push(image);
-                    }
-                    if let Some(file) = parse_file_part_from_obj(item_obj) {
-                        parts.push(file);
-                    }
-                }
-            }
-        }
+        push_chat_content_parts(&mut parts, content, message_phase);
     }
 
     if let Some(tool_calls) = msg_obj.get("tool_calls").and_then(|v| v.as_array()) {
@@ -918,6 +916,43 @@ mod tests {
                     encrypted: Some(Value::String(sig)),
                     ..
                 } if content == "plain reasoning" && sig == "opaque_sig_payload"
+            )
+        }));
+    }
+
+    #[test]
+    fn decode_response_accepts_content_array_tool_call_blocks() {
+        let value = json!({
+            "id": "chatcmpl_test",
+            "model": "m",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "text", "text": "before tool" },
+                        { "type": "tool_call", "id": "call_1", "name": "lookup", "arguments": { "q": 1 } }
+                    ]
+                }
+            }]
+        });
+
+        let decoded = decode_response(&value).expect("decode_response should succeed");
+        let parts = output_parts(&decoded.outputs[0]);
+
+        assert!(parts.iter().any(|part| {
+            matches!(part, Part::Text { content, .. } if content == "before tool")
+        }));
+        assert!(parts.iter().any(|part| {
+            matches!(
+                part,
+                Part::ToolCall {
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } if call_id == "call_1" && name == "lookup" && arguments == "{\"q\":1}"
             )
         }));
     }

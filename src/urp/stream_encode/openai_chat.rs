@@ -4,7 +4,7 @@ use crate::handlers::usage::usage_to_chat_usage_json;
 use crate::urp::stream_helpers::*;
 use crate::urp::{self, FinishReason, Item, Part, PartDelta, PartHeader, Role, UrpStreamEvent};
 use axum::response::sse::Event;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
@@ -53,7 +53,9 @@ pub(crate) async fn emit_synthetic_chat_stream(
                                 .await?;
                             }
                             let format = source.as_deref().filter(|format| !format.is_empty());
-                            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                            if let Some(summary) =
+                                summary.as_deref().filter(|summary| !summary.is_empty())
+                            {
                                 if extra_body
                                     .get("openwebui_reasoning_content")
                                     .and_then(Value::as_bool)
@@ -89,13 +91,13 @@ pub(crate) async fn emit_synthetic_chat_stream(
                             {
                                 send_chat_chunk_string(
                                     &tx,
-                                        &id,
-                                        created,
-                                        logical_model,
-                                        chat_reasoning_delta_from_text("", format),
-                                        content,
-                                        chat_delta_path_reasoning_text,
-                                        sse_max_frame_length,
+                                    &id,
+                                    created,
+                                    logical_model,
+                                    chat_reasoning_delta_from_text("", format),
+                                    content,
+                                    chat_delta_path_reasoning_text,
+                                    sse_max_frame_length,
                                 )
                                 .await?;
                             }
@@ -488,6 +490,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::decode::openai_chat::decode_response;
+    use serde_json::json;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -518,10 +522,7 @@ mod tests {
                         "format".to_string(),
                         Value::String("openrouter".to_string()),
                     ),
-                    (
-                        "openwebui_reasoning_content".to_string(),
-                        Value::Bool(true),
-                    ),
+                    ("openwebui_reasoning_content".to_string(), Value::Bool(true)),
                 ]),
             })
             .await
@@ -616,9 +617,9 @@ mod tests {
                 },
                 usage: None,
                 extra_body: HashMap::from([(
-                        "format".to_string(),
-                        Value::String("openrouter".to_string()),
-                    )]),
+                    "format".to_string(),
+                    Value::String("openrouter".to_string()),
+                )]),
             })
             .await
             .expect("reasoning signature delta");
@@ -648,5 +649,42 @@ mod tests {
         assert!(text.contains("live_sig"));
         assert!(!text.contains("\"reasoning\":"));
         assert!(!text.contains("\"signature\":"));
+    }
+
+    #[tokio::test]
+    async fn synthetic_chat_stream_preserves_content_array_tool_call_blocks() {
+        let response = decode_response(&json!({
+            "id": "chatcmpl_test",
+            "model": "gpt-5.4",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "text", "text": "before tool" },
+                        { "type": "tool_call", "id": "call_1", "name": "lookup", "arguments": { "q": 1 } }
+                    ]
+                }
+            }]
+        }))
+        .expect("decode response");
+
+        let (sse_tx, mut sse_rx) = mpsc::channel(16);
+        emit_synthetic_chat_stream("gpt-5.4", &response, None, sse_tx)
+            .await
+            .expect("emit synthetic chat stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            let debug = format!("{event:?}");
+            text.push_str(&debug);
+        }
+
+        assert!(text.contains("before tool"));
+        assert!(text.contains("tool_calls"));
+        assert!(text.contains("call_1"));
+        assert!(text.contains("lookup"));
+        assert!(text.contains("finish_reason"));
     }
 }

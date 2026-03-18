@@ -7,6 +7,7 @@ use axum::response::IntoResponse;
 use axum::response::Sse;
 use axum::response::sse::Event;
 use axum::routing::post;
+use chrono::{Duration as ChronoDuration, Utc};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -14,7 +15,6 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use chrono::{Duration as ChronoDuration, Utc};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -332,17 +332,20 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     .data(json!({ "type": "response.reasoning.done", "item_id": "rs_mock", "output_index": 0, "text": "mock_reasoning" }).to_string())));
                 events.push(Ok(Event::default()
                     .event("response.output_item.done")
-                    .data(json!({
-                        "type": "response.output_item.done",
-                        "output_index": 0,
-                        "item": {
-                            "type": "reasoning",
-                            "id": "rs_mock",
-                            "summary": [{ "type": "summary_text", "text": "mock_summary" }],
-                            "text": "mock_reasoning",
-                            "encrypted_content": "mock_sig"
-                        }
-                    }).to_string())));
+                    .data(
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": {
+                                "type": "reasoning",
+                                "id": "rs_mock",
+                                "summary": [{ "type": "summary_text", "text": "mock_summary" }],
+                                "text": "mock_reasoning",
+                                "encrypted_content": "mock_sig"
+                            }
+                        })
+                        .to_string(),
+                    )));
 
                 let calls = if parallel {
                     vec![
@@ -395,37 +398,42 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                 return Sse::new(futures_util::stream::iter(events)).into_response();
             }
 
-        if body.get("stream_mode").and_then(|v| v.as_str()) == Some("item_done_only") {
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("item_done_only") {
                 let message_phase = body
                     .get("message_phase")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let stream =
-                    futures_util::stream::iter(vec![
-                    Ok::<_, Infallible>(Event::default()
-                        .event("response.output_item.added")
-                        .data(json!({
-                            "type": "response.output_item.added",
-                            "output_index": 0,
-                            "item": {
-                                "type": "message",
-                                "role": "assistant",
-                                "phase": message_phase,
-                                "content": []
-                            }
-                        }).to_string())),
-                    Ok::<_, Infallible>(Event::default()
-                        .event("response.output_item.done")
-                        .data(json!({
-                            "type": "response.output_item.done",
-                            "output_index": 0,
-                            "item": {
-                                "type": "message",
-                                "role": "assistant",
-                                "phase": message_phase,
-                                "content": [{ "type": "output_text", "text": text }]
-                            }
-                        }).to_string())),
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.added").data(
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "phase": message_phase,
+                                    "content": []
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.done").data(
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "phase": message_phase,
+                                    "content": [{ "type": "output_text", "text": text }]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
                     Ok::<_, Infallible>(Event::default().data("[DONE]")),
                 ]);
                 return Sse::new(stream).into_response();
@@ -435,8 +443,8 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             if reasoning_enabled {
                 events.push(Ok::<_, Infallible>(
                     Event::default()
-                    .event("response.reasoning.delta")
-                    .data(json!({ "delta": "mock_reasoning" }).to_string()),
+                        .event("response.reasoning.delta")
+                        .data(json!({ "delta": "mock_reasoning" }).to_string()),
                 ));
             }
             events.push(Ok::<_, Infallible>(
@@ -674,48 +682,108 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                         "model": model,
                         "choices": [{ "index": 0, "delta": { "content": "answer" }, "finish_reason": Value::Null }]
                     }).to_string())));
-                    chunks.push(Ok(Event::default().data(json!({
-                        "id": "chatcmpl_mock",
-                        "object": "chat.completion.chunk",
-                        "created": 0,
-                        "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {
-                                "tool_calls": [{
-                                    "index": 0,
-                                    "id": "call_1",
-                                    "type": "function",
-                                    "function": { "name": "tool_a", "arguments": "" }
-                                }]
-                            },
-                            "finish_reason": Value::Null
-                        }]
-                    }).to_string())));
-                    chunks.push(Ok(Event::default().data(json!({
-                        "id": "chatcmpl_mock",
-                        "object": "chat.completion.chunk",
-                        "created": 0,
-                        "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {
-                                "tool_calls": [{
-                                    "index": 0,
-                                    "function": { "arguments": "{\"a\":1}" }
-                                }]
-                            },
-                            "finish_reason": Value::Null
-                        }]
-                    }).to_string())));
-                    chunks.push(Ok(Event::default().data(json!({
-                        "id": "chatcmpl_mock",
-                        "object": "chat.completion.chunk",
-                        "created": 0,
-                        "model": model,
-                        "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
-                    }).to_string())));
+                    chunks.push(Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": { "name": "tool_a", "arguments": "" }
+                                    }]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        })
+                        .to_string(),
+                    )));
+                    chunks.push(Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "function": { "arguments": "{\"a\":1}" }
+                                    }]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        })
+                        .to_string(),
+                    )));
+                    chunks.push(Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+                        })
+                        .to_string(),
+                    )));
                     chunks.push(Ok(Event::default().data("[DONE]")));
+                    return Sse::new(futures_util::stream::iter(chunks)).into_response();
+                }
+                if body.get("stream_mode").and_then(|v| v.as_str()) == Some("content_array_tool") {
+                    let chunks: Vec<Result<Event, Infallible>> = vec![
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": { "role": "assistant", "content": Value::Null }, "finish_reason": Value::Null }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "content": [
+                                        { "type": "text", "text": "answer" },
+                                        { "type": "tool_call", "id": "call_1", "name": "tool_a", "arguments": "" }
+                                    ]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "content": [
+                                        { "type": "tool_call", "id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }
+                                    ]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                        }).to_string())),
+                        Ok(Event::default().data("[DONE]")),
+                    ];
                     return Sse::new(futures_util::stream::iter(chunks)).into_response();
                 }
                 let mut chunks: Vec<Result<Event, Infallible>> = Vec::new();
@@ -796,13 +864,16 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     }
                 }
                 // Terminal chunk: empty delta with finish_reason (matches real OpenAI)
-                chunks.push(Ok(Event::default().data(json!({
-                    "id": "chatcmpl_mock",
-                    "object": "chat.completion.chunk",
-                    "created": 0,
-                    "model": model,
-                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
-                }).to_string())));
+                chunks.push(Ok(Event::default().data(
+                    json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+                    })
+                    .to_string(),
+                )));
                 chunks.push(Ok(Event::default().data("[DONE]")));
                 return Sse::new(futures_util::stream::iter(chunks)).into_response();
             }
@@ -1903,9 +1974,16 @@ async fn responses_streaming_emits_sse_events() {
         .find(|(event, _)| event == "response.created")
         .expect("response.created frame");
     assert_eq!(created.1["type"].as_str(), Some("response.created"));
-    assert!(created.1.get("data").is_none(), "must not wrap payload in data field");
+    assert!(
+        created.1.get("data").is_none(),
+        "must not wrap payload in data field"
+    );
     assert!(created.1["sequence_number"].as_u64().is_some());
-    assert_eq!(count_done_sentinels(&text), 1, "responses stream must emit exactly one [DONE]");
+    assert_eq!(
+        count_done_sentinels(&text),
+        1,
+        "responses stream must emit exactly one [DONE]"
+    );
 }
 
 #[tokio::test]
@@ -2321,7 +2399,10 @@ async fn request_log_batcher_broadcasts_immediately_before_flush() {
         .expect("broadcast channel should deliver batch");
 
     assert_eq!(batch.len(), 1);
-    assert_eq!(batch[0].request_id.as_deref(), Some("immediate-broadcast-request"));
+    assert_eq!(
+        batch[0].request_id.as_deref(),
+        Some("immediate-broadcast-request")
+    );
     assert_eq!(batch[0].status, monoize::users::REQUEST_LOG_STATUS_SUCCESS);
 
     ctx.state.user_store.flush_all_batchers().await;
@@ -2524,11 +2605,13 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
         .expect("list request logs after retention cleanup");
 
     assert!(
-        logs.iter().all(|log| log.request_id.as_deref() != Some("retention-old")),
+        logs.iter()
+            .all(|log| log.request_id.as_deref() != Some("retention-old")),
         "expired log should be removed"
     );
     assert!(
-        logs.iter().any(|log| log.request_id.as_deref() == Some("retention-new")),
+        logs.iter()
+            .any(|log| log.request_id.as_deref() == Some("retention-new")),
         "recent log should remain"
     );
 }
@@ -3219,8 +3302,14 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
         text_delta.1["type"].as_str(),
         Some("response.output_text.delta")
     );
-    assert!(text_delta.1.get("data").is_none(), "must not nest payload under data");
-    assert!(text_delta.1["item_id"].as_str().is_some(), "text delta must include item_id");
+    assert!(
+        text_delta.1.get("data").is_none(),
+        "must not nest payload under data"
+    );
+    assert!(
+        text_delta.1["item_id"].as_str().is_some(),
+        "text delta must include item_id"
+    );
     assert_eq!(text_delta.1["logprobs"], Value::Null);
 
     let reasoning_summary_delta = frames
@@ -3234,13 +3323,19 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
     let reasoning_item_id = reasoning_summary_delta.1["item_id"]
         .as_str()
         .expect("reasoning delta item_id");
-    assert!(!reasoning_item_id.is_empty(), "reasoning item_id must be non-empty");
+    assert!(
+        !reasoning_item_id.is_empty(),
+        "reasoning item_id must be non-empty"
+    );
 
     let reasoning_text_delta = frames
         .iter()
         .find(|(event, _)| event == "response.reasoning.delta")
         .expect("reasoning delta");
-    assert_eq!(reasoning_text_delta.1["item_id"].as_str(), Some(reasoning_item_id));
+    assert_eq!(
+        reasoning_text_delta.1["item_id"].as_str(),
+        Some(reasoning_item_id)
+    );
 
     let reasoning_done = frames
         .iter()
@@ -3301,11 +3396,31 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
     let text = String::from_utf8_lossy(&bytes).to_string();
     let frames = parse_responses_sse_json(&text);
 
-    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_text.delta"));
-    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_text.done"));
-    assert!(frames.iter().any(|(event, _)| event == "response.reasoning_summary_part.done"));
-    assert!(frames.iter().any(|(event, _)| event == "response.reasoning.delta"));
-    assert!(frames.iter().any(|(event, _)| event == "response.reasoning.done"));
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.reasoning_summary_text.delta")
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.reasoning_summary_text.done")
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.reasoning_summary_part.done")
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.reasoning.delta")
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.reasoning.done")
+    );
 
     let summary_delta = frames
         .iter()
@@ -3351,7 +3466,11 @@ async fn messages_streaming_preserves_upstream_thinking_delta_granularity() {
         .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
         .filter_map(|event| event["delta"]["thinking"].as_str())
         .collect();
-    assert_eq!(thinking_deltas, vec!["mock_reasoning"], "thinking delta should preserve upstream chunking: {text}");
+    assert_eq!(
+        thinking_deltas,
+        vec!["mock_reasoning"],
+        "thinking delta should preserve upstream chunking: {text}"
+    );
 }
 
 #[tokio::test]
@@ -3378,12 +3497,30 @@ async fn chat_streaming_preserves_summary_vs_reasoning_in_openrouter_extension()
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
 
-    assert!(text.contains("\"type\":\"reasoning.summary\""), "chat stream should expose reasoning summary detail: {text}");
-    assert!(text.contains("\"summary\":\"mock_summary\""), "chat stream should preserve summary field: {text}");
-    assert!(text.contains("\"type\":\"reasoning.text\""), "chat stream should expose reasoning text detail: {text}");
-    assert!(text.contains("\"text\":\"mock_reasoning\""), "chat stream should preserve reasoning text field: {text}");
-    assert!(!text.contains("\"delta\":{\"reasoning\":"), "chat stream should keep structured reasoning out of delta.reasoning: {text}");
-    assert!(!text.contains("\"signature\":"), "OpenRouter reasoning.text details should not carry signature: {text}");
+    assert!(
+        text.contains("\"type\":\"reasoning.summary\""),
+        "chat stream should expose reasoning summary detail: {text}"
+    );
+    assert!(
+        text.contains("\"summary\":\"mock_summary\""),
+        "chat stream should preserve summary field: {text}"
+    );
+    assert!(
+        text.contains("\"type\":\"reasoning.text\""),
+        "chat stream should expose reasoning text detail: {text}"
+    );
+    assert!(
+        text.contains("\"text\":\"mock_reasoning\""),
+        "chat stream should preserve reasoning text field: {text}"
+    );
+    assert!(
+        !text.contains("\"delta\":{\"reasoning\":"),
+        "chat stream should keep structured reasoning out of delta.reasoning: {text}"
+    );
+    assert!(
+        !text.contains("\"signature\":"),
+        "OpenRouter reasoning.text details should not carry signature: {text}"
+    );
 }
 
 #[tokio::test]
@@ -3454,15 +3591,22 @@ async fn messages_streaming_keeps_signature_in_thinking_block_and_delta_order() 
                 && event["content_block"]["type"].as_str() == Some("thinking")
         })
         .expect("thinking block start");
-    assert_eq!(thinking_start["content_block"]["thinking"].as_str(), Some(""));
+    assert_eq!(
+        thinking_start["content_block"]["thinking"].as_str(),
+        Some("")
+    );
 
     let mut thinking_delta_pos = None;
     let mut signature_delta_pos = None;
     let mut stop_pos = None;
     for (idx, event) in events.iter().enumerate() {
         match event["delta"]["type"].as_str() {
-            Some("thinking_delta") if thinking_delta_pos.is_none() => thinking_delta_pos = Some(idx),
-            Some("signature_delta") if signature_delta_pos.is_none() => signature_delta_pos = Some(idx),
+            Some("thinking_delta") if thinking_delta_pos.is_none() => {
+                thinking_delta_pos = Some(idx)
+            }
+            Some("signature_delta") if signature_delta_pos.is_none() => {
+                signature_delta_pos = Some(idx)
+            }
             _ => {}
         }
         if event["type"].as_str() == Some("content_block_stop") && stop_pos.is_none() {
@@ -3472,8 +3616,14 @@ async fn messages_streaming_keeps_signature_in_thinking_block_and_delta_order() 
     let thinking_delta_pos = thinking_delta_pos.expect("thinking delta position");
     let signature_delta_pos = signature_delta_pos.expect("signature delta position");
     let stop_pos = stop_pos.expect("stop position");
-    assert!(thinking_delta_pos < signature_delta_pos, "thinking_delta must precede signature_delta: {text}");
-    assert!(signature_delta_pos < stop_pos, "signature_delta must precede content_block_stop: {text}");
+    assert!(
+        thinking_delta_pos < signature_delta_pos,
+        "thinking_delta must precede signature_delta: {text}"
+    );
+    assert!(
+        signature_delta_pos < stop_pos,
+        "signature_delta must precede content_block_stop: {text}"
+    );
 }
 
 #[tokio::test]
@@ -3498,7 +3648,11 @@ async fn chat_streaming_emits_single_plain_done_and_no_named_events() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
 
-    assert_eq!(count_done_sentinels(&text), 1, "chat stream must emit one [DONE]");
+    assert_eq!(
+        count_done_sentinels(&text),
+        1,
+        "chat stream must emit one [DONE]"
+    );
     assert!(
         !text.lines().any(|line| line.starts_with("event: ")),
         "chat completions stream must be data-only SSE: {text}"
@@ -3527,8 +3681,15 @@ async fn responses_streaming_emits_single_plain_done_sentinel() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
 
-    assert_eq!(count_done_sentinels(&text), 1, "responses stream must emit one [DONE]");
-    assert!(text.contains("\ndata: [DONE]\n"), "responses stream must terminate with plain data [DONE]: {text}");
+    assert_eq!(
+        count_done_sentinels(&text),
+        1,
+        "responses stream must emit one [DONE]"
+    );
+    assert!(
+        text.contains("\ndata: [DONE]\n"),
+        "responses stream must terminate with plain data [DONE]: {text}"
+    );
     assert!(
         !text.contains("event: [DONE]") && !text.contains("event: done"),
         "responses [DONE] must not be a named event: {text}"
@@ -3764,31 +3925,49 @@ async fn chat_streaming_parallel_tool_calls_from_chat_upstream_reassembles_argum
         {
             for tc in tcs {
                 let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
-                let entry = tool_calls_by_idx.entry(idx).or_insert_with(|| {
-                    (String::new(), String::new(), String::new())
-                });
+                let entry = tool_calls_by_idx
+                    .entry(idx)
+                    .or_insert_with(|| (String::new(), String::new(), String::new()));
                 if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                     entry.0 = id.to_string();
                 }
-                if let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|v| v.as_str()) {
+                if let Some(name) = tc
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|v| v.as_str())
+                {
                     entry.1 = name.to_string();
                 }
-                if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|v| v.as_str()) {
+                if let Some(args) = tc
+                    .get("function")
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(|v| v.as_str())
+                {
                     entry.2.push_str(args);
                 }
             }
         }
     }
 
-    assert_eq!(tool_calls_by_idx.len(), 2, "expected 2 parallel tool calls: {text}");
+    assert_eq!(
+        tool_calls_by_idx.len(),
+        2,
+        "expected 2 parallel tool calls: {text}"
+    );
     let tc0 = &tool_calls_by_idx[&0];
     assert_eq!(tc0.0, "call_1");
     assert_eq!(tc0.1, "tool_a");
-    assert_eq!(tc0.2, "{\"a\":1}", "tool_a arguments should be reassembled from fragments");
+    assert_eq!(
+        tc0.2, "{\"a\":1}",
+        "tool_a arguments should be reassembled from fragments"
+    );
     let tc1 = &tool_calls_by_idx[&1];
     assert_eq!(tc1.0, "call_2");
     assert_eq!(tc1.1, "tool_b");
-    assert_eq!(tc1.2, "{\"b\":2}", "tool_b arguments should be reassembled from fragments");
+    assert_eq!(
+        tc1.2, "{\"b\":2}",
+        "tool_b arguments should be reassembled from fragments"
+    );
     assert_eq!(finish_reasons, vec!["tool_calls".to_string()]);
     assert!(text.contains("[DONE]"));
 }
@@ -3855,7 +4034,10 @@ async fn chat_streaming_content_then_tool_call_keeps_finish_reason_terminal() {
         let finish_reason = choice.get("finish_reason").and_then(|v| v.as_str());
         if let Some(reason) = finish_reason {
             terminal_count += 1;
-            assert_eq!(reason, "tool_calls", "unexpected terminal reason: {payload}");
+            assert_eq!(
+                reason, "tool_calls",
+                "unexpected terminal reason: {payload}"
+            );
             assert!(
                 tool_call_seen_before_terminal,
                 "terminal finish_reason arrived before tool_call delta: {text}"
@@ -3867,9 +4049,110 @@ async fn chat_streaming_content_then_tool_call_keeps_finish_reason_terminal() {
         }
     }
 
-    assert!(saw_content, "expected upstream content delta to survive downstream stream: {text}");
-    assert!(saw_tool_calls, "expected downstream tool_call delta: {text}");
-    assert_eq!(terminal_count, 1, "expected exactly one terminal finish_reason chunk: {text}");
+    assert!(
+        saw_content,
+        "expected upstream content delta to survive downstream stream: {text}"
+    );
+    assert!(
+        saw_tool_calls,
+        "expected downstream tool_call delta: {text}"
+    );
+    assert_eq!(
+        terminal_count, 1,
+        "expected exactly one terminal finish_reason chunk: {text}"
+    );
+    assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn chat_streaming_content_array_tool_call_keeps_tool_loop_alive() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true,
+                "stream_mode": "content_array_tool"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut saw_content = false;
+    let mut tool_name = String::new();
+    let mut tool_args = String::new();
+    let mut finish_reasons: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let choice = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+
+        if delta.get("content").and_then(|v| v.as_str()) == Some("answer") {
+            saw_content = true;
+        }
+        if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            if !reason.is_empty() {
+                finish_reasons.push(reason.to_string());
+            }
+        }
+        if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+            for tool_call in tool_calls {
+                if let Some(name) = tool_call
+                    .get("function")
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                {
+                    tool_name = name.to_string();
+                }
+                if let Some(arguments) = tool_call
+                    .get("function")
+                    .and_then(|v| v.get("arguments"))
+                    .and_then(|v| v.as_str())
+                {
+                    tool_args.push_str(arguments);
+                }
+            }
+        }
+    }
+
+    assert!(
+        saw_content,
+        "expected content delta before tool call: {text}"
+    );
+    assert_eq!(tool_name, "tool_a", "expected decoded tool name: {text}");
+    assert_eq!(
+        tool_args, "{\"a\":1}",
+        "expected reassembled tool arguments: {text}"
+    );
+    assert_eq!(
+        finish_reasons,
+        vec!["tool_calls".to_string()],
+        "terminal finish_reason should normalize to tool_calls for content-array tool blocks: {text}"
+    );
     assert!(text.contains("[DONE]"));
 }
 
@@ -4083,7 +4366,9 @@ async fn messages_streaming_emits_named_sse_events() {
                 return None;
             }
             Some((
-                event.clone().expect("messages frame should have event name"),
+                event
+                    .clone()
+                    .expect("messages frame should have event name"),
                 serde_json::from_str::<Value>(data).expect("messages frame should be json"),
             ))
         })
@@ -4095,7 +4380,11 @@ async fn messages_streaming_emits_named_sse_events() {
     assert!(text.contains("event: content_block_delta"));
     assert!(text.contains("event: message_delta"));
     assert!(text.contains("event: message_stop"));
-    assert_eq!(count_done_sentinels(&text), 0, "messages stream must not append [DONE]");
+    assert_eq!(
+        count_done_sentinels(&text),
+        0,
+        "messages stream must not append [DONE]"
+    );
 }
 
 #[tokio::test]
@@ -4427,10 +4716,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
                     payload.len()
                 );
                 let value: Value = serde_json::from_str(payload).expect("delta payload json");
-                let piece = value
-                    .get("delta")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let piece = value.get("delta").and_then(|v| v.as_str()).unwrap_or("");
                 reconstructed.push_str(piece);
             }
         }
@@ -5072,7 +5358,11 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let v: Value = serde_json::from_str(&body).unwrap();
     let text = v["output"]
         .as_array()
-        .and_then(|items| items.iter().find(|item| item["type"].as_str() == Some("message")))
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["type"].as_str() == Some("message"))
+        })
         .and_then(|item| item["content"].as_array())
         .and_then(|content| content.first())
         .and_then(|part| part["text"].as_str())
@@ -5531,12 +5821,18 @@ fn assert_messages_stream_invariants(events: &[Value], label: &str) {
             "{label}: block {idx} must end with content_block_stop"
         );
         assert_eq!(
-            lifecycle.iter().filter(|ty| **ty == "content_block_start").count(),
+            lifecycle
+                .iter()
+                .filter(|ty| **ty == "content_block_start")
+                .count(),
             1,
             "{label}: block {idx} must have exactly one start"
         );
         assert_eq!(
-            lifecycle.iter().filter(|ty| **ty == "content_block_stop").count(),
+            lifecycle
+                .iter()
+                .filter(|ty| **ty == "content_block_stop")
+                .count(),
             1,
             "{label}: block {idx} must have exactly one stop"
         );
@@ -5758,12 +6054,12 @@ async fn messages_stream_signature_delta_does_not_precede_thinking_delta() {
     )
     .await;
 
-    let thinking_delta_pos = events.iter().position(|event| {
-        event["delta"]["type"].as_str() == Some("thinking_delta")
-    });
-    let signature_delta_pos = events.iter().position(|event| {
-        event["delta"]["type"].as_str() == Some("signature_delta")
-    });
+    let thinking_delta_pos = events
+        .iter()
+        .position(|event| event["delta"]["type"].as_str() == Some("thinking_delta"));
+    let signature_delta_pos = events
+        .iter()
+        .position(|event| event["delta"]["type"].as_str() == Some("signature_delta"));
 
     let thinking_delta_pos = thinking_delta_pos.expect("thinking delta position");
     let signature_delta_pos = signature_delta_pos.expect("signature delta position");
@@ -6132,7 +6428,10 @@ async fn models_list_model_limits_disabled_shows_all() {
         .map(|item| item["id"].as_str().unwrap().to_string())
         .collect();
 
-    assert!(ids.len() > 1, "should return all models when limits disabled");
+    assert!(
+        ids.len() > 1,
+        "should return all models when limits disabled"
+    );
 }
 
 #[tokio::test]
@@ -6294,7 +6593,10 @@ async fn auth_missing_authorization_header() {
 #[tokio::test]
 async fn auth_accepts_x_api_key_header() {
     let ctx = setup().await;
-    let token = ctx.auth_header.strip_prefix("Bearer ").expect("bearer token");
+    let token = ctx
+        .auth_header
+        .strip_prefix("Bearer ")
+        .expect("bearer token");
     let req = Request::builder()
         .method("POST")
         .uri("/v1/responses")
@@ -6440,12 +6742,7 @@ async fn body_missing_model_returns_bad_request() {
 #[tokio::test]
 async fn body_empty_model_returns_bad_request() {
     let ctx = setup().await;
-    let (status, body) = json_post(
-        &ctx,
-        "/v1/embeddings",
-        json!({"model":"","input":"hi"}),
-    )
-    .await;
+    let (status, body) = json_post(&ctx, "/v1/embeddings", json!({"model":"","input":"hi"})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let v: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
@@ -6455,12 +6752,7 @@ async fn body_empty_model_returns_bad_request() {
 #[tokio::test]
 async fn body_model_wrong_type_returns_bad_request() {
     let ctx = setup().await;
-    let (status, body) = json_post(
-        &ctx,
-        "/v1/responses",
-        json!({"model":123,"input":"hi"}),
-    )
-    .await;
+    let (status, body) = json_post(&ctx, "/v1/responses", json!({"model":123,"input":"hi"})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let v: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
@@ -6735,7 +7027,16 @@ async fn balance_zero_returns_payment_required() {
         .expect("user exists");
     ctx.state
         .user_store
-        .update_user(&user.id, None, None, None, None, Some("0"), Some(false), None)
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("0"),
+            Some(false),
+            None,
+        )
         .await
         .expect("update user");
 
@@ -7170,7 +7471,10 @@ async fn chat_streaming_content_only_from_chat_upstream_has_terminal_chunk_and_u
         vec!["stop".to_string()],
         "content-only chat stream must have exactly one terminal finish_reason=stop: {text}"
     );
-    assert!(has_usage, "PC9: usage must be present via auto-injected stream_options.include_usage: {text}");
+    assert!(
+        has_usage,
+        "PC9: usage must be present via auto-injected stream_options.include_usage: {text}"
+    );
     assert!(text.contains("[DONE]"), "must end with [DONE]: {text}");
 }
 
@@ -7233,7 +7537,10 @@ async fn chat_streaming_header_only_tool_call_still_finishes_as_tool_calls() {
         }
     }
 
-    assert!(saw_tool_call_header, "expected downstream tool call header chunk: {text}");
+    assert!(
+        saw_tool_call_header,
+        "expected downstream tool call header chunk: {text}"
+    );
     assert_eq!(
         finish_reasons,
         vec!["tool_calls".to_string()],

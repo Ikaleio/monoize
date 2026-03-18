@@ -4,6 +4,7 @@ use crate::handlers::usage::{
     record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::urp::decode::parse_tool_call_arguments_value;
 use crate::urp::stream_helpers::extract_chat_reasoning_deltas;
 use crate::urp::{
     FinishReason, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
@@ -15,6 +16,16 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+
+struct ChatToolCallStreamState<'a> {
+    call_order: &'a mut Vec<String>,
+    calls: &'a mut HashMap<String, (String, String)>,
+    call_id_by_index: &'a mut HashMap<usize, String>,
+    response_started: &'a mut bool,
+    item_started: &'a mut bool,
+    next_part_index: &'a mut u32,
+    tool_part_index_by_call_id: &'a mut HashMap<String, u32>,
+}
 
 pub(crate) async fn stream_chat_to_urp_events(
     urp: &HandlerUrpRequest,
@@ -61,7 +72,8 @@ pub(crate) async fn stream_chat_to_urp_events(
         }
 
         let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::Null);
-        record_stream_usage_if_present(&runtime_metrics, parse_usage_from_chat_object(&data_val)).await;
+        record_stream_usage_if_present(&runtime_metrics, parse_usage_from_chat_object(&data_val))
+            .await;
 
         if let Some(reason) = data_val
             .get("choices")
@@ -72,7 +84,8 @@ pub(crate) async fn stream_chat_to_urp_events(
             .filter(|reason| !reason.is_empty())
         {
             finish_reason = Some(parse_finish_reason(reason));
-            record_stream_terminal_event(&runtime_metrics, "chat.completion.chunk", Some(reason)).await;
+            record_stream_terminal_event(&runtime_metrics, "chat.completion.chunk", Some(reason))
+                .await;
         }
 
         let delta = data_val
@@ -112,34 +125,76 @@ pub(crate) async fn stream_chat_to_urp_events(
         }
 
         if let Some(t) = delta.get("content").and_then(|v| v.as_str()) {
-            if !t.is_empty() {
-                ensure_response_and_item_started(
+            process_text_delta(
+                &tx,
+                &response_id,
+                &urp.model,
+                t,
+                &mut response_started,
+                &mut item_started,
+                &mut text_part_index,
+                &mut next_part_index,
+                &mut output_text,
+            )
+            .await?;
+        }
+
+        if let Some(content_blocks) = delta.get("content").and_then(|v| v.as_array()) {
+            for (content_pos, block) in content_blocks.iter().enumerate() {
+                if let Some(text) = block.as_str() {
+                    process_text_delta(
+                        &tx,
+                        &response_id,
+                        &urp.model,
+                        text,
+                        &mut response_started,
+                        &mut item_started,
+                        &mut text_part_index,
+                        &mut next_part_index,
+                        &mut output_text,
+                    )
+                    .await?;
+                    continue;
+                }
+
+                let Some(block_obj) = block.as_object() else {
+                    continue;
+                };
+
+                if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
+                    let item_type = block_obj.get("type").and_then(|v| v.as_str());
+                    if !matches!(item_type, Some("tool_call" | "function_call")) {
+                        process_text_delta(
+                            &tx,
+                            &response_id,
+                            &urp.model,
+                            text,
+                            &mut response_started,
+                            &mut item_started,
+                            &mut text_part_index,
+                            &mut next_part_index,
+                            &mut output_text,
+                        )
+                        .await?;
+                    }
+                }
+
+                let mut tool_state = ChatToolCallStreamState {
+                    call_order: &mut call_order,
+                    calls: &mut calls,
+                    call_id_by_index: &mut call_id_by_index,
+                    response_started: &mut response_started,
+                    item_started: &mut item_started,
+                    next_part_index: &mut next_part_index,
+                    tool_part_index_by_call_id: &mut tool_part_index_by_call_id,
+                };
+                process_tool_call_delta(
                     &tx,
                     &response_id,
                     &urp.model,
-                    &mut response_started,
-                    &mut item_started,
-                )
-                .await?;
-                let part_index = ensure_part_started(
-                    &tx,
-                    0,
-                    &mut text_part_index,
-                    &mut next_part_index,
-                    PartHeader::Text,
-                )
-                .await?;
-                output_text.push_str(t);
-                send_event(
-                    &tx,
-                    UrpStreamEvent::Delta {
-                        part_index,
-                        delta: PartDelta::Text {
-                            content: t.to_string(),
-                        },
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    },
+                    block,
+                    content_pos,
+                    &mut tool_state,
                 )
                 .await?;
             }
@@ -269,112 +324,24 @@ pub(crate) async fn stream_chat_to_urp_events(
 
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
             for (tool_call_pos, tc) in tool_calls.iter().enumerate() {
-                let tc_index = tc.get("index").and_then(|v| v.as_u64()).map(|v| v as usize);
-                let mut call_id = tc
-                    .get("id")
-                    .or_else(|| tc.get("call_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if call_id.is_empty() {
-                    if let Some(idx) = tc_index {
-                        if let Some(existing) = call_id_by_index.get(&idx) {
-                            call_id = existing.clone();
-                        }
-                    }
-                }
-                if call_id.is_empty() && tool_calls.len() == 1 {
-                    if let Some(last) = call_order.last() {
-                        call_id = last.clone();
-                    }
-                }
-                if call_id.is_empty() {
-                    if let Some(existing) = call_order.get(tool_call_pos) {
-                        call_id = existing.clone();
-                    }
-                }
-                if call_id.is_empty() {
-                    continue;
-                }
-                if let Some(idx) = tc_index {
-                    call_id_by_index.insert(idx, call_id.clone());
-                }
-
-                let name = tc
-                    .get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let args_delta = tc
-                    .get("function")
-                    .and_then(|f| f.get("arguments"))
-                    .map(|v| {
-                        v.as_str()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| v.to_string())
-                    })
-                    .unwrap_or_default();
-
-                if !calls.contains_key(&call_id) {
-                    call_order.push(call_id.clone());
-                    calls.insert(call_id.clone(), (name.clone(), String::new()));
-                }
-
-                ensure_response_and_item_started(
+                let mut tool_state = ChatToolCallStreamState {
+                    call_order: &mut call_order,
+                    calls: &mut calls,
+                    call_id_by_index: &mut call_id_by_index,
+                    response_started: &mut response_started,
+                    item_started: &mut item_started,
+                    next_part_index: &mut next_part_index,
+                    tool_part_index_by_call_id: &mut tool_part_index_by_call_id,
+                };
+                process_tool_call_delta(
                     &tx,
                     &response_id,
                     &urp.model,
-                    &mut response_started,
-                    &mut item_started,
+                    tc,
+                    tool_call_pos,
+                    &mut tool_state,
                 )
                 .await?;
-
-                let part_index = if let Some(part_index) = tool_part_index_by_call_id.get(&call_id) {
-                    *part_index
-                } else {
-                    let part_index = next_part_index;
-                    next_part_index += 1;
-                    tool_part_index_by_call_id.insert(call_id.clone(), part_index);
-                    send_event(
-                        &tx,
-                        UrpStreamEvent::PartStart {
-                            part_index,
-                            item_index: 0,
-                            header: PartHeader::ToolCall {
-                                call_id: call_id.clone(),
-                                name: name.clone(),
-                            },
-                            extra_body: HashMap::new(),
-                        },
-                    )
-                    .await?;
-                    part_index
-                };
-
-                let Some(entry) = calls.get_mut(&call_id) else {
-                    tracing::warn!(call_id = %call_id, "unknown call_id in tool call stream delta, skipping");
-                    continue;
-                };
-
-                if !name.is_empty() && entry.0.is_empty() {
-                    entry.0 = name.clone();
-                }
-                if !args_delta.is_empty() {
-                    entry.1.push_str(&args_delta);
-                    send_event(
-                        &tx,
-                        UrpStreamEvent::Delta {
-                            part_index,
-                            delta: PartDelta::ToolCallArguments {
-                                arguments: args_delta,
-                            },
-                            usage: None,
-                            extra_body: HashMap::new(),
-                        },
-                    )
-                    .await?;
-                }
             }
         }
     }
@@ -453,6 +420,174 @@ pub(crate) async fn stream_chat_to_urp_events(
                 finish_reason,
                 usage,
                 outputs: vec![item.clone()],
+                extra_body: HashMap::new(),
+            },
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn process_text_delta(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    text: &str,
+    response_started: &mut bool,
+    item_started: &mut bool,
+    text_part_index: &mut Option<u32>,
+    next_part_index: &mut u32,
+    output_text: &mut String,
+) -> AppResult<()> {
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
+        .await?;
+    let part_index =
+        ensure_part_started(tx, 0, text_part_index, next_part_index, PartHeader::Text).await?;
+    output_text.push_str(text);
+    send_event(
+        tx,
+        UrpStreamEvent::Delta {
+            part_index,
+            delta: PartDelta::Text {
+                content: text.to_string(),
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn process_tool_call_delta(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    raw_tool_call: &Value,
+    tool_call_pos: usize,
+    state: &mut ChatToolCallStreamState<'_>,
+) -> AppResult<()> {
+    let Some(tc_obj) = raw_tool_call.as_object() else {
+        return Ok(());
+    };
+
+    let tc_index = tc_obj
+        .get("index")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let mut call_id = tc_obj
+        .get("id")
+        .or_else(|| tc_obj.get("call_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if call_id.is_empty() {
+        if let Some(idx) = tc_index {
+            if let Some(existing) = state.call_id_by_index.get(&idx) {
+                call_id = existing.clone();
+            }
+        }
+    }
+    if call_id.is_empty() && tool_call_pos == 0 {
+        if let Some(last) = state.call_order.last() {
+            call_id = last.clone();
+        }
+    }
+    if call_id.is_empty() {
+        if let Some(existing) = state.call_order.get(tool_call_pos) {
+            call_id = existing.clone();
+        }
+    }
+    if call_id.is_empty() {
+        return Ok(());
+    }
+    if let Some(idx) = tc_index {
+        state.call_id_by_index.insert(idx, call_id.clone());
+    }
+
+    let name = tc_obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            tc_obj
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("")
+        .to_string();
+    let args_delta = parse_tool_call_arguments_value(tc_obj)
+        .map(|value| {
+            value
+                .as_str()
+                .map(|text| text.to_string())
+                .unwrap_or_else(|| value.to_string())
+        })
+        .unwrap_or_default();
+
+    if !state.calls.contains_key(&call_id) {
+        state.call_order.push(call_id.clone());
+        state
+            .calls
+            .insert(call_id.clone(), (name.clone(), String::new()));
+    }
+
+    ensure_response_and_item_started(
+        tx,
+        response_id,
+        model,
+        state.response_started,
+        state.item_started,
+    )
+    .await?;
+
+    let part_index = if let Some(part_index) = state.tool_part_index_by_call_id.get(&call_id) {
+        *part_index
+    } else {
+        let part_index = *state.next_part_index;
+        *state.next_part_index += 1;
+        state
+            .tool_part_index_by_call_id
+            .insert(call_id.clone(), part_index);
+        send_event(
+            tx,
+            UrpStreamEvent::PartStart {
+                part_index,
+                item_index: 0,
+                header: PartHeader::ToolCall {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                },
+                extra_body: HashMap::new(),
+            },
+        )
+        .await?;
+        part_index
+    };
+
+    let Some(entry) = state.calls.get_mut(&call_id) else {
+        tracing::warn!(call_id = %call_id, "unknown call_id in tool call stream delta, skipping");
+        return Ok(());
+    };
+
+    if !name.is_empty() && entry.0.is_empty() {
+        entry.0 = name.clone();
+    }
+    if !args_delta.is_empty() {
+        entry.1.push_str(&args_delta);
+        send_event(
+            tx,
+            UrpStreamEvent::Delta {
+                part_index,
+                delta: PartDelta::ToolCallArguments {
+                    arguments: args_delta,
+                },
+                usage: None,
                 extra_body: HashMap::new(),
             },
         )
@@ -603,7 +738,8 @@ fn sorted_parts(
             part_index,
             Part::Reasoning {
                 content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
-                encrypted: (!reasoning_sig.is_empty()).then(|| Value::String(reasoning_sig.to_string())),
+                encrypted: (!reasoning_sig.is_empty())
+                    .then(|| Value::String(reasoning_sig.to_string())),
                 summary: (!reasoning_summary.is_empty()).then(|| reasoning_summary.to_string()),
                 source: reasoning_source.map(|source| source.to_string()),
                 extra_body: HashMap::new(),
