@@ -19,13 +19,6 @@ struct PendingChatMessage {
     message_extra: HashMap<String, Value>,
 }
 
-fn is_message_content_part(part: &Part) -> bool {
-    matches!(
-        part,
-        Part::Text { .. } | Part::Image { .. } | Part::File { .. } | Part::Refusal { .. }
-    )
-}
-
 fn encode_chat_content_part(part: &Part) -> Option<Value> {
     match part {
         Part::Text {
@@ -149,13 +142,8 @@ fn flush_pending_chat_message(pending: &mut Option<PendingChatMessage>, out: &mu
 }
 
 fn should_split_chat_message(existing: &PendingChatMessage, part: &Part) -> bool {
-    if matches!(part, Part::ToolCall { .. }) && !existing.content_parts.is_empty() {
-        return true;
-    }
-    if is_message_content_part(part) && !existing.tool_calls.is_empty() {
-        return true;
-    }
     let _ = existing;
+    let _ = part;
     false
 }
 
@@ -712,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn splits_assistant_messages_when_tool_calls_break_messages() {
+    fn preserves_assistant_content_and_tool_calls_in_one_message() {
         let req = base_request(vec![Item::Message {
             role: Role::Assistant,
             parts: vec![
@@ -737,13 +725,19 @@ mod tests {
         let encoded = encode_request(&req, "gpt-5.4");
         let messages = encoded["messages"].as_array().expect("messages array");
 
-        assert_eq!(messages.len(), 3);
-        assert_eq!(messages[0]["content"], json!("prep"));
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], json!("assistant"));
         assert_eq!(
-            messages[1]["tool_calls"][0]["function"]["name"],
+            messages[0]["tool_calls"][0]["function"]["name"],
             json!("tool")
         );
-        assert_eq!(messages[2]["content"], json!("answer"));
+        assert_eq!(
+            messages[0]["content"],
+            json!([
+                { "type": "text", "text": "prep" },
+                { "type": "text", "text": "answer" }
+            ])
+        );
     }
 
     #[test]

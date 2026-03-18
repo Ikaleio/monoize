@@ -578,6 +578,12 @@ PC2.3. Chat content-block compatibility decode:
   - `arguments` from `arguments`, else `function.arguments`, else `input`, else `function.input`, else `args`, else `function.args`.
 - If the resolved `arguments` value is not a string, Monoize MUST serialize it as JSON.
 
+PC2.4. Assistant message history preservation for chat adapter:
+
+- When decoding downstream Chat Completions history, if one assistant message contains both non-empty `content` and `tool_calls`, Monoize MUST preserve both within the same internal assistant message turn.
+- When encoding that internal assistant turn back to an upstream `type=chat_completion` request, Monoize MUST encode the assistant text/refusal content and the assistant `tool_calls` on the same upstream `messages[]` element.
+- Monoize MUST NOT split one assistant turn into multiple adjacent upstream assistant messages solely because that turn contains both content parts and tool calls.
+
 PC3. Tool descriptor normalization:
 
 - For `type=chat_completion` upstreams, Monoize MUST ensure upstream `tools[]` contains only `type=function` tool descriptors.
@@ -615,6 +621,12 @@ PC7e. For upstream `type=chat_completion` streaming deltas encoded as `choices[0
 
 - Monoize MUST decode text blocks and tool-call blocks in block-array order using the same field mapping as PC2.3.
 - If one streamed assistant turn contains both text blocks and at least one tool-call block, downstream `POST /v1/chat/completions` streaming MUST preserve the assistant text deltas that precede the tool-call deltas, MUST emit the tool-call deltas after those text deltas, and MUST terminate the turn with `finish_reason="tool_calls"`.
+
+PC7f. For upstream `type=chat_completion` streaming chunks that carry assistant state in terminal `choices[0].message` snapshots instead of incremental `choices[0].delta.tool_calls[]`:
+
+- Monoize MUST decode the snapshot message using the same text/tool-call compatibility rules as PC2.3.
+- If the snapshot contains assistant tool calls that were not previously emitted as downstream deltas, Monoize MUST emit equivalent downstream tool-call deltas before the terminal downstream chunk.
+- If the snapshot contains assistant text or reasoning suffix bytes that were not previously emitted as downstream deltas, Monoize MUST emit those missing suffix deltas before the terminal downstream chunk.
 
 PC8. Reasoning (non-stream and stream):
 
