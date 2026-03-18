@@ -484,6 +484,12 @@ PR4c. When encoding URP reasoning parts into upstream `POST /v1/responses` reque
 - Monoize MUST NOT forward URP-internal/provider-origin reasoning metadata such as `source` on upstream request `input[]` reasoning items unless the upstream Responses request schema explicitly supports that field.
 - Monoize MUST NOT encode field `text` on upstream request `input[]` reasoning items. Plain reasoning text, when preserved at all, MUST be represented through `summary`.
 
+PR4d. When encoding URP message items into upstream `POST /v1/responses` request `input[]` messages, Monoize MUST choose content block types by message role:
+
+- `role="user"` content MUST use request/input block types such as `input_text`, `input_image`, and `input_file`.
+- `role="assistant"` content MUST use assistant/output block types such as `output_text`, `output_image`, and `output_file`.
+- `role="assistant"` text/refusal history MUST NOT be encoded as `input_text`.
+
 PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Responses event payloads where:
 
 - text deltas are carried in `delta` for `response.output_text.delta`;

@@ -6,7 +6,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -413,9 +413,10 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             extra_body,
         } => {
             let mut pending_message: Option<PendingResponsesMessageItem> = None;
+            let output_text_type = matches!(role, Role::Assistant);
 
             for part in parts {
-                if let Some(content_part) = encode_message_content_part(part, false) {
+                if let Some(content_part) = encode_message_content_part(part, output_text_type) {
                     append_content_part_to_pending(
                         &mut pending_message,
                         out,
@@ -959,6 +960,48 @@ mod tests {
     }
 
     #[test]
+    fn encode_request_uses_output_text_blocks_for_assistant_messages() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            inputs: vec![
+                Item::Message {
+                    role: Role::User,
+                    parts: vec![Part::Text {
+                        content: "question".to_string(),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::Text {
+                        content: "commentary".to_string(),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+            ],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        let input = encoded["input"].as_array().expect("input array");
+        assert_eq!(input[0]["role"], json!("user"));
+        assert_eq!(input[0]["content"][0]["type"], json!("input_text"));
+        assert_eq!(input[1]["role"], json!("assistant"));
+        assert_eq!(input[1]["content"][0]["type"], json!("output_text"));
+    }
+
+    #[test]
     fn responses_usage_round_trips_all_typed_usage_fields_without_detail_leakage() {
         let mut usage_extra = HashMap::new();
         usage_extra.insert("upstream_counter".to_string(), json!(42));
@@ -1025,14 +1068,18 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 5);
         assert_eq!(output.accepted_prediction_tokens, 6);
         assert_eq!(output.rejected_prediction_tokens, 7);
-        assert!(decoded_usage
-            .extra_body
-            .get("input_tokens_details")
-            .is_none());
-        assert!(decoded_usage
-            .extra_body
-            .get("output_tokens_details")
-            .is_none());
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("input_tokens_details")
+                .is_none()
+        );
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("output_tokens_details")
+                .is_none()
+        );
         assert_eq!(
             decoded_usage.extra_body.get("upstream_counter"),
             Some(&json!(42))

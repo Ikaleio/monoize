@@ -100,17 +100,62 @@ fn maybe_reasoning_summary_validation_error(body: &Value) -> Option<axum::respon
             .into_response());
     }
     let unknown_text_index = input.iter().position(|item| {
-        item.get("type").and_then(|v| v.as_str()) == Some("reasoning")
-            && item.get("text").is_some()
+        item.get("type").and_then(|v| v.as_str()) == Some("reasoning") && item.get("text").is_some()
     })?;
+    Some(
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": format!("Unknown parameter: 'input[{unknown_text_index}].text'."),
+                    "type": "invalid_request_error",
+                    "param": format!("input[{unknown_text_index}].text"),
+                    "code": "unknown_parameter"
+                }
+            })),
+        )
+            .into_response(),
+    )
+}
+
+fn maybe_assistant_output_content_validation_error(
+    body: &Value,
+) -> Option<axum::response::Response> {
+    if body
+        .get("require_assistant_output_content_types")
+        .and_then(|v| v.as_bool())
+        != Some(true)
+    {
+        return None;
+    }
+
+    let input = body.get("input").and_then(|v| v.as_array())?;
+    let invalid_index = input.iter().enumerate().find_map(|(index, item)| {
+        if item.get("type").and_then(|v| v.as_str()) != Some("message") {
+            return None;
+        }
+        if item.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+            return None;
+        }
+        let content = item.get("content").and_then(|v| v.as_array())?;
+        let invalid_part = content.iter().position(|part| {
+            !matches!(
+                part.get("type").and_then(|v| v.as_str()),
+                Some("output_text" | "refusal" | "output_image" | "output_file")
+            )
+        })?;
+        Some((index, invalid_part))
+    });
+
+    let (message_index, content_index) = invalid_index?;
     Some((
         StatusCode::BAD_REQUEST,
         Json(json!({
             "error": {
-                "message": format!("Unknown parameter: 'input[{unknown_text_index}].text'."),
+                "message": format!("Invalid value: 'input_text'. Supported values are: 'output_text' and 'refusal'."),
                 "type": "invalid_request_error",
-                "param": format!("input[{unknown_text_index}].text"),
-                "code": "unknown_parameter"
+                "param": format!("input[{message_index}].content[{content_index}]"),
+                "code": "invalid_value"
             }
         })),
     )
@@ -150,6 +195,9 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
             return resp;
         }
         if let Some(resp) = maybe_reasoning_summary_validation_error(&body) {
+            return resp;
+        }
+        if let Some(resp) = maybe_assistant_output_content_validation_error(&body) {
             return resp;
         }
         maybe_forced_upstream_delay(&body).await;
@@ -1033,7 +1081,9 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     ];
                     return Sse::new(futures_util::stream::iter(chunks)).into_response();
                 }
-                if body.get("stream_mode").and_then(|v| v.as_str()) == Some("content_array_tool_use") {
+                if body.get("stream_mode").and_then(|v| v.as_str())
+                    == Some("content_array_tool_use")
+                {
                     let chunks: Vec<Result<Event, Infallible>> = vec![
                         Ok(Event::default().data(json!({
                             "id": "chatcmpl_mock",
@@ -2229,7 +2279,77 @@ async fn chat_to_responses_upstream_reasoning_inputs_always_include_summary() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let v: Value = serde_json::from_str(&body).expect("chat response json");
-    assert_eq!(v["choices"][0]["message"]["content"], json!("startcontinue"));
+    assert_eq!(
+        v["choices"][0]["message"]["content"],
+        json!("startcontinue")
+    );
+}
+
+#[tokio::test]
+async fn responses_streaming_ai_sdk_second_step_keeps_assistant_output_blocks() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "stream": true,
+                "require_assistant_output_content_types": true,
+                "input": [
+                    {
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"input_text","text":"Before using tools, say one short sentence about your plan. Then call get_weather for tokyo and get_time for tokyo in parallel. After tool results, answer in one sentence."}]
+                    },
+                    {
+                        "type":"message",
+                        "role":"assistant",
+                        "content":[{"type":"output_text","text":"I'll fetch Tokyo's weather and local time in parallel."}]
+                    },
+                    {
+                        "type":"function_call",
+                        "call_id":"call_1",
+                        "name":"get_weather",
+                        "arguments":"{\"city\":\"tokyo\"}"
+                    },
+                    {
+                        "type":"function_call",
+                        "call_id":"call_2",
+                        "name":"get_time",
+                        "arguments":"{\"city\":\"tokyo\"}"
+                    },
+                    {
+                        "type":"function_call_output",
+                        "call_id":"call_1",
+                        "output":"{\"city\":\"tokyo\",\"weather\":\"sunny\",\"tempC\":25}"
+                    },
+                    {
+                        "type":"function_call_output",
+                        "call_id":"call_2",
+                        "output":"{\"city\":\"tokyo\",\"time\":\"10:00 JST\"}"
+                    }
+                ],
+                "tools": [
+                    { "type":"function","name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}},
+                    { "type":"function","name":"get_time","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}}
+                ]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(
+        !text.contains("event: error"),
+        "unexpected downstream error stream: {text}"
+    );
+    assert!(text.contains("event: response.completed"));
 }
 
 #[tokio::test]
@@ -3804,8 +3924,16 @@ async fn responses_streaming_from_responses_upstream_does_not_duplicate_complete
         .map(|(_, payload)| payload)
         .collect();
 
-    assert_eq!(output_item_added.len(), 2, "must not duplicate added lifecycles: {text}");
-    assert_eq!(output_item_done.len(), 2, "must not duplicate done lifecycles: {text}");
+    assert_eq!(
+        output_item_added.len(),
+        2,
+        "must not duplicate added lifecycles: {text}"
+    );
+    assert_eq!(
+        output_item_done.len(),
+        2,
+        "must not duplicate done lifecycles: {text}"
+    );
 
     let mut added_types: Vec<&str> = output_item_added
         .iter()
@@ -3817,8 +3945,16 @@ async fn responses_streaming_from_responses_upstream_does_not_duplicate_complete
         .collect();
     added_types.sort_unstable();
     done_types.sort_unstable();
-    assert_eq!(added_types, vec!["function_call", "message"], "unexpected added types: {text}");
-    assert_eq!(done_types, vec!["function_call", "message"], "unexpected done types: {text}");
+    assert_eq!(
+        added_types,
+        vec!["function_call", "message"],
+        "unexpected added types: {text}"
+    );
+    assert_eq!(
+        done_types,
+        vec!["function_call", "message"],
+        "unexpected done types: {text}"
+    );
 
     let completed = frames
         .iter()
@@ -3826,9 +3962,7 @@ async fn responses_streaming_from_responses_upstream_does_not_duplicate_complete
         .map(|(_, payload)| payload)
         .expect("response.completed frame");
     assert_eq!(
-        completed["response"]["output"]
-            .as_array()
-            .map(Vec::len),
+        completed["response"]["output"].as_array().map(Vec::len),
         Some(2),
         "completed output must still contain one message and one function call: {text}"
     );
@@ -4624,9 +4758,15 @@ async fn chat_streaming_content_array_tool_use_keeps_tool_loop_alive() {
         }
     }
 
-    assert!(saw_content, "expected content delta before tool call: {text}");
+    assert!(
+        saw_content,
+        "expected content delta before tool call: {text}"
+    );
     assert_eq!(tool_name, "tool_a", "expected decoded tool name: {text}");
-    assert_eq!(tool_args, "{\"a\":1}", "expected reassembled tool arguments: {text}");
+    assert_eq!(
+        tool_args, "{\"a\":1}",
+        "expected reassembled tool arguments: {text}"
+    );
     assert_eq!(
         finish_reasons,
         vec!["tool_calls".to_string()],
