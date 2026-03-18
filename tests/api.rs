@@ -63,18 +63,36 @@ fn maybe_reasoning_summary_validation_error(body: &Value) -> Option<axum::respon
         return None;
     }
     let input = body.get("input").and_then(|v| v.as_array())?;
-    let missing_index = input.iter().position(|item| {
+    let missing_summary_index = input.iter().position(|item| {
         item.get("type").and_then(|v| v.as_str()) == Some("reasoning")
             && item.get("summary").is_none()
+    });
+    if let Some(missing_index) = missing_summary_index {
+        return Some((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": format!("Missing required parameter: 'input[{missing_index}].summary'."),
+                    "type": "invalid_request_error",
+                    "param": format!("input[{missing_index}].summary"),
+                    "code": "missing_required_parameter"
+                }
+            })),
+        )
+            .into_response());
+    }
+    let unknown_source_index = input.iter().position(|item| {
+        item.get("type").and_then(|v| v.as_str()) == Some("reasoning")
+            && item.get("source").is_some()
     })?;
     Some((
         StatusCode::BAD_REQUEST,
         Json(json!({
             "error": {
-                "message": format!("Missing required parameter: 'input[{missing_index}].summary'."),
+                "message": format!("Unknown parameter: 'input[{unknown_source_index}].source'."),
                 "type": "invalid_request_error",
-                "param": format!("input[{missing_index}].summary"),
-                "code": "missing_required_parameter"
+                "param": format!("input[{unknown_source_index}].source"),
+                "code": "unknown_parameter"
             }
         })),
     )

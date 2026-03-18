@@ -480,6 +480,7 @@ PR4c. When encoding URP reasoning parts into upstream `POST /v1/responses` reque
 - If the URP reasoning part carries summary text, Monoize MUST encode `summary` as an array containing one `{ "type": "summary_text", "text": <summary> }` object.
 - If the URP reasoning part carries no summary text, Monoize MUST encode `summary` as `[]`.
 - This request-side requirement applies even when the same reasoning item also carries `text` and/or `encrypted_content`.
+- Monoize MUST NOT forward URP-internal/provider-origin reasoning metadata such as `source` on upstream request `input[]` reasoning items unless the upstream Responses request schema explicitly supports that field.
 
 PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Responses event payloads where:
 
