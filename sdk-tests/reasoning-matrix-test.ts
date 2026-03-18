@@ -8,8 +8,10 @@
  *   - Encrypted reasoning persistence (multi-turn)
  */
 
-const BASE_URL = process.env.BASE_URL ?? "https://mono.ikale.io/v1";
-const API_KEY = process.env.API_KEY ?? "sk-4c65b2d5a78a43e1aab5a362f8419667";
+export {};
+
+const BASE_URL = process.env.BASE_URL ?? "[set-BASE_URL]";
+const API_KEY = process.env.API_KEY ?? "[set-API_KEY]";
 const TIMEOUT_MS = 120_000;
 
 const MODELS = ["gpt-5.2", "claude-opus-4.6", "gemini-3.1-pro-preview"] as const;
@@ -131,6 +133,44 @@ interface ReasoningResult {
   rawContent?: any[];
 }
 
+interface ChatCompletionBody {
+  choices?: Array<{
+    message?: {
+      content?: string;
+      reasoning?: string;
+      reasoning_details?: Array<{
+        type?: string;
+        text?: string;
+        signature?: string;
+        data?: string;
+        summary?: string;
+      }>;
+    };
+  }>;
+}
+
+interface ResponsesBody {
+  output?: Array<{
+    type?: string;
+    text?: string;
+    signature?: string;
+    encrypted_content?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+}
+
+interface MessagesBody {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    thinking?: string;
+    signature?: string;
+  }>;
+}
+
 // ── Chat Completions (non-stream) ──
 
 async function chatNonStream(model: Model): Promise<ReasoningResult> {
@@ -141,7 +181,7 @@ async function chatNonStream(model: Model): Promise<ReasoningResult> {
       chatBody(model, [{ role: "user", content: Q1 }], false)
     ),
   });
-  const body = await resp.json();
+  const body = (await resp.json()) as ChatCompletionBody;
   if (!resp.ok)
     throw new Error(`HTTP ${resp.status}: ${JSON.stringify(body).slice(0, 300)}`);
 
@@ -214,7 +254,7 @@ async function responsesNonStream(model: Model): Promise<ReasoningResult> {
     headers: authHeaders("responses"),
     body: JSON.stringify(responsesBody(model, Q1, false)),
   });
-  const body = await resp.json();
+  const body = (await resp.json()) as ResponsesBody;
   if (!resp.ok)
     throw new Error(`HTTP ${resp.status}: ${JSON.stringify(body).slice(0, 300)}`);
 
@@ -298,7 +338,7 @@ async function messagesNonStream(model: Model): Promise<ReasoningResult> {
       messagesBody(model, [{ role: "user", content: Q1 }], false)
     ),
   });
-  const body = await resp.json();
+  const body = (await resp.json()) as MessagesBody;
   if (!resp.ok)
     throw new Error(`HTTP ${resp.status}: ${JSON.stringify(body).slice(0, 300)}`);
 
@@ -375,7 +415,7 @@ async function encryptedChat(model: Model): Promise<EncResult> {
     headers: authHeaders("chat_completions"),
     body: JSON.stringify(chatBody(model, msgs, false)),
   });
-  const body = await resp.json();
+  const body = (await resp.json()) as ChatCompletionBody;
   if (!resp.ok)
     return {
       turn1Encrypted: true,
@@ -406,7 +446,7 @@ async function encryptedResponses(model: Model): Promise<EncResult> {
     headers: authHeaders("responses"),
     body: JSON.stringify(responsesBody(model, input, false)),
   });
-  const body = await resp.json();
+  const body = (await resp.json()) as ResponsesBody;
   if (!resp.ok)
     return {
       turn1Encrypted: true,
@@ -442,7 +482,7 @@ async function encryptedMessages(model: Model): Promise<EncResult> {
     headers: authHeaders("messages"),
     body: JSON.stringify(messagesBody(model, msgs, false)),
   });
-  const body = await resp.json();
+  const body = (await resp.json()) as MessagesBody;
   if (!resp.ok)
     return {
       turn1Encrypted: true,

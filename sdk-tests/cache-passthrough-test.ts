@@ -1,5 +1,5 @@
-const baseURL = process.env.CACHE_BASE_URL ?? "https://mono.ikale.io/v1";
-const apiKey = process.env.CACHE_API_KEY ?? "test-key";
+const baseURL = process.env.CACHE_BASE_URL ?? "[set-CACHE_BASE_URL]";
+const apiKey = process.env.CACHE_API_KEY ?? "[set-CACHE_API_KEY]";
 
 const BASE_PROMPT = `You are an expert assistant specializing in advanced mathematics, theoretical physics, and computer science. Your responses should be precise, well-structured, and academically rigorous.
 
