@@ -571,11 +571,11 @@ PC2.3. Chat content-block compatibility decode:
 
 - For upstream `type=chat_completion` request/response bodies, Monoize MUST accept assistant `content` encoded as an array of block objects instead of scalar string text.
 - When an assistant `content[]` block has `type="text"` or `type="output_text"` and non-empty `text`, Monoize MUST decode that block into a URP assistant text part in array order.
-- When an assistant `content[]` block has `type="tool_call"` or `type="function_call"`, Monoize MUST decode that block into a URP assistant tool-call part in array order.
-- For a `tool_call` / `function_call` content block, Monoize MUST resolve fields as follows:
+- When an assistant `content[]` block has `type="tool_call"`, `type="function_call"`, or `type="tool_use"`, Monoize MUST decode that block into a URP assistant tool-call part in array order.
+- For a `tool_call` / `function_call` / `tool_use` content block, Monoize MUST resolve fields as follows:
   - `call_id` from `call_id`, else `id`;
   - `name` from `name`, else `function.name`;
-  - `arguments` from `arguments`, else `function.arguments`, else `input`, else `args`.
+  - `arguments` from `arguments`, else `function.arguments`, else `input`, else `function.input`, else `args`, else `function.args`.
 - If the resolved `arguments` value is not a string, Monoize MUST serialize it as JSON.
 
 PC3. Tool descriptor normalization:

@@ -12,7 +12,7 @@ use crate::urp::{
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -163,7 +163,7 @@ pub(crate) async fn stream_chat_to_urp_events(
 
                 if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
                     let item_type = block_obj.get("type").and_then(|v| v.as_str());
-                    if !matches!(item_type, Some("tool_call" | "function_call")) {
+                    if !matches!(item_type, Some("tool_call" | "function_call" | "tool_use")) {
                         process_text_delta(
                             &tx,
                             &response_id,
@@ -521,14 +521,7 @@ async fn process_tool_call_delta(
         })
         .unwrap_or("")
         .to_string();
-    let args_delta = parse_tool_call_arguments_value(tc_obj)
-        .map(|value| {
-            value
-                .as_str()
-                .map(|text| text.to_string())
-                .unwrap_or_else(|| value.to_string())
-        })
-        .unwrap_or_default();
+    let args_delta = tool_call_arguments_delta_text(tc_obj).unwrap_or_default();
 
     if !state.calls.contains_key(&call_id) {
         state.call_order.push(call_id.clone());
@@ -595,6 +588,24 @@ async fn process_tool_call_delta(
     }
 
     Ok(())
+}
+
+fn tool_call_arguments_delta_text(tc_obj: &Map<String, Value>) -> Option<String> {
+    let value = parse_tool_call_arguments_value(tc_obj)?;
+    if tc_obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+        if value
+            .as_object()
+            .map(|obj| obj.is_empty())
+            .unwrap_or(false)
+        {
+            return None;
+        }
+    }
+    value
+        .as_str()
+        .map(|text| text.to_string())
+        .or_else(|| Some(value.to_string()))
+        .filter(|text| !text.is_empty())
 }
 
 async fn ensure_response_and_item_started(

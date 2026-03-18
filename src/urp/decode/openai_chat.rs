@@ -186,7 +186,9 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
         };
         if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
             let item_type = item_obj.get("type").and_then(|v| v.as_str());
-            if !text.is_empty() && !matches!(item_type, Some("tool_call" | "function_call")) {
+            if !text.is_empty()
+                && !matches!(item_type, Some("tool_call" | "function_call" | "tool_use"))
+            {
                 parts.push(text_part_with_phase(
                     text,
                     message_phase,
@@ -933,6 +935,43 @@ mod tests {
                     "content": [
                         { "type": "text", "text": "before tool" },
                         { "type": "tool_call", "id": "call_1", "name": "lookup", "arguments": { "q": 1 } }
+                    ]
+                }
+            }]
+        });
+
+        let decoded = decode_response(&value).expect("decode_response should succeed");
+        let parts = output_parts(&decoded.outputs[0]);
+
+        assert!(parts.iter().any(|part| {
+            matches!(part, Part::Text { content, .. } if content == "before tool")
+        }));
+        assert!(parts.iter().any(|part| {
+            matches!(
+                part,
+                Part::ToolCall {
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } if call_id == "call_1" && name == "lookup" && arguments == "{\"q\":1}"
+            )
+        }));
+    }
+
+    #[test]
+    fn decode_response_accepts_content_array_tool_use_blocks() {
+        let value = json!({
+            "id": "chatcmpl_test",
+            "model": "m",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "text", "text": "before tool" },
+                        { "type": "tool_use", "id": "call_1", "name": "lookup", "input": { "q": 1 } }
                     ]
                 }
             }]

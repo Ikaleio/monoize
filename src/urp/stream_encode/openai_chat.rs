@@ -687,4 +687,41 @@ mod tests {
         assert!(text.contains("lookup"));
         assert!(text.contains("finish_reason"));
     }
+
+    #[tokio::test]
+    async fn synthetic_chat_stream_preserves_content_array_tool_use_blocks() {
+        let response = decode_response(&json!({
+            "id": "chatcmpl_test",
+            "model": "gpt-5.4",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "text", "text": "before tool" },
+                        { "type": "tool_use", "id": "call_1", "name": "lookup", "input": { "q": 1 } }
+                    ]
+                }
+            }]
+        }))
+        .expect("decode response");
+
+        let (sse_tx, mut sse_rx) = mpsc::channel(16);
+        emit_synthetic_chat_stream("gpt-5.4", &response, None, sse_tx)
+            .await
+            .expect("emit synthetic chat stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            let debug = format!("{event:?}");
+            text.push_str(&debug);
+        }
+
+        assert!(text.contains("before tool"));
+        assert!(text.contains("tool_calls"));
+        assert!(text.contains("call_1"));
+        assert!(text.contains("lookup"));
+        assert!(text.contains("finish_reason"));
+    }
 }

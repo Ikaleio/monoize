@@ -129,7 +129,7 @@ pub fn parse_tool_call_arguments_value(obj: &Map<String, Value>) -> Option<Value
 
 pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     let tool_type = obj.get("type").and_then(|v| v.as_str())?;
-    if !matches!(tool_type, "tool_call" | "function_call") {
+    if !matches!(tool_type, "tool_call" | "function_call" | "tool_use") {
         return None;
     }
 

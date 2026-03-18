@@ -786,6 +786,57 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     ];
                     return Sse::new(futures_util::stream::iter(chunks)).into_response();
                 }
+                if body.get("stream_mode").and_then(|v| v.as_str()) == Some("content_array_tool_use") {
+                    let chunks: Vec<Result<Event, Infallible>> = vec![
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": { "role": "assistant", "content": Value::Null }, "finish_reason": Value::Null }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "content": [
+                                        { "type": "text", "text": "answer" },
+                                        { "type": "tool_use", "id": "call_1", "name": "tool_a", "input": {} }
+                                    ]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "content": [
+                                        { "type": "tool_use", "id": "call_1", "name": "tool_a", "input": { "a": 1 } }
+                                    ]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        }).to_string())),
+                        Ok(Event::default().data(json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                        }).to_string())),
+                        Ok(Event::default().data("[DONE]")),
+                    ];
+                    return Sse::new(futures_util::stream::iter(chunks)).into_response();
+                }
                 let mut chunks: Vec<Result<Event, Infallible>> = Vec::new();
                 // Initial role chunk (matches real OpenAI format)
                 chunks.push(Ok(Event::default().data(json!({
@@ -4152,6 +4203,92 @@ async fn chat_streaming_content_array_tool_call_keeps_tool_loop_alive() {
         finish_reasons,
         vec!["tool_calls".to_string()],
         "terminal finish_reason should normalize to tool_calls for content-array tool blocks: {text}"
+    );
+    assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn chat_streaming_content_array_tool_use_keeps_tool_loop_alive() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "stream": true,
+                "stream_mode": "content_array_tool_use"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut saw_content = false;
+    let mut tool_name = String::new();
+    let mut tool_args = String::new();
+    let mut finish_reasons: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let choice = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+
+        if delta.get("content").and_then(|v| v.as_str()) == Some("answer") {
+            saw_content = true;
+        }
+        if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            if !reason.is_empty() {
+                finish_reasons.push(reason.to_string());
+            }
+        }
+        if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+            for tool_call in tool_calls {
+                if let Some(name) = tool_call
+                    .get("function")
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                {
+                    tool_name = name.to_string();
+                }
+                if let Some(arguments) = tool_call
+                    .get("function")
+                    .and_then(|v| v.get("arguments"))
+                    .and_then(|v| v.as_str())
+                {
+                    tool_args.push_str(arguments);
+                }
+            }
+        }
+    }
+
+    assert!(saw_content, "expected content delta before tool call: {text}");
+    assert_eq!(tool_name, "tool_a", "expected decoded tool name: {text}");
+    assert_eq!(tool_args, "{\"a\":1}", "expected reassembled tool arguments: {text}");
+    assert_eq!(
+        finish_reasons,
+        vec!["tool_calls".to_string()],
+        "terminal finish_reason should normalize to tool_calls for content-array tool_use blocks: {text}"
     );
     assert!(text.contains("[DONE]"));
 }
