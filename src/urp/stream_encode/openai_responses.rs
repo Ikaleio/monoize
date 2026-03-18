@@ -41,6 +41,7 @@ struct PendingResponsesAssistantItem {
     item_extra_body: HashMap<String, Value>,
     active_output: Option<ActiveResponsesOutputItem>,
     staged_outputs: Vec<ActiveResponsesOutputItem>,
+    streamed_any_output: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -331,6 +332,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 item_extra_body: extra_body,
                                 active_output: None,
                                 staged_outputs: Vec::new(),
+                                streamed_any_output: false,
                             },
                         );
                     }
@@ -405,6 +407,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     });
 
                     if needs_new_output {
+                        pending_item.streamed_any_output = true;
                         send_responses_event(
                             &tx,
                             &mut seq,
@@ -790,7 +793,17 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 item_index, item, ..
             } => {
                 if let Some(mut pending_item) = pending_assistant_items.remove(&item_index) {
-                    if pending_item.active_output.is_none() {
+                    if pending_item.active_output.is_some()
+                        || !pending_item.staged_outputs.is_empty()
+                    {
+                        flush_pending_stream_outputs(
+                            tx.clone(),
+                            &mut seq,
+                            &mut pending_item,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    } else if !pending_item.streamed_any_output {
                         for encoded_item in encode_stream_output_item(&item) {
                             let output_index = next_output_index;
                             next_output_index += 1;
@@ -819,14 +832,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             )
                             .await?;
                         }
-                    } else {
-                        flush_pending_stream_outputs(
-                            tx.clone(),
-                            &mut seq,
-                            &mut pending_item,
-                            sse_max_frame_length,
-                        )
-                        .await?;
                     }
                 } else {
                     let output_index = *output_indices.entry(item_index).or_insert_with(|| {

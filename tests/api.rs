@@ -303,6 +303,187 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                     ]);
                     return Sse::new(stream).into_response();
                 }
+                if body.get("stream_mode").and_then(|v| v.as_str())
+                    == Some("message_then_tool_then_completed")
+                {
+                    let stream = futures_util::stream::iter(vec![
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": 0,
+                                    "item": {
+                                        "type": "message",
+                                        "id": "msg_mock",
+                                        "role": "assistant",
+                                        "phase": "commentary",
+                                        "content": []
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.content_part.added").data(
+                                json!({
+                                    "type": "response.content_part.added",
+                                    "output_index": 0,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "part": { "type": "output_text", "text": "", "annotations": [] }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_text.delta").data(
+                                json!({
+                                    "type": "response.output_text.delta",
+                                    "output_index": 0,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "logprobs": Value::Null,
+                                    "delta": "Searching"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_text.done").data(
+                                json!({
+                                    "type": "response.output_text.done",
+                                    "output_index": 0,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "logprobs": Value::Null,
+                                    "text": "Searching"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.content_part.done").data(
+                                json!({
+                                    "type": "response.content_part.done",
+                                    "output_index": 0,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "part": {
+                                        "type": "output_text",
+                                        "text": "Searching",
+                                        "annotations": []
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.done").data(
+                                json!({
+                                    "type": "response.output_item.done",
+                                    "output_index": 0,
+                                    "item": {
+                                        "type": "message",
+                                        "id": "msg_mock",
+                                        "role": "assistant",
+                                        "phase": "commentary",
+                                        "content": [{ "type": "output_text", "text": "Searching" }]
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": 1,
+                                    "item": {
+                                        "type": "function_call",
+                                        "id": "fc_mock",
+                                        "call_id": "call_1",
+                                        "name": "tool_a",
+                                        "arguments": ""
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.function_call_arguments.delta").data(
+                                json!({
+                                    "type": "response.function_call_arguments.delta",
+                                    "output_index": 1,
+                                    "item_id": "fc_mock",
+                                    "delta": "{\"a\":1}"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.function_call_arguments.done").data(
+                                json!({
+                                    "type": "response.function_call_arguments.done",
+                                    "output_index": 1,
+                                    "item_id": "fc_mock",
+                                    "call_id": "call_1",
+                                    "name": "tool_a",
+                                    "arguments": "{\"a\":1}"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.done").data(
+                                json!({
+                                    "type": "response.output_item.done",
+                                    "output_index": 1,
+                                    "item": {
+                                        "type": "function_call",
+                                        "id": "fc_mock",
+                                        "call_id": "call_1",
+                                        "name": "tool_a",
+                                        "arguments": "{\"a\":1}"
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.completed").data(
+                                json!({
+                                    "type": "response.completed",
+                                    "response": {
+                                        "id": "resp_mock",
+                                        "object": "response",
+                                        "created_at": 0,
+                                        "model": model,
+                                        "status": "completed",
+                                        "output": [
+                                            {
+                                                "type": "message",
+                                                "id": "msg_mock",
+                                                "role": "assistant",
+                                                "phase": "commentary",
+                                                "content": [{ "type": "output_text", "text": "Searching" }]
+                                            },
+                                            {
+                                                "type": "function_call",
+                                                "id": "fc_mock",
+                                                "call_id": "call_1",
+                                                "name": "tool_a",
+                                                "arguments": "{\"a\":1}"
+                                            }
+                                        ]
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                    ]);
+                    return Sse::new(stream).into_response();
+                }
 
                 let mut events: Vec<Result<Event, Infallible>> = Vec::new();
                 events.push(Ok(Event::default()
@@ -3490,6 +3671,72 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
         .find(|(event, _)| event == "response.reasoning.done")
         .expect("reasoning done");
     assert_eq!(reasoning_done.1["text"].as_str(), Some("mock_reasoning"));
+}
+
+#[tokio::test]
+async fn responses_streaming_from_responses_upstream_does_not_duplicate_completed_items() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":"stream tool",
+                "tools":[{ "type":"function","name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}],
+                "stream": true,
+                "stream_mode": "message_then_tool_then_completed"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let output_item_added: Vec<&Value> = frames
+        .iter()
+        .filter(|(event, _)| event == "response.output_item.added")
+        .map(|(_, payload)| payload)
+        .collect();
+    let output_item_done: Vec<&Value> = frames
+        .iter()
+        .filter(|(event, _)| event == "response.output_item.done")
+        .map(|(_, payload)| payload)
+        .collect();
+
+    assert_eq!(output_item_added.len(), 2, "must not duplicate added lifecycles: {text}");
+    assert_eq!(output_item_done.len(), 2, "must not duplicate done lifecycles: {text}");
+
+    let mut added_types: Vec<&str> = output_item_added
+        .iter()
+        .filter_map(|payload| payload["item"]["type"].as_str())
+        .collect();
+    let mut done_types: Vec<&str> = output_item_done
+        .iter()
+        .filter_map(|payload| payload["item"]["type"].as_str())
+        .collect();
+    added_types.sort_unstable();
+    done_types.sort_unstable();
+    assert_eq!(added_types, vec!["function_call", "message"], "unexpected added types: {text}");
+    assert_eq!(done_types, vec!["function_call", "message"], "unexpected done types: {text}");
+
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .expect("response.completed frame");
+    assert_eq!(
+        completed["response"]["output"]
+            .as_array()
+            .map(Vec::len),
+        Some(2),
+        "completed output must still contain one message and one function call: {text}"
+    );
 }
 
 #[tokio::test]

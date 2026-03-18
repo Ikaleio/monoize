@@ -973,6 +973,8 @@ STR3j. Downstream `/v1/responses` SSE MUST obey nested lifecycle ordering. For e
 - message `response.output_text.done` and `response.content_part.done` MUST precede the message item's `response.output_item.done`;
 - function-call `response.function_call_arguments.done` MUST precede the function-call item's `response.output_item.done`.
 
+STR3k. For downstream `/v1/responses` SSE translated from upstream Responses streams, Monoize MUST emit at most one `response.output_item.added` / `response.output_item.done` lifecycle per upstream output item. If a message or function-call item has already been streamed before `response.completed`, Monoize MUST NOT synthesize a second duplicate lifecycle for that same logical item when the assistant item closes or when the terminal response snapshot arrives.
+
 ### 8.1 Internal URP stream events
 
 STR4. URP-Proto internally represents stream boundaries using `ItemStart` and `ItemDone` events:
