@@ -463,6 +463,17 @@ pub(crate) fn reasoning_text_detail_value(text: &str, format: Option<&str>) -> V
     value
 }
 
+pub(crate) fn reasoning_summary_detail_value(summary: &str, format: Option<&str>) -> Value {
+    let mut value = json!({
+        "type": "reasoning.summary",
+        "summary": summary,
+    });
+    if let Some(format) = format {
+        value["format"] = Value::String(format.to_string());
+    }
+    value
+}
+
 pub(crate) fn reasoning_encrypted_detail_value(data: Value, format: Option<&str>) -> Value {
     let mut value = json!({
         "type": "reasoning.encrypted",
@@ -556,15 +567,8 @@ pub(crate) fn chat_reasoning_delta_from_text(text: &str, format: Option<&str>) -
 }
 
 pub(crate) fn chat_reasoning_delta_from_summary(summary: &str, format: Option<&str>) -> Value {
-    let mut detail = json!({
-        "type": "reasoning.summary",
-        "summary": summary
-    });
-    if let Some(format) = format {
-        detail["format"] = Value::String(format.to_string());
-    }
     json!({
-        "reasoning_details": [detail]
+        "reasoning_details": [reasoning_summary_detail_value(summary, format)]
     })
 }
 

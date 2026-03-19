@@ -734,6 +734,41 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
                 return Sse::new(stream).into_response();
             }
 
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("reasoning_encrypted_only")
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.added").data(
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "reasoning",
+                                    "id": "rs_mock"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.done").data(
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "reasoning",
+                                    "id": "rs_mock",
+                                    "encrypted_content": "mock_sig_only"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
             let mut events = Vec::new();
             if reasoning_enabled {
                 events.push(Ok::<_, Infallible>(
@@ -4799,6 +4834,47 @@ async fn chat_streaming_maps_text_from_responses_output_item_done() {
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(text.contains("\"content\""));
     assert!(text.contains("[DONE]"));
+}
+
+#[tokio::test]
+async fn chat_streaming_from_responses_encrypted_only_reasoning_synthesizes_summary_detail() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream encrypted reasoning only"}],
+                "stream": true,
+                "stream_mode": "reasoning_encrypted_only"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    assert!(
+        text.contains("\"type\":\"reasoning.summary\""),
+        "chat stream should synthesize summary detail for encrypted-only reasoning: {text}"
+    );
+    assert!(
+        text.contains("\"summary\":\"\""),
+        "chat stream should use an empty summary placeholder for encrypted-only reasoning: {text}"
+    );
+    assert!(
+        text.contains("\"type\":\"reasoning.encrypted\""),
+        "chat stream should preserve encrypted reasoning detail: {text}"
+    );
+    assert!(
+        text.contains("\"data\":\"mock_sig_only\""),
+        "chat stream should preserve encrypted reasoning payload: {text}"
+    );
 }
 
 #[tokio::test]
