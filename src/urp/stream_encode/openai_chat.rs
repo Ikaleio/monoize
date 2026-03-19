@@ -53,28 +53,6 @@ pub(crate) async fn emit_synthetic_chat_stream(
                                 .await?;
                             }
                             let format = source.as_deref().filter(|format| !format.is_empty());
-                            let has_summary =
-                                summary.as_deref().filter(|summary| !summary.is_empty()).is_some();
-                            let has_content =
-                                content.as_deref().filter(|content| !content.is_empty()).is_some();
-                            let has_encrypted = encrypted.as_ref().is_some_and(|data| match data {
-                                Value::String(signature) => !signature.is_empty(),
-                                Value::Null => false,
-                                _ => true,
-                            });
-                            if has_encrypted && !has_summary && !has_content {
-                                send_chat_chunk_string(
-                                    &tx,
-                                    &id,
-                                    created,
-                                    logical_model,
-                                    chat_reasoning_delta_from_summary("", format),
-                                    "",
-                                    chat_delta_path_reasoning_summary,
-                                    sse_max_frame_length,
-                                )
-                                .await?;
-                            }
                             if let Some(summary) =
                                 summary.as_deref().filter(|summary| !summary.is_empty())
                             {
@@ -355,28 +333,6 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             .and_then(Value::as_str)
                             .filter(|format| !format.is_empty())
                     });
-                let has_summary =
-                    summary.as_deref().filter(|summary| !summary.is_empty()).is_some();
-                let has_content =
-                    content.as_deref().filter(|content| !content.is_empty()).is_some();
-                let has_encrypted = encrypted.as_ref().is_some_and(|data| match data {
-                    Value::String(signature) => !signature.is_empty(),
-                    Value::Null => false,
-                    _ => true,
-                });
-                if has_encrypted && !has_summary && !has_content {
-                    send_chat_chunk_string(
-                        &tx,
-                        &chat_id,
-                        created,
-                        logical_model,
-                        chat_reasoning_delta_from_summary("", format),
-                        "",
-                        chat_delta_path_reasoning_summary,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
                 if let Some(signature) = encrypted
                     .as_ref()
                     .and_then(Value::as_str)
@@ -689,7 +645,6 @@ mod tests {
         }
 
         assert!(text.contains("reasoning_details"));
-        assert!(text.contains("reasoning.summary"));
         assert!(text.contains("reasoning.encrypted"));
         assert!(text.contains("live_sig"));
         assert!(!text.contains("\"reasoning\":"));

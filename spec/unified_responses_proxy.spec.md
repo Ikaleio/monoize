@@ -312,6 +312,8 @@ RC4. When the selected upstream provider type is:
     - `medium -> N=4096`
     - `high -> N=16384`
 
+RC4a. For upstream provider type `responses`, Monoize MUST include top-level `reasoning.summary = "detailed"` on the encoded upstream request unless the typed downstream request already carries an explicit `reasoning.summary` value.
+
 RC5. If Monoize generated provider-native reasoning-control fields under RC4, Monoize MUST NOT forward conflicting source fields from `extra` to the same upstream request.
 
 ### 7.1.5 Greedy Phase-Zone Merging
@@ -824,7 +826,6 @@ DC5. Reasoning:
     - `choices[0].message.reasoning` from URP reasoning `text` when present, otherwise from URP reasoning `summary`; and
     - `choices[0].message.reasoning_details[]` using OpenRouter reasoning item types (`reasoning.summary`, `reasoning.text`, and/or `reasoning.encrypted`).
   - when URP reasoning carries both `summary` and `text`, Monoize MUST preserve that distinction in the OpenRouter extension by rendering summary text as `type="reasoning.summary"` detail entries and full reasoning content as `type="reasoning.text"` detail entries, rather than collapsing both into one field.
-  - when URP reasoning carries encrypted payloads but carries neither plaintext `summary` nor plaintext `text`, Monoize MUST still emit a `type="reasoning.summary"` detail with `summary = ""` before the corresponding `type="reasoning.encrypted"` detail, in both non-stream and streaming Chat Completions output. Monoize MUST NOT fabricate non-empty summary text in that case.
   - when non-stream Chat Completions output is assembled from multiple assistant reasoning segments, Monoize MUST preserve every distinct encrypted reasoning payload as its own `type="reasoning.encrypted"` entry in `choices[0].message.reasoning_details[]`; Monoize MUST NOT collapse those entries to only the first encrypted payload.
   - for streaming, emit `choices[0].delta.reasoning_details[]` chunks as reasoning deltas become available.
   - preserve reasoning stream lifecycle: each reasoning delta MUST be emitted as one chat chunk in arrival order, MAY interleave with text/tool-call chunks, and MUST terminate with the final finish chunk and `[DONE]`.

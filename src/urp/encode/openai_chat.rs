@@ -2,14 +2,12 @@ use crate::urp::encode::{
     merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
     usage_output_details,
 };
-use crate::urp::stream_helpers::{
-    reasoning_encrypted_detail_value, reasoning_summary_detail_value, reasoning_text_detail_value,
-};
+use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
 use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 struct PendingChatMessage {
@@ -444,7 +442,6 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     let mut reasoning_value: Option<String> = None;
     let mut reasoning_summary_value: Option<String> = None;
     let mut reasoning_content_value: Option<String> = None;
-    let mut inserted_placeholder_summary = false;
 
     for part in parts {
         let Part::Reasoning {
@@ -496,14 +493,6 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
                     if s.is_empty() {
                         continue;
                     }
-                }
-
-                if summary.as_deref().filter(|summary| !summary.is_empty()).is_none()
-                    && content.as_deref().filter(|content| !content.is_empty()).is_none()
-                    && !inserted_placeholder_summary
-                {
-                    details.push(reasoning_summary_detail_value("", format));
-                    inserted_placeholder_summary = true;
                 }
 
                 let detail = reasoning_encrypted_detail_value(enc.clone(), format);
@@ -1046,42 +1035,6 @@ mod tests {
             detail["type"].as_str() == Some("reasoning.encrypted")
                 && detail["data"].as_str() == Some("sig_only_summary")
         }));
-    }
-
-    #[test]
-    fn chat_response_encrypted_only_reasoning_gets_empty_summary_detail() {
-        let response = UrpResponse {
-            id: "chatcmpl_encrypted_only_reasoning".to_string(),
-            model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
-                role: Role::Assistant,
-                parts: vec![Part::Reasoning {
-                    content: None,
-                    encrypted: Some(json!("sig_only")),
-                    summary: None,
-                    source: Some("openrouter".to_string()),
-                    extra_body: empty_map(),
-                }],
-                extra_body: empty_map(),
-            }],
-            finish_reason: Some(FinishReason::Stop),
-            usage: None,
-            extra_body: empty_map(),
-        };
-
-        let encoded = encode_response(&response, "gpt-5.4");
-        let message = &encoded["choices"][0]["message"];
-        assert!(message.get("reasoning").is_none());
-        let details = message["reasoning_details"]
-            .as_array()
-            .expect("details array");
-        assert_eq!(details.len(), 2);
-        assert_eq!(details[0]["type"].as_str(), Some("reasoning.summary"));
-        assert_eq!(details[0]["summary"].as_str(), Some(""));
-        assert_eq!(details[0]["format"].as_str(), Some("openrouter"));
-        assert_eq!(details[1]["type"].as_str(), Some("reasoning.encrypted"));
-        assert_eq!(details[1]["data"].as_str(), Some("sig_only"));
-        assert_eq!(details[1]["format"].as_str(), Some("openrouter"));
     }
 
     #[test]

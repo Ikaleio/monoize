@@ -208,6 +208,26 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     }
 }
 
+fn ensure_default_responses_reasoning_summary(obj: &mut Map<String, Value>) {
+    let Some(existing) = obj.remove("reasoning") else {
+        obj.insert(
+            "reasoning".to_string(),
+            json!({ "summary": "detailed" }),
+        );
+        return;
+    };
+
+    let Value::Object(mut reasoning_obj) = existing else {
+        obj.insert("reasoning".to_string(), existing);
+        return;
+    };
+
+    reasoning_obj
+        .entry("summary".to_string())
+        .or_insert_with(|| Value::String("detailed".to_string()));
+    obj.insert("reasoning".to_string(), Value::Object(reasoning_obj));
+}
+
 fn encode_tool_call_item(part: &Part) -> Option<Value> {
     match part {
         Part::ToolCall {
@@ -294,6 +314,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         apply_response_format(obj, format);
     }
     merge_extra(obj, &req.extra_body);
+    ensure_default_responses_reasoning_summary(obj);
     body
 }
 
@@ -999,6 +1020,67 @@ mod tests {
         assert_eq!(input[0]["content"][0]["type"], json!("input_text"));
         assert_eq!(input[1]["role"], json!("assistant"));
         assert_eq!(input[1]["content"][0]["type"], json!("output_text"));
+    }
+
+    #[test]
+    fn encode_request_defaults_responses_reasoning_summary_to_detailed() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            inputs: vec![Item::Message {
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        assert_eq!(encoded["reasoning"]["summary"], json!("detailed"));
+        assert!(encoded["reasoning"].get("effort").is_none());
+    }
+
+    #[test]
+    fn encode_request_preserves_explicit_responses_reasoning_summary() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            inputs: vec![Item::Message {
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: Some(crate::urp::ReasoningConfig {
+                effort: Some("high".to_string()),
+                extra_body: HashMap::from([("summary".to_string(), json!("concise"))]),
+            }),
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        assert_eq!(encoded["reasoning"]["effort"], json!("high"));
+        assert_eq!(encoded["reasoning"]["summary"], json!("concise"));
     }
 
     #[test]
