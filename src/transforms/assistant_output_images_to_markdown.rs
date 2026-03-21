@@ -4,6 +4,7 @@ use crate::transforms::{
 };
 use crate::urp::{ImageSource, Item, Part, Role, UrpStreamEvent};
 use async_trait::async_trait;
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -44,7 +45,7 @@ impl Transform for AssistantOutputImagesToMarkdownTransform {
                 "template": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Template appended for each image. Supports {{src}}, {{url}}, {{media_type}}, and {{data}}."
+                    "description": "Template appended for each image. Supports raw placeholders {{src}}, {{url}}, {{media_type}}, {{data}} and URL-safe placeholders {{src_urlencoded}}, {{url_urlencoded}}, {{media_type_urlencoded}}, {{data_urlencoded}}."
                 }
             },
             "additionalProperties": false
@@ -52,8 +53,8 @@ impl Transform for AssistantOutputImagesToMarkdownTransform {
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config =
-            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
         Ok(Box::new(cfg))
     }
 
@@ -138,20 +139,33 @@ fn format_image_markdown(source: &ImageSource, config: &Config) -> String {
         return default;
     };
     match source {
-        ImageSource::Url { url, .. } => template
-            .replace("{{src}}", url)
-            .replace("{{url}}", url)
-            .replace("{{media_type}}", "")
-            .replace("{{data}}", ""),
+        ImageSource::Url { url, .. } => apply_template(template, url, url, "", ""),
         ImageSource::Base64 { media_type, data } => {
             let src = format!("data:{media_type};base64,{data}");
-            template
-                .replace("{{src}}", &src)
-                .replace("{{url}}", "")
-                .replace("{{media_type}}", media_type)
-                .replace("{{data}}", data)
+            apply_template(template, &src, "", media_type, data)
         }
     }
+}
+
+fn apply_template(template: &str, src: &str, url: &str, media_type: &str, data: &str) -> String {
+    [
+        ("{{src_urlencoded}}", percent_encode(src)),
+        ("{{url_urlencoded}}", percent_encode(url)),
+        ("{{media_type_urlencoded}}", percent_encode(media_type)),
+        ("{{data_urlencoded}}", percent_encode(data)),
+        ("{{src}}", src.to_string()),
+        ("{{url}}", url.to_string()),
+        ("{{media_type}}", media_type.to_string()),
+        ("{{data}}", data.to_string()),
+    ]
+    .into_iter()
+    .fold(template.to_string(), |rendered, (placeholder, value)| {
+        rendered.replace(placeholder, &value)
+    })
+}
+
+fn percent_encode(value: &str) -> String {
+    utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
 }
 
 inventory::submit!(TransformEntry {
@@ -193,6 +207,19 @@ mod tests {
     }
 
     #[test]
+    fn renders_default_data_url_for_base64_output_images() {
+        let cfg = Config { template: None };
+        let rendered = format_image_markdown(
+            &ImageSource::Base64 {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            },
+            &cfg,
+        );
+        assert_eq!(rendered, "![image](data:image/png;base64,QUJD)");
+    }
+
+    #[test]
     fn supports_custom_template() {
         let cfg = Config {
             template: Some("<img src=\"{{src}}\">".to_string()),
@@ -205,5 +232,57 @@ mod tests {
             &cfg,
         );
         assert_eq!(rendered, "<img src=\"data:image/png;base64,QUJD\">");
+    }
+
+    #[test]
+    fn resolves_url_and_base64_placeholders_by_source_variant() {
+        let cfg = Config {
+            template: Some(
+                "src={{src}} url={{url}} media={{media_type}} data={{data}}".to_string(),
+            ),
+        };
+        let url_rendered = format_image_markdown(
+            &ImageSource::Url {
+                url: "https://example.com/a.png".to_string(),
+                detail: None,
+            },
+            &cfg,
+        );
+        assert_eq!(
+            url_rendered,
+            "src=https://example.com/a.png url=https://example.com/a.png media= data="
+        );
+
+        let base64_rendered = format_image_markdown(
+            &ImageSource::Base64 {
+                media_type: "image/png".to_string(),
+                data: "QUJD".to_string(),
+            },
+            &cfg,
+        );
+        assert_eq!(
+            base64_rendered,
+            "src=data:image/png;base64,QUJD url= media=image/png data=QUJD"
+        );
+    }
+
+    #[test]
+    fn supports_urlencoded_placeholders_for_base64_url_templates() {
+        let cfg = Config {
+            template: Some(
+                "https://cdn.example/render/{{data_urlencoded}}?src={{src_urlencoded}}".to_string(),
+            ),
+        };
+        let rendered = format_image_markdown(
+            &ImageSource::Base64 {
+                media_type: "image/png".to_string(),
+                data: "ab/c+=,".to_string(),
+            },
+            &cfg,
+        );
+        assert_eq!(
+            rendered,
+            "https://cdn.example/render/ab%2Fc%2B%3D%2C?src=data%3Aimage%2Fpng%3Bbase64%2Cab%2Fc%2B%3D%2C"
+        );
     }
 }

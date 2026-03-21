@@ -349,7 +349,8 @@ impl ModelRegistryStore {
     pub async fn delete_model(&self, id: &str) -> Result<(), String> {
         let result = self
             .db
-            .write().await
+            .write()
+            .await
             .execute(self.db.stmt(
                 "DELETE FROM model_registry_records WHERE id = $1",
                 vec![id.into()],
@@ -537,7 +538,8 @@ impl ModelRegistryStore {
     pub async fn delete_model_metadata(&self, model_id: &str) -> Result<bool, String> {
         let result = self
             .db
-            .write().await
+            .write()
+            .await
             .execute(self.db.stmt(
                 "DELETE FROM model_metadata_records WHERE model_id = $1",
                 vec![model_id.into()],
@@ -629,10 +631,7 @@ impl ModelRegistryStore {
 
         let fetched_at = Utc::now().to_rfc3339();
         let _write_guard = self.db.write().await;
-        let txn = _write_guard
-            .begin()
-            .await
-            .map_err(|e| e.to_string())?;
+        let txn = _write_guard.begin().await.map_err(|e| e.to_string())?;
 
         let del_result = txn
             .execute(self.db.stmt(
@@ -659,8 +658,8 @@ impl ModelRegistryStore {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            let existing_source: Option<String> = existing_row
-                .and_then(|r| r.try_get::<String>("", "source").ok());
+            let existing_source: Option<String> =
+                existing_row.and_then(|r| r.try_get::<String>("", "source").ok());
 
             if existing_source.as_deref() == Some("manual") {
                 skipped += 1;
@@ -759,9 +758,7 @@ fn row_to_record(row: &sea_orm::QueryResult) -> Result<DbModelRecord, String> {
         logical_model: row
             .try_get("", "logical_model")
             .map_err(|e| e.to_string())?,
-        provider_id: row
-            .try_get("", "provider_id")
-            .map_err(|e| e.to_string())?,
+        provider_id: row.try_get("", "provider_id").map_err(|e| e.to_string())?,
         upstream_model: row
             .try_get("", "upstream_model")
             .map_err(|e| e.to_string())?,
@@ -785,9 +782,7 @@ fn row_to_model_metadata(row: &sea_orm::QueryResult) -> Result<DbModelMetadataRe
         model_id: row.try_get("", "model_id").map_err(|e| e.to_string())?,
         models_dev_provider: row.try_get("", "models_dev_provider").unwrap_or(None),
         mode: row.try_get("", "mode").unwrap_or(None),
-        input_cost_per_token_nano: row
-            .try_get("", "input_cost_per_token_nano")
-            .unwrap_or(None),
+        input_cost_per_token_nano: row.try_get("", "input_cost_per_token_nano").unwrap_or(None),
         output_cost_per_token_nano: row
             .try_get("", "output_cost_per_token_nano")
             .unwrap_or(None),

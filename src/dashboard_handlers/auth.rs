@@ -153,7 +153,10 @@ pub async fn register(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let session_ttl_days = state.settings_store.get_all().await
+    let session_ttl_days = state
+        .settings_store
+        .get_all()
+        .await
         .map(|s| s.session_ttl_days)
         .unwrap_or(7);
 
@@ -167,10 +170,7 @@ pub async fn register(
         token: session.token,
         user: user.into(),
     });
-    Ok((
-        [(axum::http::header::SET_COOKIE, cookie)],
-        body,
-    ).into_response())
+    Ok(([(axum::http::header::SET_COOKIE, cookie)], body).into_response())
 }
 
 pub async fn login(
@@ -229,7 +229,10 @@ pub async fn login(
 
     user_store.update_last_login(&user.id).await.ok();
 
-    let session_ttl_days = state.settings_store.get_all().await
+    let session_ttl_days = state
+        .settings_store
+        .get_all()
+        .await
         .map(|s| s.session_ttl_days)
         .unwrap_or(7);
 
@@ -243,10 +246,7 @@ pub async fn login(
         token: session.token,
         user: user.into(),
     });
-    Ok((
-        [(axum::http::header::SET_COOKIE, cookie)],
-        body,
-    ).into_response())
+    Ok(([(axum::http::header::SET_COOKIE, cookie)], body).into_response())
 }
 
 pub async fn logout(
@@ -270,7 +270,8 @@ pub async fn logout(
     Ok((
         [(axum::http::header::SET_COOKIE, clear_cookie)],
         Json(json!({ "success": true })),
-    ).into_response())
+    )
+        .into_response())
 }
 pub async fn get_me(
     State(state): State<AppState>,
@@ -328,9 +329,7 @@ fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
 
 fn build_session_cookie(token: &str, ttl_days: i64) -> String {
     let max_age = ttl_days.max(0) * 86400;
-    format!(
-        "monoize_session={token}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age}"
-    )
+    format!("monoize_session={token}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age}")
 }
 
 fn clear_session_cookie() -> String {

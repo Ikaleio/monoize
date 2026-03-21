@@ -57,8 +57,13 @@ pub(super) fn calculate_charge_components(
     let prompt_tokens = i128::from(usage.input_tokens);
     let completion_tokens = i128::from(usage.output_tokens);
     let cached_tokens = i128::from(usage.cached_tokens().unwrap_or(0));
-    let cache_creation_tokens =
-        i128::from(usage.input_details.as_ref().map(|d| d.cache_creation_tokens).unwrap_or(0));
+    let cache_creation_tokens = i128::from(
+        usage
+            .input_details
+            .as_ref()
+            .map(|d| d.cache_creation_tokens)
+            .unwrap_or(0),
+    );
     let reasoning_tokens = i128::from(usage.reasoning_tokens().unwrap_or(0));
 
     let uncached_prompt_tokens = match provider_type {
@@ -305,7 +310,10 @@ pub(super) fn build_billing_breakdown(
     })
 }
 
-pub(super) fn scale_charge_with_multiplier(base_nano: i128, provider_multiplier: f64) -> Option<i128> {
+pub(super) fn scale_charge_with_multiplier(
+    base_nano: i128,
+    provider_multiplier: f64,
+) -> Option<i128> {
     if !provider_multiplier.is_finite() || provider_multiplier < 0.0 {
         return None;
     }
@@ -338,29 +346,27 @@ pub(super) async fn maybe_charge_usage(
     let Some(user_id) = auth.user_id.as_deref() else {
         return Ok(ChargeComputation::default());
     };
-    let pricing = match state
-        .model_registry_store
-        .get_model_pricing(&attempt.upstream_model)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
-    {
-        Some(v) => v,
-        None => {
-            return Err(AppError::new(
-                StatusCode::FORBIDDEN,
-                "model_pricing_required",
-                format!("pricing metadata required for model: {}", attempt.upstream_model),
-            ));
-        }
-    };
+    let pricing =
+        match resolve_billable_pricing(state, &attempt.upstream_model, logical_model).await? {
+            Some(v) => v,
+            None => {
+                return Err(AppError::new(
+                    StatusCode::FORBIDDEN,
+                    "model_pricing_required",
+                    format!(
+                        "pricing metadata required for model: {}",
+                        attempt.upstream_model
+                    ),
+                ));
+            }
+        };
 
     let Some(components) = calculate_charge_components(
         usage,
         &pricing,
         attempt.model_multiplier,
         attempt.provider_type,
-    )
-    else {
+    ) else {
         tracing::error!(
             "billing error: charge overflow for model={}",
             attempt.upstream_model
@@ -368,7 +374,10 @@ pub(super) async fn maybe_charge_usage(
         return Err(AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "billing_overflow",
-            format!("charge calculation overflow for model={}", attempt.upstream_model),
+            format!(
+                "charge calculation overflow for model={}",
+                attempt.upstream_model
+            ),
         ));
     };
     let billing_breakdown = build_billing_breakdown(logical_model, attempt, &pricing, &components);

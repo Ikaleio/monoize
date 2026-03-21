@@ -6,8 +6,9 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Sse};
-use chrono::Utc;
 use chrono::NaiveTime;
+use chrono::Utc;
+use dashmap::DashMap;
 use futures_util::stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -15,7 +16,6 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use dashmap::DashMap;
 use tokio::sync::broadcast::error::RecvError;
 
 #[derive(Debug, Deserialize)]
@@ -296,7 +296,14 @@ pub async fn stream_request_logs(
     let api_key_cache = state.user_store.api_key_cache.clone();
     let receiver = state.log_broadcast.subscribe();
     let stream = stream::unfold(
-        (receiver, name_caches, api_key_cache, is_admin, user_id, guard),
+        (
+            receiver,
+            name_caches,
+            api_key_cache,
+            is_admin,
+            user_id,
+            guard,
+        ),
         |(mut receiver, name_caches, api_key_cache, is_admin, user_id, guard)| async move {
             loop {
                 match receiver.recv().await {
@@ -322,14 +329,28 @@ pub async fn stream_request_logs(
                         };
                         return Some((
                             Ok::<Event, Infallible>(event),
-                            (receiver, name_caches, api_key_cache, is_admin, user_id, guard),
+                            (
+                                receiver,
+                                name_caches,
+                                api_key_cache,
+                                is_admin,
+                                user_id,
+                                guard,
+                            ),
                         ));
                     }
                     Err(RecvError::Lagged(_)) => {
                         let event = Event::default().event("resync").data("{}");
                         return Some((
                             Ok::<Event, Infallible>(event),
-                            (receiver, name_caches, api_key_cache, is_admin, user_id, guard),
+                            (
+                                receiver,
+                                name_caches,
+                                api_key_cache,
+                                is_admin,
+                                user_id,
+                                guard,
+                            ),
                         ));
                     }
                     Err(RecvError::Closed) => return None,

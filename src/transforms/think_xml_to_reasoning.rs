@@ -2,8 +2,8 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData, response_output_items_mut,
 };
-use async_trait::async_trait;
 use crate::urp::{Item, Part, PartDelta, PartHeader, UrpStreamEvent};
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -177,9 +177,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
             }
         }
         UrpStreamEvent::Delta {
-            part_index,
-            delta,
-            ..
+            part_index, delta, ..
         } => {
             let key = *part_index;
             let Some(in_reasoning) = state.in_reasoning.get_mut(&key) else {
@@ -205,10 +203,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
                 }
             }
         }
-        UrpStreamEvent::PartDone {
-            part_index,
-            ..
-        } => {
+        UrpStreamEvent::PartDone { part_index, .. } => {
             state.in_reasoning.remove(part_index);
         }
         _ => {}

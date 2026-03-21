@@ -10,9 +10,7 @@ pub(crate) mod usage;
 mod tests;
 
 use crate::app::AppState;
-use crate::config::{
-    ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType,
-};
+use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType};
 use crate::error::{AppError, AppResult};
 use crate::model_registry_store::ModelPricing;
 use crate::transforms::{self, Phase, TransformRuleConfig};
@@ -30,7 +28,6 @@ use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-
 
 use billing::*;
 use helpers::*;
@@ -530,6 +527,31 @@ struct MonoizeAttempt {
     request_timeout_ms: u64,
 }
 
+async fn get_model_pricing_or_internal_error(
+    state: &AppState,
+    model_id: &str,
+) -> AppResult<Option<ModelPricing>> {
+    state
+        .model_registry_store
+        .get_model_pricing(model_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))
+}
+
+async fn resolve_billable_pricing(
+    state: &AppState,
+    upstream_model: &str,
+    logical_model: &str,
+) -> AppResult<Option<ModelPricing>> {
+    if let Some(pricing) = get_model_pricing_or_internal_error(state, upstream_model).await? {
+        return Ok(Some(pricing));
+    }
+    if logical_model == upstream_model {
+        return Ok(None);
+    }
+    get_model_pricing_or_internal_error(state, logical_model).await
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 struct TriedProvider {
     provider_id: String,
@@ -564,9 +586,9 @@ async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
     {
-        auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "invalid auth"))?
+        auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "invalid auth")
+        })?
     } else if let Some(api_key) = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
@@ -638,10 +660,7 @@ async fn ensure_quota_before_forward(
     Ok(())
 }
 
-fn split_body(
-    value: Value,
-    known_keys: &[&str],
-) -> AppResult<(Value, Map<String, Value>)> {
+fn split_body(value: Value, known_keys: &[&str]) -> AppResult<(Value, Map<String, Value>)> {
     let known: HashSet<&str> = known_keys.iter().copied().collect();
     let obj = value.as_object().ok_or_else(|| {
         AppError::new(

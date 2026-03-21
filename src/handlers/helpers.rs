@@ -63,7 +63,12 @@ pub(super) fn check_ip_whitelist(
         return Ok(());
     }
     let client_ip = extract_client_ip(headers).unwrap_or_default();
-    if client_ip.is_empty() || !auth.ip_whitelist.iter().any(|allowed| allowed == &client_ip) {
+    if client_ip.is_empty()
+        || !auth
+            .ip_whitelist
+            .iter()
+            .any(|allowed| allowed == &client_ip)
+    {
         return Err(AppError::new(
             StatusCode::FORBIDDEN,
             "ip_not_allowed",
@@ -89,7 +94,9 @@ pub(super) struct UserImageRequestMetrics {
     pub estimated_decoded_bytes: usize,
 }
 
-pub(super) fn summarize_user_image_request_metrics(req: &urp::UrpRequest) -> UserImageRequestMetrics {
+pub(super) fn summarize_user_image_request_metrics(
+    req: &urp::UrpRequest,
+) -> UserImageRequestMetrics {
     let mut metrics = UserImageRequestMetrics::default();
     for item in &req.inputs {
         let urp::Item::Message { role, parts, .. } = item else {
@@ -125,7 +132,9 @@ pub(super) fn summarize_user_image_request_metrics(req: &urp::UrpRequest) -> Use
 }
 
 pub(super) fn encoded_json_size_bytes(value: &Value) -> usize {
-    serde_json::to_vec(value).map(|bytes| bytes.len()).unwrap_or_default()
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .unwrap_or_default()
 }
 
 pub(super) fn log_outgoing_request_shape(
@@ -190,7 +199,8 @@ pub(super) fn read_max_multiplier_from_extra(req: &urp::UrpRequest) -> Option<f6
 
 pub(super) fn inject_monoize_context(auth: &crate::auth::AuthResult, req: &mut urp::UrpRequest) {
     if let Some(username) = &auth.username {
-        req.extra_body.insert("__monoize_username".to_string(), json!(username.clone()));
+        req.extra_body
+            .insert("__monoize_username".to_string(), json!(username.clone()));
     }
 }
 
@@ -284,25 +294,25 @@ pub(super) async fn transform_urp_stream(
     auth_rules: &[TransformRuleConfig],
     model: &str,
 ) -> AppResult<()> {
-    let mut provider_states = transforms::build_states_for_rules(
-        provider_rules,
-        state.transform_registry.as_ref(),
-    )
-    .map_err(|e| {
-        AppError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "transform_init_failed",
-            e.to_string(),
-        )
-    })?;
-    let mut auth_states = transforms::build_states_for_rules(auth_rules, state.transform_registry.as_ref())
-        .map_err(|e| {
-        AppError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "transform_init_failed",
-            e.to_string(),
-        )
-    })?;
+    let mut provider_states =
+        transforms::build_states_for_rules(provider_rules, state.transform_registry.as_ref())
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "transform_init_failed",
+                    e.to_string(),
+                )
+            })?;
+    let mut auth_states =
+        transforms::build_states_for_rules(auth_rules, state.transform_registry.as_ref()).map_err(
+            |e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "transform_init_failed",
+                    e.to_string(),
+                )
+            },
+        )?;
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
     };
@@ -373,7 +383,10 @@ pub(super) fn build_routing_stub(req: &urp::UrpRequest, max_multiplier: Option<f
     }
 }
 
-pub(super) fn build_embeddings_routing_stub(model: &str, max_multiplier: Option<f64>) -> UrpRequest {
+pub(super) fn build_embeddings_routing_stub(
+    model: &str,
+    max_multiplier: Option<f64>,
+) -> UrpRequest {
     UrpRequest {
         model: model.to_string(),
         max_multiplier,
@@ -440,7 +453,9 @@ fn resolve_sse_max_frame_length_from_rules(
                 && rule.transform == "split_sse_frames"
                 && match &rule.models {
                     None => true,
-                    Some(patterns) => patterns.iter().any(|pattern| model_glob_match(pattern, model)),
+                    Some(patterns) => patterns
+                        .iter()
+                        .any(|pattern| model_glob_match(pattern, model)),
                 }
         })
         .map(|rule| {
@@ -464,7 +479,9 @@ pub(super) fn requires_buffered_response_stream(
         .filter(|rule| rule.enabled && rule.phase == Phase::Response)
         .filter(|rule| match &rule.models {
             None => true,
-            Some(patterns) => patterns.iter().any(|pattern| model_glob_match(pattern, model)),
+            Some(patterns) => patterns
+                .iter()
+                .any(|pattern| model_glob_match(pattern, model)),
         })
         .any(|rule| {
             matches!(
@@ -492,7 +509,10 @@ pub(super) fn model_glob_match(pattern: &str, model: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn ensure_stream_usage_requested(req: &mut urp::UrpRequest, provider_type: ProviderType) {
+pub(super) fn ensure_stream_usage_requested(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+) {
     if req.stream != Some(true) || provider_type != ProviderType::ChatCompletion {
         return;
     }

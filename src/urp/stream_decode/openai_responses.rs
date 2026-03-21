@@ -6,8 +6,7 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::stream_helpers::{
-    extract_reasoning_parts, extract_responses_message_phase,
-    extract_responses_message_text,
+    extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,
 };
 use crate::urp::{
     FinishReason, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
@@ -151,9 +150,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     let text = extract_responses_message_text(item);
                     if !text.is_empty() {
-                        output_texts_by_output_index
-                            .entry(idx)
-                            .or_insert(text);
+                        output_texts_by_output_index.entry(idx).or_insert(text);
                     }
                     if let Some(phase) = extract_responses_message_phase(item) {
                         message_phases_by_output_index.insert(idx, phase);
@@ -317,7 +314,6 @@ pub(crate) async fn stream_responses_to_urp_events(
         let final_usage = latest_stream_usage_snapshot(&runtime_metrics).await;
 
         if !saw_text_delta && !saw_text_part_done {
-
             for (final_item_index, output_item) in output_items.iter().enumerate() {
                 let Some(Item::Message {
                     role: Role::Assistant,
@@ -441,7 +437,10 @@ fn map_responses_event_to_urp_events_with_state(
         }],
         "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
             if let Some(output_index) = data_val.get("output_index").and_then(|v| v.as_u64()) {
-                let output_state = index_state.output_state_by_index.entry(output_index).or_default();
+                let output_state = index_state
+                    .output_state_by_index
+                    .entry(output_index)
+                    .or_default();
                 if event_name == "response.reasoning_summary_text.delta" {
                     output_state.reasoning_summary_delta_seen = true;
                 } else {
@@ -502,7 +501,16 @@ fn map_responses_event_to_urp_events_with_state(
                     encrypted: None,
                     summary: None,
                     source: None,
-                    extra_body: split_known_fields(data_val, &["text", "delta", "output_index", "content_index", "part_index"]),
+                    extra_body: split_known_fields(
+                        data_val,
+                        &[
+                            "text",
+                            "delta",
+                            "output_index",
+                            "content_index",
+                            "part_index",
+                        ],
+                    ),
                 },
                 usage: None,
                 extra_body: HashMap::new(),
@@ -520,12 +528,7 @@ fn map_responses_event_to_urp_events_with_state(
             usage: None,
             extra_body: split_known_fields(
                 data_val,
-                &[
-                    "delta",
-                    "output_index",
-                    "content_index",
-                    "part_index",
-                ],
+                &["delta", "output_index", "content_index", "part_index"],
             ),
         }],
         "response.content_part.done" => map_content_part_done(data_val, index_state),
@@ -615,7 +618,10 @@ struct OutputItemStreamState {
     reasoning_summary_delta_seen: bool,
 }
 
-fn flush_active_assistant_item(state: &mut ResponsesStreamIndexState, events: &mut Vec<UrpStreamEvent>) {
+fn flush_active_assistant_item(
+    state: &mut ResponsesStreamIndexState,
+    events: &mut Vec<UrpStreamEvent>,
+) {
     let Some(active_item) = state.active_assistant_item.take() else {
         return;
     };
@@ -708,7 +714,10 @@ fn map_output_item_added(
     let mut events = Vec::new();
 
     {
-        let output_state = index_state.output_state_by_index.entry(output_index).or_default();
+        let output_state = index_state
+            .output_state_by_index
+            .entry(output_index)
+            .or_default();
         output_state.item_type = Some(item_type.to_string());
         output_state.role = Some(role);
         output_state.item_extra_body = item_extra_body.clone();
@@ -801,7 +810,10 @@ fn map_content_part_added(
         .unwrap_or(0);
     let part_index = index_state.part_index_for_content(output_index, content_index);
     let (fed_to_merger, role, item_extra_body) = {
-        let output_state = index_state.output_state_by_index.entry(output_index).or_default();
+        let output_state = index_state
+            .output_state_by_index
+            .entry(output_index)
+            .or_default();
         (
             output_state.fed_to_merger,
             output_state.role.unwrap_or(Role::Assistant),
@@ -945,8 +957,12 @@ fn map_output_item_done(
                     .then(|| summary.clone())
                     .flatten();
                 let fallback_encrypted = encrypted.clone();
-                if fallback_content.as_deref().is_some_and(|content| !content.is_empty())
-                    || fallback_summary.as_deref().is_some_and(|summary| !summary.is_empty())
+                if fallback_content
+                    .as_deref()
+                    .is_some_and(|content| !content.is_empty())
+                    || fallback_summary
+                        .as_deref()
+                        .is_some_and(|summary| !summary.is_empty())
                     || fallback_encrypted.is_some()
                 {
                     events.push(UrpStreamEvent::Delta {
@@ -1074,17 +1090,22 @@ fn map_response_completed(
         extra_body: split_known_fields(
             response_value,
             &[
-                "id", "object", "created", "created_at", "model", "status", "output", "usage", "error",
+                "id",
+                "object",
+                "created",
+                "created_at",
+                "model",
+                "status",
+                "output",
+                "usage",
+                "error",
             ],
         ),
     });
     events
 }
 
-fn urp_part_index_from_delta(
-    data_val: &Value,
-    index_state: &mut ResponsesStreamIndexState,
-) -> u32 {
+fn urp_part_index_from_delta(data_val: &Value, index_state: &mut ResponsesStreamIndexState) -> u32 {
     let output_index = data_val
         .get("output_index")
         .and_then(|v| v.as_u64())
@@ -1358,13 +1379,17 @@ fn build_accumulated_output_items(
     }
 
     let mut ordered_kinds = Vec::new();
-    if !reasoning_text.is_empty() || !reasoning_summary_text.is_empty() || !reasoning_sig.is_empty() {
+    if !reasoning_text.is_empty() || !reasoning_summary_text.is_empty() || !reasoning_sig.is_empty()
+    {
         ordered_kinds.push(FallbackOutputKind::Reasoning(
             reasoning_output_index.unwrap_or(0),
         ));
     }
 
-    let mut text_indices = output_texts_by_output_index.keys().copied().collect::<Vec<_>>();
+    let mut text_indices = output_texts_by_output_index
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
     text_indices.sort_unstable();
     ordered_kinds.extend(text_indices.into_iter().map(FallbackOutputKind::Text));
 
@@ -1458,9 +1483,9 @@ fn output_index_for_call_id(
     call_ids_by_output_index: &HashMap<u64, String>,
     target_call_id: &str,
 ) -> Option<u64> {
-    call_ids_by_output_index.iter().find_map(|(output_index, call_id)| {
-        (call_id == target_call_id).then_some(*output_index)
-    })
+    call_ids_by_output_index
+        .iter()
+        .find_map(|(output_index, call_id)| (call_id == target_call_id).then_some(*output_index))
 }
 
 fn item_extra_body_from_value(item: &Value) -> HashMap<String, Value> {
@@ -1605,10 +1630,7 @@ mod tests {
             "",
             "",
             None,
-            &HashMap::from([
-                (0, "analysis".to_string()),
-                (2, "final".to_string()),
-            ]),
+            &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
             &HashMap::from([
                 (0, "commentary".to_string()),
                 (2, "final_answer".to_string()),
@@ -1874,7 +1896,10 @@ mod tests {
             "",
             None,
             &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
-            &HashMap::from([(0, "commentary".to_string()), (2, "final_answer".to_string())]),
+            &HashMap::from([
+                (0, "commentary".to_string()),
+                (2, "final_answer".to_string()),
+            ]),
             &[],
             &HashMap::new(),
             &HashMap::new(),
@@ -2034,12 +2059,18 @@ mod tests {
             &mut state,
         );
 
-        assert_eq!(done_events.len(), 1, "fallback should start one merged assistant item");
+        assert_eq!(
+            done_events.len(),
+            1,
+            "fallback should start one merged assistant item"
+        );
         assert!(matches!(
             &done_events[0],
             UrpStreamEvent::ItemStart {
                 item_index: 0,
-                header: ItemHeader::Message { role: Role::Assistant },
+                header: ItemHeader::Message {
+                    role: Role::Assistant
+                },
                 ..
             }
         ));
@@ -2051,7 +2082,9 @@ mod tests {
         assert_eq!(active_item.item_index, 0);
         assert_eq!(active_item.parts.len(), 2);
         assert!(matches!(&active_item.parts[0], Part::Text { content, .. } if content == "answer"));
-        assert!(matches!(&active_item.parts[1], Part::ToolCall { call_id, .. } if call_id == "call_1"));
+        assert!(
+            matches!(&active_item.parts[1], Part::ToolCall { call_id, .. } if call_id == "call_1")
+        );
 
         let mut finish_events = Vec::new();
         finish_assistant_stream_group(&mut state, &mut finish_events);

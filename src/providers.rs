@@ -514,7 +514,8 @@ impl ProviderStore {
             values.push(id.into());
 
             self.db
-                .write().await
+                .write()
+                .await
                 .execute(self.db.stmt(&sql, values))
                 .await
                 .map_err(|e| e.to_string())?;
@@ -522,7 +523,8 @@ impl ProviderStore {
 
         if let Some(model_map) = &input.model_map {
             self.db
-                .write().await
+                .write()
+                .await
                 .execute(self.db.stmt(
                     "DELETE FROM model_mappings WHERE provider_id = $1",
                     vec![id.into()],
@@ -538,7 +540,8 @@ impl ProviderStore {
         if let Some(members) = &input.members {
             if existing.provider_type == ProviderType::Group {
                 self.db
-                    .write().await
+                    .write()
+                    .await
                     .execute(self.db.stmt(
                         "DELETE FROM group_members WHERE group_provider_id = $1",
                         vec![id.into()],
@@ -576,11 +579,12 @@ impl ProviderStore {
         }
 
         self.db
-            .write().await
-            .execute(self.db.stmt(
-                "DELETE FROM providers WHERE id = $1",
-                vec![id.into()],
-            ))
+            .write()
+            .await
+            .execute(
+                self.db
+                    .stmt("DELETE FROM providers WHERE id = $1", vec![id.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?;
 
@@ -611,9 +615,7 @@ impl ProviderStore {
 
             mappings.push(ModelMapping {
                 id: row.try_get("", "id").map_err(|e| e.to_string())?,
-                provider_id: row
-                    .try_get("", "provider_id")
-                    .map_err(|e| e.to_string())?,
+                provider_id: row.try_get("", "provider_id").map_err(|e| e.to_string())?,
                 logical_model: row
                     .try_get("", "logical_model")
                     .map_err(|e| e.to_string())?,
@@ -654,7 +656,9 @@ impl ProviderStore {
                 member_provider_id: row
                     .try_get("", "member_provider_id")
                     .map_err(|e| e.to_string())?,
-                weight: row.try_get::<i32>("", "weight").map_err(|e| e.to_string())? as u32,
+                weight: row
+                    .try_get::<i32>("", "weight")
+                    .map_err(|e| e.to_string())? as u32,
                 priority: row.try_get("", "priority").map_err(|e| e.to_string())?,
                 created_at,
             });
@@ -726,8 +730,9 @@ impl ProviderStore {
     }
 
     fn row_to_provider(&self, row: &QueryResult) -> Result<Provider, String> {
-        let provider_type_str: String =
-            row.try_get("", "provider_type").map_err(|e| e.to_string())?;
+        let provider_type_str: String = row
+            .try_get("", "provider_type")
+            .map_err(|e| e.to_string())?;
         let provider_type = ProviderType::from_str(&provider_type_str)
             .ok_or_else(|| format!("invalid provider type: {provider_type_str}"))?;
 
@@ -763,23 +768,23 @@ impl ProviderStore {
             .transpose()
             .map_err(|e| e.to_string())?;
 
-        let created_at_str: String =
-            row.try_get("", "created_at").map_err(|e| e.to_string())?;
+        let created_at_str: String = row.try_get("", "created_at").map_err(|e| e.to_string())?;
         let created_at = DateTime::parse_from_rfc3339(&created_at_str)
             .map_err(|e| e.to_string())?
             .with_timezone(&Utc);
 
-        let updated_at_str: String =
-            row.try_get("", "updated_at").map_err(|e| e.to_string())?;
+        let updated_at_str: String = row.try_get("", "updated_at").map_err(|e| e.to_string())?;
         let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
             .map_err(|e| e.to_string())?
             .with_timezone(&Utc);
 
-        let groups_json: String = row
-            .try_get("", "groups_json")
-            .map_err(|e| e.to_string())?;
-        let groups: Vec<String> = serde_json::from_str(&groups_json)
-            .map_err(|e| format!("invalid groups_json for provider {}: {e}", row.try_get::<String>("", "id").unwrap_or_default()))?;
+        let groups_json: String = row.try_get("", "groups_json").map_err(|e| e.to_string())?;
+        let groups: Vec<String> = serde_json::from_str(&groups_json).map_err(|e| {
+            format!(
+                "invalid groups_json for provider {}: {e}",
+                row.try_get::<String>("", "id").unwrap_or_default()
+            )
+        })?;
 
         Ok(Provider {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -825,9 +830,9 @@ impl ProviderStore {
                     .model_map
                     .iter()
                     .any(|m| m.logical_model == logical_model)
-                {
-                    result.push(provider);
-                }
+            {
+                result.push(provider);
+            }
         }
 
         Ok(result)

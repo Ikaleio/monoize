@@ -268,10 +268,11 @@ RCD-2. Config MUST be an empty object.
 
 RCD-3. Value resolution:
 1. For each `Part::Reasoning` (response) or `PartDelta::Reasoning` (stream delta), the transform MUST resolve a `reasoning_content` value as follows:
-   - If `encrypted` is present and non-empty (stringified), use that value.
+   - If plaintext `content` is present and non-empty, use that value.
    - Else if `summary` is present and non-empty, use that value.
    - Else no value is resolved; the transform MUST NOT inject anything.
-2. The transform MUST NOT modify `content`, `summary`, or `encrypted` field values.
+2. `encrypted` MUST NOT contribute to the resolved `reasoning_content` value. If a reasoning part or delta carries only encrypted reasoning payload and no plaintext `content` or `summary`, the transform MUST inject nothing.
+3. The transform MUST NOT modify `content`, `summary`, or `encrypted` field values.
 
 RCD-4. Response behavior:
 1. If a value is resolved per RCD-3, the transform MUST set `part.extra_body.inject_reasoning_content = Value::String(resolved_value)`.
@@ -285,6 +286,7 @@ RCD-6. Downstream Chat Completions compatibility:
 1. When a Chat Completions encoder (streaming or synthetic) sees `inject_reasoning_content` as a non-empty string in `extra_body`, it MUST emit an additional SSE chunk whose JSON payload places that value at `choices[0].delta.reasoning_content`, before emitting the standard `reasoning_details` fields.
 2. This provides DeepSeek-style `reasoning_content` field injection for downstream clients that only recognize that field.
 3. This transform MUST be independent of `reasoning_summary_to_raw_cot`. Both MAY be enabled simultaneously without conflict.
+4. The additional `choices[0].delta.reasoning_content` chunk defined by RCD-6.1 MUST contain only plaintext reasoning derived per RCD-3. Encrypted reasoning payloads MUST continue to flow only through the normal Chat Completions reasoning fields when those fields are otherwise enabled.
 
 ### 4.6 `assistant_markdown_images_to_output`
 
@@ -316,7 +318,14 @@ AMIO-5. Streaming behavior:
 AOIM-1. Phase: `response` only.
 
 AOIM-2. Config MAY contain:
-- `template` (string, optional): string template used for each image appended to assistant text. Supported placeholders are `{{src}}`, `{{url}}`, `{{media_type}}`, and `{{data}}`.
+- `template` (string, optional): string template used for each image appended to assistant text. Supported raw placeholders are `{{src}}`, `{{url}}`, `{{media_type}}`, and `{{data}}`. Supported percent-encoded placeholders are `{{src_urlencoded}}`, `{{url_urlencoded}}`, `{{media_type_urlencoded}}`, and `{{data_urlencoded}}`.
+
+AOIM-2a. Placeholder resolution:
+1. Raw placeholders MUST expand to the literal value without percent-encoding.
+2. Percent-encoded placeholders MUST percent-encode the UTF-8 bytes of the corresponding raw value.
+3. For `ImageSource::Url`, `src` and `url` MUST both resolve to the source URL, and `media_type` and `data` MUST resolve to the empty string.
+4. For `ImageSource::Base64`, `src` MUST resolve to `data:{media_type};base64,{data}`, `url` MUST resolve to the empty string, and `media_type` and `data` MUST resolve to the underlying raw fields.
+5. Percent-encoded placeholders exist so templates that embed image values inside another URL can preserve reserved characters such as `/`, `+`, `=`, `:`, and `,` as data rather than URL syntax.
 
 AOIM-3. Default formatting:
 1. If `template` is absent and the image source is `ImageSource::Url`, the transform MUST render `![image]({url})`.

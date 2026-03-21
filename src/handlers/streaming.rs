@@ -17,9 +17,11 @@ pub(super) async fn forward_stream_typed(
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
     let requested_model = req.model.clone();
-    let transform_match_model = normalized_logical_model_for_matching(&state, &requested_model).await;
+    let transform_match_model =
+        normalized_logical_model_for_matching(&state, &requested_model).await;
     inject_monoize_context(&auth, &mut req);
-    apply_transform_rules_request(&state, &mut req, &auth.transforms, &transform_match_model).await?;
+    apply_transform_rules_request(&state, &mut req, &auth.transforms, &transform_match_model)
+        .await?;
     strip_monoize_context(&mut req);
     resolve_model_suffix(&state, &mut req).await;
     let logical_model = req.model.clone();
@@ -138,17 +140,21 @@ pub(super) async fn forward_stream_typed(
                     let logical_model_for_stream = logical_model.clone();
                     tokio::spawn(async move {
                         let tx_err = tx.clone();
-                        let stream_result = crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                            downstream,
-                            &logical_model_for_stream,
-                            &resp,
-                            sse_max_frame_length,
-                            tx,
-                        )
-                        .await;
+                        let stream_result =
+                            crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
+                                downstream,
+                                &logical_model_for_stream,
+                                &resp,
+                                sse_max_frame_length,
+                                tx,
+                            )
+                            .await;
                         if let Err(err) = stream_result {
                             tracing::warn!("synthetic stream failed: {}", err.message);
-                            if matches!(downstream, DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses) {
+                            if matches!(
+                                downstream,
+                                DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses
+                            ) {
                                 let _ = tx_err.send(Event::default().data("[DONE]")).await;
                             }
                         }
@@ -269,7 +275,8 @@ pub(super) async fn forward_stream_typed(
                 tokio::spawn(async move {
                     let tx_err = tx.clone();
                     let (decoded_tx, decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-                    let (transformed_tx, transformed_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                    let (transformed_tx, transformed_rx) =
+                        mpsc::channel::<crate::urp::UrpStreamEvent>(64);
 
                     let decode_handle = {
                         let metrics = metrics_for_stream.clone();
@@ -396,11 +403,13 @@ pub(super) async fn forward_stream_typed(
                         });
                         match downstream {
                             DownstreamProtocol::Responses => {
-                                let _ = tx_err.send(
+                                let _ = tx_err
+                                    .send(
                                         Event::default()
                                             .event("error")
                                             .data(error_json.to_string()),
-                                ).await;
+                                    )
+                                    .await;
                             }
                             DownstreamProtocol::ChatCompletions => {
                                 let _ = tx_err
@@ -417,7 +426,10 @@ pub(super) async fn forward_stream_typed(
                         }
                     }
                     if stream_failed
-                        && matches!(downstream, DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses)
+                        && matches!(
+                            downstream,
+                            DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses
+                        )
                     {
                         let _ = tx_err.send(Event::default().data("[DONE]")).await;
                     }

@@ -301,10 +301,10 @@ impl MonoizeRoutingStore {
         let row = self
             .db
             .read()
-            .query_one(self.db.stmt(
-                "SELECT COUNT(*) as cnt FROM monoize_providers",
-                vec![],
-            ))
+            .query_one(
+                self.db
+                    .stmt("SELECT COUNT(*) as cnt FROM monoize_providers", vec![]),
+            )
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "count query returned no rows".to_string())?;
@@ -413,7 +413,8 @@ impl MonoizeRoutingStore {
             serde_json::to_string(&input.api_type_overrides).map_err(|e| e.to_string())?;
 
         self.db
-            .write().await
+            .write()
+            .await
             .execute(self.db.stmt(
                 r#"INSERT INTO monoize_providers (
                         id, name, provider_type, max_retries, transforms, api_type_overrides,
@@ -423,22 +424,26 @@ impl MonoizeRoutingStore {
                         enabled, priority, created_at, updated_at
                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"#,
                 vec![
-                    id.clone().into(),
-                    input.name.clone().into(),
-                    input.provider_type.as_str().into(),
-                    SeaValue::Int(Some(input.max_retries)),
-                    transforms_json.into(),
-                    api_type_overrides_json.into(),
-                    opt_bool_to_value(input.active_probe_enabled_override),
-                    opt_u64_to_value(input.active_probe_interval_seconds_override),
-                    opt_u64_to_value(input.active_probe_success_threshold_override.map(|v| v as u64)),
-                    input.active_probe_model_override.clone().into(),
-                    opt_u64_to_value(input.request_timeout_ms_override),
-                    SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
-                    SeaValue::Int(Some(priority)),
-                    now.to_rfc3339().into(),
-                    now.to_rfc3339().into(),
-                ],
+                        id.clone().into(),
+                        input.name.clone().into(),
+                        input.provider_type.as_str().into(),
+                        SeaValue::Int(Some(input.max_retries)),
+                        transforms_json.into(),
+                        api_type_overrides_json.into(),
+                        opt_bool_to_value(input.active_probe_enabled_override),
+                        opt_u64_to_value(input.active_probe_interval_seconds_override),
+                        opt_u64_to_value(
+                            input
+                                .active_probe_success_threshold_override
+                                .map(|v| v as u64),
+                        ),
+                        input.active_probe_model_override.clone().into(),
+                        opt_u64_to_value(input.request_timeout_ms_override),
+                        SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
+                        SeaValue::Int(Some(priority)),
+                        now.to_rfc3339().into(),
+                        now.to_rfc3339().into(),
+                    ],
             ))
             .await
             .map_err(|e| e.to_string())?;
@@ -511,13 +516,13 @@ impl MonoizeRoutingStore {
 
         let now = Utc::now();
 
-        let transforms_json =
-            serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
+        let transforms_json = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
         let api_type_overrides_json =
             serde_json::to_string(&api_type_overrides).map_err(|e| e.to_string())?;
 
         self.db
-            .write().await
+            .write()
+            .await
             .execute(self.db.stmt(
                 r#"UPDATE monoize_providers
                    SET name = $1, provider_type = $2, max_retries = $3, transforms = $4,
@@ -564,7 +569,8 @@ impl MonoizeRoutingStore {
     pub async fn delete_provider(&self, id: &str) -> Result<(), String> {
         let result = self
             .db
-            .write().await
+            .write()
+            .await
             .execute(self.db.stmt(
                 "DELETE FROM monoize_providers WHERE id = $1",
                 vec![id.into()],
@@ -604,7 +610,8 @@ impl MonoizeRoutingStore {
 
         for (i, id) in input.provider_ids.iter().enumerate() {
             self.db
-                .write().await
+                .write()
+                .await
                 .execute(self.db.stmt(
                     "UPDATE monoize_providers SET priority = $1, updated_at = $2 WHERE id = $3",
                     vec![
@@ -626,7 +633,8 @@ impl MonoizeRoutingStore {
         models: &HashMap<String, MonoizeModelEntry>,
     ) -> Result<(), String> {
         self.db
-            .write().await
+            .write()
+            .await
             .execute(self.db.stmt(
                 "DELETE FROM monoize_provider_models WHERE provider_id = $1",
                 vec![provider_id.into()],
@@ -636,7 +644,8 @@ impl MonoizeRoutingStore {
 
         for (model_name, entry) in models {
             self.db
-                .write().await
+                .write()
+                .await
                 .execute(self.db.stmt(
                     r#"INSERT INTO monoize_provider_models
                        (id, provider_id, model_name, redirect, multiplier, created_at)
@@ -724,7 +733,8 @@ impl MonoizeRoutingStore {
         }
 
         self.db
-            .write().await
+            .write()
+            .await
             .execute(self.db.stmt(
                 "DELETE FROM monoize_channels WHERE provider_id = $1",
                 vec![provider_id.into()],
@@ -811,8 +821,9 @@ impl MonoizeRoutingStore {
 
     async fn row_to_provider(&self, row: &QueryResult) -> Result<MonoizeProvider, String> {
         let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-        let provider_type_raw: String =
-            row.try_get("", "provider_type").map_err(|e| e.to_string())?;
+        let provider_type_raw: String = row
+            .try_get("", "provider_type")
+            .map_err(|e| e.to_string())?;
         let provider_type = MonoizeProviderType::from_str(&provider_type_raw)
             .ok_or_else(|| format!("invalid provider type: {provider_type_raw}"))?;
 
@@ -831,8 +842,7 @@ impl MonoizeRoutingStore {
         let mut models = HashMap::new();
         for mr in &model_rows {
             let model_name: String = mr.try_get("", "model_name").map_err(|e| e.to_string())?;
-            let redirect: Option<String> =
-                mr.try_get("", "redirect").map_err(|e| e.to_string())?;
+            let redirect: Option<String> = mr.try_get("", "redirect").map_err(|e| e.to_string())?;
             let multiplier: f64 = mr.try_get("", "multiplier").map_err(|e| e.to_string())?;
             models.insert(
                 model_name,
@@ -939,10 +949,8 @@ impl MonoizeRoutingStore {
             .map_err(|e| format!("provider {id} invalid request_timeout_ms_override: {e}"))?
             .map(|v| v as u64);
 
-        let created_at_str: String =
-            row.try_get("", "created_at").map_err(|e| e.to_string())?;
-        let updated_at_str: String =
-            row.try_get("", "updated_at").map_err(|e| e.to_string())?;
+        let created_at_str: String = row.try_get("", "created_at").map_err(|e| e.to_string())?;
+        let updated_at_str: String = row.try_get("", "updated_at").map_err(|e| e.to_string())?;
 
         Ok(MonoizeProvider {
             id: id.clone(),
@@ -1117,7 +1125,6 @@ pub async fn probe_channel_list_models(
     }
 }
 
-
 /// Resolves the effective API type for a given model by evaluating api_type_overrides
 /// in order. First matching glob pattern wins; falls back to the default provider_type.
 pub fn resolve_effective_api_type(
@@ -1255,7 +1262,9 @@ fn extract_probe_usage(body: &Value) -> Option<Value> {
             .or_else(|| usage.get("output_tokens").and_then(Value::as_u64));
 
         if let (Some(prompt_tokens), Some(completion_tokens)) = (prompt_tokens, completion_tokens) {
-            return Some(json!({"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}));
+            return Some(
+                json!({"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}),
+            );
         }
     }
 
@@ -1333,11 +1342,8 @@ mod tests {
         );
         assert!(gem_body.get("contents").is_some());
 
-        let (grok_url, grok_body, grok_headers, grok_google_auth) = build_probe_request(
-            "https://up.example",
-            "grok-4",
-            MonoizeProviderType::Grok,
-        );
+        let (grok_url, grok_body, grok_headers, grok_google_auth) =
+            build_probe_request("https://up.example", "grok-4", MonoizeProviderType::Grok);
         assert_eq!(grok_url, "https://up.example/v1/responses");
         assert!(!grok_google_auth);
         assert!(grok_headers.is_empty());

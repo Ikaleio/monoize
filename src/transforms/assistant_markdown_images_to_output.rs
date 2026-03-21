@@ -45,8 +45,8 @@ impl Transform for AssistantMarkdownImagesToOutputTransform {
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config =
-            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
         Ok(Box::new(cfg))
     }
 
@@ -196,5 +196,4 @@ mod tests {
             _ => panic!("expected base64 image"),
         }
     }
-
 }

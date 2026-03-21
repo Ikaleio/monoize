@@ -1,33 +1,33 @@
 use crate::auth::AuthState;
-use crate::name_cache::NameCaches;
+use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 use crate::image_transform_cache::ImageTransformCache;
 use crate::model_registry::ModelRegistry;
 use crate::model_registry_store::ModelRegistryStore;
-use crate::rate_limit::RateLimiter;
 use crate::monoize_routing::{
     ChannelHealthState, MonoizeRoutingStore, MonoizeRuntimeConfig, probe_channel_completion,
 };
+use crate::name_cache::NameCaches;
 use crate::providers::ProviderStore;
+use crate::rate_limit::RateLimiter;
 use crate::settings::SettingsStore;
 use crate::transforms::TransformRegistry;
 use crate::users::{InsertRequestLog, UserRole, UserStore};
-use axum::extract::DefaultBodyLimit;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
+use dashmap::DashMap;
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde_json::{Value, json};
-use crate::db::DbPool;
 use std::collections::HashMap;
-use std::sync::{Arc, Once, OnceLock};
 use std::sync::atomic::AtomicUsize;
-use dashmap::DashMap;
+use std::sync::{Arc, Once, OnceLock};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::TraceLayer;
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::trace::TraceLayer;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -89,7 +89,6 @@ pub async fn load_state() -> AppResult<AppState> {
     load_state_with_runtime(RuntimeConfig::from_env()).await
 }
 
-
 #[allow(clippy::field_reassign_with_default)]
 pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppState> {
     let auth = AuthState::new();
@@ -105,35 +104,41 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             )
         })?;
 
-    let db = DbPool::connect(&runtime.database_dsn).await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "database_init_failed",
-            err.to_string(),
-        )
-    })?;
+    let db = DbPool::connect(&runtime.database_dsn)
+        .await
+        .map_err(|err| {
+            AppError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "database_init_failed",
+                err.to_string(),
+            )
+        })?;
 
     {
         use sea_orm_migration::MigratorTrait;
         let _write_guard = db.write().await;
-        crate::migration::Migrator::up(&*_write_guard, None).await.map_err(|err| {
-            AppError::new(
-                axum::http::StatusCode::BAD_REQUEST,
-                "database_migration_failed",
-                err.to_string(),
-            )
-        })?;
+        crate::migration::Migrator::up(&*_write_guard, None)
+            .await
+            .map_err(|err| {
+                AppError::new(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "database_migration_failed",
+                    err.to_string(),
+                )
+            })?;
     }
 
     let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(64);
 
-    let user_store = UserStore::new(db.clone(), log_broadcast.clone()).await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "user_store_init_failed",
-            err,
-        )
-    })?;
+    let user_store = UserStore::new(db.clone(), log_broadcast.clone())
+        .await
+        .map_err(|err| {
+            AppError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "user_store_init_failed",
+                err,
+            )
+        })?;
     let name_caches = NameCaches::init(db.read()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
@@ -361,8 +366,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             }
         }
     });
-
-
 
     Ok(AppState {
         runtime: Arc::new(runtime),
@@ -709,7 +712,6 @@ fn resolve_database_dsn() -> String {
         })
         .unwrap_or_else(|| "sqlite://./data/monoize.db".to_string())
 }
-
 
 pub fn build_app(state: AppState) -> Router {
     let metrics_path = state.runtime.metrics_path.clone();

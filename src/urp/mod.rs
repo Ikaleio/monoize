@@ -419,7 +419,9 @@ pub enum PartHeader {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PartDelta {
-    Text { content: String },
+    Text {
+        content: String,
+    },
     Reasoning {
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>,
@@ -430,12 +432,24 @@ pub enum PartDelta {
         #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
-    Refusal { content: String },
-    ToolCallArguments { arguments: String },
-    Image { source: ImageSource },
-    Audio { source: AudioSource },
-    File { source: FileSource },
-    ProviderItem { data: Value },
+    Refusal {
+        content: String,
+    },
+    ToolCallArguments {
+        arguments: String,
+    },
+    Image {
+        source: ImageSource,
+    },
+    Audio {
+        source: AudioSource,
+    },
+    File {
+        source: FileSource,
+    },
+    ProviderItem {
+        data: Value,
+    },
 }
 
 impl Item {

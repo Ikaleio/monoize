@@ -8,15 +8,21 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub mod append_empty_user_message;
+pub mod assistant_markdown_images_to_output;
+pub mod assistant_output_images_to_markdown;
+pub mod auto_cache_system;
+pub mod auto_cache_tool_use;
+pub mod auto_cache_user_id;
+pub mod compress_user_message_images;
 pub mod force_stream;
 pub mod inject_system_prompt;
 pub mod merge_consecutive_roles;
 pub mod override_max_tokens;
 pub mod plaintext_reasoning_to_summary;
 pub mod reasoning_content_delta;
-pub mod reasoning_summary_to_raw_cot;
 pub mod reasoning_effort_to_budget;
 pub mod reasoning_effort_to_model_suffix;
+pub mod reasoning_summary_to_raw_cot;
 pub mod reasoning_to_think_xml;
 pub mod remove_field;
 pub mod set_field;
@@ -24,12 +30,6 @@ pub mod split_sse_frames;
 pub mod strip_reasoning;
 pub mod system_to_developer_role;
 pub mod think_xml_to_reasoning;
-pub mod assistant_markdown_images_to_output;
-pub mod assistant_output_images_to_markdown;
-pub mod auto_cache_system;
-pub mod auto_cache_tool_use;
-pub mod auto_cache_user_id;
-pub mod compress_user_message_images;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -189,14 +189,18 @@ mod registry_tests {
             .get("reasoning_content_delta")
             .expect("reasoning_content_delta should be registered");
 
-        assert!(transform
-            .supported_phases()
-            .iter()
-            .any(|phase| matches!(phase, super::Phase::Response)));
-        assert!(transform
-            .supported_scopes()
-            .iter()
-            .any(|scope| matches!(scope, super::TransformScope::ApiKey)));
+        assert!(
+            transform
+                .supported_phases()
+                .iter()
+                .any(|phase| matches!(phase, super::Phase::Response))
+        );
+        assert!(
+            transform
+                .supported_scopes()
+                .iter()
+                .any(|scope| matches!(scope, super::TransformScope::ApiKey))
+        );
     }
 }
 
@@ -246,7 +250,13 @@ pub async fn apply_transforms(
             .ok_or_else(|| TransformError::NotFound(rule.transform.clone()))?;
         let config = transform.parse_config(rule.config.clone())?;
         transform
-            .apply(data.reborrow(), phase, context, config.as_ref(), states[i].as_mut())
+            .apply(
+                data.reborrow(),
+                phase,
+                context,
+                config.as_ref(),
+                states[i].as_mut(),
+            )
             .await?;
     }
     Ok(())
@@ -339,7 +349,13 @@ pub fn response_output_items_mut(resp: &mut UrpResponse) -> impl Iterator<Item =
 }
 
 pub fn ensure_assistant_output_message(resp: &mut UrpResponse) -> &mut Item {
-    if !matches!(resp.outputs.first(), Some(Item::Message { role: Role::Assistant, .. })) {
+    if !matches!(
+        resp.outputs.first(),
+        Some(Item::Message {
+            role: Role::Assistant,
+            ..
+        })
+    ) {
         resp.outputs.insert(0, Item::new_message(Role::Assistant));
     }
 

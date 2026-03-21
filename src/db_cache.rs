@@ -78,7 +78,10 @@ pub struct RequestLogBatcher {
 }
 
 impl RequestLogBatcher {
-    pub fn new(capacity_hint: usize, broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>) -> Self {
+    pub fn new(
+        capacity_hint: usize,
+        broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
+    ) -> Self {
         Self {
             buffer: Arc::new(Mutex::new(Vec::with_capacity(capacity_hint))),
             capacity_hint,
@@ -107,8 +110,8 @@ impl RequestLogBatcher {
         }
 
         let write = db.write().await;
-        use sea_orm::{ConnectionTrait, TransactionTrait};
         use sea_orm::Value as SeaValue;
+        use sea_orm::{ConnectionTrait, TransactionTrait};
 
         let tx = match write.begin().await {
             Ok(tx) => tx,

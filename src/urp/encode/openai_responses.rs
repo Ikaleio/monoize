@@ -210,10 +210,7 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
 
 fn ensure_default_responses_reasoning_summary(obj: &mut Map<String, Value>) {
     let Some(existing) = obj.remove("reasoning") else {
-        obj.insert(
-            "reasoning".to_string(),
-            json!({ "summary": "detailed" }),
-        );
+        obj.insert("reasoning".to_string(), json!({ "summary": "detailed" }));
         return;
     };
 

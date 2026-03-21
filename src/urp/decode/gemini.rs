@@ -2,12 +2,12 @@ use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj, split_extra,
 };
 use crate::urp::{
-    greedy::{Action, GreedyMerger},
     FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     ToolResultContent, UrpRequest, UrpResponse, Usage,
+    greedy::{Action, GreedyMerger},
 };
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -672,7 +672,7 @@ fn collect_content_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::decode_response;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[test]
     fn decode_response_greedy_merges_assistant_parts_and_extracts_tool_results() {

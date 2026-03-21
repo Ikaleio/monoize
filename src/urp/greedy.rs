@@ -90,8 +90,7 @@ impl GreedyMerger {
             | Part::Audio { .. }
             | Part::File { .. }
             | Part::Refusal { .. } => PartKind::Content,
-            Part::ToolCall { .. }
-            | Part::ProviderItem { .. } => PartKind::Action,
+            Part::ToolCall { .. } | Part::ProviderItem { .. } => PartKind::Action,
         }
     }
 

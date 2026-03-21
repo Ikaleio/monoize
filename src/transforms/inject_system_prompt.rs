@@ -3,8 +3,8 @@ use crate::transforms::{
     TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
     text_part,
 };
-use async_trait::async_trait;
 use crate::urp::{Item, Part, Role};
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -87,7 +87,13 @@ impl Transform for InjectSystemPromptTransform {
         match cfg.position {
             Position::Prepend => {
                 for (idx, msg) in messages.iter().enumerate() {
-                    if matches!(msg, Item::Message { role: Role::System, .. }) {
+                    if matches!(
+                        msg,
+                        Item::Message {
+                            role: Role::System,
+                            ..
+                        }
+                    ) {
                         target_index = Some(idx);
                         break;
                     }
@@ -95,7 +101,13 @@ impl Transform for InjectSystemPromptTransform {
             }
             Position::Append => {
                 for (idx, msg) in messages.iter().enumerate().rev() {
-                    if matches!(msg, Item::Message { role: Role::System, .. }) {
+                    if matches!(
+                        msg,
+                        Item::Message {
+                            role: Role::System,
+                            ..
+                        }
+                    ) {
                         target_index = Some(idx);
                         break;
                     }

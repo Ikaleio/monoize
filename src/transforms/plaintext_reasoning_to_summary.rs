@@ -1,6 +1,6 @@
 use crate::transforms::{
-    Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, response_output_items_mut,
+    Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
+    TransformScope, TransformState, UrpData, response_output_items_mut,
 };
 use crate::urp::{Item, Part, PartDelta, UrpStreamEvent};
 use async_trait::async_trait;
@@ -54,8 +54,8 @@ impl Transform for PlaintextReasoningToSummaryTransform {
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config =
-            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
         Ok(Box::new(cfg))
     }
 
@@ -92,9 +92,7 @@ impl Transform for PlaintextReasoningToSummaryTransform {
 fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState) {
     match event {
         UrpStreamEvent::Delta {
-            part_index,
-            delta,
-            ..
+            part_index, delta, ..
         } => {
             let PartDelta::Reasoning {
                 content,
@@ -146,9 +144,7 @@ fn rewrite_item_reasoning(item: &mut Item) {
 
 fn rewrite_reasoning_part(part: &mut Part) {
     let Part::Reasoning {
-        content,
-        summary,
-        ..
+        content, summary, ..
     } = part
     else {
         return;

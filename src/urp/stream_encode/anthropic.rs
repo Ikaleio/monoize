@@ -1,8 +1,10 @@
 use crate::error::AppResult;
 use crate::urp::stream_helpers::*;
-use crate::urp::{self, FinishReason, Item, Part, PartDelta, PartHeader, Role, UrpStreamEvent, Usage};
+use crate::urp::{
+    self, FinishReason, Item, Part, PartDelta, PartHeader, Role, UrpStreamEvent, Usage,
+};
 use axum::response::sse::Event;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
@@ -16,7 +18,8 @@ struct LiveReasoningBlockState {
 fn reasoning_display_text(part: &Part) -> Option<&str> {
     let Part::Reasoning {
         content, summary, ..
-    } = part else {
+    } = part
+    else {
         return None;
     };
     content
@@ -85,7 +88,9 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                         .map(str::to_owned)
                                 });
                             if display_text.is_none()
-                                && signature.as_deref().is_none_or(|signature| signature.is_empty())
+                                && signature
+                                    .as_deref()
+                                    .is_none_or(|signature| signature.is_empty())
                             {
                                 continue;
                             }
@@ -100,7 +105,9 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                     sse_max_frame_length,
                                 )
                                 .await?;
-                                if let Some(sig) = signature.as_deref().filter(|sig| !sig.is_empty()) {
+                                if let Some(sig) =
+                                    signature.as_deref().filter(|sig| !sig.is_empty())
+                                {
                                     send_messages_delta_string(
                                         &tx,
                                         json!({ "type": "content_block_delta", "index": index, "delta": { "type": "signature_delta", "signature": "" } }),
@@ -113,7 +120,9 @@ pub(crate) async fn emit_synthetic_messages_stream(
                                 let e = json!({ "type": "content_block_stop", "index": index });
                                 send_named_messages_event(&tx, e).await?;
                                 index += 1;
-                            } else if let Some(sig) = signature.as_deref().filter(|sig| !sig.is_empty()) {
+                            } else if let Some(sig) =
+                                signature.as_deref().filter(|sig| !sig.is_empty())
+                            {
                                 let s = json!({ "type": "content_block_start", "index": index, "content_block": { "type": "thinking", "thinking": "", "signature": sig } });
                                 send_named_messages_event(&tx, s).await?;
                                 send_messages_delta_string(
@@ -285,15 +294,15 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     response_usage = Some(usage);
                 }
                 if let PartDelta::Reasoning {
-                    content,
-                    encrypted,
-                    ..
+                    content, encrypted, ..
                 } = delta
                 {
-                    let Some(block_state) = reasoning_block_state_by_part.get_mut(&part_index) else {
+                    let Some(block_state) = reasoning_block_state_by_part.get_mut(&part_index)
+                    else {
                         continue;
                     };
-                    if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                    if let Some(content) = content.as_deref().filter(|content| !content.is_empty())
+                    {
                         send_messages_delta_string(
                             &tx,
                             json!({
@@ -331,11 +340,12 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     }
                 }
             }
-            UrpStreamEvent::PartDone { part_index, part, .. } => {
+            UrpStreamEvent::PartDone {
+                part_index, part, ..
+            } => {
                 saw_stream_parts = true;
                 let mut started_live_reasoning_block = false;
-                let block_index = if let Part::Reasoning { encrypted, .. } = &part
-                {
+                let block_index = if let Part::Reasoning { encrypted, .. } = &part {
                     if let Some(block_state) = reasoning_block_state_by_part.remove(&part_index) {
                         started_live_reasoning_block = true;
                         if !block_state.sent_thinking {
@@ -393,7 +403,8 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         "content_block": content_block
                     });
                     send_named_messages_event(&tx, start).await?;
-                    emit_messages_part_done_payload(&tx, block_index, &part, sse_max_frame_length).await?;
+                    emit_messages_part_done_payload(&tx, block_index, &part, sse_max_frame_length)
+                        .await?;
                 }
 
                 let stop = json!({ "type": "content_block_stop", "index": block_index });
@@ -461,10 +472,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
     Ok(())
 }
 
-fn content_block_from_part(
-    part: &Part,
-    saw_tool_use: &mut bool,
-) -> AppResult<Value> {
+fn content_block_from_part(part: &Part, saw_tool_use: &mut bool) -> AppResult<Value> {
     let content_block = match part {
         Part::Text { .. } | Part::Refusal { .. } => json!({ "type": "text", "text": "" }),
         Part::Reasoning { encrypted, .. } => json!({
@@ -479,11 +487,13 @@ fn content_block_from_part(
             *saw_tool_use = true;
             json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })
         }
-        _ => return Err(crate::error::AppError::new(
-            axum::http::StatusCode::BAD_GATEWAY,
-            "stream_encode_failed",
-            "unsupported URP part for Anthropic messages stream",
-        )),
+        _ => {
+            return Err(crate::error::AppError::new(
+                axum::http::StatusCode::BAD_GATEWAY,
+                "stream_encode_failed",
+                "unsupported URP part for Anthropic messages stream",
+            ));
+        }
     };
     Ok(content_block)
 }
@@ -511,10 +521,7 @@ async fn emit_messages_part_done_payload(
                 .await?;
             }
         }
-        Part::Reasoning {
-            encrypted,
-            ..
-        } => {
+        Part::Reasoning { encrypted, .. } => {
             if let Some(content) = reasoning_display_text(part) {
                 send_messages_delta_string(
                     tx,
@@ -624,10 +631,12 @@ async fn send_named_messages_event(tx: &mpsc::Sender<Event>, payload: Value) -> 
         .get("type")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| crate::error::AppError::new(
-            axum::http::StatusCode::BAD_GATEWAY,
-            "stream_encode_failed",
-            "messages stream payload missing type field",
-        ))?;
+        .ok_or_else(|| {
+            crate::error::AppError::new(
+                axum::http::StatusCode::BAD_GATEWAY,
+                "stream_encode_failed",
+                "messages stream payload missing type field",
+            )
+        })?;
     send_named_sse_json(tx, &event_name, payload).await
 }

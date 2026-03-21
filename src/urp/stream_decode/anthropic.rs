@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 enum ActivePart {
     Text,
@@ -77,7 +77,16 @@ pub(crate) async fn stream_messages_to_urp_events(
                 }
                 response_extra = object_without_keys(
                     &message,
-                    &["id", "type", "role", "model", "content", "stop_reason", "stop_sequence", "usage"],
+                    &[
+                        "id",
+                        "type",
+                        "role",
+                        "model",
+                        "content",
+                        "stop_reason",
+                        "stop_sequence",
+                        "usage",
+                    ],
                 );
                 let _ = tx
                     .send(UrpStreamEvent::ResponseStart {
@@ -98,13 +107,14 @@ pub(crate) async fn stream_messages_to_urp_events(
                 item_started = true;
             }
             "content_block_start" => {
-                let part_index = data_val
-                    .get("index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let cb = data_val.get("content_block").cloned().unwrap_or(Value::Null);
+                let part_index = data_val.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let cb = data_val
+                    .get("content_block")
+                    .cloned()
+                    .unwrap_or(Value::Null);
                 let cb_type = cb.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let extra_body = object_without_keys(&cb, &["type", "id", "name", "text", "thinking"]);
+                let extra_body =
+                    object_without_keys(&cb, &["type", "id", "name", "text", "thinking"]);
                 let header = match cb_type {
                     "text" => {
                         active_parts.insert(part_index, ActivePart::Text);
@@ -151,10 +161,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                     .await;
             }
             "content_block_delta" => {
-                let part_index = data_val
-                    .get("index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
+                let part_index = data_val.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let delta = data_val.get("delta").cloned().unwrap_or(Value::Null);
                 let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 match delta_type {
@@ -246,10 +253,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                 }
             }
             "content_block_stop" => {
-                let part_index = data_val
-                    .get("index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
+                let part_index = data_val.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let part = match active_parts.get(&part_index) {
                     Some(ActivePart::Text) => Part::Text {
                         content: output_text.clone(),

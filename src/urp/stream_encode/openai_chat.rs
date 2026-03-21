@@ -562,13 +562,13 @@ mod tests {
             outputs: vec![Item::Message {
                 role: Role::Assistant,
                 parts: vec![Part::Reasoning {
-                    content: None,
+                    content: Some("plain_reasoning".to_string()),
                     encrypted: Some(Value::String("enc_reasoning".to_string())),
                     summary: Some("brief summary".to_string()),
                     source: Some("openrouter".to_string()),
                     extra_body: HashMap::from([(
                         "inject_reasoning_content".to_string(),
-                        Value::String("enc_reasoning".to_string()),
+                        Value::String("plain_reasoning".to_string()),
                     )]),
                 }],
                 extra_body: HashMap::new(),
@@ -588,9 +588,9 @@ mod tests {
             text.push_str(&debug);
         }
 
-        assert!(text.contains("enc_reasoning"));
-        assert!(text.contains("\\\"delta\\\":{\\\"reasoning_content\\\":\\\"enc_reasoning\\\"}"));
-        assert!(!text.contains("data: {\"reasoning_content\":\"enc_reasoning\"}"));
+        assert!(text.contains("plain_reasoning"));
+        assert!(text.contains("\\\"delta\\\":{\\\"reasoning_content\\\":\\\"plain_reasoning\\\"}"));
+        assert!(!text.contains("data: {\"reasoning_content\":\"plain_reasoning\"}"));
     }
 
     #[tokio::test]

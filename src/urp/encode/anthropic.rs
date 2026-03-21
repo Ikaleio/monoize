@@ -5,7 +5,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, Role, ToolDefinition, ToolResultContent,
     UrpRequest, UrpResponse,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
@@ -727,14 +727,18 @@ mod tests {
         assert_eq!(decoded_output.reasoning_tokens, 6);
         assert_eq!(decoded_output.accepted_prediction_tokens, 7);
         assert_eq!(decoded_output.rejected_prediction_tokens, 8);
-        assert!(decoded_usage
-            .extra_body
-            .get("tool_prompt_input_tokens")
-            .is_none());
-        assert!(decoded_usage
-            .extra_body
-            .get("reasoning_output_tokens")
-            .is_none());
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("tool_prompt_input_tokens")
+                .is_none()
+        );
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("reasoning_output_tokens")
+                .is_none()
+        );
         assert_eq!(
             decoded_usage.extra_body.get("native_counter"),
             Some(&json!(7))

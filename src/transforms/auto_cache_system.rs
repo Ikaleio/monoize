@@ -1,12 +1,11 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState,
-    UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use async_trait::async_trait;
 use crate::urp::{Item, Role};
+use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::any::Any;
 
 #[derive(Debug, Deserialize)]
@@ -72,18 +71,15 @@ impl Transform for AutoCacheSystemTransform {
         }
 
         // Find the last system message
-        let system_idx = req
-            .inputs
-            .iter()
-            .rposition(|item| {
-                matches!(
-                    item,
-                    Item::Message {
-                        role: Role::System | Role::Developer,
-                        ..
-                    }
-                )
-            });
+        let system_idx = req.inputs.iter().rposition(|item| {
+            matches!(
+                item,
+                Item::Message {
+                    role: Role::System | Role::Developer,
+                    ..
+                }
+            )
+        });
         let Some(idx) = system_idx else {
             return Ok(());
         };
@@ -120,7 +116,9 @@ fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
                 .iter()
                 .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
                 .count(),
-            Item::ToolResult { extra_body, .. } => usize::from(extra_body.contains_key("cache_control")),
+            Item::ToolResult { extra_body, .. } => {
+                usize::from(extra_body.contains_key("cache_control"))
+            }
         })
         .sum()
 }

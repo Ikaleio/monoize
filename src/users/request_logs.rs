@@ -1,8 +1,7 @@
 use super::{
-    AnalyticsModelBucketRow, AnalyticsProviderBucketRow, DashboardAnalyticsRaw,
-    InsertRequestLog, RequestLogApiKey, RequestLogBilling, RequestLogChannel,
-    RequestLogError, RequestLogProvider, RequestLogRow, RequestLogTiming,
-    RequestLogTokens, RequestLogUser, UserStore,
+    AnalyticsModelBucketRow, AnalyticsProviderBucketRow, DashboardAnalyticsRaw, InsertRequestLog,
+    RequestLogApiKey, RequestLogBilling, RequestLogChannel, RequestLogError, RequestLogProvider,
+    RequestLogRow, RequestLogTiming, RequestLogTokens, RequestLogUser, UserStore,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -46,7 +45,9 @@ fn row_decimal_to_string(row: &sea_orm::QueryResult, col: &str) -> Option<String
         .ok()
         .flatten()
         .map(|v| v.trunc().to_string())
-        .or_else(|| parse_optional_charge_decimal(row.try_get::<Option<String>>("", col).unwrap_or(None)))
+        .or_else(|| {
+            parse_optional_charge_decimal(row.try_get::<Option<String>>("", col).unwrap_or(None))
+        })
 }
 
 fn row_decimal_to_nano_i64(row: &sea_orm::QueryResult, col: &str) -> i64 {
@@ -168,7 +169,11 @@ fn append_request_log_filters(
             .map(|dt| dt.timestamp_millis());
         if let Some(time_from_unix_ms) = parsed {
             let _ = is_postgres;
-            sql.push_str(&format!(" AND {} >= ${}", request_log_time_filter_column(), *idx));
+            sql.push_str(&format!(
+                " AND {} >= ${}",
+                request_log_time_filter_column(),
+                *idx
+            ));
             values.push(time_from_unix_ms.into());
         }
         *idx += 1;
@@ -180,7 +185,11 @@ fn append_request_log_filters(
             .map(|dt| dt.timestamp_millis());
         if let Some(time_to_unix_ms) = parsed {
             let _ = is_postgres;
-            sql.push_str(&format!(" AND {} < ${}", request_log_time_filter_column(), *idx));
+            sql.push_str(&format!(
+                " AND {} < ${}",
+                request_log_time_filter_column(),
+                *idx
+            ));
             values.push(time_to_unix_ms.into());
         }
         *idx += 1;
@@ -194,7 +203,9 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
             .unwrap_or(0)
     }) == 1;
 
-    let charge_nano_usd = row.try_get::<Option<String>>("", "charge_nano_usd").unwrap_or(None);
+    let charge_nano_usd = row
+        .try_get::<Option<String>>("", "charge_nano_usd")
+        .unwrap_or(None);
 
     RequestLogRow {
         id: row.try_get("", "id").unwrap_or_default(),
@@ -275,7 +286,8 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
 
 impl UserStore {
     pub async fn cleanup_expired_request_logs(&self) -> Result<u64, String> {
-        let cutoff_unix_ms = (Utc::now() - Duration::days(REQUEST_LOG_RETENTION_DAYS)).timestamp_millis();
+        let cutoff_unix_ms =
+            (Utc::now() - Duration::days(REQUEST_LOG_RETENTION_DAYS)).timestamp_millis();
         let result = self.db.write().await
             .execute(self.db.stmt(
                 "DELETE FROM request_logs WHERE created_at_unix_ms IS NOT NULL AND created_at_unix_ms < $1",
@@ -371,7 +383,8 @@ impl UserStore {
         let search = normalize_request_log_filter(search);
 
         // Count query
-        let mut count_sql = "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.user_id = $1".to_string();
+        let mut count_sql =
+            "SELECT COUNT(*) as cnt FROM request_logs rl WHERE rl.user_id = $1".to_string();
         let mut count_values: Vec<SeaValue> = vec![user_id.into()];
         let mut count_idx = 2usize;
         append_request_log_filters(
@@ -387,7 +400,9 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let count_row = self.db.read()
+        let count_row = self
+            .db
+            .read()
             .query_one(self.db.stmt(&count_sql, count_values))
             .await
             .map_err(|e| e.to_string())?;
@@ -419,13 +434,16 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let sum_row = self.db.read()
+        let sum_row = self
+            .db
+            .read()
             .query_one(self.db.stmt(&sum_sql, sum_values))
             .await
             .map_err(|e| e.to_string())?;
         let total_charge_row = sum_row.ok_or_else(|| "no sum row".to_string())?;
         let total_charge_nano_usd = if is_postgres {
-            row_decimal_to_string(&total_charge_row, "total_charge").unwrap_or_else(|| "0".to_string())
+            row_decimal_to_string(&total_charge_row, "total_charge")
+                .unwrap_or_else(|| "0".to_string())
         } else {
             total_charge_row
                 .try_get::<i64>("", "total_charge")
@@ -434,7 +452,8 @@ impl UserStore {
         };
 
         // Rows query
-        let mut rows_sql = format!(r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        let mut rows_sql = format!(
+            r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
                       rl.channel_id, rl.is_stream,
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
@@ -444,7 +463,8 @@ impl UserStore {
                       rl.error_code, rl.error_message, rl.error_http_status,
                       rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at
                FROM request_logs rl
-               WHERE rl.user_id = $1"#);
+               WHERE rl.user_id = $1"#
+        );
         let mut rows_values: Vec<SeaValue> = vec![user_id.into()];
         let mut rows_idx = 2usize;
         append_request_log_filters(
@@ -467,12 +487,18 @@ impl UserStore {
                 rows_idx + 1
             ));
         } else {
-            rows_sql.push_str(&format!(" ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+            rows_sql.push_str(&format!(
+                " ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC LIMIT ${} OFFSET ${}",
+                rows_idx,
+                rows_idx + 1
+            ));
         }
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
 
-        let rows = self.db.read()
+        let rows = self
+            .db
+            .read()
             .query_all(self.db.stmt(&rows_sql, rows_values))
             .await
             .map_err(|e| e.to_string())?;
@@ -509,7 +535,8 @@ impl UserStore {
 
         // Count query
         let mut count_sql = r#"SELECT COUNT(*) as cnt FROM request_logs rl
-               WHERE 1 = 1"#.to_string();
+               WHERE 1 = 1"#
+            .to_string();
         let mut count_values: Vec<SeaValue> = Vec::new();
         let mut count_idx = 1usize;
         append_request_log_filters(
@@ -525,7 +552,9 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let count_row = self.db.read()
+        let count_row = self
+            .db
+            .read()
             .query_one(self.db.stmt(&count_sql, count_values))
             .await
             .map_err(|e| e.to_string())?;
@@ -558,13 +587,16 @@ impl UserStore {
             time_from,
             time_to,
         );
-        let sum_row = self.db.read()
+        let sum_row = self
+            .db
+            .read()
             .query_one(self.db.stmt(&sum_sql, sum_values))
             .await
             .map_err(|e| e.to_string())?;
         let total_charge_row = sum_row.ok_or_else(|| "no sum row".to_string())?;
         let total_charge_nano_usd = if is_postgres {
-            row_decimal_to_string(&total_charge_row, "total_charge").unwrap_or_else(|| "0".to_string())
+            row_decimal_to_string(&total_charge_row, "total_charge")
+                .unwrap_or_else(|| "0".to_string())
         } else {
             total_charge_row
                 .try_get::<i64>("", "total_charge")
@@ -573,7 +605,8 @@ impl UserStore {
         };
 
         // Rows query
-        let mut rows_sql = format!(r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        let mut rows_sql = format!(
+            r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
                       rl.channel_id, rl.is_stream,
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
@@ -583,7 +616,8 @@ impl UserStore {
                       rl.error_code, rl.error_message, rl.error_http_status,
                       rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at
                FROM request_logs rl
-               WHERE 1 = 1"#);
+               WHERE 1 = 1"#
+        );
         let mut rows_values: Vec<SeaValue> = Vec::new();
         let mut rows_idx = 1usize;
         append_request_log_filters(
@@ -606,12 +640,18 @@ impl UserStore {
                 rows_idx + 1
             ));
         } else {
-            rows_sql.push_str(&format!(" ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC LIMIT ${} OFFSET ${}", rows_idx, rows_idx + 1));
+            rows_sql.push_str(&format!(
+                " ORDER BY rl.created_at_unix_ms DESC, rl.created_at DESC LIMIT ${} OFFSET ${}",
+                rows_idx,
+                rows_idx + 1
+            ));
         }
         rows_values.push(SeaValue::BigInt(Some(limit)));
         rows_values.push(SeaValue::BigInt(Some(offset)));
 
-        let rows = self.db.read()
+        let rows = self
+            .db
+            .read()
             .query_all(self.db.stmt(&rows_sql, rows_values))
             .await
             .map_err(|e| e.to_string())?;
@@ -644,7 +684,8 @@ impl UserStore {
         let bucket_expr = if is_sqlite {
             "CAST(((rl.created_at_unix_ms - $1) / 86400000.0) / $2 AS BIGINT)".to_string()
         } else {
-            "CAST(((rl.created_at_unix_ms - $1)::DOUBLE PRECISION / 86400000.0) / $2 AS BIGINT)".to_string()
+            "CAST(((rl.created_at_unix_ms - $1)::DOUBLE PRECISION / 86400000.0) / $2 AS BIGINT)"
+                .to_string()
         };
 
         let mut model_sql = format!(
@@ -684,7 +725,9 @@ impl UserStore {
         let _ = model_idx;
         model_sql.push_str(" GROUP BY bucket_idx, rl.model");
 
-        let model_rows = self.db.read()
+        let model_rows = self
+            .db
+            .read()
             .query_all(self.db.stmt(&model_sql, model_values))
             .await
             .map_err(|e| e.to_string())?;
@@ -739,7 +782,9 @@ impl UserStore {
         let _ = prov_idx;
         prov_sql.push_str(" GROUP BY bucket_idx, provider_label");
 
-        let prov_rows = self.db.read()
+        let prov_rows = self
+            .db
+            .read()
             .query_all(self.db.stmt(&prov_sql, prov_values))
             .await
             .map_err(|e| e.to_string())?;
@@ -770,10 +815,8 @@ impl UserStore {
             }
         );
         total_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
-        let mut total_values: Vec<SeaValue> = vec![
-            time_from_unix_ms.into(),
-            time_to_unix_ms.into(),
-        ];
+        let mut total_values: Vec<SeaValue> =
+            vec![time_from_unix_ms.into(), time_to_unix_ms.into()];
         let mut total_idx = 3usize;
 
         if let Some(uid) = user_id {
@@ -783,7 +826,9 @@ impl UserStore {
         }
         let _ = total_idx;
 
-        let total_row = self.db.read()
+        let total_row = self
+            .db
+            .read()
             .query_one(self.db.stmt(&total_sql, total_values))
             .await
             .map_err(|e| e.to_string())?;
@@ -824,9 +869,7 @@ impl UserStore {
         let today_start_unix_ms = chrono::DateTime::parse_from_rfc3339(today_start)
             .map_err(|e| e.to_string())?
             .timestamp_millis();
-        let mut today_values: Vec<SeaValue> = vec![
-            today_start_unix_ms.into(),
-        ];
+        let mut today_values: Vec<SeaValue> = vec![today_start_unix_ms.into()];
         let mut today_idx = 2usize;
 
         if let Some(uid) = user_id {
@@ -836,7 +879,9 @@ impl UserStore {
         }
         let _ = today_idx;
 
-        let today_row = self.db.read()
+        let today_row = self
+            .db
+            .read()
             .query_one(self.db.stmt(&today_sql, today_values))
             .await
             .map_err(|e| e.to_string())?;

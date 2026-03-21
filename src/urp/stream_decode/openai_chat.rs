@@ -593,11 +593,7 @@ async fn process_tool_call_delta(
 fn tool_call_arguments_delta_text(tc_obj: &Map<String, Value>) -> Option<String> {
     let value = parse_tool_call_arguments_value(tc_obj)?;
     if tc_obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-        if value
-            .as_object()
-            .map(|obj| obj.is_empty())
-            .unwrap_or(false)
-        {
+        if value.as_object().map(|obj| obj.is_empty()).unwrap_or(false) {
             return None;
         }
     }

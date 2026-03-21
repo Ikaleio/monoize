@@ -39,7 +39,8 @@ impl MigrationTrait for Migration {
             DbBackend::Postgres => {
                 conn.execute(Statement::from_string(
                     DbBackend::Postgres,
-                    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS created_at_unix_ms BIGINT".to_string(),
+                    "ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS created_at_unix_ms BIGINT"
+                        .to_string(),
                 ))
                 .await?;
 

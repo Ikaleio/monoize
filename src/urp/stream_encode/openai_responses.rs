@@ -1,10 +1,9 @@
 use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
-use crate::urp::{
-    self, Item, ItemHeader, Part, PartDelta, PartHeader, Role, ToolResultContent,
-    UrpStreamEvent,
-};
 use crate::urp::stream_helpers::*;
+use crate::urp::{
+    self, Item, ItemHeader, Part, PartDelta, PartHeader, Role, ToolResultContent, UrpStreamEvent,
+};
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -77,7 +76,13 @@ pub(crate) async fn emit_synthetic_responses_stream(
         .get("created_at")
         .and_then(|v| v.as_i64())
         .unwrap_or_else(now_ts);
-    let base_response = response_envelope_payload(&response_id, created, logical_model, "in_progress", Value::Array(Vec::new()));
+    let base_response = response_envelope_payload(
+        &response_id,
+        created,
+        logical_model,
+        "in_progress",
+        Value::Array(Vec::new()),
+    );
     send_responses_event(&tx, &mut seq, "response.created", base_response.clone()).await?;
     send_responses_event(&tx, &mut seq, "response.in_progress", base_response).await?;
 
@@ -226,18 +231,25 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.output_text.delta",
-                        responses_text_delta_payload(phase.as_deref(), item, output_index as u64, 0),
+                        responses_text_delta_payload(
+                            phase.as_deref(),
+                            item,
+                            output_index as u64,
+                            0,
+                        ),
                         "delta",
                         &text,
                         sse_max_frame_length,
                     )
                     .await?;
                 }
-                let mut done_payload = responses_text_delta_payload(phase.as_deref(), item, output_index as u64, 0);
+                let mut done_payload =
+                    responses_text_delta_payload(phase.as_deref(), item, output_index as u64, 0);
                 if let Some(obj) = done_payload.as_object_mut() {
                     obj.insert("text".to_string(), json!(text));
                 }
-                send_responses_event(&tx, &mut seq, "response.output_text.done", done_payload).await?;
+                send_responses_event(&tx, &mut seq, "response.output_text.done", done_payload)
+                    .await?;
                 send_responses_event(
                     &tx,
                     &mut seq,
@@ -270,7 +282,8 @@ pub(crate) async fn emit_synthetic_responses_stream(
         )
         .await?;
     }
-    let completed_response = sanitize_responses_completed_for_frame_limit(&encoded, sse_max_frame_length);
+    let completed_response =
+        sanitize_responses_completed_for_frame_limit(&encoded, sse_max_frame_length);
     send_responses_event(
         &tx,
         &mut seq,
@@ -322,38 +335,36 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 item_index,
                 header,
                 extra_body,
-            } => {
-                match header {
-                    ItemHeader::Message { role } => {
-                        pending_assistant_items.insert(
-                            item_index,
-                            PendingResponsesAssistantItem {
-                                role,
-                                item_extra_body: extra_body,
-                                active_output: None,
-                                staged_outputs: Vec::new(),
-                                streamed_any_output: false,
-                            },
-                        );
-                    }
-                    ItemHeader::ToolResult { .. } => {
-                        let output_index = next_output_index;
-                        next_output_index += 1;
-                        output_indices.insert(item_index, output_index);
-                        let item = encode_item_start_stub(&header);
-                        send_responses_event(
-                            &tx,
-                            &mut seq,
-                            "response.output_item.added",
-                            json!({
-                                "output_index": output_index,
-                                "item": item,
-                            }),
-                        )
-                        .await?;
-                    }
+            } => match header {
+                ItemHeader::Message { role } => {
+                    pending_assistant_items.insert(
+                        item_index,
+                        PendingResponsesAssistantItem {
+                            role,
+                            item_extra_body: extra_body,
+                            active_output: None,
+                            staged_outputs: Vec::new(),
+                            streamed_any_output: false,
+                        },
+                    );
                 }
-            }
+                ItemHeader::ToolResult { .. } => {
+                    let output_index = next_output_index;
+                    next_output_index += 1;
+                    output_indices.insert(item_index, output_index);
+                    let item = encode_item_start_stub(&header);
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.output_item.added",
+                        json!({
+                            "output_index": output_index,
+                            "item": item,
+                        }),
+                    )
+                    .await?;
+                }
+            },
             UrpStreamEvent::PartStart {
                 part_index,
                 item_index,
@@ -373,13 +384,16 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     } else {
                         None
                     };
-                    let needs_new_output = pending_item.active_output.as_ref().is_none_or(|active| {
-                        active.zone != zone
-                            || matches!(zone, ResponsesOutputZone::FunctionCall)
-                    });
+                    let needs_new_output =
+                        pending_item.active_output.as_ref().is_none_or(|active| {
+                            active.zone != zone || matches!(zone, ResponsesOutputZone::FunctionCall)
+                        });
 
                     if needs_new_output {
-                        stage_active_stream_output(&mut pending_item.active_output, &mut pending_item.staged_outputs);
+                        stage_active_stream_output(
+                            &mut pending_item.active_output,
+                            &mut pending_item.staged_outputs,
+                        );
                     }
 
                     let active_output = pending_item.active_output.get_or_insert_with(|| {
@@ -451,23 +465,22 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
             }
             UrpStreamEvent::Delta {
-                part_index,
-                delta,
-                ..
+                part_index, delta, ..
             } => match delta {
                 PartDelta::Text { ref content } => {
-                    let part_state = part_states
-                        .get(&part_index)
-                        .cloned()
-                        .unwrap_or(StreamedPartState {
-                            item_index: 0,
-                            output_index: 0,
-                            zone: ResponsesOutputZone::Message,
-                            content_index: Some(part_index),
-                            item_id: String::new(),
-                            call_id: None,
-                            name: None,
-                        });
+                    let part_state =
+                        part_states
+                            .get(&part_index)
+                            .cloned()
+                            .unwrap_or(StreamedPartState {
+                                item_index: 0,
+                                output_index: 0,
+                                zone: ResponsesOutputZone::Message,
+                                content_index: Some(part_index),
+                                item_id: String::new(),
+                                call_id: None,
+                                name: None,
+                            });
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
                         .and_then(|pending| stream_output_mut(pending, part_state.output_index))
@@ -496,25 +509,27 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     ref summary,
                     ref source,
                 } => {
-                    let part_state = part_states
-                        .get(&part_index)
-                        .cloned()
-                        .unwrap_or(StreamedPartState {
-                            item_index: 0,
-                            output_index: 0,
-                            zone: ResponsesOutputZone::Reasoning,
-                            content_index: None,
-                            item_id: String::new(),
-                            call_id: None,
-                            name: None,
-                        });
+                    let part_state =
+                        part_states
+                            .get(&part_index)
+                            .cloned()
+                            .unwrap_or(StreamedPartState {
+                                item_index: 0,
+                                output_index: 0,
+                                zone: ResponsesOutputZone::Reasoning,
+                                content_index: None,
+                                item_id: String::new(),
+                                call_id: None,
+                                name: None,
+                            });
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
                         .and_then(|pending| stream_output_mut(pending, part_state.output_index))
                     {
                         append_delta_to_stream_output_item(active_output, &delta);
                     }
-                    if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                    if let Some(content) = content.as_deref().filter(|content| !content.is_empty())
+                    {
                         send_responses_delta_string(
                             &tx,
                             &mut seq,
@@ -529,7 +544,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         )
                         .await?;
                     }
-                    if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                    if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty())
+                    {
                         let should_emit_added = pending_assistant_items
                             .get_mut(&part_state.item_index)
                             .and_then(|pending| stream_output_mut(pending, part_state.output_index))
@@ -575,18 +591,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     let _ = source;
                 }
                 PartDelta::ToolCallArguments { ref arguments } => {
-                    let part_state = part_states
-                        .get(&part_index)
-                        .cloned()
-                        .unwrap_or(StreamedPartState {
-                            item_index: 0,
-                            output_index: 0,
-                            zone: ResponsesOutputZone::FunctionCall,
-                            content_index: None,
-                            item_id: String::new(),
-                            call_id: Some(String::new()),
-                            name: Some(String::new()),
-                        });
+                    let part_state =
+                        part_states
+                            .get(&part_index)
+                            .cloned()
+                            .unwrap_or(StreamedPartState {
+                                item_index: 0,
+                                output_index: 0,
+                                zone: ResponsesOutputZone::FunctionCall,
+                                content_index: None,
+                                item_id: String::new(),
+                                call_id: Some(String::new()),
+                                name: Some(String::new()),
+                            });
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
                         .and_then(|pending| stream_output_mut(pending, part_state.output_index))
@@ -608,18 +625,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     .await?;
                 }
                 PartDelta::Refusal { ref content } => {
-                    let part_state = part_states
-                        .get(&part_index)
-                        .cloned()
-                        .unwrap_or(StreamedPartState {
-                            item_index: 0,
-                            output_index: 0,
-                            zone: ResponsesOutputZone::Message,
-                            content_index: Some(part_index),
-                            item_id: String::new(),
-                            call_id: None,
-                            name: None,
-                        });
+                    let part_state =
+                        part_states
+                            .get(&part_index)
+                            .cloned()
+                            .unwrap_or(StreamedPartState {
+                                item_index: 0,
+                                output_index: 0,
+                                zone: ResponsesOutputZone::Message,
+                                content_index: Some(part_index),
+                                item_id: String::new(),
+                                call_id: None,
+                                name: None,
+                            });
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
                         .and_then(|pending| pending.active_output.as_mut())
@@ -703,16 +721,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         if is_staged_message
                             && let Some(output) = pending_assistant_items
                                 .get_mut(&part_state.item_index)
-                                .and_then(|pending| take_stream_output(pending, part_state.output_index))
+                                .and_then(|pending| {
+                                    take_stream_output(pending, part_state.output_index)
+                                })
                         {
-                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length).await?;
+                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
+                                .await?;
                         }
                     } else if part_state.zone == ResponsesOutputZone::FunctionCall {
-                        if let Part::ToolCall {
-                            arguments,
-                            ..
-                        } = &part
-                        {
+                        if let Part::ToolCall { arguments, .. } = &part {
                             send_responses_event(
                                 &tx,
                                 &mut seq,
@@ -729,18 +746,21 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         }
                         if let Some(output) = pending_assistant_items
                             .get_mut(&part_state.item_index)
-                            .and_then(|pending| take_stream_output(pending, part_state.output_index))
+                            .and_then(|pending| {
+                                take_stream_output(pending, part_state.output_index)
+                            })
                         {
-                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length).await?;
+                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
+                                .await?;
                         }
                     } else if part_state.zone == ResponsesOutputZone::Reasoning {
                         if let Part::Reasoning {
-                            content,
-                            summary,
-                            ..
+                            content, summary, ..
                         } = &part
                         {
-                            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                            if let Some(summary) =
+                                summary.as_deref().filter(|summary| !summary.is_empty())
+                            {
                                 send_responses_event(
                                     &tx,
                                     &mut seq,
@@ -766,7 +786,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 )
                                 .await?;
                             }
-                            if content.as_deref().is_some_and(|content| !content.is_empty()) {
+                            if content
+                                .as_deref()
+                                .is_some_and(|content| !content.is_empty())
+                            {
                                 send_responses_event(
                                     &tx,
                                     &mut seq,
@@ -782,9 +805,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         }
                         if let Some(output) = pending_assistant_items
                             .get_mut(&part_state.item_index)
-                            .and_then(|pending| take_stream_output(pending, part_state.output_index))
+                            .and_then(|pending| {
+                                take_stream_output(pending, part_state.output_index)
+                            })
                         {
-                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length).await?;
+                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
+                                .await?;
                         }
                     }
                 }
@@ -843,7 +869,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &encode_stream_output_item(&item)
                             .into_iter()
                             .next()
-                            .unwrap_or_else(|| encode_item_start_stub(&item_header_from_item(&item))),
+                            .unwrap_or_else(|| {
+                                encode_item_start_stub(&item_header_from_item(&item))
+                            }),
                         sse_max_frame_length,
                     );
                     send_responses_event(
@@ -970,9 +998,15 @@ fn stream_output_item_start_stub(
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(role_to_str(role)));
             obj.insert("content".to_string(), json!([]));
-            obj.insert("id".to_string(), json!(format!("msg_{}", uuid::Uuid::new_v4())));
+            obj.insert(
+                "id".to_string(),
+                json!(format!("msg_{}", uuid::Uuid::new_v4())),
+            );
             obj.insert("status".to_string(), json!("in_progress"));
-            if let Some(phase) = part_extra_body.get("phase").and_then(|value| value.as_str()) {
+            if let Some(phase) = part_extra_body
+                .get("phase")
+                .and_then(|value| value.as_str())
+            {
                 obj.insert("phase".to_string(), json!(phase));
             }
             merge_json_extra(&mut obj, item_extra_body);
@@ -1001,7 +1035,10 @@ fn stream_output_item_start_stub(
             obj.insert("call_id".to_string(), json!(call_id));
             obj.insert("name".to_string(), json!(name));
             obj.insert("arguments".to_string(), json!(""));
-            obj.insert("id".to_string(), json!(format!("fc_{}", uuid::Uuid::new_v4())));
+            obj.insert(
+                "id".to_string(),
+                json!(format!("fc_{}", uuid::Uuid::new_v4())),
+            );
             obj.insert("status".to_string(), json!("in_progress"));
             merge_json_extra(&mut obj, part_extra_body);
             Value::Object(obj)
@@ -1017,13 +1054,26 @@ fn merge_json_extra_value(obj: &mut Map<String, Value>, value: &Value) {
     }
 }
 
-fn append_delta_to_stream_output_item(active_output: &mut ActiveResponsesOutputItem, delta: &PartDelta) {
+fn append_delta_to_stream_output_item(
+    active_output: &mut ActiveResponsesOutputItem,
+    delta: &PartDelta,
+) {
     match (&active_output.zone, delta) {
         (ResponsesOutputZone::Message, PartDelta::Text { content }) => {
-            append_string_field_to_message_content(&mut active_output.item, "output_text", "text", content);
+            append_string_field_to_message_content(
+                &mut active_output.item,
+                "output_text",
+                "text",
+                content,
+            );
         }
         (ResponsesOutputZone::Message, PartDelta::Refusal { content }) => {
-            append_string_field_to_message_content(&mut active_output.item, "refusal", "refusal", content);
+            append_string_field_to_message_content(
+                &mut active_output.item,
+                "refusal",
+                "refusal",
+                content,
+            );
         }
         (
             ResponsesOutputZone::Reasoning,
@@ -1069,9 +1119,9 @@ fn append_string_field_to_message_content(
     let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) else {
         return;
     };
-    let needs_new_part = content.last().is_none_or(|last| {
-        last.get("type").and_then(Value::as_str) != Some(content_type)
-    });
+    let needs_new_part = content
+        .last()
+        .is_none_or(|last| last.get("type").and_then(Value::as_str) != Some(content_type));
     if needs_new_part {
         content.push(json!({ "type": content_type, field_name: "" }));
     }
@@ -1111,14 +1161,14 @@ fn append_reasoning_summary_field(item: &mut Value, delta: &str) {
     let Some(last) = entries.last_mut().and_then(Value::as_object_mut) else {
         return;
     };
-    let current = last
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let current = last.get("text").and_then(Value::as_str).unwrap_or_default();
     last.insert("text".to_string(), json!(format!("{current}{delta}")));
 }
 
-fn apply_part_done_to_stream_output_item(active_output: &mut ActiveResponsesOutputItem, part: &Part) {
+fn apply_part_done_to_stream_output_item(
+    active_output: &mut ActiveResponsesOutputItem,
+    part: &Part,
+) {
     match active_output.zone {
         ResponsesOutputZone::Message => {
             if let Some(content) = active_output
@@ -1237,7 +1287,8 @@ async fn flush_stream_output(
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     let completed_item = complete_stream_output_item(active_output.item);
-    let done_item = sanitize_responses_output_item_for_frame_limit(&completed_item, sse_max_frame_length);
+    let done_item =
+        sanitize_responses_output_item_for_frame_limit(&completed_item, sse_max_frame_length);
     send_responses_event(
         &tx,
         seq,
@@ -1313,7 +1364,10 @@ fn flush_pending_message_item(
     obj.insert("type".to_string(), json!("message"));
     obj.insert("role".to_string(), json!(role_to_str(pending_item.role)));
     obj.insert("content".to_string(), Value::Array(pending_item.content));
-    obj.insert("id".to_string(), json!(format!("msg_{}", uuid::Uuid::new_v4())));
+    obj.insert(
+        "id".to_string(),
+        json!(format!("msg_{}", uuid::Uuid::new_v4())),
+    );
     obj.insert("status".to_string(), json!("completed"));
     if let Some(phase) = pending_item.phase {
         obj.insert("phase".to_string(), Value::String(phase));
@@ -1659,10 +1713,7 @@ fn encode_image_part(
     Value::Object(obj)
 }
 
-fn encode_file_part(
-    source: &crate::urp::FileSource,
-    extra_body: &HashMap<String, Value>,
-) -> Value {
+fn encode_file_part(source: &crate::urp::FileSource, extra_body: &HashMap<String, Value>) -> Value {
     let mut obj = Map::new();
     obj.insert("type".to_string(), json!("output_file"));
     match source {
@@ -1798,5 +1849,4 @@ mod tests {
         assert_eq!(output[1]["custom_message_field"], json!(true));
         assert_eq!(output[2]["type"], json!("function_call"));
     }
-
 }

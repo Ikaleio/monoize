@@ -1,12 +1,11 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState,
-    UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use async_trait::async_trait;
 use crate::urp::{Item, Part, Role};
+use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::any::Any;
 
 #[derive(Debug, Deserialize)]
@@ -105,7 +104,13 @@ impl Transform for AutoCacheToolUseTransform {
         // Find the last User message before the assistant's tool call
         let mut target_user_idx: Option<usize> = None;
         for i in (0..assistant_idx).rev() {
-            if matches!(&req.inputs[i], Item::Message { role: Role::User, .. }) {
+            if matches!(
+                &req.inputs[i],
+                Item::Message {
+                    role: Role::User,
+                    ..
+                }
+            ) {
                 target_user_idx = Some(i);
                 break;
             }
@@ -147,7 +152,9 @@ fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
                 .iter()
                 .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
                 .count(),
-            Item::ToolResult { extra_body, .. } => usize::from(extra_body.contains_key("cache_control")),
+            Item::ToolResult { extra_body, .. } => {
+                usize::from(extra_body.contains_key("cache_control"))
+            }
         })
         .sum()
 }

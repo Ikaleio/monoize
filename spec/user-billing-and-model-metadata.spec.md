@@ -82,12 +82,19 @@ BE3. Before upstream forwarding, if `balance_unlimited = false` and `balance_nan
 C1. Charge requires both:
 
 - upstream response usage (`input_tokens`, `output_tokens`), and
-- model metadata pricing for the served upstream model (`input_cost_per_token_nano`, `output_cost_per_token_nano`).
+- model metadata pricing resolved under C1.2, with non-null `input_cost_per_token_nano` and `output_cost_per_token_nano`.
 
-C1.1. Served upstream model resolution for billing:
+C1.1. Served upstream model resolution for request execution and billing metadata:
 
-- if provider model mapping has non-empty `redirect`, billing MUST use `redirect` as `upstream_model`;
-- otherwise billing MUST use the requested logical model.
+- if provider model mapping has non-empty `redirect`, Monoize MUST send that `redirect` upstream and MUST record it as `upstream_model`;
+- otherwise Monoize MUST use the requested logical model as `upstream_model`.
+
+C1.2. Pricing model resolution for billing:
+
+- Monoize MUST first look up pricing for `upstream_model` from C1.1.
+- If `upstream_model` came from a non-empty `redirect` and that lookup does not yield complete pricing, Monoize MUST retry pricing lookup with the requested logical model.
+- If the requested logical model equals `upstream_model`, Monoize MUST NOT perform a second lookup.
+- If neither lookup yields complete pricing, the request has no billable pricing.
 
 C2. Base charge formula (nano-dollar):
 
@@ -157,7 +164,11 @@ C5. Final charge MUST multiply by provider model multiplier and truncate toward 
 final_charge_nano = trunc(base_charge * provider_multiplier)
 ```
 
-C6. If any required pricing field is missing, charge MUST be skipped for that request and a warning MUST be logged.
+C6. If C1.2 yields no billable pricing, Monoize MUST reject the request with HTTP `403` and code `model_pricing_required`.
+
+C6.1. `build_monoize_attempts()` SHOULD prevent C6 from being reached by filtering unbillable attempts before upstream forwarding.
+
+C6.2. If C6 is reached during post-response billing, Monoize MUST NOT write any charge ledger row for that request.
 
 C7. For embeddings responses, billing MUST treat usage as:
 
@@ -234,7 +245,7 @@ S1. Admin endpoint `POST /api/dashboard/model-metadata/sync/models-dev` MUST fet
 
 S2. The response is a JSON object keyed by provider ID, each containing a `models` object keyed by model ID.
 
-S3. For each `provider/model` pair, the `model_id` stored in the database MUST be `"{provider_id}/{model_id}"` (e.g. `"openai/gpt-4o"`).
+S3. For each `provider/model` pair, sync MUST normalize the upstream model name to the canonical bare `model_id` used by billing lookups (for example `"openai/gpt-4o"` stores as `"gpt-4o"`). The source provider identity for the chosen sync variant MUST be stored separately in `models_dev_provider`.
 
 S4. Cost fields in models.dev are denominated in USD per 1M tokens. Conversion to nano-dollar per token:
 

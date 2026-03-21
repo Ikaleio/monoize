@@ -51,8 +51,8 @@ impl Transform for ReasoningSummaryToRawCotTransform {
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config =
-            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
         Ok(Box::new(cfg))
     }
 
@@ -94,25 +94,26 @@ fn mark_item(item: &mut Item) {
         else {
             continue;
         };
-        if summary.as_deref().is_some_and(|summary| !summary.is_empty()) {
-            extra_body.insert(
-                "openwebui_reasoning_content".to_string(),
-                Value::Bool(true),
-            );
+        if summary
+            .as_deref()
+            .is_some_and(|summary| !summary.is_empty())
+        {
+            extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
         }
     }
 }
 
 fn mark_stream(event: &mut UrpStreamEvent) {
     match event {
-        UrpStreamEvent::Delta { delta, extra_body, .. } => {
+        UrpStreamEvent::Delta {
+            delta, extra_body, ..
+        } => {
             if let PartDelta::Reasoning { summary, .. } = delta
-                && summary.as_deref().is_some_and(|summary| !summary.is_empty())
+                && summary
+                    .as_deref()
+                    .is_some_and(|summary| !summary.is_empty())
             {
-                extra_body.insert(
-                    "openwebui_reasoning_content".to_string(),
-                    Value::Bool(true),
-                );
+                extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
             }
         }
         UrpStreamEvent::PartDone { part, .. } => {
@@ -124,11 +125,11 @@ fn mark_stream(event: &mut UrpStreamEvent) {
             else {
                 return;
             };
-            if summary.as_deref().is_some_and(|summary| !summary.is_empty()) {
-                extra_body.insert(
-                    "openwebui_reasoning_content".to_string(),
-                    Value::Bool(true),
-                );
+            if summary
+                .as_deref()
+                .is_some_and(|summary| !summary.is_empty())
+            {
+                extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
             }
         }
         UrpStreamEvent::ItemDone { item, .. } => mark_item(item),

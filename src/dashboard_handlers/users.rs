@@ -131,7 +131,10 @@ pub async fn create_user(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    state.name_caches.users.insert(user.id.clone(), user.username.clone());
+    state
+        .name_caches
+        .users
+        .insert(user.id.clone(), user.username.clone());
     Ok((StatusCode::CREATED, Json(UserResponse::from(user))))
 }
 
@@ -255,7 +258,10 @@ pub async fn update_user(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "user not found"))?;
 
-    state.name_caches.users.insert(updated_user.id.clone(), updated_user.username.clone());
+    state
+        .name_caches
+        .users
+        .insert(updated_user.id.clone(), updated_user.username.clone());
     Ok(Json(UserResponse::from(updated_user)))
 }
 

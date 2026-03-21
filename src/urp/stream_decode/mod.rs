@@ -9,7 +9,7 @@ use crate::handlers::{StreamRuntimeMetrics, UrpRequest};
 use crate::urp::UrpStreamEvent;
 use axum::http::StatusCode;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 pub(crate) async fn stream_upstream_to_urp_events(
     urp: &UrpRequest,
@@ -51,14 +51,8 @@ pub(crate) async fn stream_upstream_to_urp_events(
             .await
         }
         ProviderType::Gemini => {
-            gemini::stream_gemini_to_urp_events(
-                urp,
-                upstream_resp,
-                tx,
-                started_at,
-                runtime_metrics,
-            )
-            .await
+            gemini::stream_gemini_to_urp_events(urp, upstream_resp, tx, started_at, runtime_metrics)
+                .await
         }
         ProviderType::Group => Err(AppError::new(
             StatusCode::BAD_REQUEST,

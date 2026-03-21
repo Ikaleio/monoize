@@ -19,7 +19,11 @@ pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
     }
 }
 
-pub(super) fn upstream_path_for_model(provider_type: ProviderType, model: &str, stream: bool) -> String {
+pub(super) fn upstream_path_for_model(
+    provider_type: ProviderType,
+    model: &str,
+    stream: bool,
+) -> String {
     match provider_type {
         ProviderType::Gemini => {
             let model = model.trim();
@@ -148,21 +152,20 @@ pub(super) async fn build_monoize_attempts(
         return Ok(attempts);
     }
 
-    let mut pricing_cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut pricing_cache: std::collections::HashMap<(String, String), bool> =
+        std::collections::HashMap::new();
     let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut priced_attempts = Vec::with_capacity(attempts.len());
 
     for attempt in attempts {
-        let has_pricing = if let Some(cached) = pricing_cache.get(&attempt.upstream_model) {
+        let cache_key = (attempt.upstream_model.clone(), urp.model.clone());
+        let has_pricing = if let Some(cached) = pricing_cache.get(&cache_key) {
             *cached
         } else {
-            let priced = state
-                .model_registry_store
-                .get_model_pricing(&attempt.upstream_model)
-                .await
-                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+            let priced = resolve_billable_pricing(state, &attempt.upstream_model, &urp.model)
+                .await?
                 .is_some();
-            pricing_cache.insert(attempt.upstream_model.clone(), priced);
+            pricing_cache.insert(cache_key, priced);
             priced
         };
 
@@ -247,7 +250,12 @@ pub(super) async fn collect_provider_attempts(
             .max(1);
         out.push(MonoizeAttempt {
             provider_id: provider.id.clone(),
-            provider_type: crate::monoize_routing::resolve_effective_api_type(&provider.api_type_overrides, provider.provider_type, &upstream_model).to_config_type(),
+            provider_type: crate::monoize_routing::resolve_effective_api_type(
+                &provider.api_type_overrides,
+                provider.provider_type,
+                &upstream_model,
+            )
+            .to_config_type(),
             channel_id: channel.id.clone(),
             base_url: channel.base_url.clone(),
             api_key: channel.api_key.clone(),
@@ -372,13 +380,14 @@ pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> Provide
     }
 }
 
-pub(super) fn provider_extra_headers(provider_type: ProviderType) -> &'static [(&'static str, &'static str)] {
+pub(super) fn provider_extra_headers(
+    provider_type: ProviderType,
+) -> &'static [(&'static str, &'static str)] {
     match provider_type {
         ProviderType::Messages => &[("anthropic-version", "2023-06-01")],
         _ => &[],
     }
 }
-
 
 pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]) -> String {
     if tried.is_empty() {
@@ -552,11 +561,8 @@ pub(super) fn error_to_sse_stream(
     match downstream {
         DownstreamProtocol::Responses => {
             let mut seq: u64 = 1;
-            let payload = crate::urp::stream_helpers::normalize_responses_payload(
-                seq,
-                "error",
-                error_json,
-            );
+            let payload =
+                crate::urp::stream_helpers::normalize_responses_payload(seq, "error", error_json);
             seq += 1;
             events.push(Event::default().event("error").data(payload.to_string()));
             let _ = seq;

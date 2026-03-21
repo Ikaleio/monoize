@@ -186,7 +186,10 @@ pub async fn create_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
-    state.name_caches.api_keys.insert(api_key.id.clone(), api_key.name.clone());
+    state
+        .name_caches
+        .api_keys
+        .insert(api_key.id.clone(), api_key.name.clone());
     Ok((
         StatusCode::CREATED,
         Json(ApiKeyCreatedResponse {
@@ -329,7 +332,10 @@ pub async fn update_api_key(
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
-    state.name_caches.api_keys.insert(updated_key.id.clone(), updated_key.name.clone());
+    state
+        .name_caches
+        .api_keys
+        .insert(updated_key.id.clone(), updated_key.name.clone());
     Ok(Json(ApiKeyResponse {
         id: updated_key.id,
         name: updated_key.name,

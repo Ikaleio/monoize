@@ -140,11 +140,12 @@ pub async fn list_model_metadata(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
-    let rows: Vec<DbModelMetadataRecord> = state
-        .model_registry_store
-        .list_model_metadata()
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let rows: Vec<DbModelMetadataRecord> =
+        state
+            .model_registry_store
+            .list_model_metadata()
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     Ok(Json(rows))
 }
 

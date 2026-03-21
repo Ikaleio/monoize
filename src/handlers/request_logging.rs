@@ -2,8 +2,7 @@ use super::*;
 use chrono::{Duration as ChronoDuration, Utc};
 
 fn request_created_at(started_at: std::time::Instant) -> chrono::DateTime<Utc> {
-    let elapsed = ChronoDuration::from_std(started_at.elapsed())
-        .unwrap_or(ChronoDuration::MAX);
+    let elapsed = ChronoDuration::from_std(started_at.elapsed()).unwrap_or(ChronoDuration::MAX);
     Utc::now() - elapsed
 }
 
@@ -90,7 +89,6 @@ pub(super) async fn insert_pending_request_log(
         None,
         request_created_at(started_at),
     );
-
 }
 
 pub(super) async fn update_pending_channel_info(
@@ -123,7 +121,6 @@ pub(super) async fn update_pending_channel_info(
         Some(attempt.model_multiplier),
         request_created_at(started_at),
     );
-
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -281,7 +278,12 @@ pub(super) fn spawn_request_log_error(
     let created_at = request_created_at(started_at);
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
-    let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));
+    let error_message = Some(
+        error
+            .internal_message
+            .clone()
+            .unwrap_or_else(|| error.message.clone()),
+    );
     let error_http_status = Some(error.status.as_u16());
     let tried_providers_json = if tried_providers.is_empty() {
         None
@@ -351,7 +353,12 @@ pub(super) fn spawn_request_log_error_no_attempt(
     let created_at = request_created_at(started_at);
     let user_store = state.user_store.clone();
     let error_code = Some(error.code.clone());
-    let error_message = Some(error.internal_message.clone().unwrap_or_else(|| error.message.clone()));
+    let error_message = Some(
+        error
+            .internal_message
+            .clone()
+            .unwrap_or_else(|| error.message.clone()),
+    );
     let error_http_status = Some(error.status.as_u16());
     let tried_providers_json = if tried_providers.is_empty() {
         None

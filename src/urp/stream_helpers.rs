@@ -86,11 +86,13 @@ pub(crate) async fn send_messages_delta_string(
     let event_name = template
         .get("type")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "stream_encode_failed",
-            "messages stream payload missing type field",
-        ))?
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "stream_encode_failed",
+                "messages stream payload missing type field",
+            )
+        })?
         .to_string();
     for chunk in split_json_value_by_string_patch(template, content, patch, max_frame_length) {
         send_named_sse_json(tx, &event_name, chunk).await?;
@@ -110,11 +112,17 @@ pub(crate) fn split_wrapped_responses_json_string_field(
         obj.insert(field.to_string(), Value::String(String::new()));
     }
     let wrapped_template_len = responses_payload_length(seq, event_name, &template);
-    split_json_by_estimated_limit(template, content, max_frame_length, wrapped_template_len, move |value, part| {
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(field.to_string(), Value::String(part.to_string()));
-        }
-    })
+    split_json_by_estimated_limit(
+        template,
+        content,
+        max_frame_length,
+        wrapped_template_len,
+        move |value, part| {
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(field.to_string(), Value::String(part.to_string()));
+            }
+        },
+    )
 }
 
 pub(crate) fn split_json_value_by_string_patch(
@@ -324,42 +332,36 @@ pub(crate) fn chat_delta_path_tool_arguments(value: &mut Value, content: &str) {
 }
 
 pub(crate) fn messages_delta_path_text(value: &mut Value, content: &str) {
-    if let Some(delta) = value
-        .get_mut("delta")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(delta) = value.get_mut("delta").and_then(Value::as_object_mut) {
         delta.insert("text".to_string(), Value::String(content.to_string()));
     }
 }
 
 pub(crate) fn messages_delta_path_thinking(value: &mut Value, content: &str) {
-    if let Some(delta) = value
-        .get_mut("delta")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(delta) = value.get_mut("delta").and_then(Value::as_object_mut) {
         delta.insert("thinking".to_string(), Value::String(content.to_string()));
     }
 }
 
 pub(crate) fn messages_delta_path_signature(value: &mut Value, content: &str) {
-    if let Some(delta) = value
-        .get_mut("delta")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(delta) = value.get_mut("delta").and_then(Value::as_object_mut) {
         delta.insert("signature".to_string(), Value::String(content.to_string()));
     }
 }
 
 pub(crate) fn messages_delta_path_partial_json(value: &mut Value, content: &str) {
-    if let Some(delta) = value
-        .get_mut("delta")
-        .and_then(Value::as_object_mut)
-    {
-        delta.insert("partial_json".to_string(), Value::String(content.to_string()));
+    if let Some(delta) = value.get_mut("delta").and_then(Value::as_object_mut) {
+        delta.insert(
+            "partial_json".to_string(),
+            Value::String(content.to_string()),
+        );
     }
 }
 
-pub(crate) fn sanitize_responses_output_item_for_frame_limit(item: &Value, max_frame_length: Option<usize>) -> Value {
+pub(crate) fn sanitize_responses_output_item_for_frame_limit(
+    item: &Value,
+    max_frame_length: Option<usize>,
+) -> Value {
     let Some(max_len) = max_frame_length else {
         return item.clone();
     };
@@ -373,7 +375,8 @@ pub(crate) fn sanitize_responses_output_item_for_frame_limit(item: &Value, max_f
                 if let Some(content) = obj.get_mut("content").and_then(Value::as_array_mut) {
                     for part in content {
                         if let Some(part_obj) = part.as_object_mut() {
-                            if part_obj.get("type").and_then(|v| v.as_str()) == Some("output_text") {
+                            if part_obj.get("type").and_then(|v| v.as_str()) == Some("output_text")
+                            {
                                 part_obj.insert("text".to_string(), Value::String(String::new()));
                             }
                         }
@@ -399,7 +402,10 @@ pub(crate) fn sanitize_responses_output_item_for_frame_limit(item: &Value, max_f
     sanitized
 }
 
-pub(crate) fn sanitize_responses_completed_for_frame_limit(encoded: &Value, max_frame_length: Option<usize>) -> Value {
+pub(crate) fn sanitize_responses_completed_for_frame_limit(
+    encoded: &Value,
+    max_frame_length: Option<usize>,
+) -> Value {
     let Some(max_len) = max_frame_length else {
         return encoded.clone();
     };
@@ -444,10 +450,10 @@ pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) 
         .to_string();
     if signature.is_empty() {
         signature = item
-        .get("signature")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
     }
     (text, summary_text, signature)
 }
@@ -511,7 +517,9 @@ pub(crate) fn extract_chat_reasoning_from_detail(
     }
 }
 
-pub(crate) fn extract_chat_reasoning_deltas(delta: &Value) -> (Vec<String>, Vec<String>, Vec<String>) {
+pub(crate) fn extract_chat_reasoning_deltas(
+    delta: &Value,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut text_parts = Vec::new();
     let mut summary_parts = Vec::new();
     let mut sig_parts = Vec::new();
@@ -621,4 +629,23 @@ pub(crate) fn responses_text_delta_payload(
     obj.insert("logprobs".to_string(), Value::Null);
     insert_phase_if_present(&mut obj, phase);
     Value::Object(obj)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_chat_reasoning_deltas;
+    use serde_json::json;
+
+    #[test]
+    fn extract_chat_reasoning_deltas_reads_legacy_reasoning_content() {
+        let delta = json!({
+            "reasoning_content": "legacy streamed reasoning"
+        });
+
+        let (text_parts, summary_parts, sig_parts) = extract_chat_reasoning_deltas(&delta);
+
+        assert_eq!(text_parts, vec!["legacy streamed reasoning".to_string()]);
+        assert!(summary_parts.is_empty());
+        assert!(sig_parts.is_empty());
+    }
 }

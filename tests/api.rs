@@ -7635,6 +7635,140 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
 }
 
 #[tokio::test]
+async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpriced() {
+    let ctx = setup().await;
+
+    let providers = ctx
+        .state
+        .monoize_store
+        .list_providers()
+        .await
+        .expect("list providers");
+    let base_url = providers
+        .iter()
+        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .expect("base_url");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "alias-fallback-model".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: Some("gpt-5-unpriced-upstream".to_string()),
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "alias-fallback-provider".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("alias-fallback-ch".to_string()),
+                name: "alias-fallback-ch".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-50),
+        })
+        .await
+        .expect("create alias fallback provider");
+
+    ctx.state
+        .model_registry_store
+        .upsert_model_metadata(
+            "alias-fallback-model",
+            monoize::model_registry_store::UpsertModelMetadataInput {
+                models_dev_provider: Some("test".to_string()),
+                mode: Some("chat".to_string()),
+                input_cost_per_token_nano: Some("2000".to_string()),
+                output_cost_per_token_nano: Some("3000".to_string()),
+                cache_read_input_cost_per_token_nano: None,
+                cache_creation_input_cost_per_token_nano: None,
+                output_cost_per_reasoning_token_nano: None,
+                max_input_tokens: None,
+                max_output_tokens: None,
+                max_tokens: None,
+            },
+        )
+        .await
+        .expect("seed alias fallback model pricing");
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let before: i64 = user_before.balance_nano_usd.parse().unwrap();
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model":"alias-fallback-model",
+            "input":"route-charge-fallback",
+            "stream": true,
+            "emit_usage": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+
+    assert_eq!(before - after, 48_000);
+}
+
+#[tokio::test]
 async fn balance_zero_returns_payment_required() {
     let ctx = setup().await;
     let user = ctx

@@ -254,7 +254,8 @@ pub(crate) async fn stream_gemini_to_urp_events(
                 continue;
             };
 
-            let previous_arguments_len = calls.get(call_id).map(|(_, args)| args.len()).unwrap_or(0);
+            let previous_arguments_len =
+                calls.get(call_id).map(|(_, args)| args.len()).unwrap_or(0);
             if let Some(entry) = calls.get_mut(call_id) {
                 entry.0 = name.clone();
                 if arguments.len() > previous_arguments_len {

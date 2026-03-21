@@ -1,4 +1,6 @@
-use super::providers::{build_models_list_url, provider_pricing_model};
+use super::providers::{
+    build_models_list_url, provider_has_billable_pricing, provider_pricing_model,
+};
 use crate::db::DbPool;
 use crate::migration::Migrator;
 use crate::monoize_routing::MonoizeModelEntry;
@@ -53,6 +55,21 @@ fn provider_pricing_model_falls_back_to_logical_when_redirect_blank() {
         provider_pricing_model("gpt-5-logical", &entry),
         "gpt-5-logical"
     );
+}
+
+#[test]
+fn provider_has_billable_pricing_accepts_logical_fallback_when_redirect_target_is_unpriced() {
+    let entry = MonoizeModelEntry {
+        redirect: Some("gpt-5-target".to_string()),
+        multiplier: 1.0,
+    };
+    let priced_ids = std::collections::HashSet::from(["gpt-5-logical".to_string()]);
+
+    assert!(provider_has_billable_pricing(
+        "gpt-5-logical",
+        &entry,
+        &priced_ids,
+    ));
 }
 
 #[test]
@@ -136,7 +153,9 @@ fn request_log_timing_serializes_compatibility_aliases() {
 
 #[tokio::test]
 async fn provider_store_rejects_invalid_groups_json() {
-    let db = DbPool::connect("sqlite::memory:").await.expect("db connects");
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
     {
         let write = db.write().await;
         Migrator::up(&*write, None).await.expect("migrates");
@@ -176,7 +195,9 @@ async fn provider_store_rejects_invalid_groups_json() {
 
 #[tokio::test]
 async fn sqlite_migration_creates_request_log_retention_indexes() {
-    let db = DbPool::connect("sqlite::memory:").await.expect("db connects");
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
     {
         let write = db.write().await;
         Migrator::up(&*write, None).await.expect("migrates");

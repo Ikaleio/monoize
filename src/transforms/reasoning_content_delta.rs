@@ -51,8 +51,8 @@ impl Transform for ReasoningContentDeltaTransform {
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config =
-            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
         Ok(Box::new(cfg))
     }
 
@@ -81,14 +81,10 @@ impl Transform for ReasoningContentDeltaTransform {
     }
 }
 
-fn extract_reasoning_content(encrypted: &Option<Value>, summary: &Option<String>) -> Option<String> {
-    if let Some(enc) = encrypted {
-        let s = enc
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| enc.to_string());
-        if !s.is_empty() {
-            return Some(s);
+fn extract_reasoning_content(content: &Option<String>, summary: &Option<String>) -> Option<String> {
+    if let Some(content) = content {
+        if !content.is_empty() {
+            return Some(content.clone());
         }
     }
     if let Some(sum) = summary {
@@ -105,6 +101,7 @@ fn mark_item(item: &mut Item) {
     };
     for part in parts {
         let Part::Reasoning {
+            content,
             encrypted,
             summary,
             extra_body,
@@ -113,11 +110,9 @@ fn mark_item(item: &mut Item) {
         else {
             continue;
         };
-        if let Some(value) = extract_reasoning_content(encrypted, summary) {
-            extra_body.insert(
-                "inject_reasoning_content".to_string(),
-                Value::String(value),
-            );
+        let _ = encrypted;
+        if let Some(value) = extract_reasoning_content(content, summary) {
+            extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
         }
     }
 }
@@ -128,19 +123,21 @@ fn mark_stream(event: &mut UrpStreamEvent) {
             delta, extra_body, ..
         } => {
             if let PartDelta::Reasoning {
-                encrypted, summary, ..
+                content,
+                encrypted,
+                summary,
+                ..
             } = delta
             {
-                if let Some(value) = extract_reasoning_content(encrypted, summary) {
-                    extra_body.insert(
-                        "inject_reasoning_content".to_string(),
-                        Value::String(value),
-                    );
+                let _ = encrypted;
+                if let Some(value) = extract_reasoning_content(content, summary) {
+                    extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
                 }
             }
         }
         UrpStreamEvent::PartDone { part, .. } => {
             let Part::Reasoning {
+                content,
                 encrypted,
                 summary,
                 extra_body,
@@ -149,11 +146,9 @@ fn mark_stream(event: &mut UrpStreamEvent) {
             else {
                 return;
             };
-            if let Some(value) = extract_reasoning_content(encrypted, summary) {
-                extra_body.insert(
-                    "inject_reasoning_content".to_string(),
-                    Value::String(value),
-                );
+            let _ = encrypted;
+            if let Some(value) = extract_reasoning_content(content, summary) {
+                extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
             }
         }
         UrpStreamEvent::ItemDone { item, .. } => mark_item(item),
@@ -193,7 +188,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn injects_encrypted_as_reasoning_content_when_present() {
+    async fn injects_plaintext_reasoning_content_when_present() {
         let transform = ReasoningContentDeltaTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
@@ -201,7 +196,7 @@ mod tests {
         let mut event = UrpStreamEvent::Delta {
             part_index: 0,
             delta: PartDelta::Reasoning {
-                content: None,
+                content: Some("plaintext_reasoning".to_string()),
                 encrypted: Some(Value::String("encrypted_data".to_string())),
                 summary: Some("summary_text".to_string()),
                 source: None,
@@ -227,13 +222,13 @@ mod tests {
             extra_body
                 .get("inject_reasoning_content")
                 .and_then(Value::as_str),
-            Some("encrypted_data"),
-            "should prefer encrypted over summary"
+            Some("plaintext_reasoning"),
+            "should prefer plaintext content over summary and ignore encrypted"
         );
     }
 
     #[tokio::test]
-    async fn falls_back_to_summary_when_no_encrypted() {
+    async fn falls_back_to_summary_when_no_plaintext() {
         let transform = ReasoningContentDeltaTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
@@ -241,7 +236,7 @@ mod tests {
         let mut event = UrpStreamEvent::Delta {
             part_index: 0,
             delta: PartDelta::Reasoning {
-                content: Some("plaintext".to_string()),
+                content: None,
                 encrypted: None,
                 summary: Some("summary_fallback".to_string()),
                 source: None,
@@ -268,12 +263,12 @@ mod tests {
                 .get("inject_reasoning_content")
                 .and_then(Value::as_str),
             Some("summary_fallback"),
-            "should fall back to summary when encrypted is absent"
+            "should fall back to summary when plaintext content is absent"
         );
     }
 
     #[tokio::test]
-    async fn does_not_inject_when_neither_encrypted_nor_summary() {
+    async fn does_not_inject_when_only_encrypted_reasoning_exists() {
         let transform = ReasoningContentDeltaTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
@@ -281,8 +276,8 @@ mod tests {
         let mut event = UrpStreamEvent::Delta {
             part_index: 0,
             delta: PartDelta::Reasoning {
-                content: Some("plaintext only".to_string()),
-                encrypted: None,
+                content: None,
+                encrypted: Some(Value::String("encrypted_only".to_string())),
                 summary: None,
                 source: None,
             },
@@ -305,12 +300,12 @@ mod tests {
         };
         assert!(
             extra_body.get("inject_reasoning_content").is_none(),
-            "should not inject when neither encrypted nor summary is present"
+            "should not inject encrypted-only reasoning content"
         );
     }
 
     #[tokio::test]
-    async fn marks_response_parts_with_encrypted() {
+    async fn marks_response_parts_with_plaintext_reasoning() {
         let transform = ReasoningContentDeltaTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
@@ -321,7 +316,7 @@ mod tests {
             outputs: vec![Item::Message {
                 role: crate::urp::Role::Assistant,
                 parts: vec![Part::Reasoning {
-                    content: None,
+                    content: Some("plain_resp".to_string()),
                     encrypted: Some(Value::String("enc_resp".to_string())),
                     summary: Some("sum_resp".to_string()),
                     source: None,
@@ -354,7 +349,7 @@ mod tests {
             extra_body
                 .get("inject_reasoning_content")
                 .and_then(Value::as_str),
-            Some("enc_resp"),
+            Some("plain_resp"),
         );
     }
 }

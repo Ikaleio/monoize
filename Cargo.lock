@@ -2278,6 +2278,7 @@ dependencies = [
  "once_cell",
  "oxipng",
  "pdf-extract",
+ "percent-encoding",
  "rand_core 0.6.4",
  "regex",
  "reqwest",

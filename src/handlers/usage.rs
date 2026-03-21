@@ -73,7 +73,10 @@ pub(crate) async fn record_stream_terminal_event(
     };
     let mut guard = runtime_metrics.lock().await;
     guard.terminal.terminal_event = Some(event.to_string());
-    if let Some(reason) = finish_reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+    if let Some(reason) = finish_reason
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+    {
         guard.terminal.terminal_finish_reason = Some(reason.to_string());
     }
 }
@@ -284,7 +287,12 @@ pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
         .unwrap_or(0);
     let extra_body = split_usage_extra(
         usage,
-        &["prompt_tokens", "completion_tokens", "input_tokens", "output_tokens"],
+        &[
+            "prompt_tokens",
+            "completion_tokens",
+            "input_tokens",
+            "output_tokens",
+        ],
     );
     Some(urp::Usage {
         input_tokens,
@@ -389,7 +397,12 @@ pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
         .unwrap_or(0);
     let extra_body = split_usage_extra(
         usage.as_object()?,
-        &["input_tokens", "output_tokens", "prompt_tokens", "completion_tokens"],
+        &[
+            "input_tokens",
+            "output_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+        ],
     );
     Some(urp::Usage {
         input_tokens,

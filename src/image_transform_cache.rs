@@ -69,30 +69,49 @@ impl ImageTransformCache {
     }
 
     pub async fn write(&self, key: &str, payload: &CachedImagePayload) -> Result<(), String> {
-        tokio::fs::create_dir_all(&self.root)
-            .await
-            .map_err(|err| format!("ensure image transform cache dir {}: {err}", self.root.display()))?;
+        tokio::fs::create_dir_all(&self.root).await.map_err(|err| {
+            format!(
+                "ensure image transform cache dir {}: {err}",
+                self.root.display()
+            )
+        })?;
         let path = self.path_for(key);
         let tmp = self.tmp_path_for(key);
-        let encoded = serde_json::to_vec(payload)
-            .map_err(|err| format!("serialize image transform cache entry {}: {err}", path.display()))?;
-        tokio::fs::write(&tmp, encoded)
-            .await
-            .map_err(|err| format!("write image transform cache temp file {}: {err}", tmp.display()))?;
-        tokio::fs::rename(&tmp, &path)
-            .await
-            .map_err(|err| format!("rename image transform cache file {}: {err}", path.display()))?;
+        let encoded = serde_json::to_vec(payload).map_err(|err| {
+            format!(
+                "serialize image transform cache entry {}: {err}",
+                path.display()
+            )
+        })?;
+        tokio::fs::write(&tmp, encoded).await.map_err(|err| {
+            format!(
+                "write image transform cache temp file {}: {err}",
+                tmp.display()
+            )
+        })?;
+        tokio::fs::rename(&tmp, &path).await.map_err(|err| {
+            format!(
+                "rename image transform cache file {}: {err}",
+                path.display()
+            )
+        })?;
         Ok(())
     }
 
     pub async fn cleanup_expired(&self) -> Result<u64, String> {
-        tokio::fs::create_dir_all(&self.root)
-            .await
-            .map_err(|err| format!("ensure image transform cache dir {}: {err}", self.root.display()))?;
+        tokio::fs::create_dir_all(&self.root).await.map_err(|err| {
+            format!(
+                "ensure image transform cache dir {}: {err}",
+                self.root.display()
+            )
+        })?;
         let mut removed = 0_u64;
-        let mut entries = tokio::fs::read_dir(&self.root)
-            .await
-            .map_err(|err| format!("read image transform cache dir {}: {err}", self.root.display()))?;
+        let mut entries = tokio::fs::read_dir(&self.root).await.map_err(|err| {
+            format!(
+                "read image transform cache dir {}: {err}",
+                self.root.display()
+            )
+        })?;
         loop {
             let entry = match entries.next_entry().await {
                 Ok(Some(entry)) => entry,
@@ -115,7 +134,9 @@ impl ImageTransformCache {
                 match tokio::fs::remove_file(entry.path()).await {
                     Ok(()) => removed = removed.saturating_add(1),
                     Err(err) if err.kind() == ErrorKind::NotFound => {}
-                    Err(err) => tracing::warn!(path = %entry.path().display(), "remove expired image transform cache file failed: {err}"),
+                    Err(err) => {
+                        tracing::warn!(path = %entry.path().display(), "remove expired image transform cache file failed: {err}")
+                    }
                 }
             }
         }
@@ -151,5 +172,7 @@ impl ImageTransformCache {
 }
 
 fn default_cache_root() -> PathBuf {
-    std::env::temp_dir().join("monoize").join("image-transform-cache")
+    std::env::temp_dir()
+        .join("monoize")
+        .join("image-transform-cache")
 }

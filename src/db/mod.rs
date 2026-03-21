@@ -137,7 +137,8 @@ impl DbPool {
         conn.execute_unprepared("PRAGMA foreign_keys=ON").await?;
         conn.execute_unprepared("PRAGMA synchronous=NORMAL").await?;
         conn.execute_unprepared("PRAGMA cache_size=-65536").await?;
-        conn.execute_unprepared("PRAGMA mmap_size=268435456").await?;
+        conn.execute_unprepared("PRAGMA mmap_size=268435456")
+            .await?;
         Ok(())
     }
 
@@ -229,8 +230,7 @@ fn ensure_sqlite_file(dsn: &str) -> Result<(), String> {
         }
     }
     if !path.exists() {
-        std::fs::File::create(&path)
-            .map_err(|err| format!("sqlite_file_create_failed: {err}"))?;
+        std::fs::File::create(&path).map_err(|err| format!("sqlite_file_create_failed: {err}"))?;
     }
     Ok(())
 }

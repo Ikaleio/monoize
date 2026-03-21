@@ -1,10 +1,7 @@
 use crate::db::DbPool;
 use crate::entity::system_settings;
 use chrono::{DateTime, Utc};
-use sea_orm::{
-    EntityTrait, Set,
-    sea_query::OnConflict,
-};
+use sea_orm::{EntityTrait, Set, sea_query::OnConflict};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -210,15 +207,14 @@ impl SettingsStore {
             updated_at: Set(now),
         };
 
-        let insert = system_settings::Entity::insert(model)
-            .on_conflict(
-                OnConflict::column(system_settings::Column::Key)
-                    .update_columns([
-                        system_settings::Column::Value,
-                        system_settings::Column::UpdatedAt,
-                    ])
-                    .to_owned(),
-            );
+        let insert = system_settings::Entity::insert(model).on_conflict(
+            OnConflict::column(system_settings::Column::Key)
+                .update_columns([
+                    system_settings::Column::Value,
+                    system_settings::Column::UpdatedAt,
+                ])
+                .to_owned(),
+        );
 
         let _write_guard = self.db.write().await;
         insert
@@ -273,8 +269,7 @@ impl SettingsStore {
                     }
                 }
                 "monoize_active_probe_enabled" => {
-                    settings.monoize_active_probe_enabled =
-                        row.value.parse().unwrap_or(true);
+                    settings.monoize_active_probe_enabled = row.value.parse().unwrap_or(true);
                 }
                 "monoize_active_probe_interval_seconds" => {
                     settings.monoize_active_probe_interval_seconds =
@@ -293,20 +288,16 @@ impl SettingsStore {
                     };
                 }
                 "monoize_passive_failure_threshold" => {
-                    settings.monoize_passive_failure_threshold =
-                        row.value.parse().unwrap_or(3);
+                    settings.monoize_passive_failure_threshold = row.value.parse().unwrap_or(3);
                 }
                 "monoize_passive_cooldown_seconds" => {
-                    settings.monoize_passive_cooldown_seconds =
-                        row.value.parse().unwrap_or(60);
+                    settings.monoize_passive_cooldown_seconds = row.value.parse().unwrap_or(60);
                 }
                 "monoize_passive_window_seconds" => {
-                    settings.monoize_passive_window_seconds =
-                        row.value.parse().unwrap_or(30);
+                    settings.monoize_passive_window_seconds = row.value.parse().unwrap_or(30);
                 }
                 "monoize_passive_min_samples" => {
-                    settings.monoize_passive_min_samples =
-                        row.value.parse().unwrap_or(20);
+                    settings.monoize_passive_min_samples = row.value.parse().unwrap_or(20);
                 }
                 "monoize_passive_failure_rate_threshold" => {
                     settings.monoize_passive_failure_rate_threshold =
@@ -317,8 +308,7 @@ impl SettingsStore {
                         row.value.parse().unwrap_or(15);
                 }
                 "monoize_request_timeout_ms" => {
-                    settings.monoize_request_timeout_ms =
-                        row.value.parse().unwrap_or(30000);
+                    settings.monoize_request_timeout_ms = row.value.parse().unwrap_or(30000);
                 }
                 _ => {}
             }
@@ -370,9 +360,7 @@ impl SettingsStore {
         .await?;
         self.set(
             "monoize_active_probe_model",
-            settings
-                .monoize_active_probe_model.as_deref()
-                .unwrap_or(""),
+            settings.monoize_active_probe_model.as_deref().unwrap_or(""),
         )
         .await?;
         self.set(

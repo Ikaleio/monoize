@@ -74,7 +74,6 @@ pub struct ImageInputSupport {
     pub max_images: Option<u64>,
 }
 
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[derive(Default)]
@@ -83,14 +82,12 @@ pub struct FileInputSupport {
     pub max_files: Option<u64>,
 }
 
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[derive(Default)]
 pub struct ImageOutputSupport {
     pub supported: bool,
 }
-
 
 #[derive(Clone)]
 pub struct ModelRegistry {

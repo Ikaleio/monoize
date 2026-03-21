@@ -149,7 +149,8 @@ pub async fn update_settings(
         rt.passive_failure_rate_threshold = updated
             .monoize_passive_failure_rate_threshold
             .clamp(0.01, 1.0);
-        rt.passive_rate_limit_cooldown_seconds = updated.monoize_passive_rate_limit_cooldown_seconds.max(1);
+        rt.passive_rate_limit_cooldown_seconds =
+            updated.monoize_passive_rate_limit_cooldown_seconds.max(1);
         rt.active_enabled = updated.monoize_active_probe_enabled;
         rt.active_interval_seconds = updated.monoize_active_probe_interval_seconds.max(1);
         rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);

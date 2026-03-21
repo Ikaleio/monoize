@@ -87,8 +87,8 @@ impl Transform for CompressUserMessageImagesTransform {
     }
 
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
-        let cfg: Config =
-            serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
         if cfg.max_edge_px == 0 {
             return Err(TransformError::InvalidConfig(
                 "max_edge_px must be >= 1".to_string(),
@@ -131,10 +131,7 @@ impl Transform for CompressUserMessageImagesTransform {
                 continue;
             }
             for part in parts.iter_mut() {
-                let Part::Image {
-                    source,
-                    ..
-                } = part else {
+                let Part::Image { source, .. } = part else {
                     continue;
                 };
                 match source {
@@ -155,13 +152,8 @@ impl Transform for CompressUserMessageImagesTransform {
                         let Some((media_type, data)) = split_image_data_url(&url) else {
                             continue;
                         };
-                        let Some(next_source) = compress_base64_image(
-                            context,
-                            cfg.clone(),
-                            media_type,
-                            data,
-                        )
-                        .await?
+                        let Some(next_source) =
+                            compress_base64_image(context, cfg.clone(), media_type, data).await?
                         else {
                             continue;
                         };
@@ -194,7 +186,10 @@ fn preserve_url_detail(source: ImageSource, detail: Option<String>) -> ImageSour
             url: format!("data:{};base64,{}", media_type, data),
             detail,
         },
-        ImageSource::Url { url, detail: next_detail } => ImageSource::Url {
+        ImageSource::Url {
+            url,
+            detail: next_detail,
+        } => ImageSource::Url {
             url,
             detail: next_detail.or(detail),
         },
@@ -249,7 +244,11 @@ async fn compress_base64_image(
         media_type: transformed.media_type.clone(),
         data_base64: STANDARD.encode(&transformed.bytes),
     };
-    if let Err(err) = context.image_transform_cache.write(&cache_key, &payload).await {
+    if let Err(err) = context
+        .image_transform_cache
+        .write(&cache_key, &payload)
+        .await
+    {
         tracing::warn!("persist image transform cache entry failed: {err}");
     }
     Ok(Some(ImageSource::Base64 {
@@ -259,7 +258,10 @@ async fn compress_base64_image(
 }
 
 fn is_supported_media_type(media_type: &str) -> bool {
-    matches!(media_type, "image/jpeg" | "image/jpg" | "image/png" | "image/webp")
+    matches!(
+        media_type,
+        "image/jpeg" | "image/jpg" | "image/png" | "image/webp"
+    )
 }
 
 fn build_cache_key(media_type: &str, cfg: &Config, original: &[u8]) -> String {
@@ -295,13 +297,15 @@ fn compress_image_bytes(
         let rgba = resized.to_rgba8();
         let (width, height) = rgba.dimensions();
         let mut out = Vec::new();
-        let encoder = PngEncoder::new_with_quality(
-            &mut out,
-            CompressionType::Best,
-            PngFilterType::Adaptive,
-        );
+        let encoder =
+            PngEncoder::new_with_quality(&mut out, CompressionType::Best, PngFilterType::Adaptive);
         encoder
-            .write_image(rgba.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .write_image(
+                rgba.as_raw(),
+                width,
+                height,
+                image::ExtendedColorType::Rgba8,
+            )
             .map_err(|err| TransformError::Apply(format!("encode png: {err}")))?;
         let out = optimize_png_losslessly(&out)?;
         return Ok(Some(CompressedImageBytes {
@@ -377,9 +381,12 @@ mod tests {
     #[tokio::test]
     async fn compresses_user_message_base64_images_and_persists_cache() {
         let temp_dir = TempDir::new().expect("temp dir");
-        let cache = ImageTransformCache::new(temp_dir.path().join("cache"), std::time::Duration::from_secs(3600))
-            .await
-            .expect("cache");
+        let cache = ImageTransformCache::new(
+            temp_dir.path().join("cache"),
+            std::time::Duration::from_secs(3600),
+        )
+        .await
+        .expect("cache");
         let context = TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
         };
@@ -440,8 +447,12 @@ mod tests {
             panic!("expected base64 image source");
         };
         assert_eq!(media_type, "image/jpeg");
-        let compressed = STANDARD.decode(data.as_bytes()).expect("decode transformed image");
-        let original = STANDARD.decode(input_png.as_bytes()).expect("decode original image");
+        let compressed = STANDARD
+            .decode(data.as_bytes())
+            .expect("decode transformed image");
+        let original = STANDARD
+            .decode(input_png.as_bytes())
+            .expect("decode original image");
         assert!(compressed.len() < original.len());
 
         let entries = std::fs::read_dir(context.image_transform_cache.root())
@@ -525,8 +536,12 @@ mod tests {
             panic!("expected transformed data url");
         };
         assert_eq!(media_type, "image/jpeg");
-        let compressed = STANDARD.decode(data.as_bytes()).expect("decode transformed image");
-        let original = STANDARD.decode(input_png.as_bytes()).expect("decode original image");
+        let compressed = STANDARD
+            .decode(data.as_bytes())
+            .expect("decode transformed image");
+        let original = STANDARD
+            .decode(input_png.as_bytes())
+            .expect("decode original image");
         assert!(compressed.len() < original.len());
     }
 

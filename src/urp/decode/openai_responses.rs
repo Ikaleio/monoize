@@ -3,9 +3,9 @@ use crate::urp::decode::{
     parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
-    greedy::{Action, GreedyMerger},
     FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     ToolResultContent, UrpRequest, UrpResponse, Usage,
+    greedy::{Action, GreedyMerger},
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -832,11 +832,7 @@ fn summary_to_text(item_obj: &Map<String, Value>) -> Option<String> {
             }
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {

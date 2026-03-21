@@ -26,22 +26,12 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
             .await
         }
         DownstreamProtocol::ChatCompletions => {
-            openai_chat::emit_synthetic_chat_stream(
-                logical_model,
-                resp,
-                sse_max_frame_length,
-                tx,
-            )
-            .await
+            openai_chat::emit_synthetic_chat_stream(logical_model, resp, sse_max_frame_length, tx)
+                .await
         }
         DownstreamProtocol::AnthropicMessages => {
-            anthropic::emit_synthetic_messages_stream(
-                logical_model,
-                resp,
-                sse_max_frame_length,
-                tx,
-            )
-            .await
+            anthropic::emit_synthetic_messages_stream(logical_model, resp, sse_max_frame_length, tx)
+                .await
         }
     }
 }
@@ -68,13 +58,8 @@ pub(crate) async fn encode_urp_stream(
                 .await
         }
         DownstreamProtocol::AnthropicMessages => {
-            anthropic::encode_urp_stream_as_messages(
-                rx,
-                tx,
-                logical_model,
-                sse_max_frame_length,
-            )
-            .await
+            anthropic::encode_urp_stream_as_messages(rx, tx, logical_model, sse_max_frame_length)
+                .await
         }
     }
 }

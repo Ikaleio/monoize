@@ -18,7 +18,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Users::CreatedAt).text().not_null())
                     .col(ColumnDef::new(Users::UpdatedAt).text().not_null())
                     .col(ColumnDef::new(Users::LastLoginAt).text())
-                    .col(ColumnDef::new(Users::Enabled).integer().not_null().default(1))
+                    .col(
+                        ColumnDef::new(Users::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
                     .col(
                         ColumnDef::new(Users::BalanceNanoUsd)
                             .text()
@@ -71,7 +76,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ApiKeys::CreatedAt).text().not_null())
                     .col(ColumnDef::new(ApiKeys::ExpiresAt).text())
                     .col(ColumnDef::new(ApiKeys::LastUsedAt).text())
-                    .col(ColumnDef::new(ApiKeys::Enabled).integer().not_null().default(1))
+                    .col(
+                        ColumnDef::new(ApiKeys::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
                     .col(ColumnDef::new(ApiKeys::QuotaRemaining).integer())
                     .col(
                         ColumnDef::new(ApiKeys::QuotaUnlimited)
@@ -126,10 +136,19 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(BillingLedger::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(BillingLedger::Id).text().not_null().primary_key())
+                    .col(
+                        ColumnDef::new(BillingLedger::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(BillingLedger::UserId).text().not_null())
                     .col(ColumnDef::new(BillingLedger::Kind).text().not_null())
-                    .col(ColumnDef::new(BillingLedger::DeltaNanoUsd).text().not_null())
+                    .col(
+                        ColumnDef::new(BillingLedger::DeltaNanoUsd)
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(BillingLedger::BalanceAfterNanoUsd).text())
                     .col(ColumnDef::new(BillingLedger::MetaJson).text().not_null())
                     .col(ColumnDef::new(BillingLedger::CreatedAt).text().not_null())
@@ -149,7 +168,12 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(RequestLogs::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(RequestLogs::Id).text().not_null().primary_key())
+                    .col(
+                        ColumnDef::new(RequestLogs::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(RequestLogs::RequestId).text())
                     .col(ColumnDef::new(RequestLogs::UserId).text().not_null())
                     .col(ColumnDef::new(RequestLogs::ApiKeyId).text())
@@ -203,7 +227,12 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(SystemSettings::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(SystemSettings::Key).text().not_null().primary_key())
+                    .col(
+                        ColumnDef::new(SystemSettings::Key)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(SystemSettings::Value).text().not_null())
                     .col(ColumnDef::new(SystemSettings::UpdatedAt).text().not_null())
                     .to_owned(),
@@ -221,9 +250,21 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(ModelRegistryRecords::LogicalModel).text().not_null())
-                    .col(ColumnDef::new(ModelRegistryRecords::ProviderId).text().not_null())
-                    .col(ColumnDef::new(ModelRegistryRecords::UpstreamModel).text().not_null())
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::LogicalModel)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::ProviderId)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::UpstreamModel)
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(ModelRegistryRecords::CapabilitiesJson)
                             .text()
@@ -241,8 +282,16 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0),
                     )
-                    .col(ColumnDef::new(ModelRegistryRecords::CreatedAt).text().not_null())
-                    .col(ColumnDef::new(ModelRegistryRecords::UpdatedAt).text().not_null())
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::CreatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelRegistryRecords::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -263,8 +312,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ModelMetadataRecords::InputCostPerTokenNano).text())
                     .col(ColumnDef::new(ModelMetadataRecords::OutputCostPerTokenNano).text())
                     .col(
-                        ColumnDef::new(ModelMetadataRecords::CacheReadInputCostPerTokenNano)
-                            .text(),
+                        ColumnDef::new(ModelMetadataRecords::CacheReadInputCostPerTokenNano).text(),
                     )
                     .col(
                         ColumnDef::new(ModelMetadataRecords::CacheCreationInputCostPerTokenNano)
@@ -277,9 +325,21 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ModelMetadataRecords::MaxInputTokens).integer())
                     .col(ColumnDef::new(ModelMetadataRecords::MaxOutputTokens).integer())
                     .col(ColumnDef::new(ModelMetadataRecords::MaxTokens).integer())
-                    .col(ColumnDef::new(ModelMetadataRecords::RawJson).text().not_null())
-                    .col(ColumnDef::new(ModelMetadataRecords::Source).text().not_null())
-                    .col(ColumnDef::new(ModelMetadataRecords::UpdatedAt).text().not_null())
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::RawJson)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::Source)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelMetadataRecords::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -296,7 +356,11 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(MonoizeProviders::Name).text().not_null())
-                    .col(ColumnDef::new(MonoizeProviders::ProviderType).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeProviders::ProviderType)
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(MonoizeProviders::MaxRetries)
                             .integer()
@@ -338,8 +402,16 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0),
                     )
-                    .col(ColumnDef::new(MonoizeProviders::CreatedAt).text().not_null())
-                    .col(ColumnDef::new(MonoizeProviders::UpdatedAt).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeProviders::CreatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviders::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -355,8 +427,16 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(MonoizeProviderModels::ProviderId).text().not_null())
-                    .col(ColumnDef::new(MonoizeProviderModels::ModelName).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeProviderModels::ProviderId)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeProviderModels::ModelName)
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(MonoizeProviderModels::Redirect).text())
                     .col(
                         ColumnDef::new(MonoizeProviderModels::Multiplier)
@@ -364,11 +444,18 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(1.0),
                     )
-                    .col(ColumnDef::new(MonoizeProviderModels::CreatedAt).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeProviderModels::CreatedAt)
+                            .text()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_mpm_provider_id")
-                            .from(MonoizeProviderModels::Table, MonoizeProviderModels::ProviderId)
+                            .from(
+                                MonoizeProviderModels::Table,
+                                MonoizeProviderModels::ProviderId,
+                            )
                             .to(MonoizeProviders::Table, MonoizeProviders::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
@@ -381,8 +468,17 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(MonoizeChannels::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(MonoizeChannels::Id).text().not_null().primary_key())
-                    .col(ColumnDef::new(MonoizeChannels::ProviderId).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ProviderId)
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(MonoizeChannels::Name).text().not_null())
                     .col(ColumnDef::new(MonoizeChannels::BaseUrl).text().not_null())
                     .col(ColumnDef::new(MonoizeChannels::ApiKey).text().not_null())
@@ -429,7 +525,12 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Providers::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Providers::Id).text().not_null().primary_key())
+                    .col(
+                        ColumnDef::new(Providers::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Providers::Name).text().not_null())
                     .col(ColumnDef::new(Providers::ProviderType).text().not_null())
                     .col(ColumnDef::new(Providers::BaseUrl).text())
@@ -439,9 +540,24 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Providers::AuthQueryName).text())
                     .col(ColumnDef::new(Providers::CapabilitiesJson).text())
                     .col(ColumnDef::new(Providers::StrategyJson).text())
-                    .col(ColumnDef::new(Providers::Enabled).integer().not_null().default(1))
-                    .col(ColumnDef::new(Providers::Priority).integer().not_null().default(0))
-                    .col(ColumnDef::new(Providers::Weight).integer().not_null().default(1))
+                    .col(
+                        ColumnDef::new(Providers::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(Providers::Priority)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(Providers::Weight)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
                     .col(ColumnDef::new(Providers::Tag).text())
                     .col(
                         ColumnDef::new(Providers::GroupsJson)
@@ -461,10 +577,23 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(ModelMappings::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(ModelMappings::Id).text().not_null().primary_key())
+                    .col(
+                        ColumnDef::new(ModelMappings::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(ModelMappings::ProviderId).text().not_null())
-                    .col(ColumnDef::new(ModelMappings::LogicalModel).text().not_null())
-                    .col(ColumnDef::new(ModelMappings::UpstreamModel).text().not_null())
+                    .col(
+                        ColumnDef::new(ModelMappings::LogicalModel)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ModelMappings::UpstreamModel)
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(ModelMappings::CreatedAt).text().not_null())
                     .foreign_key(
                         ForeignKey::create()
@@ -482,11 +611,34 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(GroupMembers::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(GroupMembers::Id).text().not_null().primary_key())
-                    .col(ColumnDef::new(GroupMembers::GroupProviderId).text().not_null())
-                    .col(ColumnDef::new(GroupMembers::MemberProviderId).text().not_null())
-                    .col(ColumnDef::new(GroupMembers::Weight).integer().not_null().default(1))
-                    .col(ColumnDef::new(GroupMembers::Priority).integer().not_null().default(0))
+                    .col(
+                        ColumnDef::new(GroupMembers::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(GroupMembers::GroupProviderId)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(GroupMembers::MemberProviderId)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(GroupMembers::Weight)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(GroupMembers::Priority)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
                     .col(ColumnDef::new(GroupMembers::CreatedAt).text().not_null())
                     .foreign_key(
                         ForeignKey::create()
@@ -548,191 +700,191 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("uq_users_username")
-                                    .table(Users::Table)
-                                    .col(Users::Username)
-                                    .unique()
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("uq_users_username")
+                    .table(Users::Table)
+                    .col(Users::Username)
+                    .unique()
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_sessions_user_id")
-                                    .table(Sessions::Table)
-                                    .col(Sessions::UserId)
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_sessions_user_id")
+                    .table(Sessions::Table)
+                    .col(Sessions::UserId)
+                    .to_owned(),
             )
             .await?;
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_sessions_token")
-                                    .table(Sessions::Table)
-                                    .col(Sessions::Token)
-                                    .unique()
-                                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_index(
-                Index::create()
-                                    .if_not_exists()
-                                    .name("idx_api_keys_user_id")
-                                    .table(ApiKeys::Table)
-                                    .col(ApiKeys::UserId)
-                                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                                    .if_not_exists()
-                                    .name("idx_api_keys_key_hash")
-                                    .table(ApiKeys::Table)
-                                    .col(ApiKeys::KeyHash)
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_sessions_token")
+                    .table(Sessions::Table)
+                    .col(Sessions::Token)
+                    .unique()
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_billing_ledger_user_id")
-                                    .table(BillingLedger::Table)
-                                    .col(BillingLedger::UserId)
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_api_keys_user_id")
+                    .table(ApiKeys::Table)
+                    .col(ApiKeys::UserId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_api_keys_key_hash")
+                    .table(ApiKeys::Table)
+                    .col(ApiKeys::KeyHash)
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_request_logs_user_created_at")
-                                    .table(RequestLogs::Table)
-                                    .col(RequestLogs::UserId)
-                                    .col(RequestLogs::CreatedAtUnixMs)
-                                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                                    .if_not_exists()
-                                    .name("idx_request_logs_created_at")
-                                    .table(RequestLogs::Table)
-                                    .col(RequestLogs::CreatedAtUnixMs)
-                                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                                    .if_not_exists()
-                                    .name("idx_request_logs_model")
-                                    .table(RequestLogs::Table)
-                                    .col(RequestLogs::Model)
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_billing_ledger_user_id")
+                    .table(BillingLedger::Table)
+                    .col(BillingLedger::UserId)
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("uq_mrr_logical_model_provider_id")
-                                    .table(ModelRegistryRecords::Table)
-                                    .col(ModelRegistryRecords::LogicalModel)
-                                    .col(ModelRegistryRecords::ProviderId)
-                                    .unique()
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_request_logs_user_created_at")
+                    .table(RequestLogs::Table)
+                    .col(RequestLogs::UserId)
+                    .col(RequestLogs::CreatedAtUnixMs)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_request_logs_created_at")
+                    .table(RequestLogs::Table)
+                    .col(RequestLogs::CreatedAtUnixMs)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_request_logs_model")
+                    .table(RequestLogs::Table)
+                    .col(RequestLogs::Model)
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_mpm_provider_id")
-                                    .table(MonoizeProviderModels::Table)
-                                    .col(MonoizeProviderModels::ProviderId)
-                                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                                    .if_not_exists()
-                                    .name("uq_mpm_provider_id_model_name")
-                                    .table(MonoizeProviderModels::Table)
-                                    .col(MonoizeProviderModels::ProviderId)
-                                    .col(MonoizeProviderModels::ModelName)
-                                    .unique()
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("uq_mrr_logical_model_provider_id")
+                    .table(ModelRegistryRecords::Table)
+                    .col(ModelRegistryRecords::LogicalModel)
+                    .col(ModelRegistryRecords::ProviderId)
+                    .unique()
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_mc_provider_id")
-                                    .table(MonoizeChannels::Table)
-                                    .col(MonoizeChannels::ProviderId)
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_mpm_provider_id")
+                    .table(MonoizeProviderModels::Table)
+                    .col(MonoizeProviderModels::ProviderId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("uq_mpm_provider_id_model_name")
+                    .table(MonoizeProviderModels::Table)
+                    .col(MonoizeProviderModels::ProviderId)
+                    .col(MonoizeProviderModels::ModelName)
+                    .unique()
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_mm_provider_id")
-                                    .table(ModelMappings::Table)
-                                    .col(ModelMappings::ProviderId)
-                                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                                    .if_not_exists()
-                                    .name("uq_mm_provider_id_logical_model")
-                                    .table(ModelMappings::Table)
-                                    .col(ModelMappings::ProviderId)
-                                    .col(ModelMappings::LogicalModel)
-                                    .unique()
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_mc_provider_id")
+                    .table(MonoizeChannels::Table)
+                    .col(MonoizeChannels::ProviderId)
+                    .to_owned(),
             )
             .await?;
 
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("idx_gm_group_provider_id")
-                                    .table(GroupMembers::Table)
-                                    .col(GroupMembers::GroupProviderId)
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("idx_mm_provider_id")
+                    .table(ModelMappings::Table)
+                    .col(ModelMappings::ProviderId)
+                    .to_owned(),
             )
             .await?;
         manager
             .create_index(
                 Index::create()
-                                    .if_not_exists()
-                                    .name("uq_gm_group_provider_id_member_provider_id")
-                                    .table(GroupMembers::Table)
-                                    .col(GroupMembers::GroupProviderId)
-                                    .col(GroupMembers::MemberProviderId)
-                                    .unique()
-                                    .to_owned(),
+                    .if_not_exists()
+                    .name("uq_mm_provider_id_logical_model")
+                    .table(ModelMappings::Table)
+                    .col(ModelMappings::ProviderId)
+                    .col(ModelMappings::LogicalModel)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_gm_group_provider_id")
+                    .table(GroupMembers::Table)
+                    .col(GroupMembers::GroupProviderId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("uq_gm_group_provider_id_member_provider_id")
+                    .table(GroupMembers::Table)
+                    .col(GroupMembers::GroupProviderId)
+                    .col(GroupMembers::MemberProviderId)
+                    .unique()
+                    .to_owned(),
             )
             .await?;
 
@@ -744,19 +896,39 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(FileBytes::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(StateRecords::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(StateRecords::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
-            .drop_table(Table::drop().table(GroupMembers::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(GroupMembers::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
-            .drop_table(Table::drop().table(ModelMappings::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(ModelMappings::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(Table::drop().table(Providers::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(MonoizeChannels::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(MonoizeChannels::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(
@@ -767,7 +939,12 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
-            .drop_table(Table::drop().table(MonoizeProviders::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(MonoizeProviders::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(
@@ -786,13 +963,28 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
-            .drop_table(Table::drop().table(SystemSettings::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(SystemSettings::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
-            .drop_table(Table::drop().table(RequestLogs::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(RequestLogs::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
-            .drop_table(Table::drop().table(BillingLedger::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(BillingLedger::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_table(Table::drop().table(ApiKeys::Table).if_exists().to_owned())

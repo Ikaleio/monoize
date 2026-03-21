@@ -56,6 +56,16 @@ pub(super) fn provider_pricing_model<'a>(
         .unwrap_or(logical_model)
 }
 
+pub(super) fn provider_has_billable_pricing(
+    logical_model: &str,
+    model_entry: &crate::monoize_routing::MonoizeModelEntry,
+    priced_ids: &std::collections::HashSet<String>,
+) -> bool {
+    let upstream_model = provider_pricing_model(logical_model, model_entry);
+    priced_ids.contains(upstream_model)
+        || (upstream_model != logical_model && priced_ids.contains(logical_model))
+}
+
 pub async fn list_providers(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -80,8 +90,7 @@ pub async fn list_providers(
             .models
             .iter()
             .filter(|(logical_model, model_entry)| {
-                let target_model = provider_pricing_model(logical_model, model_entry);
-                !priced_ids.contains(target_model)
+                !provider_has_billable_pricing(logical_model, model_entry, &priced_ids)
             })
             .count();
         let p = provider_with_runtime(&state, provider).await;
@@ -130,9 +139,15 @@ pub async fn create_provider(
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
-    state.name_caches.providers.insert(provider.id.clone(), provider.name.clone());
+    state
+        .name_caches
+        .providers
+        .insert(provider.id.clone(), provider.name.clone());
     for ch in &provider.channels {
-        state.name_caches.channels.insert(ch.id.clone(), ch.name.clone());
+        state
+            .name_caches
+            .channels
+            .insert(ch.id.clone(), ch.name.clone());
     }
 
     Ok((
@@ -168,9 +183,15 @@ pub async fn update_provider(
             }
         })?;
 
-    state.name_caches.providers.insert(provider.id.clone(), provider.name.clone());
+    state
+        .name_caches
+        .providers
+        .insert(provider.id.clone(), provider.name.clone());
     for ch in &provider.channels {
-        state.name_caches.channels.insert(ch.id.clone(), ch.name.clone());
+        state
+            .name_caches
+            .channels
+            .insert(ch.id.clone(), ch.name.clone());
     }
 
     let next_channel_ids: std::collections::HashSet<&str> =

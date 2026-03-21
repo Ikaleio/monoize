@@ -1,16 +1,16 @@
-use crate::transforms::TransformRuleConfig;
-use super::{
-    ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput, Session, UpdateApiKeyInput,
-    User, UserBalance, UserRole, UserStore, RESERVED_INTERNAL_USER_PREFIX,
-};
 use super::utils::parse_nano_usd;
+use super::{
+    ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput, RESERVED_INTERNAL_USER_PREFIX,
+    Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore,
+};
+use crate::transforms::TransformRuleConfig;
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use chrono::{DateTime, Utc};
-use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryResult, TransactionTrait};
 use sea_orm::Value as SeaValue;
+use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryResult, TransactionTrait};
 use serde_json::Value;
 
 const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
@@ -38,10 +38,12 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
 
 pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
     match rule.phase {
-        crate::transforms::Phase::Request => ALLOWED_API_KEY_REQUEST_TRANSFORMS
-            .contains(&rule.transform.as_str()),
-        crate::transforms::Phase::Response => ALLOWED_API_KEY_RESPONSE_TRANSFORMS
-            .contains(&rule.transform.as_str()),
+        crate::transforms::Phase::Request => {
+            ALLOWED_API_KEY_REQUEST_TRANSFORMS.contains(&rule.transform.as_str())
+        }
+        crate::transforms::Phase::Response => {
+            ALLOWED_API_KEY_RESPONSE_TRANSFORMS.contains(&rule.transform.as_str())
+        }
     }
 }
 
@@ -58,7 +60,10 @@ pub(crate) fn sanitize_api_key_transforms(
         .collect()
 }
 
-pub(crate) fn validate_api_key_transforms(transforms: &[TransformRuleConfig], is_admin: bool) -> Result<(), String> {
+pub(crate) fn validate_api_key_transforms(
+    transforms: &[TransformRuleConfig],
+    is_admin: bool,
+) -> Result<(), String> {
     if is_admin {
         return Ok(());
     }
@@ -187,7 +192,10 @@ impl UserStore {
             .starts_with(RESERVED_INTERNAL_USER_PREFIX)
     }
 
-    pub async fn new(db: crate::db::DbPool, log_broadcast: tokio::sync::broadcast::Sender<Vec<super::InsertRequestLog>>) -> Result<Self, String> {
+    pub async fn new(
+        db: crate::db::DbPool,
+        log_broadcast: tokio::sync::broadcast::Sender<Vec<super::InsertRequestLog>>,
+    ) -> Result<Self, String> {
         use std::time::Duration;
         Ok(Self {
             db,
@@ -199,14 +207,25 @@ impl UserStore {
     }
 
     pub fn spawn_background_tasks(&self) {
-        self.last_used_batcher.clone().spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(30));
-        self.request_log_batcher.clone().spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(2));
-        self.api_key_cache.clone().spawn_eviction_task(std::time::Duration::from_secs(30));
-        self.balance_cache.clone().spawn_eviction_task(std::time::Duration::from_secs(30));
+        self.last_used_batcher
+            .clone()
+            .spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(30));
+        self.request_log_batcher
+            .clone()
+            .spawn_flush_task(self.db.clone(), std::time::Duration::from_secs(2));
+        self.api_key_cache
+            .clone()
+            .spawn_eviction_task(std::time::Duration::from_secs(30));
+        self.balance_cache
+            .clone()
+            .spawn_eviction_task(std::time::Duration::from_secs(30));
         let store = self.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(super::request_logs::REQUEST_LOG_RETENTION_INTERVAL_SECS)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    super::request_logs::REQUEST_LOG_RETENTION_INTERVAL_SECS,
+                ))
+                .await;
                 if let Err(e) = store.cleanup_expired_request_logs().await {
                     tracing::warn!("failed to cleanup expired request logs: {e}");
                 }
@@ -402,9 +421,14 @@ impl UserStore {
 
         values.push(id.into());
 
-        let query = format!("UPDATE users SET {} WHERE id = ${idx}", set_clauses.join(", "));
+        let query = format!(
+            "UPDATE users SET {} WHERE id = ${idx}",
+            set_clauses.join(", ")
+        );
 
-        self.db.write().await
+        self.db
+            .write()
+            .await
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
@@ -420,8 +444,13 @@ impl UserStore {
     }
 
     pub async fn delete_user(&self, id: &str) -> Result<(), String> {
-        self.db.write().await
-            .execute(self.db.stmt("DELETE FROM users WHERE id = $1", vec![id.into()]))
+        self.db
+            .write()
+            .await
+            .execute(
+                self.db
+                    .stmt("DELETE FROM users WHERE id = $1", vec![id.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?;
         self.api_key_cache.invalidate_by_user_id(id);
@@ -431,7 +460,9 @@ impl UserStore {
 
     pub async fn update_last_login(&self, id: &str) -> Result<(), String> {
         let now = Utc::now();
-        self.db.write().await
+        self.db
+            .write()
+            .await
             .execute(self.db.stmt(
                 "UPDATE users SET last_login_at = $1 WHERE id = $2",
                 vec![now.to_rfc3339().into(), id.into()],
@@ -441,7 +472,11 @@ impl UserStore {
         Ok(())
     }
 
-    pub async fn create_session(&self, user_id: &str, session_ttl_days: i64) -> Result<Session, String> {
+    pub async fn create_session(
+        &self,
+        user_id: &str,
+        session_ttl_days: i64,
+    ) -> Result<Session, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let token = format!(
             "urp_session_{}",
@@ -450,7 +485,9 @@ impl UserStore {
         let now = Utc::now();
         let expires_at = now + chrono::Duration::days(session_ttl_days);
 
-        self.db.write().await
+        self.db
+            .write()
+            .await
             .execute(self.db.stmt(
                 r#"INSERT INTO sessions (id, user_id, token, created_at, expires_at)
                    VALUES ($1, $2, $3, $4, $5)"#,
@@ -475,7 +512,9 @@ impl UserStore {
     }
 
     pub async fn get_session_by_token(&self, token: &str) -> Result<Option<Session>, String> {
-        let row = self.db.read()
+        let row = self
+            .db
+            .read()
             .query_one(self.db.stmt(
                 "SELECT id, user_id, token, created_at, expires_at FROM sessions WHERE token = $1",
                 vec![token.into()],
@@ -512,16 +551,26 @@ impl UserStore {
     }
 
     pub async fn delete_session(&self, token: &str) -> Result<(), String> {
-        self.db.write().await
-            .execute(self.db.stmt("DELETE FROM sessions WHERE token = $1", vec![token.into()]))
+        self.db
+            .write()
+            .await
+            .execute(
+                self.db
+                    .stmt("DELETE FROM sessions WHERE token = $1", vec![token.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn delete_user_sessions(&self, user_id: &str) -> Result<(), String> {
-        self.db.write().await
-            .execute(self.db.stmt("DELETE FROM sessions WHERE user_id = $1", vec![user_id.into()]))
+        self.db
+            .write()
+            .await
+            .execute(self.db.stmt(
+                "DELETE FROM sessions WHERE user_id = $1",
+                vec![user_id.into()],
+            ))
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -657,7 +706,9 @@ impl UserStore {
 
     pub async fn update_api_key_last_used(&self, id: &str) -> Result<(), String> {
         let now = Utc::now();
-        self.db.write().await
+        self.db
+            .write()
+            .await
             .execute(self.db.stmt(
                 "UPDATE api_keys SET last_used_at = $1 WHERE id = $2",
                 vec![now.to_rfc3339().into(), id.into()],
@@ -681,8 +732,13 @@ impl UserStore {
     }
 
     pub async fn delete_api_key(&self, id: &str) -> Result<(), String> {
-        self.db.write().await
-            .execute(self.db.stmt("DELETE FROM api_keys WHERE id = $1", vec![id.into()]))
+        self.db
+            .write()
+            .await
+            .execute(
+                self.db
+                    .stmt("DELETE FROM api_keys WHERE id = $1", vec![id.into()]),
+            )
             .await
             .map_err(|e| e.to_string())?;
         self.api_key_cache.invalidate_by_key_id(id);
@@ -698,7 +754,9 @@ impl UserStore {
         // Check cache first
         if let Some((cached_key, cached_user)) = self.api_key_cache.get(prefix) {
             let now = Utc::now();
-            let not_expired = cached_key.expires_at.is_none_or(|expires_at| expires_at >= now);
+            let not_expired = cached_key
+                .expires_at
+                .is_none_or(|expires_at| expires_at >= now);
             let is_valid =
                 cached_key.enabled && cached_user.enabled && not_expired && key == cached_key.key;
             if is_valid {
@@ -738,8 +796,10 @@ impl UserStore {
             return Ok(None);
         }
 
-        self.api_key_cache.insert(prefix.to_string(), api_key.clone(), user.clone());
-        self.last_used_batcher.record(api_key.id.clone(), Utc::now());
+        self.api_key_cache
+            .insert(prefix.to_string(), api_key.clone(), user.clone());
+        self.last_used_batcher
+            .record(api_key.id.clone(), Utc::now());
 
         Ok(Some((api_key, user)))
     }
@@ -748,8 +808,9 @@ impl UserStore {
         let role_str: String = row.try_get("", "role").map_err(|e| e.to_string())?;
         let role = UserRole::from_str(&role_str).ok_or_else(|| "invalid role".to_string())?;
 
-        let last_login_at: Option<String> =
-            row.try_get("", "last_login_at").map_err(|e| e.to_string())?;
+        let last_login_at: Option<String> = row
+            .try_get("", "last_login_at")
+            .map_err(|e| e.to_string())?;
         let last_login_at = last_login_at
             .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
             .transpose()
@@ -758,7 +819,9 @@ impl UserStore {
         Ok(User {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
             username: row.try_get("", "username").map_err(|e| e.to_string())?,
-            password_hash: row.try_get("", "password_hash").map_err(|e| e.to_string())?,
+            password_hash: row
+                .try_get("", "password_hash")
+                .map_err(|e| e.to_string())?,
             role,
             created_at: DateTime::parse_from_rfc3339(
                 &row.try_get::<String>("", "created_at")
@@ -786,7 +849,8 @@ impl UserStore {
     }
 
     pub(crate) async fn row_to_api_key(&self, row: &QueryResult) -> Result<ApiKey, String> {
-        let expires_at: Option<String> = row.try_get("", "expires_at").map_err(|e| e.to_string())?;
+        let expires_at: Option<String> =
+            row.try_get("", "expires_at").map_err(|e| e.to_string())?;
         let expires_at = expires_at
             .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
             .transpose()
@@ -825,8 +889,10 @@ impl UserStore {
             .get_user_by_id(&user_id)
             .await?
             .is_some_and(|user| user.role.can_manage_system());
-        let transforms: Vec<TransformRuleConfig> =
-            sanitize_api_key_transforms(serde_json::from_str(&transforms_str).unwrap_or_default(), is_admin);
+        let transforms: Vec<TransformRuleConfig> = sanitize_api_key_transforms(
+            serde_json::from_str(&transforms_str).unwrap_or_default(),
+            is_admin,
+        );
 
         Ok(ApiKey {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -894,17 +960,29 @@ impl UserStore {
         }
         if let Some(model_limits_enabled) = input.model_limits_enabled {
             set_clauses.push(format!("model_limits_enabled = ${idx}"));
-            values.push(SeaValue::Int(Some(if model_limits_enabled { 1 } else { 0 })));
+            values.push(SeaValue::Int(Some(if model_limits_enabled {
+                1
+            } else {
+                0
+            })));
             idx += 1;
         }
         if let Some(model_limits) = &input.model_limits {
             set_clauses.push(format!("model_limits = ${idx}"));
-            values.push(serde_json::to_string(model_limits).map_err(|e| e.to_string())?.into());
+            values.push(
+                serde_json::to_string(model_limits)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
             idx += 1;
         }
         if let Some(ip_whitelist) = &input.ip_whitelist {
             set_clauses.push(format!("ip_whitelist = ${idx}"));
-            values.push(serde_json::to_string(ip_whitelist).map_err(|e| e.to_string())?.into());
+            values.push(
+                serde_json::to_string(ip_whitelist)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
             idx += 1;
         }
         if let Some(group) = &input.group {
@@ -919,7 +997,11 @@ impl UserStore {
         }
         if let Some(transforms) = &input.transforms {
             set_clauses.push(format!("transforms = ${idx}"));
-            values.push(serde_json::to_string(transforms).map_err(|e| e.to_string())?.into());
+            values.push(
+                serde_json::to_string(transforms)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
             idx += 1;
         }
         if let Some(expires_at) = &input.expires_at {
@@ -937,9 +1019,14 @@ impl UserStore {
 
         values.push(key_id.into());
 
-        let query = format!("UPDATE api_keys SET {} WHERE id = ${idx}", set_clauses.join(", "));
+        let query = format!(
+            "UPDATE api_keys SET {} WHERE id = ${idx}",
+            set_clauses.join(", ")
+        );
 
-        self.db.write().await
+        self.db
+            .write()
+            .await
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
@@ -975,16 +1062,23 @@ impl UserStore {
         }
 
         let mut values: Vec<SeaValue> = Vec::new();
-        let placeholders: Vec<String> = ids.iter().enumerate().map(|(i, id)| {
-            values.push(id.clone().into());
-            format!("${}", i + 1)
-        }).collect();
+        let placeholders: Vec<String> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                values.push(id.clone().into());
+                format!("${}", i + 1)
+            })
+            .collect();
         let query = format!(
             "DELETE FROM api_keys WHERE id IN ({})",
             placeholders.join(", ")
         );
 
-        let result = self.db.write().await
+        let result = self
+            .db
+            .write()
+            .await
             .execute(self.db.stmt(&query, values))
             .await
             .map_err(|e| e.to_string())?;
@@ -996,7 +1090,9 @@ impl UserStore {
         if let Some(cached) = self.balance_cache.get(user_id) {
             return Ok(Some(cached));
         }
-        let row = self.db.read()
+        let row = self
+            .db
+            .read()
             .query_one(self.db.stmt(
                 "SELECT id, balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
                 vec![user_id.into()],
@@ -1015,7 +1111,8 @@ impl UserStore {
             balance_nano_usd,
             balance_unlimited: row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1,
         };
-        self.balance_cache.insert(user_id.to_string(), balance.clone());
+        self.balance_cache
+            .insert(user_id.to_string(), balance.clone());
         Ok(Some(balance))
     }
 

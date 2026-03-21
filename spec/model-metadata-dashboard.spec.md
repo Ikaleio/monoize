@@ -153,7 +153,7 @@ UI15. Skeleton placeholders while loading.
 
 ### 4.8 Billing integration note
 
-UI16. Billing queries `model_metadata_records` by `upstream_model` (bare name). PK is now bare name, so billing matches correctly.
+UI16. Billing queries `model_metadata_records` by `upstream_model` (bare name) first. If a redirected `upstream_model` has no complete pricing, billing MUST retry the lookup with the logical model. PK is bare model name, so both lookups address the same table.
 
 ## 5. Invariants
 
@@ -163,21 +163,24 @@ INV2. Sync MUST NOT modify records where `source = 'manual'`.
 
 INV3. `model_id` is the primary key, bare model API name, MUST be unique.
 
-INV4. Price fields nullable; billing **blocks** requests to models with missing input/output cost.
+INV4. Price fields are nullable. Billing **blocks** a request only when neither `upstream_model` nor its redirected source logical model resolves to complete input/output pricing.
 
 ## 6. Billing Enforcement
 
-BE1. `build_monoize_attempts()` MUST filter out any attempt whose `upstream_model` has no pricing data in `model_metadata_records` (i.e. row does not exist, or `input_cost_per_token_nano` is null, or `output_cost_per_token_nano` is null).
+BE1. `build_monoize_attempts()` MUST filter out an attempt only when both of the following are true:
+
+- `upstream_model` has no pricing data in `model_metadata_records` (i.e. row does not exist, or `input_cost_per_token_nano` is null, or `output_cost_per_token_nano` is null), and
+- the request logical model also has no pricing data in `model_metadata_records`.
 
 BE2. If ALL attempts for a request are filtered out due to missing pricing, the system MUST return HTTP 403 with error code `model_pricing_required` and a message listing the blocked model name(s).
 
-BE3. `maybe_charge_response()` MUST return an error (HTTP 403 `model_pricing_required`) if pricing lookup fails. This is a defense-in-depth check — BE1 should already prevent this path from being reached.
+BE3. `maybe_charge_response()` MUST return an error (HTTP 403 `model_pricing_required`) only if both the `upstream_model` lookup and the logical-model fallback lookup fail. This is a defense-in-depth check — BE1 should already prevent this path from being reached.
 
 BE4. The Provider dashboard page MUST display a visible warning badge on any `ProviderCard` whose models include entries not present (or not fully priced) in `model_metadata_records`. The badge MUST show the count of unpriced models.
 
-- Unpriced counting target MUST be `redirect` model when `redirect` is non-empty; otherwise the logical model key.
+- For a redirected entry, the card MUST treat the model as priced when either the `redirect` model or the logical model has complete pricing. It MUST count the entry as unpriced only when both are missing/incomplete.
 
-BE5. The billing enforcement check uses a per-request cache to avoid redundant pricing lookups when multiple attempts share the same `upstream_model`.
+BE5. The billing enforcement check uses a per-request cache to avoid redundant pricing lookups. Because redirect fallback depends on both `upstream_model` and logical model, the cache key MUST include both values or an equivalent composite identity.
 
 ## 7. Model ID Normalization
 

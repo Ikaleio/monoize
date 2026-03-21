@@ -7,7 +7,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 struct PendingChatMessage {
@@ -838,14 +838,18 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 4);
         assert_eq!(output.accepted_prediction_tokens, 5);
         assert_eq!(output.rejected_prediction_tokens, 6);
-        assert!(decoded_usage
-            .extra_body
-            .get("prompt_tokens_details")
-            .is_none());
-        assert!(decoded_usage
-            .extra_body
-            .get("completion_tokens_details")
-            .is_none());
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("prompt_tokens_details")
+                .is_none()
+        );
+        assert!(
+            decoded_usage
+                .extra_body
+                .get("completion_tokens_details")
+                .is_none()
+        );
         assert_eq!(
             decoded_usage.extra_body.get("provider_specific"),
             Some(&json!(true))

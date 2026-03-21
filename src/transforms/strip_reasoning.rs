@@ -2,8 +2,8 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData, response_output_items_mut, strip_reasoning_parts,
 };
-use async_trait::async_trait;
 use crate::urp::{Item, Part, PartDelta, PartHeader, UrpStreamEvent};
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
@@ -105,9 +105,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
             }
         }
         UrpStreamEvent::Delta {
-            part_index,
-            delta,
-            ..
+            part_index, delta, ..
         } => {
             let key = *part_index;
             if strip_state.stripped_indices.contains(&key)
@@ -119,9 +117,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
             }
         }
         UrpStreamEvent::PartDone {
-            part_index,
-            part,
-            ..
+            part_index, part, ..
         } => {
             let key = *part_index;
             if strip_state.stripped_indices.contains(&key) {
