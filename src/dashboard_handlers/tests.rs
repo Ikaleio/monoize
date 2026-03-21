@@ -12,6 +12,7 @@ use crate::users::{
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
 use serde_json::json;
+use std::collections::HashMap;
 
 #[test]
 fn build_models_list_url_adds_v1_when_missing() {
@@ -64,11 +65,30 @@ fn provider_has_billable_pricing_accepts_logical_fallback_when_redirect_target_i
         multiplier: 1.0,
     };
     let priced_ids = std::collections::HashSet::from(["gpt-5-logical".to_string()]);
+    let reasoning_suffix_map = HashMap::new();
 
     assert!(provider_has_billable_pricing(
         "gpt-5-logical",
         &entry,
         &priced_ids,
+        &reasoning_suffix_map,
+    ));
+}
+
+#[test]
+fn provider_has_billable_pricing_strips_reasoning_suffix_before_lookup() {
+    let entry = MonoizeModelEntry {
+        redirect: None,
+        multiplier: 1.0,
+    };
+    let priced_ids = std::collections::HashSet::from(["gpt-5-mini".to_string()]);
+    let reasoning_suffix_map = HashMap::from([("-thinking".to_string(), "high".to_string())]);
+
+    assert!(provider_has_billable_pricing(
+        "gpt-5-mini-thinking",
+        &entry,
+        &priced_ids,
+        &reasoning_suffix_map,
     ));
 }
 

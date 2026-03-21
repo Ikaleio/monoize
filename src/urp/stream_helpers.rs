@@ -331,6 +331,41 @@ pub(crate) fn chat_delta_path_tool_arguments(value: &mut Value, content: &str) {
     }
 }
 
+pub(crate) fn normalize_chat_reasoning_delta_object(delta: &mut Map<String, Value>) {
+    if delta
+        .get("reasoning_details")
+        .and_then(|value| value.as_array())
+        .is_none()
+    {
+        let mut details = Vec::new();
+        if let Some(text) = delta
+            .get("reasoning_content")
+            .and_then(|value| value.as_str())
+        {
+            if !text.is_empty() {
+                details.push(reasoning_text_detail_value(text, None));
+            }
+        }
+        if let Some(sig) = delta
+            .get("reasoning_opaque")
+            .and_then(|value| value.as_str())
+        {
+            if !sig.is_empty() {
+                details.push(reasoning_encrypted_detail_value(
+                    Value::String(sig.to_string()),
+                    None,
+                ));
+            }
+        }
+        if !details.is_empty() {
+            delta.insert("reasoning_details".to_string(), Value::Array(details));
+        }
+    }
+
+    delta.remove("reasoning_content");
+    delta.remove("reasoning_opaque");
+}
+
 pub(crate) fn messages_delta_path_text(value: &mut Value, content: &str) {
     if let Some(delta) = value.get_mut("delta").and_then(Value::as_object_mut) {
         delta.insert("text".to_string(), Value::String(content.to_string()));
@@ -456,6 +491,43 @@ pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) 
             .to_string();
     }
     (text, summary_text, signature)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChatReasoningContentBlock {
+    pub(crate) content: Option<String>,
+    pub(crate) summary: Option<String>,
+    pub(crate) encrypted: Option<Value>,
+    pub(crate) format: Option<String>,
+}
+
+pub(crate) fn extract_chat_reasoning_content_block(
+    block: &Value,
+) -> Option<ChatReasoningContentBlock> {
+    if block.get("type").and_then(|v| v.as_str()) != Some("reasoning") {
+        return None;
+    }
+
+    let (text, summary, signature) = extract_reasoning_parts(block);
+    let format = block
+        .get("format")
+        .and_then(|v| v.as_str())
+        .filter(|format| !format.is_empty())
+        .map(|format| format.to_string());
+    let content = (!text.is_empty()).then_some(text);
+    let summary = (!summary.is_empty()).then_some(summary);
+    let encrypted = (!signature.is_empty()).then(|| Value::String(signature));
+
+    if content.is_none() && summary.is_none() && encrypted.is_none() {
+        return None;
+    }
+
+    Some(ChatReasoningContentBlock {
+        content,
+        summary,
+        encrypted,
+        format,
+    })
 }
 
 pub(crate) fn reasoning_text_detail_value(text: &str, format: Option<&str>) -> Value {
@@ -633,8 +705,8 @@ pub(crate) fn responses_text_delta_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::extract_chat_reasoning_deltas;
-    use serde_json::json;
+    use super::{extract_chat_reasoning_content_block, extract_chat_reasoning_deltas};
+    use serde_json::{Value, json};
 
     #[test]
     fn extract_chat_reasoning_deltas_reads_legacy_reasoning_content() {
@@ -647,5 +719,27 @@ mod tests {
         assert_eq!(text_parts, vec!["legacy streamed reasoning".to_string()]);
         assert!(summary_parts.is_empty());
         assert!(sig_parts.is_empty());
+    }
+
+    #[test]
+    fn extract_chat_reasoning_content_block_reads_reasoning_content_arrays() {
+        let block = json!({
+            "type": "reasoning",
+            "format": "openrouter",
+            "text": "streamed reasoning",
+            "summary": [{ "type": "summary_text", "text": "brief summary" }],
+            "encrypted_content": "sig_1"
+        });
+
+        let reasoning = extract_chat_reasoning_content_block(&block)
+            .expect("reasoning content block should parse");
+
+        assert_eq!(reasoning.content.as_deref(), Some("streamed reasoning"));
+        assert_eq!(reasoning.summary.as_deref(), Some("brief summary"));
+        assert_eq!(
+            reasoning.encrypted,
+            Some(Value::String("sig_1".to_string()))
+        );
+        assert_eq!(reasoning.format.as_deref(), Some("openrouter"));
     }
 }

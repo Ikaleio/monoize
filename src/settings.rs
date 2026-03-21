@@ -29,6 +29,45 @@ pub struct SystemSettings {
     pub updated_at: DateTime<Utc>,
 }
 
+pub const BUILTIN_REASONING_EFFORT_SUFFIXES: &[(&str, &str)] = &[
+    ("-none", "none"),
+    ("-minimum", "minimum"),
+    ("-low", "low"),
+    ("-medium", "medium"),
+    ("-high", "high"),
+    ("-xhigh", "xhigh"),
+    ("-max", "xhigh"),
+];
+
+pub fn normalize_pricing_model_key(
+    model_id: &str,
+    reasoning_suffix_map: &HashMap<String, String>,
+) -> String {
+    let trimmed = model_id.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut suffixes: Vec<&str> = reasoning_suffix_map.keys().map(String::as_str).collect();
+    suffixes.extend(
+        BUILTIN_REASONING_EFFORT_SUFFIXES
+            .iter()
+            .map(|(suffix, _)| *suffix),
+    );
+    suffixes.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    suffixes.dedup();
+
+    for suffix in suffixes {
+        if let Some(base) = trimmed.strip_suffix(suffix) {
+            if !base.is_empty() {
+                return base.to_string();
+            }
+        }
+    }
+
+    trimmed.to_string()
+}
+
 fn default_reasoning_suffix_map() -> HashMap<String, String> {
     let mut m = HashMap::new();
     m.insert("-thinking".to_string(), "high".to_string());

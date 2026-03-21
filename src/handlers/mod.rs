@@ -13,6 +13,7 @@ use crate::app::AppState;
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType};
 use crate::error::{AppError, AppResult};
 use crate::model_registry_store::ModelPricing;
+use crate::settings::normalize_pricing_model_key;
 use crate::transforms::{self, Phase, TransformRuleConfig};
 use crate::upstream::{self, UpstreamCallError, UpstreamErrorKind};
 use crate::urp;
@@ -538,18 +539,31 @@ async fn get_model_pricing_or_internal_error(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))
 }
 
+async fn normalized_pricing_model_key(state: &AppState, model_id: &str) -> String {
+    let reasoning_suffix_map = state
+        .settings_store
+        .get_reasoning_suffix_map()
+        .await
+        .unwrap_or_default();
+    normalize_pricing_model_key(model_id, &reasoning_suffix_map)
+}
+
 async fn resolve_billable_pricing(
     state: &AppState,
     upstream_model: &str,
     logical_model: &str,
 ) -> AppResult<Option<ModelPricing>> {
-    if let Some(pricing) = get_model_pricing_or_internal_error(state, upstream_model).await? {
+    let normalized_upstream_model = normalized_pricing_model_key(state, upstream_model).await;
+    if let Some(pricing) =
+        get_model_pricing_or_internal_error(state, &normalized_upstream_model).await?
+    {
         return Ok(Some(pricing));
     }
-    if logical_model == upstream_model {
+    let normalized_logical_model = normalized_pricing_model_key(state, logical_model).await;
+    if normalized_logical_model == normalized_upstream_model {
         return Ok(None);
     }
-    get_model_pricing_or_internal_error(state, logical_model).await
+    get_model_pricing_or_internal_error(state, &normalized_logical_model).await
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

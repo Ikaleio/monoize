@@ -274,75 +274,78 @@ pub(super) async fn forward_stream_typed(
                 let auth_rules_for_transform = auth.transforms.clone();
                 tokio::spawn(async move {
                     let tx_err = tx.clone();
-                    let (decoded_tx, decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-                    let (transformed_tx, transformed_rx) =
-                        mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                    let stream_result = {
+                        let (decoded_tx, decoded_rx) =
+                            mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                        let (transformed_tx, transformed_rx) =
+                            mpsc::channel::<crate::urp::UrpStreamEvent>(64);
 
-                    let decode_handle = {
-                        let metrics = metrics_for_stream.clone();
-                        tokio::spawn(async move {
-                            stream_upstream_to_urp_events(
-                                &legacy,
-                                provider_type,
-                                upstream_resp,
-                                decoded_tx,
-                                Some(started_at),
-                                Some(metrics),
+                        let decode_handle = {
+                            let metrics = metrics_for_stream.clone();
+                            tokio::spawn(async move {
+                                stream_upstream_to_urp_events(
+                                    &legacy,
+                                    provider_type,
+                                    upstream_resp,
+                                    decoded_tx,
+                                    Some(started_at),
+                                    Some(metrics),
+                                )
+                                .await
+                            })
+                        };
+
+                        let transform_handle = tokio::spawn(async move {
+                            transform_urp_stream(
+                                &state_for_transform,
+                                decoded_rx,
+                                transformed_tx,
+                                &provider_rules_for_transform,
+                                &auth_rules_for_transform,
+                                &model_for_transform,
                             )
                             .await
-                        })
+                        });
+
+                        let encode_handle = {
+                            let tx = tx;
+                            tokio::spawn(async move {
+                                encode_urp_stream(
+                                    downstream,
+                                    transformed_rx,
+                                    tx,
+                                    &model_for_encode,
+                                    sse_max_frame_length,
+                                )
+                                .await
+                            })
+                        };
+
+                        let (decode_result, transform_result, encode_result) =
+                            tokio::join!(decode_handle, transform_handle, encode_handle);
+                        decode_result
+                            .unwrap_or_else(|e| {
+                                Err(AppError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "task_panic",
+                                    e.to_string(),
+                                ))
+                            })
+                            .and(transform_result.unwrap_or_else(|e| {
+                                Err(AppError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "task_panic",
+                                    e.to_string(),
+                                ))
+                            }))
+                            .and(encode_result.unwrap_or_else(|e| {
+                                Err(AppError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "task_panic",
+                                    e.to_string(),
+                                ))
+                            }))
                     };
-
-                    let transform_handle = tokio::spawn(async move {
-                        transform_urp_stream(
-                            &state_for_transform,
-                            decoded_rx,
-                            transformed_tx,
-                            &provider_rules_for_transform,
-                            &auth_rules_for_transform,
-                            &model_for_transform,
-                        )
-                        .await
-                    });
-
-                    let encode_handle = {
-                        let tx = tx;
-                        tokio::spawn(async move {
-                            encode_urp_stream(
-                                downstream,
-                                transformed_rx,
-                                tx,
-                                &model_for_encode,
-                                sse_max_frame_length,
-                            )
-                            .await
-                        })
-                    };
-
-                    let (decode_result, transform_result, encode_result) =
-                        tokio::join!(decode_handle, transform_handle, encode_handle);
-                    let stream_result = decode_result
-                        .unwrap_or_else(|e| {
-                            Err(AppError::new(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "task_panic",
-                                e.to_string(),
-                            ))
-                        })
-                        .and(transform_result.unwrap_or_else(|e| {
-                            Err(AppError::new(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "task_panic",
-                                e.to_string(),
-                            ))
-                        }))
-                        .and(encode_result.unwrap_or_else(|e| {
-                            Err(AppError::new(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "task_panic",
-                                e.to_string(),
-                            ))
-                        }));
 
                     let (ttfb_ms, usage, terminal_diagnostics) = {
                         let guard = runtime_metrics.lock().await;

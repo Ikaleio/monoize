@@ -7769,6 +7769,120 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
 }
 
 #[tokio::test]
+async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_pricing() {
+    let ctx = setup().await;
+
+    let providers = ctx
+        .state
+        .monoize_store
+        .list_providers()
+        .await
+        .expect("list providers");
+    let base_url = providers
+        .iter()
+        .find_map(|p| p.channels.first().map(|c| c.base_url.clone()))
+        .expect("base_url");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5-mini-thinking".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: None,
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "suffix-pricing-provider".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            models,
+            api_type_overrides: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("suffix-pricing-ch".to_string()),
+                name: "suffix-pricing-ch".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_min_samples_override: None,
+                passive_failure_rate_threshold_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            transforms: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(-50),
+        })
+        .await
+        .expect("create suffix provider");
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+            None,
+        )
+        .await
+        .expect("update user");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let before: i64 = user_before.balance_nano_usd.parse().unwrap();
+
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model":"gpt-5-mini-thinking",
+            "input":"suffix-charge",
+            "stream": true,
+            "emit_usage": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    ctx.state.user_store.flush_all_batchers().await;
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("get user")
+        .expect("user exists");
+    let after: i64 = user_after.balance_nano_usd.parse().unwrap();
+
+    assert_eq!(before - after, 20_000);
+}
+
+#[tokio::test]
 async fn balance_zero_returns_payment_required() {
     let ctx = setup().await;
     let user = ctx

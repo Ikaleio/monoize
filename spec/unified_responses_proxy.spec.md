@@ -159,6 +159,8 @@ FP6a. For pass-through streaming on `/v1/responses`, `/v1/chat/completions`, and
 - stage 2: response-transform stage consumes `UrpStreamEvent` values, applies any matching response-phase transforms incrementally, and emits transformed `UrpStreamEvent` values;
 - stage 3: downstream-specific encoder consumes transformed `UrpStreamEvent` values and emits downstream SSE frames.
 
+FP6a-NF. Monoize MUST NOT implement any fast-path or raw passthrough that bypasses the three-stage Decoder → URP → Encoder pipeline defined in FP6a for any combination of provider type and downstream protocol. All streaming responses MUST flow through stages 1–3 of FP6a unconditionally, regardless of whether response-phase transforms are active.
+
 FP6a1. If a streaming request matches only response-phase transform rules that support incremental `UrpStreamEvent` rewriting, Monoize MUST keep the request in pass-through streaming mode and apply those response transforms to each `UrpStreamEvent` after stage 1 decoding and before stage 2 encoding.
 
 FP6a2. The pass-through streaming runtime in FP6a1 MUST preserve transform rule order and scope semantics already used for non-streaming responses: provider response-phase rules run before API-key response-phase rules, using one mutable transform-state vector per rule chain for the lifetime of the request.

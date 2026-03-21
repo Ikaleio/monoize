@@ -5,7 +5,9 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::parse_tool_call_arguments_value;
-use crate::urp::stream_helpers::extract_chat_reasoning_deltas;
+use crate::urp::stream_helpers::{
+    extract_chat_reasoning_content_block, extract_chat_reasoning_deltas,
+};
 use crate::urp::{
     FinishReason, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
 };
@@ -161,6 +163,52 @@ pub(crate) async fn stream_chat_to_urp_events(
                     continue;
                 };
 
+                if let Some(reasoning_block) = extract_chat_reasoning_content_block(block) {
+                    process_reasoning_summary_delta(
+                        &tx,
+                        &response_id,
+                        &urp.model,
+                        reasoning_block.summary.as_deref(),
+                        reasoning_block.format.as_deref(),
+                        &mut response_started,
+                        &mut item_started,
+                        &mut reasoning_part_index,
+                        &mut next_part_index,
+                        &mut reasoning_summary,
+                        &mut reasoning_source,
+                    )
+                    .await?;
+                    process_reasoning_text_delta(
+                        &tx,
+                        &response_id,
+                        &urp.model,
+                        reasoning_block.content.as_deref(),
+                        reasoning_block.format.as_deref(),
+                        &mut response_started,
+                        &mut item_started,
+                        &mut reasoning_part_index,
+                        &mut next_part_index,
+                        &mut reasoning_text,
+                        &mut reasoning_source,
+                    )
+                    .await?;
+                    process_reasoning_encrypted_delta(
+                        &tx,
+                        &response_id,
+                        &urp.model,
+                        reasoning_block.encrypted.as_ref(),
+                        reasoning_block.format.as_deref(),
+                        &mut response_started,
+                        &mut item_started,
+                        &mut reasoning_part_index,
+                        &mut next_part_index,
+                        &mut reasoning_sig,
+                        &mut reasoning_source,
+                    )
+                    .await?;
+                    continue;
+                }
+
                 if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
                     let item_type = block_obj.get("type").and_then(|v| v.as_str());
                     if !matches!(item_type, Some("tool_call" | "function_call" | "tool_use")) {
@@ -203,123 +251,52 @@ pub(crate) async fn stream_chat_to_urp_events(
         let (reasoning_text_deltas, reasoning_summary_deltas, reasoning_sig_deltas) =
             extract_chat_reasoning_deltas(&delta);
         for summary in reasoning_summary_deltas {
-            if summary.is_empty() {
-                continue;
-            }
-            if reasoning_source.is_none() {
-                reasoning_source = Some("openrouter".to_string());
-            }
-            reasoning_summary.push_str(&summary);
-            ensure_response_and_item_started(
+            process_reasoning_summary_delta(
                 &tx,
                 &response_id,
                 &urp.model,
+                Some(&summary),
+                None,
                 &mut response_started,
                 &mut item_started,
-            )
-            .await?;
-            let part_index = ensure_part_started(
-                &tx,
-                0,
                 &mut reasoning_part_index,
                 &mut next_part_index,
-                PartHeader::Reasoning,
-            )
-            .await?;
-            send_event(
-                &tx,
-                UrpStreamEvent::Delta {
-                    part_index,
-                    delta: PartDelta::Reasoning {
-                        content: None,
-                        encrypted: None,
-                        summary: Some(summary),
-                        source: Some("openrouter".to_string()),
-                    },
-                    usage: None,
-                    extra_body: HashMap::new(),
-                },
+                &mut reasoning_summary,
+                &mut reasoning_source,
             )
             .await?;
         }
         for t in reasoning_text_deltas {
-            if t.is_empty() {
-                continue;
-            }
-            if reasoning_source.is_none() {
-                reasoning_source = Some("openrouter".to_string());
-            }
-            ensure_response_and_item_started(
+            process_reasoning_text_delta(
                 &tx,
                 &response_id,
                 &urp.model,
+                Some(&t),
+                None,
                 &mut response_started,
                 &mut item_started,
-            )
-            .await?;
-            let part_index = ensure_part_started(
-                &tx,
-                0,
                 &mut reasoning_part_index,
                 &mut next_part_index,
-                PartHeader::Reasoning,
-            )
-            .await?;
-            reasoning_text.push_str(&t);
-            send_event(
-                &tx,
-                UrpStreamEvent::Delta {
-                    part_index,
-                    delta: PartDelta::Reasoning {
-                        content: Some(t),
-                        encrypted: None,
-                        summary: None,
-                        source: Some("openrouter".to_string()),
-                    },
-                    usage: None,
-                    extra_body: HashMap::new(),
-                },
+                &mut reasoning_text,
+                &mut reasoning_source,
             )
             .await?;
         }
         for sig in reasoning_sig_deltas {
-            if !sig.is_empty() {
-                if reasoning_source.is_none() {
-                    reasoning_source = Some("openrouter".to_string());
-                }
-                ensure_response_and_item_started(
-                    &tx,
-                    &response_id,
-                    &urp.model,
-                    &mut response_started,
-                    &mut item_started,
-                )
-                .await?;
-                let _ = ensure_part_started(
-                    &tx,
-                    0,
-                    &mut reasoning_part_index,
-                    &mut next_part_index,
-                    PartHeader::Reasoning,
-                )
-                .await?;
-                reasoning_sig.push_str(&sig);
-                send_event(
-                    &tx,
-                    UrpStreamEvent::Delta {
-                        part_index: reasoning_part_index.expect("reasoning part index must exist"),
-                        delta: PartDelta::Reasoning {
-                            content: None,
-                            encrypted: Some(Value::String(sig.clone())),
-                            summary: None,
-                            source: Some("openrouter".to_string()),
-                        },
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    },
-                )
-                .await?;
-            }
+            process_reasoning_encrypted_delta(
+                &tx,
+                &response_id,
+                &urp.model,
+                Some(&Value::String(sig)),
+                None,
+                &mut response_started,
+                &mut item_started,
+                &mut reasoning_part_index,
+                &mut next_part_index,
+                &mut reasoning_sig,
+                &mut reasoning_source,
+            )
+            .await?;
         }
 
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -455,6 +432,171 @@ async fn process_text_delta(
             part_index,
             delta: PartDelta::Text {
                 content: text.to_string(),
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+fn resolve_reasoning_source(
+    reasoning_source: &mut Option<String>,
+    source: Option<&str>,
+) -> Option<String> {
+    if reasoning_source.is_none() {
+        *reasoning_source = source
+            .filter(|source| !source.is_empty())
+            .map(|source| source.to_string())
+            .or_else(|| Some("openrouter".to_string()));
+    }
+    reasoning_source.clone()
+}
+
+async fn process_reasoning_summary_delta(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    summary: Option<&str>,
+    source: Option<&str>,
+    response_started: &mut bool,
+    item_started: &mut bool,
+    reasoning_part_index: &mut Option<u32>,
+    next_part_index: &mut u32,
+    reasoning_summary: &mut String,
+    reasoning_source: &mut Option<String>,
+) -> AppResult<()> {
+    let Some(summary) = summary.filter(|summary| !summary.is_empty()) else {
+        return Ok(());
+    };
+
+    let source = resolve_reasoning_source(reasoning_source, source);
+    reasoning_summary.push_str(summary);
+    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
+        .await?;
+    let part_index = ensure_part_started(
+        tx,
+        0,
+        reasoning_part_index,
+        next_part_index,
+        PartHeader::Reasoning,
+    )
+    .await?;
+    send_event(
+        tx,
+        UrpStreamEvent::Delta {
+            part_index,
+            delta: PartDelta::Reasoning {
+                content: None,
+                encrypted: None,
+                summary: Some(summary.to_string()),
+                source,
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn process_reasoning_text_delta(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    content: Option<&str>,
+    source: Option<&str>,
+    response_started: &mut bool,
+    item_started: &mut bool,
+    reasoning_part_index: &mut Option<u32>,
+    next_part_index: &mut u32,
+    reasoning_text: &mut String,
+    reasoning_source: &mut Option<String>,
+) -> AppResult<()> {
+    let Some(content) = content.filter(|content| !content.is_empty()) else {
+        return Ok(());
+    };
+
+    let source = resolve_reasoning_source(reasoning_source, source);
+    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
+        .await?;
+    let part_index = ensure_part_started(
+        tx,
+        0,
+        reasoning_part_index,
+        next_part_index,
+        PartHeader::Reasoning,
+    )
+    .await?;
+    reasoning_text.push_str(content);
+    send_event(
+        tx,
+        UrpStreamEvent::Delta {
+            part_index,
+            delta: PartDelta::Reasoning {
+                content: Some(content.to_string()),
+                encrypted: None,
+                summary: None,
+                source,
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn process_reasoning_encrypted_delta(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    encrypted: Option<&Value>,
+    source: Option<&str>,
+    response_started: &mut bool,
+    item_started: &mut bool,
+    reasoning_part_index: &mut Option<u32>,
+    next_part_index: &mut u32,
+    reasoning_sig: &mut String,
+    reasoning_source: &mut Option<String>,
+) -> AppResult<()> {
+    let Some(encrypted) = encrypted else {
+        return Ok(());
+    };
+    if matches!(encrypted, Value::Null) {
+        return Ok(());
+    }
+
+    let sig = encrypted
+        .as_str()
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| encrypted.to_string());
+    if sig.is_empty() {
+        return Ok(());
+    }
+
+    let source = resolve_reasoning_source(reasoning_source, source);
+    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
+        .await?;
+    let part_index = ensure_part_started(
+        tx,
+        0,
+        reasoning_part_index,
+        next_part_index,
+        PartHeader::Reasoning,
+    )
+    .await?;
+    reasoning_sig.push_str(&sig);
+    send_event(
+        tx,
+        UrpStreamEvent::Delta {
+            part_index,
+            delta: PartDelta::Reasoning {
+                content: None,
+                encrypted: Some(encrypted.clone()),
+                summary: None,
+                source,
             },
             usage: None,
             extra_body: HashMap::new(),

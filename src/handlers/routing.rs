@@ -1,4 +1,5 @@
 use super::*;
+use crate::settings::BUILTIN_REASONING_EFFORT_SUFFIXES;
 
 pub(crate) fn now_ts() -> i64 {
     chrono::Utc::now().timestamp()
@@ -37,16 +38,6 @@ pub(super) fn upstream_path_for_model(
     }
 }
 
-pub(super) const BUILTIN_EFFORT_SUFFIXES: &[(&str, &str)] = &[
-    ("-none", "none"),
-    ("-minimum", "minimum"),
-    ("-low", "low"),
-    ("-medium", "medium"),
-    ("-high", "high"),
-    ("-xhigh", "xhigh"),
-    ("-max", "xhigh"),
-];
-
 pub(super) async fn resolve_model_suffix(state: &AppState, req: &mut urp::UrpRequest) {
     let requested_model = req.model.clone();
     let normalized = normalized_logical_model_for_matching(state, &requested_model).await;
@@ -69,7 +60,7 @@ pub(super) async fn resolve_model_suffix(state: &AppState, req: &mut urp::UrpReq
 
     for (suffix, effort) in settings_entries
         .iter()
-        .chain(BUILTIN_EFFORT_SUFFIXES.iter())
+        .chain(BUILTIN_REASONING_EFFORT_SUFFIXES.iter())
     {
         if let Some(base) = requested_model.strip_suffix(suffix) {
             if !base.is_empty() {
@@ -124,7 +115,7 @@ pub(super) async fn normalized_logical_model_for_matching(
 
     for (suffix, _effort) in settings_entries
         .iter()
-        .chain(BUILTIN_EFFORT_SUFFIXES.iter())
+        .chain(BUILTIN_REASONING_EFFORT_SUFFIXES.iter())
     {
         if let Some(base) = requested_model.strip_suffix(suffix) {
             if !base.is_empty() && model_exists(base) {

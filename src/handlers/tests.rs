@@ -5,6 +5,7 @@ use crate::model_registry_store::ModelPricing;
 use crate::monoize_routing::{
     CreateMonoizeChannelInput, CreateMonoizeProviderInput, MonoizeModelEntry, MonoizeProviderType,
 };
+use crate::settings::normalize_pricing_model_key;
 use crate::urp;
 use axum::http::StatusCode;
 use std::collections::HashMap;
@@ -155,6 +156,23 @@ fn scale_charge_quantizes_multiplier_to_nano_precision() {
     let base = 1_000_000_000i128;
     let charged = scale_charge_with_multiplier(base, 1.000_000_000_9);
     assert_eq!(charged, Some(1_000_000_000));
+}
+
+#[test]
+fn normalize_pricing_model_key_strips_recognized_reasoning_suffix() {
+    let suffix_map = std::collections::HashMap::from([
+        ("-thinking".to_string(), "high".to_string()),
+        ("-nothinking".to_string(), "none".to_string()),
+    ]);
+
+    assert_eq!(
+        normalize_pricing_model_key("gpt-5-mini-thinking", &suffix_map),
+        "gpt-5-mini"
+    );
+    assert_eq!(
+        normalize_pricing_model_key("gpt-5-mini-high", &suffix_map),
+        "gpt-5-mini"
+    );
 }
 
 #[test]

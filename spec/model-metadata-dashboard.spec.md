@@ -153,7 +153,7 @@ UI15. Skeleton placeholders while loading.
 
 ### 4.8 Billing integration note
 
-UI16. Billing queries `model_metadata_records` by `upstream_model` (bare name) first. If a redirected `upstream_model` has no complete pricing, billing MUST retry the lookup with the logical model. PK is bare model name, so both lookups address the same table.
+UI16. Billing queries `model_metadata_records` by the normalized pricing key of `upstream_model` first. Pricing-key normalization MUST strip at most one recognized reasoning-tier suffix using the suffix rules in § 8 before metadata lookup. If a redirected normalized `upstream_model` key has no complete pricing, billing MUST retry the lookup with the normalized logical-model key. PK is bare model name, so both lookups address the same table.
 
 ## 5. Invariants
 
@@ -163,24 +163,24 @@ INV2. Sync MUST NOT modify records where `source = 'manual'`.
 
 INV3. `model_id` is the primary key, bare model API name, MUST be unique.
 
-INV4. Price fields are nullable. Billing **blocks** a request only when neither `upstream_model` nor its redirected source logical model resolves to complete input/output pricing.
+INV4. Price fields are nullable. Billing **blocks** a request only when neither the normalized `upstream_model` pricing key nor the normalized redirected source logical-model pricing key resolves to complete input/output pricing.
 
 ## 6. Billing Enforcement
 
 BE1. `build_monoize_attempts()` MUST filter out an attempt only when both of the following are true:
 
-- `upstream_model` has no pricing data in `model_metadata_records` (i.e. row does not exist, or `input_cost_per_token_nano` is null, or `output_cost_per_token_nano` is null), and
-- the request logical model also has no pricing data in `model_metadata_records`.
+- the normalized pricing key of `upstream_model` has no pricing data in `model_metadata_records` (i.e. row does not exist, or `input_cost_per_token_nano` is null, or `output_cost_per_token_nano` is null), and
+- the normalized pricing key of the request logical model also has no pricing data in `model_metadata_records`.
 
 BE2. If ALL attempts for a request are filtered out due to missing pricing, the system MUST return HTTP 403 with error code `model_pricing_required` and a message listing the blocked model name(s).
 
-BE3. `maybe_charge_response()` MUST return an error (HTTP 403 `model_pricing_required`) only if both the `upstream_model` lookup and the logical-model fallback lookup fail. This is a defense-in-depth check — BE1 should already prevent this path from being reached.
+BE3. `maybe_charge_response()` MUST return an error (HTTP 403 `model_pricing_required`) only if both the normalized `upstream_model` pricing-key lookup and the normalized logical-model fallback lookup fail. This is a defense-in-depth check — BE1 should already prevent this path from being reached.
 
 BE4. The Provider dashboard page MUST display a visible warning badge on any `ProviderCard` whose models include entries not present (or not fully priced) in `model_metadata_records`. The badge MUST show the count of unpriced models.
 
-- For a redirected entry, the card MUST treat the model as priced when either the `redirect` model or the logical model has complete pricing. It MUST count the entry as unpriced only when both are missing/incomplete.
+- For a redirected entry, the card MUST treat the model as priced when either the normalized pricing key of the `redirect` model or the normalized pricing key of the logical model has complete pricing. It MUST count the entry as unpriced only when both are missing/incomplete.
 
-BE5. The billing enforcement check uses a per-request cache to avoid redundant pricing lookups. Because redirect fallback depends on both `upstream_model` and logical model, the cache key MUST include both values or an equivalent composite identity.
+BE5. The billing enforcement check uses a per-request cache to avoid redundant pricing lookups. Because redirect fallback and suffix normalization depend on both `upstream_model` and logical model after pricing-key normalization, the cache key MUST include both values or an equivalent composite identity.
 
 ## 7. Model ID Normalization
 
@@ -245,7 +245,7 @@ RE7. When `collect_provider_attempts` looks up `urp.model` in `provider.models`:
 
 RE8. When a suffix match resolves to a base model, the resolved `reasoning_effort` value MUST be injected into the URP request's `reasoning.effort` field (typed flow) before the request is encoded for the upstream provider. If the user already specified `reasoning_effort` explicitly in the request body, the explicit value takes precedence over the suffix-derived value.
 
-RE9. Billing uses the **base model**'s pricing from `model_metadata_records`. The suffix model itself does not need a separate pricing entry.
+RE9. Billing and any other model-pricing identification path use the **base model**'s pricing from `model_metadata_records`. When a model ID ends with a recognized reasoning-tier suffix, Monoize MUST strip that suffix (longest suffix first, at most one suffix removed) before metadata lookup. The suffix model itself does not need a separate pricing entry.
 
 ### 8.4 Billing: reasoning token fallback
 

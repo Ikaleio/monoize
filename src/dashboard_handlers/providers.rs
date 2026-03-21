@@ -5,6 +5,7 @@ use crate::monoize_routing::{
     ChannelHealthState, CreateMonoizeProviderInput, MonoizeChannel, MonoizeProvider,
     ReorderProvidersInput, UpdateMonoizeProviderInput,
 };
+use crate::settings::normalize_pricing_model_key;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -60,10 +61,15 @@ pub(super) fn provider_has_billable_pricing(
     logical_model: &str,
     model_entry: &crate::monoize_routing::MonoizeModelEntry,
     priced_ids: &std::collections::HashSet<String>,
+    reasoning_suffix_map: &std::collections::HashMap<String, String>,
 ) -> bool {
     let upstream_model = provider_pricing_model(logical_model, model_entry);
-    priced_ids.contains(upstream_model)
-        || (upstream_model != logical_model && priced_ids.contains(logical_model))
+    let normalized_upstream_model =
+        normalize_pricing_model_key(upstream_model, reasoning_suffix_map);
+    let normalized_logical_model = normalize_pricing_model_key(logical_model, reasoning_suffix_map);
+    priced_ids.contains(&normalized_upstream_model)
+        || (normalized_upstream_model != normalized_logical_model
+            && priced_ids.contains(&normalized_logical_model))
 }
 
 pub async fn list_providers(
@@ -83,6 +89,11 @@ pub async fn list_providers(
         .list_priced_model_ids()
         .await
         .unwrap_or_default();
+    let reasoning_suffix_map = state
+        .settings_store
+        .get_reasoning_suffix_map()
+        .await
+        .unwrap_or_default();
 
     let mut out = Vec::with_capacity(providers.len());
     for provider in providers {
@@ -90,7 +101,12 @@ pub async fn list_providers(
             .models
             .iter()
             .filter(|(logical_model, model_entry)| {
-                !provider_has_billable_pricing(logical_model, model_entry, &priced_ids)
+                !provider_has_billable_pricing(
+                    logical_model,
+                    model_entry,
+                    &priced_ids,
+                    &reasoning_suffix_map,
+                )
             })
             .count();
         let p = provider_with_runtime(&state, provider).await;

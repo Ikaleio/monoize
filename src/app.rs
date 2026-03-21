@@ -10,7 +10,7 @@ use crate::monoize_routing::{
 use crate::name_cache::NameCaches;
 use crate::providers::ProviderStore;
 use crate::rate_limit::RateLimiter;
-use crate::settings::SettingsStore;
+use crate::settings::{SettingsStore, normalize_pricing_model_key};
 use crate::transforms::TransformRegistry;
 use crate::users::{InsertRequestLog, UserRole, UserStore};
 use axum::Router;
@@ -243,6 +243,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let probe_health = channel_health.clone();
     let probe_user_store = user_store.clone();
     let probe_model_registry_store = model_registry_store.clone();
+    let probe_settings_store = settings_store.clone();
     tokio::spawn(async move {
         loop {
             sleep(std::time::Duration::from_secs(1)).await;
@@ -318,6 +319,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     spawn_active_probe_request_log(
                         probe_user_store.clone(),
                         probe_model_registry_store.clone(),
+                        probe_settings_store.clone(),
                         active_probe_user_id.clone(),
                         provider.id.clone(),
                         provider.name.clone(),
@@ -575,6 +577,7 @@ fn build_probe_billing_breakdown(
 fn spawn_active_probe_request_log(
     user_store: UserStore,
     model_registry_store: ModelRegistryStore,
+    settings_store: SettingsStore,
     user_id: Option<String>,
     provider_id: String,
     provider_name: String,
@@ -600,10 +603,18 @@ fn spawn_active_probe_request_log(
             .and_then(|v| v.get("completion_tokens"))
             .and_then(|v| v.as_u64());
         let usage_tokens = parsed_prompt_tokens.zip(parsed_completion_tokens);
+        let reasoning_suffix_map = settings_store
+            .get_reasoning_suffix_map()
+            .await
+            .unwrap_or_default();
+        let pricing_model_key = normalize_pricing_model_key(&model, &reasoning_suffix_map);
 
         let (charge_nano_usd, billing_breakdown_json) = if status_ok {
             if let Some((prompt_tokens, completion_tokens)) = usage_tokens {
-                match model_registry_store.get_model_metadata(&model).await {
+                match model_registry_store
+                    .get_model_metadata(&pricing_model_key)
+                    .await
+                {
                     Ok(Some(meta)) => {
                         let input_rate =
                             parse_pricing_i128(meta.input_cost_per_token_nano).unwrap_or_default();

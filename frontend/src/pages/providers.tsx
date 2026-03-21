@@ -83,6 +83,7 @@ import type {
 } from '@/lib/api'
 import {
 	useProviders,
+	useSettings,
 	useTransformRegistry,
 	createProviderOptimistic,
 	updateProviderOptimistic,
@@ -121,6 +122,20 @@ const PROVIDER_TYPE_CONFIG: Record<
 
 const PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT = 40
 const PROVIDER_EDIT_CHANNEL_ROW_HEIGHT = 56
+const DEFAULT_REASONING_SUFFIX_MAP: Record<string, string> = {
+	'-thinking': 'high',
+	'-reasoning': 'high',
+	'-nothinking': 'none'
+}
+const BUILTIN_REASONING_SUFFIXES = [
+	'-none',
+	'-minimum',
+	'-low',
+	'-medium',
+	'-high',
+	'-xhigh',
+	'-max'
+]
 
 type ModelRow = {
 	model: string
@@ -272,6 +287,62 @@ function resolvePricingModelId(model: string, redirect?: string | null): string 
 	return redirectTarget ? redirectTarget : model.trim()
 }
 
+function normalizePricingModelId(
+	model: string,
+	reasoningSuffixMap: Record<string, string>
+): string {
+	const trimmed = model.trim()
+	if (!trimmed) return ''
+	const suffixes = Array.from(
+		new Set([
+			...Object.keys(reasoningSuffixMap),
+			...BUILTIN_REASONING_SUFFIXES
+		])
+	).sort((a, b) => b.length - a.length || a.localeCompare(b))
+	for (const suffix of suffixes) {
+		if (trimmed.endsWith(suffix)) {
+			const base = trimmed.slice(0, -suffix.length)
+			if (base) {
+				return base
+			}
+		}
+	}
+	return trimmed
+}
+
+function resolveNormalizedPricingModelId(
+	model: string,
+	redirect: string | null | undefined,
+	reasoningSuffixMap: Record<string, string>
+): string {
+	return normalizePricingModelId(
+		resolvePricingModelId(model, redirect),
+		reasoningSuffixMap
+	)
+}
+
+function hasBillablePricingModelId(
+	pricedModelIdSet: Set<string>,
+	model: string,
+	redirect: string | null | undefined,
+	reasoningSuffixMap: Record<string, string>
+): boolean {
+	const normalizedLogicalModelId = normalizePricingModelId(
+		model,
+		reasoningSuffixMap
+	)
+	const normalizedPricingModelId = resolveNormalizedPricingModelId(
+		model,
+		redirect,
+		reasoningSuffixMap
+	)
+	return (
+		pricedModelIdSet.has(normalizedPricingModelId) ||
+		(normalizedPricingModelId !== normalizedLogicalModelId &&
+			pricedModelIdSet.has(normalizedLogicalModelId))
+	)
+}
+
 function statusBadge(status?: string) {
 	if (status === 'healthy') {
 		return (
@@ -305,6 +376,7 @@ function ModelPickerDialog({
 	providerName,
 	existingModels,
 	modelMetadata,
+	reasoningSuffixMap,
 	onConfirm
 }: {
 	open: boolean
@@ -314,6 +386,7 @@ function ModelPickerDialog({
 	providerName: string
 	existingModels: string[]
 	modelMetadata: ModelMetadataRecord[]
+	reasoningSuffixMap: Record<string, string>
 	onConfirm: (checkedModels: string[]) => void
 }) {
 	const { t } = useTranslation()
@@ -484,7 +557,14 @@ function ModelPickerDialog({
 											<ModelBadge
 												model={model}
 												provider={provider}
-												highlightUnpriced={!pricedModelIdSet.has(model)}
+												highlightUnpriced={
+													!hasBillablePricingModelId(
+														pricedModelIdSet,
+														model,
+														null,
+														reasoningSuffixMap
+													)
+												}
 											/>
 										</label>
 									)
@@ -514,7 +594,8 @@ function ProviderDialog({
 	current,
 	providers,
 	transformRegistry,
-	modelMetadata
+	modelMetadata,
+	reasoningSuffixMap
 }: {
 	open: boolean
 	onOpenChange: (open: boolean) => void
@@ -523,6 +604,7 @@ function ProviderDialog({
 	providers: Provider[]
 	transformRegistry: TransformRegistryItem[]
 	modelMetadata: ModelMetadataRecord[]
+	reasoningSuffixMap: Record<string, string>
 }) {
 	const { t } = useTranslation()
 	const [loading, setLoading] = useState(false)
@@ -1459,10 +1541,6 @@ function ProviderDialog({
 										</div>
 									:	<div className='flex flex-wrap content-start gap-2 max-h-[220px] overflow-y-auto'>
 											{form.models.map((row, idx) => {
-												const pricingModelId = resolvePricingModelId(
-													row.model,
-													row.redirect
-												)
 												return (
 													<div
 														key={`model-${row.model || idx}`}
@@ -1480,9 +1558,14 @@ function ProviderDialog({
 																detailTarget={
 																	row.redirect.trim() || row.model || '-'
 																}
-																highlightUnpriced={
-																	!pricedModelIdSet.has(pricingModelId)
-																}
+														highlightUnpriced={
+															!hasBillablePricingModelId(
+																pricedModelIdSet,
+																row.model,
+																row.redirect,
+																reasoningSuffixMap
+															)
+														}
 																className={cn(
 																	'pr-6 cursor-pointer',
 																	editingModelIndex === idx && 'ring-1 ring-primary'
@@ -1765,6 +1848,7 @@ function ProviderDialog({
 				providerName={form.name || current?.name || ''}
 				existingModels={existingModelNames}
 				modelMetadata={modelMetadata}
+				reasoningSuffixMap={reasoningSuffixMap}
 				onConfirm={handleModelsConfirm}
 			/>
 
@@ -2292,7 +2376,8 @@ function ProviderCard({
 	onToggle,
 	onDragStart,
 	onDrop,
-	modelMetadata
+	modelMetadata,
+	reasoningSuffixMap
 }: {
 	provider: Provider
 	index: number
@@ -2304,6 +2389,7 @@ function ProviderCard({
 	onDragStart: (providerId: string) => void
 	onDrop: (targetProviderId: string) => void
 	modelMetadata: ModelMetadataRecord[]
+	reasoningSuffixMap: Record<string, string>
 }) {
 	const { t } = useTranslation()
 	const [expanded, setExpanded] = useState(false)
@@ -2537,10 +2623,6 @@ function ProviderCard({
 									<div className='mt-1 rounded-lg border overflow-hidden px-3 py-2'>
 										<div className='flex flex-wrap content-start gap-1.5 max-h-[220px] overflow-y-auto'>
 											{modelEntries.map(([model, modelEntry]) => {
-												const pricingModelId = resolvePricingModelId(
-													model,
-													modelEntry.redirect
-												)
 												const meta = modelMetadataById.get(model)
 												return (
 													<div key={model} className='min-w-0 max-w-full shrink-0'>
@@ -2549,9 +2631,14 @@ function ProviderCard({
 															provider={meta?.models_dev_provider}
 															multiplier={modelEntry.multiplier}
 															redirect={modelEntry.redirect}
-															highlightUnpriced={
-																!pricedModelIdSet.has(pricingModelId)
-															}
+														highlightUnpriced={
+															!hasBillablePricingModelId(
+																pricedModelIdSet,
+																model,
+																modelEntry.redirect,
+																reasoningSuffixMap
+															)
+														}
 														/>
 													</div>
 												)
@@ -2672,10 +2759,13 @@ function ProviderCard({
 export function ProvidersPage() {
 	const { t } = useTranslation()
 	const { data: providers = [], isLoading } = useProviders()
+	const { data: settings } = useSettings()
 	const { data: transformRegistry = [] } = useTransformRegistry()
 	const { data: modelMetadata = [] } = useSWR('model-metadata', () =>
 		api.listModelMetadata()
 	)
+	const reasoningSuffixMap =
+		settings?.reasoning_suffix_map ?? DEFAULT_REASONING_SUFFIX_MAP
 	const [createOpen, setCreateOpen] = useState(false)
 	const [editProvider, setEditProvider] = useState<Provider | null>(null)
 	const [draggingProviderId, setDraggingProviderId] = useState<string | null>(
@@ -2823,6 +2913,7 @@ export function ProvidersPage() {
 						onDragStart={setDraggingProviderId}
 						onDrop={handleDrop}
 						modelMetadata={modelMetadata}
+						reasoningSuffixMap={reasoningSuffixMap}
 					/>
 				))}
 			</div>
@@ -2835,6 +2926,7 @@ export function ProvidersPage() {
 				providers={providers}
 				transformRegistry={transformRegistry}
 				modelMetadata={modelMetadata}
+				reasoningSuffixMap={reasoningSuffixMap}
 			/>
 
 			<ProviderDialog
@@ -2849,6 +2941,7 @@ export function ProvidersPage() {
 				providers={providers}
 				transformRegistry={transformRegistry}
 				modelMetadata={modelMetadata}
+				reasoningSuffixMap={reasoningSuffixMap}
 			/>
 		</PageWrapper>
 	)

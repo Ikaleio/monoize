@@ -91,9 +91,11 @@ C1.1. Served upstream model resolution for request execution and billing metadat
 
 C1.2. Pricing model resolution for billing:
 
-- Monoize MUST first look up pricing for `upstream_model` from C1.1.
-- If `upstream_model` came from a non-empty `redirect` and that lookup does not yield complete pricing, Monoize MUST retry pricing lookup with the requested logical model.
-- If the requested logical model equals `upstream_model`, Monoize MUST NOT perform a second lookup.
+- Before each pricing lookup candidate in this section, Monoize MUST normalize that candidate to a `pricing_model_key` by removing at most one recognized reasoning-tier suffix from the end of the model ID. If no recognized suffix matches, `pricing_model_key` MUST equal the original candidate.
+- Recognized reasoning-tier suffixes MUST use the same suffix set and longest-suffix-first matching rule as `reasoning_suffix_map` plus the built-in effort suffixes defined in `model-metadata-dashboard.spec.md` § 8.
+- Monoize MUST first look up pricing for the normalized `upstream_model` key derived from C1.1.
+- If `upstream_model` came from a non-empty `redirect` and that normalized lookup does not yield complete pricing, Monoize MUST retry pricing lookup with the normalized requested logical model key.
+- If the normalized requested logical model key equals the normalized `upstream_model` key, Monoize MUST NOT perform a second lookup.
 - If neither lookup yields complete pricing, the request has no billable pricing.
 
 C2. Base charge formula (nano-dollar):
