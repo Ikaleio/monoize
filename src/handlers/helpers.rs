@@ -486,7 +486,7 @@ pub(super) fn requires_buffered_response_stream(
         .any(|rule| {
             matches!(
                 rule.transform.as_str(),
-                "assistant_markdown_images_to_output" | "assistant_output_images_to_markdown"
+                "assistant_markdown_images_to_output"
             )
         })
 }

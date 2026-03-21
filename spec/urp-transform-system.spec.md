@@ -66,7 +66,7 @@ STR-3d. If an upstream streaming protocol emits reasoning opaque payload increme
 
 STR-4. Transform engine MUST be able to process stream events incrementally with per-request mutable state.
 
-STR-5. If a streaming request matches any enabled response-phase transform rule, the runtime MAY execute upstream in non-stream mode, apply response transforms on `UrpResponse`, and emit a synthesized downstream stream. In this mode, downstream still receives protocol-correct streaming events (`SSE` for Chat/Responses/Messages), but event timing is buffered.
+STR-5. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, the runtime MAY execute upstream in non-stream mode, apply response transforms on `UrpResponse`, and emit a synthesized downstream stream. In this mode, downstream still receives protocol-correct streaming events (`SSE` for Chat/Responses/Messages), but event timing is buffered.
 
 ## 4. Transform System
 
@@ -340,8 +340,9 @@ AOIM-4. Response behavior:
 6. The transform MUST NOT remove or rewrite the original `Part::Image` parts.
 
 AOIM-5. Streaming behavior:
-1. For streaming requests executed through the synthetic-stream response-transform path, the transformed final `UrpResponse` MUST produce downstream text deltas that include the appended Markdown image strings.
-2. For direct `UrpStreamEvent` application, the transform MUST update at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative final streamed response state includes the appended Markdown image strings.
+1. If a streaming request remains on the pass-through stream path, the transform MUST preserve pass-through timing and MUST apply only to terminal stream state by updating at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative final streamed response state includes the appended Markdown image strings.
+2. If a streaming request is already executing through the synthetic-stream response-transform path because of some other matching whole-response transform, the transformed final `UrpResponse` MUST produce downstream text deltas that include the appended Markdown image strings.
+3. `assistant_output_images_to_markdown` by itself MUST NOT require the runtime to switch an otherwise pass-through stream into buffered synthetic streaming.
 
 ### 4.1 `reasoning_effort_to_model_suffix`
 
@@ -406,7 +407,7 @@ MSUF-5. On successful suffix match (base model exists in at least one provider):
 MSUF-6. If no suffix match yields an existing base model, `urp` MUST remain unchanged.
 
 PIPE-1a. Stream transform fallback:
-- precondition: request is streaming, and at least one enabled response-phase transform rule matches.
+- precondition: request is streaming, and at least one enabled response-phase transform rule matches and requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting.
 - behavior: runtime calls upstream non-stream endpoint for the selected attempt, decodes to `UrpResponse`, applies response transforms, then emits synthesized downstream stream events from transformed response.
 - postcondition: transformed content is visible on stream path even when upstream native stream is bypassed.
 
