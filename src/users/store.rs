@@ -635,7 +635,7 @@ impl UserStore {
                     key_hash.clone().into(),
                     now.to_rfc3339().into(),
                     expires_at.map(|e| e.to_rfc3339()).into(),
-                    input.quota.map(|v| SeaValue::BigInt(Some(v))).unwrap_or(SeaValue::BigInt(None)),
+                    input.quota.map(|v| SeaValue::Int(Some(v))).unwrap_or(SeaValue::Int(None)),
                     SeaValue::Int(Some(if input.quota_unlimited { 1 } else { 0 })),
                     SeaValue::Int(Some(if input.model_limits_enabled { 1 } else { 0 })),
                     model_limits_json.into(),
@@ -863,7 +863,7 @@ impl UserStore {
             .transpose()
             .map_err(|e| e.to_string())?;
 
-        let quota_remaining: Option<i64> = row.try_get("", "quota_remaining").unwrap_or(None);
+        let quota_remaining: Option<i32> = row.try_get("", "quota_remaining").unwrap_or(None);
         let quota_unlimited: i32 = row.try_get("", "quota_unlimited").unwrap_or(1);
         let model_limits_enabled: i32 = row.try_get("", "model_limits_enabled").unwrap_or(0);
 
@@ -950,7 +950,7 @@ impl UserStore {
         }
         if let Some(quota) = input.quota {
             set_clauses.push(format!("quota_remaining = ${idx}"));
-            values.push(SeaValue::BigInt(Some(quota)));
+            values.push(SeaValue::Int(Some(quota)));
             idx += 1;
         }
         if let Some(quota_unlimited) = input.quota_unlimited {

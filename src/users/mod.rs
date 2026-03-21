@@ -131,7 +131,7 @@ pub struct ApiKey {
     pub enabled: bool,
     /// Remaining quota in credits. None means quota_unlimited applies.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub quota_remaining: Option<i64>,
+    pub quota_remaining: Option<i32>,
     /// Whether quota is unlimited
     #[serde(default)]
     pub quota_unlimited: bool,
@@ -160,7 +160,7 @@ pub struct ApiKey {
 pub struct CreateApiKeyInput {
     pub name: String,
     pub expires_in_days: Option<i64>,
-    pub quota: Option<i64>,
+    pub quota: Option<i32>,
     #[serde(default = "default_quota_unlimited")]
     pub quota_unlimited: bool,
     #[serde(default)]
@@ -190,7 +190,7 @@ fn default_group() -> String {
 pub struct UpdateApiKeyInput {
     pub name: Option<String>,
     pub enabled: Option<bool>,
-    pub quota: Option<i64>,
+    pub quota: Option<i32>,
     pub quota_unlimited: Option<bool>,
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,

@@ -23,7 +23,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub last_used_at: Option<String>,
     pub enabled: i32,
-    pub quota_remaining: Option<i64>,
+    pub quota_remaining: Option<i32>,
     pub quota_unlimited: i32,
     pub model_limits_enabled: i32,
     #[sea_orm(column_type = "Text")]

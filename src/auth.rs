@@ -14,7 +14,7 @@ pub struct AuthResult {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub quota_remaining: Option<i64>,
+    pub quota_remaining: Option<i32>,
     pub quota_unlimited: bool,
 }
 

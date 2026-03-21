@@ -13,7 +13,7 @@ use serde_json::json;
 pub struct CreateApiKeyRequest {
     pub name: String,
     pub expires_in_days: Option<i64>,
-    pub quota: Option<i64>,
+    pub quota: Option<i32>,
     #[serde(default = "default_quota_unlimited")]
     pub quota_unlimited: bool,
     #[serde(default)]
@@ -48,7 +48,7 @@ pub struct ApiKeyResponse {
     pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
     pub enabled: bool,
-    pub quota_remaining: Option<i64>,
+    pub quota_remaining: Option<i32>,
     pub quota_unlimited: bool,
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
@@ -66,7 +66,7 @@ pub struct ApiKeyCreatedResponse {
     pub key_prefix: String,
     pub created_at: String,
     pub expires_at: Option<String>,
-    pub quota_remaining: Option<i64>,
+    pub quota_remaining: Option<i32>,
     pub quota_unlimited: bool,
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
@@ -80,7 +80,7 @@ pub struct ApiKeyCreatedResponse {
 pub struct UpdateApiKeyRequest {
     pub name: Option<String>,
     pub enabled: Option<bool>,
-    pub quota: Option<i64>,
+    pub quota: Option<i32>,
     pub quota_unlimited: Option<bool>,
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
