@@ -96,6 +96,11 @@ pub(crate) async fn emit_synthetic_responses_stream(
         match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
             "reasoning" => {
                 let (text, summary, sig) = extract_reasoning_parts(item);
+                let source = item
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .filter(|source| !source.is_empty())
+                    .map(|source| source.to_string());
                 if !summary.is_empty() {
                     send_responses_event(
                         &tx,
@@ -113,11 +118,14 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.reasoning_summary_text.delta",
-                        json!({
+                        insert_reasoning_source(
+                            json!({
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "summary_index": 0,
-                        }),
+                            }),
+                            source.as_deref(),
+                        ),
                         "delta",
                         &summary,
                         sse_max_frame_length,
@@ -127,12 +135,15 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.reasoning_summary_text.done",
-                        json!({
+                        insert_reasoning_source(
+                            json!({
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "summary_index": 0,
                             "text": summary,
-                        }),
+                            }),
+                            source.as_deref(),
+                        ),
                     )
                     .await?;
                 }
@@ -141,10 +152,13 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.reasoning.delta",
-                        json!({
+                        insert_reasoning_source(
+                            json!({
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
-                        }),
+                            }),
+                            source.as_deref(),
+                        ),
                         "delta",
                         &text,
                         sse_max_frame_length,
@@ -154,11 +168,14 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         &tx,
                         &mut seq,
                         "response.reasoning.done",
-                        json!({
+                        insert_reasoning_source(
+                            json!({
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
                             "text": text,
-                        }),
+                            }),
+                            source.as_deref(),
+                        ),
                     )
                     .await?;
                 }
@@ -534,10 +551,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             &tx,
                             &mut seq,
                             "response.reasoning.delta",
-                            json!({
-                                "item_id": part_state.item_id,
-                                "output_index": part_state.output_index,
-                            }),
+                            insert_reasoning_source(
+                                json!({
+                                    "item_id": part_state.item_id,
+                                    "output_index": part_state.output_index,
+                                }),
+                                source.as_deref(),
+                            ),
                             "delta",
                             content,
                             sse_max_frame_length,
@@ -576,11 +596,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             &tx,
                             &mut seq,
                             "response.reasoning_summary_text.delta",
-                            json!({
-                                "item_id": part_state.item_id,
-                                "output_index": part_state.output_index,
-                                "summary_index": 0,
-                            }),
+                            insert_reasoning_source(
+                                json!({
+                                    "item_id": part_state.item_id,
+                                    "output_index": part_state.output_index,
+                                    "summary_index": 0,
+                                }),
+                                source.as_deref(),
+                            ),
                             "delta",
                             summary,
                             sse_max_frame_length,
@@ -588,7 +611,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .await?;
                     }
                     let _ = encrypted;
-                    let _ = source;
                 }
                 PartDelta::ToolCallArguments { ref arguments } => {
                     let part_state =
@@ -755,7 +777,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         }
                     } else if part_state.zone == ResponsesOutputZone::Reasoning {
                         if let Part::Reasoning {
-                            content, summary, ..
+                            content,
+                            summary,
+                            source,
+                            ..
                         } = &part
                         {
                             if let Some(summary) =
@@ -765,12 +790,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     &tx,
                                     &mut seq,
                                     "response.reasoning_summary_text.done",
-                                    json!({
-                                        "item_id": part_state.item_id,
-                                        "output_index": part_state.output_index,
-                                        "summary_index": 0,
-                                        "text": summary,
-                                    }),
+                                    insert_reasoning_source(
+                                        json!({
+                                            "item_id": part_state.item_id,
+                                            "output_index": part_state.output_index,
+                                            "summary_index": 0,
+                                            "text": summary,
+                                        }),
+                                        source.as_deref(),
+                                    ),
                                 )
                                 .await?;
                                 send_responses_event(
@@ -794,11 +822,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     &tx,
                                     &mut seq,
                                     "response.reasoning.done",
-                                    json!({
-                                        "item_id": part_state.item_id,
-                                        "output_index": part_state.output_index,
-                                        "text": content,
-                                    }),
+                                    insert_reasoning_source(
+                                        json!({
+                                            "item_id": part_state.item_id,
+                                            "output_index": part_state.output_index,
+                                            "text": content,
+                                        }),
+                                        source.as_deref(),
+                                    ),
                                 )
                                 .await?;
                             }
@@ -1163,6 +1194,17 @@ fn append_reasoning_summary_field(item: &mut Value, delta: &str) {
     };
     let current = last.get("text").and_then(Value::as_str).unwrap_or_default();
     last.insert("text".to_string(), json!(format!("{current}{delta}")));
+}
+
+fn insert_reasoning_source(mut payload: Value, source: Option<&str>) -> Value {
+    let Some(source) = source.filter(|source| !source.is_empty()) else {
+        return payload;
+    };
+    let Some(obj) = payload.as_object_mut() else {
+        return payload;
+    };
+    obj.insert("source".to_string(), Value::String(source.to_string()));
+    payload
 }
 
 fn apply_part_done_to_stream_output_item(

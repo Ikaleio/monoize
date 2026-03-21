@@ -331,41 +331,6 @@ pub(crate) fn chat_delta_path_tool_arguments(value: &mut Value, content: &str) {
     }
 }
 
-pub(crate) fn normalize_chat_reasoning_delta_object(delta: &mut Map<String, Value>) {
-    if delta
-        .get("reasoning_details")
-        .and_then(|value| value.as_array())
-        .is_none()
-    {
-        let mut details = Vec::new();
-        if let Some(text) = delta
-            .get("reasoning_content")
-            .and_then(|value| value.as_str())
-        {
-            if !text.is_empty() {
-                details.push(reasoning_text_detail_value(text, None));
-            }
-        }
-        if let Some(sig) = delta
-            .get("reasoning_opaque")
-            .and_then(|value| value.as_str())
-        {
-            if !sig.is_empty() {
-                details.push(reasoning_encrypted_detail_value(
-                    Value::String(sig.to_string()),
-                    None,
-                ));
-            }
-        }
-        if !details.is_empty() {
-            delta.insert("reasoning_details".to_string(), Value::Array(details));
-        }
-    }
-
-    delta.remove("reasoning_content");
-    delta.remove("reasoning_opaque");
-}
-
 pub(crate) fn messages_delta_path_text(value: &mut Value, content: &str) {
     if let Some(delta) = value.get_mut("delta").and_then(Value::as_object_mut) {
         delta.insert("text".to_string(), Value::String(content.to_string()));
@@ -501,6 +466,12 @@ pub(crate) struct ChatReasoningContentBlock {
     pub(crate) format: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChatReasoningDeltaChunk {
+    pub(crate) text: String,
+    pub(crate) format: Option<String>,
+}
+
 pub(crate) fn extract_chat_reasoning_content_block(
     block: &Value,
 ) -> Option<ChatReasoningContentBlock> {
@@ -552,83 +523,95 @@ pub(crate) fn reasoning_encrypted_detail_value(data: Value, format: Option<&str>
     value
 }
 
-pub(crate) fn extract_chat_reasoning_from_detail(
-    detail: &Value,
-    text_out: &mut Vec<String>,
-    summary_out: &mut Vec<String>,
-    sig_out: &mut Vec<String>,
-) {
-    let Some(obj) = detail.as_object() else {
-        return;
-    };
-    match obj.get("type").and_then(|v| v.as_str()).unwrap_or("") {
-        "reasoning.text" => {
-            if let Some(t) = obj.get("text").and_then(|v| v.as_str()) {
-                if !t.is_empty() {
-                    text_out.push(t.to_string());
-                }
-            }
-        }
-        "reasoning.encrypted" => {
-            if let Some(data) = obj.get("data") {
-                match data {
-                    Value::String(s) if !s.is_empty() => sig_out.push(s.clone()),
-                    Value::String(_) | Value::Null => {}
-                    other => sig_out.push(other.to_string()),
-                }
-            }
-        }
-        "reasoning.summary" => {
-            if let Some(summary) = obj.get("summary").and_then(|v| v.as_str()) {
-                if !summary.is_empty() {
-                    summary_out.push(summary.to_string());
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-pub(crate) fn extract_chat_reasoning_deltas(
+pub(crate) fn extract_chat_reasoning_delta_chunks(
     delta: &Value,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
+) -> (
+    Vec<ChatReasoningDeltaChunk>,
+    Vec<ChatReasoningDeltaChunk>,
+    Vec<ChatReasoningDeltaChunk>,
+) {
     let mut text_parts = Vec::new();
     let mut summary_parts = Vec::new();
     let mut sig_parts = Vec::new();
 
     if let Some(details) = delta.get("reasoning_details").and_then(|v| v.as_array()) {
         for detail in details {
-            extract_chat_reasoning_from_detail(
-                detail,
-                &mut text_parts,
-                &mut summary_parts,
-                &mut sig_parts,
-            );
+            let Some(obj) = detail.as_object() else {
+                continue;
+            };
+            let format = obj
+                .get("format")
+                .and_then(|v| v.as_str())
+                .filter(|format| !format.is_empty())
+                .map(|format| format.to_string());
+            match obj.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                "reasoning.text" => {
+                    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+                        if !text.is_empty() {
+                            text_parts.push(ChatReasoningDeltaChunk {
+                                text: text.to_string(),
+                                format,
+                            });
+                        }
+                    }
+                }
+                "reasoning.encrypted" => {
+                    if let Some(data) = obj.get("data") {
+                        let text = match data {
+                            Value::String(s) if !s.is_empty() => Some(s.clone()),
+                            Value::String(_) | Value::Null => None,
+                            other => Some(other.to_string()),
+                        };
+                        if let Some(text) = text {
+                            sig_parts.push(ChatReasoningDeltaChunk { text, format });
+                        }
+                    }
+                }
+                "reasoning.summary" => {
+                    if let Some(summary) = obj.get("summary").and_then(|v| v.as_str()) {
+                        if !summary.is_empty() {
+                            summary_parts.push(ChatReasoningDeltaChunk {
+                                text: summary.to_string(),
+                                format,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
     if text_parts.is_empty() {
         if let Some(reasoning) = delta.get("reasoning").and_then(|v| v.as_str()) {
             if !reasoning.is_empty() {
-                text_parts.push(reasoning.to_string());
+                text_parts.push(ChatReasoningDeltaChunk {
+                    text: reasoning.to_string(),
+                    format: None,
+                });
             }
         }
     }
 
     if let Some(reasoning) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
         if !reasoning.is_empty() {
-            text_parts.push(reasoning.to_string());
+            text_parts.push(ChatReasoningDeltaChunk {
+                text: reasoning.to_string(),
+                format: None,
+            });
         }
     }
     if let Some(sig) = delta.get("reasoning_opaque").and_then(|v| v.as_str()) {
         if !sig.is_empty() {
-            sig_parts.push(sig.to_string());
+            sig_parts.push(ChatReasoningDeltaChunk {
+                text: sig.to_string(),
+                format: None,
+            });
         }
     }
 
     (text_parts, summary_parts, sig_parts)
 }
-
 pub(crate) fn chat_reasoning_delta_from_text(text: &str, format: Option<&str>) -> Value {
     json!({
         "reasoning_details": [reasoning_text_detail_value(text, format)]
@@ -705,18 +688,20 @@ pub(crate) fn responses_text_delta_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_chat_reasoning_content_block, extract_chat_reasoning_deltas};
+    use super::{extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks};
     use serde_json::{Value, json};
 
     #[test]
-    fn extract_chat_reasoning_deltas_reads_legacy_reasoning_content() {
+    fn extract_chat_reasoning_delta_chunks_read_legacy_reasoning_content() {
         let delta = json!({
             "reasoning_content": "legacy streamed reasoning"
         });
 
-        let (text_parts, summary_parts, sig_parts) = extract_chat_reasoning_deltas(&delta);
+        let (text_parts, summary_parts, sig_parts) = extract_chat_reasoning_delta_chunks(&delta);
 
-        assert_eq!(text_parts, vec!["legacy streamed reasoning".to_string()]);
+        assert_eq!(text_parts.len(), 1);
+        assert_eq!(text_parts[0].text, "legacy streamed reasoning");
+        assert_eq!(text_parts[0].format, None);
         assert!(summary_parts.is_empty());
         assert!(sig_parts.is_empty());
     }
@@ -741,5 +726,28 @@ mod tests {
             Some(Value::String("sig_1".to_string()))
         );
         assert_eq!(reasoning.format.as_deref(), Some("openrouter"));
+    }
+
+    #[test]
+    fn extract_chat_reasoning_delta_chunks_preserves_format_per_detail() {
+        let delta = json!({
+            "reasoning_details": [
+                { "type": "reasoning.summary", "summary": "brief", "format": "anthropic" },
+                { "type": "reasoning.text", "text": "full", "format": "anthropic" },
+                { "type": "reasoning.encrypted", "data": "sig_1", "format": "anthropic" }
+            ]
+        });
+
+        let (text_parts, summary_parts, sig_parts) = extract_chat_reasoning_delta_chunks(&delta);
+
+        assert_eq!(summary_parts.len(), 1);
+        assert_eq!(summary_parts[0].text, "brief");
+        assert_eq!(summary_parts[0].format.as_deref(), Some("anthropic"));
+        assert_eq!(text_parts.len(), 1);
+        assert_eq!(text_parts[0].text, "full");
+        assert_eq!(text_parts[0].format.as_deref(), Some("anthropic"));
+        assert_eq!(sig_parts.len(), 1);
+        assert_eq!(sig_parts[0].text, "sig_1");
+        assert_eq!(sig_parts[0].format.as_deref(), Some("anthropic"));
     }
 }

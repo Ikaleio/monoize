@@ -317,9 +317,9 @@ pub(super) async fn transform_urp_stream(
         image_transform_cache: state.image_transform_cache.clone(),
     };
 
-    while let Some(mut event) = rx.recv().await {
-        transforms::apply_transforms(
-            transforms::UrpData::Stream(&mut event),
+    while let Some(event) = rx.recv().await {
+        let provider_events = transforms::apply_stream_transforms(
+            event,
             provider_rules,
             &mut provider_states,
             model,
@@ -335,30 +335,36 @@ pub(super) async fn transform_urp_stream(
                 e.to_string(),
             )
         })?;
-        transforms::apply_transforms(
-            transforms::UrpData::Stream(&mut event),
-            auth_rules,
-            &mut auth_states,
-            model,
-            Phase::Response,
-            &context,
-            state.transform_registry.as_ref(),
-        )
-        .await
-        .map_err(|e| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "transform_apply_failed",
-                e.to_string(),
+
+        for provider_event in provider_events {
+            let auth_events = transforms::apply_stream_transforms(
+                provider_event,
+                auth_rules,
+                &mut auth_states,
+                model,
+                Phase::Response,
+                &context,
+                state.transform_registry.as_ref(),
             )
-        })?;
-        tx.send(event).await.map_err(|_| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "stream_transform_failed",
-                "failed to forward transformed stream event",
-            )
-        })?;
+            .await
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "transform_apply_failed",
+                    e.to_string(),
+                )
+            })?;
+
+            for auth_event in auth_events {
+                tx.send(auth_event).await.map_err(|_| {
+                    AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "stream_transform_failed",
+                        "failed to forward transformed stream event",
+                    )
+                })?;
+            }
+        }
     }
 
     Ok(())
@@ -472,6 +478,7 @@ pub(super) fn requires_buffered_response_stream(
     provider_rules: &[TransformRuleConfig],
     auth_rules: &[TransformRuleConfig],
     model: &str,
+    downstream: DownstreamProtocol,
 ) -> bool {
     provider_rules
         .iter()
@@ -484,10 +491,8 @@ pub(super) fn requires_buffered_response_stream(
                 .any(|pattern| model_glob_match(pattern, model)),
         })
         .any(|rule| {
-            matches!(
-                rule.transform.as_str(),
-                "assistant_markdown_images_to_output"
-            )
+            rule.transform == "assistant_markdown_images_to_output"
+                && !matches!(downstream, DownstreamProtocol::Responses)
         })
 }
 
@@ -527,5 +532,46 @@ pub(super) fn ensure_stream_usage_requested(
             req.extra_body
                 .insert("stream_options".to_string(), json!({"include_usage": true}));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn response_rule(transform: &str) -> TransformRuleConfig {
+        TransformRuleConfig {
+            transform: transform.to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Response,
+            config: json!({}),
+        }
+    }
+
+    #[test]
+    fn assistant_markdown_images_to_output_stays_passthrough_for_responses() {
+        assert!(!requires_buffered_response_stream(
+            &[response_rule("assistant_markdown_images_to_output")],
+            &[],
+            "gpt-5-mini",
+            DownstreamProtocol::Responses,
+        ));
+    }
+
+    #[test]
+    fn assistant_markdown_images_to_output_still_buffers_for_chat_and_messages() {
+        assert!(requires_buffered_response_stream(
+            &[response_rule("assistant_markdown_images_to_output")],
+            &[],
+            "gpt-5-mini",
+            DownstreamProtocol::ChatCompletions,
+        ));
+        assert!(requires_buffered_response_stream(
+            &[response_rule("assistant_markdown_images_to_output")],
+            &[],
+            "gpt-5-mini",
+            DownstreamProtocol::AnthropicMessages,
+        ));
     }
 }

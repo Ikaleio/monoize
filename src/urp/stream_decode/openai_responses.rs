@@ -34,6 +34,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut reasoning_text = String::new();
     let mut reasoning_summary_text = String::new();
     let mut reasoning_sig = String::new();
+    let mut reasoning_source: Option<String> = None;
     let mut reasoning_output_index: Option<u64> = None;
     let mut call_order: Vec<String> = Vec::new();
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
@@ -160,6 +161,10 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     reasoning_output_index.get_or_insert(idx);
                 }
+                merge_reasoning_source(
+                    &mut reasoning_source,
+                    reasoning_source_from_value(item),
+                );
                 let (text, summary, sig) = extract_reasoning_parts(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
@@ -246,6 +251,10 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     reasoning_output_index.get_or_insert(idx);
                 }
+                merge_reasoning_source(
+                    &mut reasoning_source,
+                    reasoning_source_from_value(item),
+                );
                 let (text, summary, sig) = extract_reasoning_parts(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
@@ -304,6 +313,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             &reasoning_text,
             &reasoning_summary_text,
             &reasoning_sig,
+            reasoning_source.as_deref(),
             reasoning_output_index,
             &output_texts_by_output_index,
             &message_phases_by_output_index,
@@ -436,17 +446,25 @@ fn map_responses_event_to_urp_events_with_state(
             extra_body: delta_extra_body_with_phase(data_val, message_phases_by_output_index),
         }],
         "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
-            if let Some(output_index) = data_val.get("output_index").and_then(|v| v.as_u64()) {
-                let output_state = index_state
-                    .output_state_by_index
-                    .entry(output_index)
-                    .or_default();
-                if event_name == "response.reasoning_summary_text.delta" {
-                    output_state.reasoning_summary_delta_seen = true;
-                } else {
-                    output_state.reasoning_text_delta_seen = true;
-                }
-            }
+            let reasoning_source = data_val
+                .get("output_index")
+                .and_then(|v| v.as_u64())
+                .and_then(|output_index| {
+                    let output_state = index_state
+                        .output_state_by_index
+                        .entry(output_index)
+                        .or_default();
+                    merge_reasoning_source(
+                        &mut output_state.reasoning_source,
+                        reasoning_source_from_value(&data_val),
+                    );
+                    if event_name == "response.reasoning_summary_text.delta" {
+                        output_state.reasoning_summary_delta_seen = true;
+                    } else {
+                        output_state.reasoning_text_delta_seen = true;
+                    }
+                    output_state.reasoning_source.clone()
+                });
             let extra_body = split_known_fields(
                 data_val.clone(),
                 &[
@@ -482,7 +500,7 @@ fn map_responses_event_to_urp_events_with_state(
                     } else {
                         None
                     },
-                    source: None,
+                    source: reasoning_source,
                 },
                 usage: None,
                 extra_body,
@@ -490,6 +508,20 @@ fn map_responses_event_to_urp_events_with_state(
         }
         "response.reasoning.done" => {
             let part_index = urp_part_index_from_delta(&data_val, index_state);
+            let reasoning_source = data_val
+                .get("output_index")
+                .and_then(|v| v.as_u64())
+                .and_then(|output_index| {
+                    let output_state = index_state
+                        .output_state_by_index
+                        .entry(output_index)
+                        .or_default();
+                    merge_reasoning_source(
+                        &mut output_state.reasoning_source,
+                        reasoning_source_from_value(&data_val),
+                    );
+                    output_state.reasoning_source.clone()
+                });
             vec![UrpStreamEvent::PartDone {
                 part_index,
                 part: Part::Reasoning {
@@ -500,7 +532,7 @@ fn map_responses_event_to_urp_events_with_state(
                         .map(|text| text.to_string()),
                     encrypted: None,
                     summary: None,
-                    source: None,
+                    source: reasoning_source,
                     extra_body: split_known_fields(
                         data_val,
                         &[
@@ -616,6 +648,21 @@ struct OutputItemStreamState {
     part_done_seen: bool,
     reasoning_text_delta_seen: bool,
     reasoning_summary_delta_seen: bool,
+    reasoning_source: Option<String>,
+}
+
+fn merge_reasoning_source(dst: &mut Option<String>, source: Option<String>) {
+    if let Some(source) = source.filter(|source| !source.is_empty()) {
+        *dst = Some(source);
+    }
+}
+
+fn reasoning_source_from_value(value: &Value) -> Option<String> {
+    value
+        .get("source")
+        .and_then(|value| value.as_str())
+        .filter(|source| !source.is_empty())
+        .map(|source| source.to_string())
 }
 
 fn flush_active_assistant_item(
@@ -721,6 +768,9 @@ fn map_output_item_added(
         output_state.item_type = Some(item_type.to_string());
         output_state.role = Some(role);
         output_state.item_extra_body = item_extra_body.clone();
+        if item_type == "reasoning" {
+            merge_reasoning_source(&mut output_state.reasoning_source, reasoning_source_from_value(item));
+        }
     }
 
     match item_type {
@@ -1360,6 +1410,7 @@ fn build_accumulated_output_items(
     reasoning_text: &str,
     reasoning_summary_text: &str,
     reasoning_sig: &str,
+    reasoning_source: Option<&str>,
     reasoning_output_index: Option<u64>,
     output_texts_by_output_index: &HashMap<u64, String>,
     message_phases_by_output_index: &HashMap<u64, String>,
@@ -1428,7 +1479,7 @@ fn build_accumulated_output_items(
                             .then(|| reasoning_summary_text.to_string()),
                         encrypted: (!reasoning_sig.is_empty())
                             .then(|| Value::String(reasoning_sig.to_string())),
-                        source: None,
+                        source: reasoning_source.map(|source| source.to_string()),
                         extra_body: HashMap::new(),
                     },
                     &HashMap::new(),
@@ -1547,6 +1598,7 @@ mod tests {
             "think",
             "summary",
             "sig_1",
+            Some("anthropic"),
             Some(0),
             &HashMap::from([(0, "answer".to_string())]),
             &HashMap::from([(0, "analysis".to_string())]),
@@ -1572,8 +1624,10 @@ mod tests {
                 content: Some(content),
                 summary: Some(summary),
                 encrypted: Some(Value::String(sig)),
+                source: Some(source),
+                extra_body: _,
                 ..
-            } if content == "think" && summary == "summary" && sig == "sig_1"
+            } if content == "think" && summary == "summary" && sig == "sig_1" && source == "anthropic"
         ));
         assert!(matches!(
             &parts[1],
@@ -1596,6 +1650,7 @@ mod tests {
             "",
             "",
             "sig_only",
+            None,
             Some(0),
             &HashMap::new(),
             &HashMap::from([(0, "analysis".to_string())]),
@@ -1629,6 +1684,7 @@ mod tests {
             "",
             "",
             "",
+            None,
             None,
             &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
             &HashMap::from([
@@ -1674,6 +1730,7 @@ mod tests {
             "think",
             "summary",
             "",
+            Some("upstream-reasoner"),
             Some(2),
             &HashMap::from([(5, "answer".to_string())]),
             &HashMap::new(),
@@ -1686,7 +1743,13 @@ mod tests {
         let Item::Message { parts, .. } = &outputs[0] else {
             panic!("expected merged assistant output");
         };
-        assert!(matches!(&parts[0], Part::Reasoning { .. }));
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                source: Some(source),
+                ..
+            } if source == "upstream-reasoner"
+        ));
         assert!(matches!(&parts[1], Part::Text { content, .. } if content == "answer"));
         assert!(matches!(&parts[2], Part::ToolCall { call_id, .. } if call_id == "call_1"));
     }
@@ -1895,6 +1958,7 @@ mod tests {
             "",
             "",
             None,
+            None,
             &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
             &HashMap::from([
                 (0, "commentary".to_string()),
@@ -1973,6 +2037,30 @@ mod tests {
             &observed[4],
             UrpStreamEvent::PartStart { part_index, extra_body, .. }
                 if *part_index == 3 && extra_body.get("phase") == Some(&json!("final_answer"))
+        ));
+    }
+
+    #[test]
+    fn build_accumulated_output_items_omits_reasoning_source_when_missing() {
+        let outputs = build_accumulated_output_items(
+            "think",
+            "",
+            "",
+            None,
+            Some(0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let Item::Message { parts, .. } = &outputs[0] else {
+            panic!("expected assistant message output");
+        };
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning { source: None, .. }
         ));
     }
 

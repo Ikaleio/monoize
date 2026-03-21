@@ -66,7 +66,7 @@ STR-3d. If an upstream streaming protocol emits reasoning opaque payload increme
 
 STR-4. Transform engine MUST be able to process stream events incrementally with per-request mutable state.
 
-STR-5. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, the runtime MAY execute upstream in non-stream mode, apply response transforms on `UrpResponse`, and emit a synthesized downstream stream. In this mode, downstream still receives protocol-correct streaming events (`SSE` for Chat/Responses/Messages), but event timing is buffered.
+STR-5. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, or the selected downstream streaming protocol cannot faithfully represent the transform's incremental output, the runtime MAY execute upstream in non-stream mode, apply response transforms on `UrpResponse`, and emit a synthesized downstream stream. In this mode, downstream still receives protocol-correct streaming events (`SSE` for Chat/Responses/Messages), but event timing is buffered.
 
 ## 4. Transform System
 
@@ -310,8 +310,9 @@ AMIO-4. Extraction behavior:
 7. If removing Markdown image blocks leaves a text part empty, the transform MAY remove that empty text part.
 
 AMIO-5. Streaming behavior:
-1. For streaming requests executed through the response-transform fallback path defined in PIPE-1a, the transformed final `UrpResponse` MUST emit downstream text deltas for cleaned assistant text and MUST emit downstream image parts for extracted Markdown image blocks.
-2. For direct `UrpStreamEvent` application, the transform MUST update at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative streamed response state contains the cleaned text and the new image parts.
+1. For downstream streaming protocols that can represent assistant image parts incrementally (including `/v1/responses`), the transform MUST preserve pass-through timing by buffering only the ambiguous Markdown-image suffix needed to disambiguate `![...](...)`, emitting cleaned text deltas for safe text prefixes, and emitting image-part lifecycle events in original order once a full Markdown image block is recognized.
+2. Under the pass-through behavior in AMIO-5.1, the transform MUST update at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative streamed response state contains the cleaned text and the new image parts.
+3. For downstream streaming protocols that cannot faithfully surface extracted assistant image parts incrementally, the runtime MUST execute the transform through the response-transform fallback path defined in PIPE-1a.
 
 ### 4.7 `assistant_output_images_to_markdown`
 
@@ -407,7 +408,7 @@ MSUF-5. On successful suffix match (base model exists in at least one provider):
 MSUF-6. If no suffix match yields an existing base model, `urp` MUST remain unchanged.
 
 PIPE-1a. Stream transform fallback:
-- precondition: request is streaming, and at least one enabled response-phase transform rule matches and requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting.
+- precondition: request is streaming, and at least one enabled response-phase transform rule matches and either requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting or cannot be represented faithfully by the selected downstream streaming protocol.
 - behavior: runtime calls upstream non-stream endpoint for the selected attempt, decodes to `UrpResponse`, applies response transforms, then emits synthesized downstream stream events from transformed response.
 - postcondition: transformed content is visible on stream path even when upstream native stream is bypassed.
 

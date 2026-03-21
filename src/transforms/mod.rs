@@ -83,6 +83,10 @@ pub trait TransformConfig: Send + Sync + 'static {
 
 pub trait TransformState: Send + Sync {
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn finalize_stream_event(&mut self, event: UrpStreamEvent) -> Vec<UrpStreamEvent> {
+        vec![event]
+    }
 }
 
 pub struct NoState;
@@ -260,6 +264,57 @@ pub async fn apply_transforms(
             .await?;
     }
     Ok(())
+}
+
+pub async fn apply_stream_transforms(
+    initial_event: UrpStreamEvent,
+    rules: &[TransformRuleConfig],
+    states: &mut [Box<dyn TransformState>],
+    current_model: &str,
+    phase: Phase,
+    context: &TransformRuntimeContext,
+    registry: &TransformRegistry,
+) -> Result<Vec<UrpStreamEvent>, TransformError> {
+    if rules.len() != states.len() {
+        return Err(TransformError::Apply(
+            "rule/state length mismatch".to_string(),
+        ));
+    }
+
+    let mut events = vec![initial_event];
+    for (i, rule) in rules.iter().enumerate() {
+        if !rule.enabled || rule.phase != phase {
+            continue;
+        }
+        if let Some(patterns) = &rule.models {
+            if !patterns
+                .iter()
+                .any(|pattern| model_glob_match(pattern, current_model))
+            {
+                continue;
+            }
+        }
+        let transform = registry
+            .get(rule.transform.as_str())
+            .ok_or_else(|| TransformError::NotFound(rule.transform.clone()))?;
+        let config = transform.parse_config(rule.config.clone())?;
+        let mut next_events = Vec::new();
+        for mut event in events {
+            transform
+                .apply(
+                    UrpData::Stream(&mut event),
+                    phase,
+                    context,
+                    config.as_ref(),
+                    states[i].as_mut(),
+                )
+                .await?;
+            next_events.extend(states[i].finalize_stream_event(event));
+        }
+        events = next_events;
+    }
+
+    Ok(events)
 }
 
 pub fn model_glob_match(pattern: &str, model: &str) -> bool {

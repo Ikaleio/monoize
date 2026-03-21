@@ -58,6 +58,7 @@ pub(super) async fn forward_stream_typed(
             &attempt.provider_transforms,
             &auth.transforms,
             &logical_model,
+            downstream,
         );
 
         if requires_buffered_stream {

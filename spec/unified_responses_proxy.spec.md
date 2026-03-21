@@ -165,7 +165,7 @@ FP6a1. If a streaming request matches only response-phase transform rules that s
 
 FP6a2. The pass-through streaming runtime in FP6a1 MUST preserve transform rule order and scope semantics already used for non-streaming responses: provider response-phase rules run before API-key response-phase rules, using one mutable transform-state vector per rule chain for the lifetime of the request.
 
-FP6a3. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, Monoize MUST use buffered synthetic streaming for that request: fetch upstream non-stream response, apply response transforms on `UrpResponse`, then emit protocol-correct synthetic downstream SSE.
+FP6a3. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, or the selected downstream protocol cannot faithfully represent that transform's incremental output, Monoize MUST use buffered synthetic streaming for that request: fetch upstream non-stream response, apply response transforms on `UrpResponse`, then emit protocol-correct synthetic downstream SSE.
 
 FP6a4. `response.reasoning_signature.delta` is not part of the OpenAI Responses downstream event set. Monoize MUST NOT emit that event on downstream `/v1/responses` streams.
 
@@ -354,6 +354,12 @@ GZ9. For provider streaming decoders, every intermediate assistant `UrpStreamEve
 GZ10. For each downstream response protocol implemented by Monoize (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`), the protocol decoder MUST be able to parse the canonical non-stream response object emitted by the matching protocol encoder back into an equivalent URP response without inventing, discarding, or reclassifying protocol-visible reasoning/text/tool-call structure.
 
 GZ11. The round-trip requirement in GZ10 applies in particular to reasoning structure. If an encoder emits distinct reasoning summary text, full reasoning content, encrypted/signature payloads, or phase metadata, the matching decoder MUST reconstruct those fields into the same URP part shape rather than collapsing them into a different field or splitting one encoded block into multiple URP parts unless the encoded protocol itself distinguishes those parts separately.
+
+GZ12. If an upstream reasoning item or reasoning delta carries a provider/source identifier, the decoder MUST copy that value into `Part::Reasoning.source` or `PartDelta::Reasoning.source` exactly as provided, subject only to omission of empty strings.
+
+GZ13. Streaming reconstruction and fallback synthesis MUST preserve the most recent non-empty upstream reasoning source associated with the reconstructed reasoning part. Monoize MUST NOT replace that upstream value with router/provider defaults such as `"openrouter"`, selected model identifiers, or any other locally inferred fallback.
+
+GZ14. If the upstream protocol does not provide a reasoning source value, Monoize MUST leave `Part::Reasoning.source` absent rather than inventing a placeholder.
 
 ### 7.1.6 Encoder Splitting
 

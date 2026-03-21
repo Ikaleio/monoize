@@ -5878,10 +5878,18 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
     let frames = parse_responses_sse_json(&text);
 
     assert!(frames.iter().any(|(event, payload)| {
+        event == "response.output_text.delta" && payload["delta"].as_str() == Some("see ")
+    }));
+    assert!(!frames.iter().any(|(event, payload)| {
         event == "response.output_text.delta"
             && payload["delta"]
                 .as_str()
                 .is_some_and(|delta| delta.contains("![image](https://example.com/chart.png)"))
+    }));
+    assert!(frames.iter().any(|(event, payload)| {
+        event == "response.content_part.done"
+            && payload["part"]["type"].as_str() == Some("output_image")
+            && payload["part"]["url"].as_str() == Some("https://example.com/chart.png")
     }));
     assert!(frames.iter().any(|(event, payload)| {
         event == "response.completed"
@@ -5895,6 +5903,11 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
                                     part["type"].as_str() == Some("output_image")
                                         && part["url"].as_str()
                                             == Some("https://example.com/chart.png")
+                                }) && content.iter().any(|part| {
+                                    part["type"].as_str() == Some("output_text")
+                                        && part["text"]
+                                            .as_str()
+                                            .is_some_and(|text| text.contains("![image](https://example.com/chart.png)"))
                                 })
                             })
                     })

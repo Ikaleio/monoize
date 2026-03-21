@@ -6,7 +6,7 @@ use crate::handlers::usage::{
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::parse_tool_call_arguments_value;
 use crate::urp::stream_helpers::{
-    extract_chat_reasoning_content_block, extract_chat_reasoning_deltas,
+    extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks,
 };
 use crate::urp::{
     FinishReason, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
@@ -249,14 +249,14 @@ pub(crate) async fn stream_chat_to_urp_events(
         }
 
         let (reasoning_text_deltas, reasoning_summary_deltas, reasoning_sig_deltas) =
-            extract_chat_reasoning_deltas(&delta);
+            extract_chat_reasoning_delta_chunks(&delta);
         for summary in reasoning_summary_deltas {
             process_reasoning_summary_delta(
                 &tx,
                 &response_id,
                 &urp.model,
-                Some(&summary),
-                None,
+                Some(&summary.text),
+                summary.format.as_deref(),
                 &mut response_started,
                 &mut item_started,
                 &mut reasoning_part_index,
@@ -271,8 +271,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &tx,
                 &response_id,
                 &urp.model,
-                Some(&t),
-                None,
+                Some(&t.text),
+                t.format.as_deref(),
                 &mut response_started,
                 &mut item_started,
                 &mut reasoning_part_index,
@@ -287,8 +287,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &tx,
                 &response_id,
                 &urp.model,
-                Some(&Value::String(sig)),
-                None,
+                Some(&Value::String(sig.text)),
+                sig.format.as_deref(),
                 &mut response_started,
                 &mut item_started,
                 &mut reasoning_part_index,
@@ -445,11 +445,11 @@ fn resolve_reasoning_source(
     reasoning_source: &mut Option<String>,
     source: Option<&str>,
 ) -> Option<String> {
-    if reasoning_source.is_none() {
-        *reasoning_source = source
-            .filter(|source| !source.is_empty())
-            .map(|source| source.to_string())
-            .or_else(|| Some("openrouter".to_string()));
+    if let Some(source) = source
+        .filter(|source| !source.is_empty() && *source != "openrouter")
+        .map(|source| source.to_string())
+    {
+        *reasoning_source = Some(source);
     }
     reasoning_source.clone()
 }
@@ -924,4 +924,32 @@ fn item_extra_body(assistant_message_phase: &Option<String>) -> HashMap<String, 
         extra_body.insert("phase".to_string(), Value::String(phase.clone()));
     }
     extra_body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_reasoning_source_preserves_none_without_fallback() {
+        let mut reasoning_source = None;
+
+        assert_eq!(resolve_reasoning_source(&mut reasoning_source, None), None);
+        assert_eq!(reasoning_source, None);
+    }
+
+    #[test]
+    fn resolve_reasoning_source_preserves_explicit_upstream_value() {
+        let mut reasoning_source = None;
+
+        assert_eq!(
+            resolve_reasoning_source(&mut reasoning_source, Some("anthropic")),
+            Some("anthropic".to_string())
+        );
+        assert_eq!(reasoning_source, Some("anthropic".to_string()));
+        assert_eq!(
+            resolve_reasoning_source(&mut reasoning_source, None),
+            Some("anthropic".to_string())
+        );
+    }
 }
