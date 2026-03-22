@@ -25,8 +25,8 @@ pub use auth::{
 };
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,
-    list_model_metadata, list_models, sync_model_metadata_models_dev, update_model,
-    upsert_model_metadata,
+    list_marketplace_models, list_model_metadata, list_models, sync_model_metadata_models_dev,
+    update_model, upsert_model_metadata,
 };
 pub use providers::{
     FetchChannelModelsRequest, TestChannelRequest, create_provider, delete_provider,

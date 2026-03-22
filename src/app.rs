@@ -986,6 +986,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
             get(crate::dashboard_handlers::list_model_metadata),
         )
         .route(
+            "/dashboard/marketplace/models",
+            get(crate::dashboard_handlers::list_marketplace_models),
+        )
+        .route(
             "/dashboard/model-metadata/sync/models-dev",
             post(crate::dashboard_handlers::sync_model_metadata_models_dev),
         )

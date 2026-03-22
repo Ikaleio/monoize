@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::dashboard_handlers::session_helpers::require_admin;
+use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
 use crate::model_registry_store::{
     CreateModelInput, DbModelMetadataRecord, ModelMetadataSyncResult, UpdateModelInput,
@@ -10,6 +10,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde_json::json;
+use std::collections::HashSet;
 
 pub async fn list_models(
     State(state): State<AppState>,
@@ -233,4 +234,38 @@ pub async fn delete_model_metadata(
         ));
     }
     Ok(Json(json!({ "success": true })))
+}
+
+/// Returns model metadata only for models offered by at least one enabled provider.
+/// Requires login (any role), NOT admin-only.
+pub async fn list_marketplace_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    get_current_user(&headers, &state).await?;
+
+    let providers = state
+        .monoize_store
+        .list_providers()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    let offered: HashSet<String> = providers
+        .into_iter()
+        .filter(|p| p.enabled)
+        .flat_map(|p| p.models.into_keys())
+        .collect();
+
+    let all_metadata: Vec<DbModelMetadataRecord> = state
+        .model_registry_store
+        .list_model_metadata()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+
+    let filtered: Vec<DbModelMetadataRecord> = all_metadata
+        .into_iter()
+        .filter(|r| offered.contains(&r.model_id))
+        .collect();
+
+    Ok(Json(filtered))
 }

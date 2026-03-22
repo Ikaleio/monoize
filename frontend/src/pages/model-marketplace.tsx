@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ModelBadge } from "@/components/ModelBadge";
-import { useModelMetadata } from "@/lib/swr";
+import { useMarketplaceModels } from "@/lib/swr";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { TableVirtuoso } from "react-virtuoso";
 
@@ -29,7 +29,7 @@ function formatTokens(tokens?: number | null): string {
 
 export function ModelMarketplacePage() {
   const { t } = useTranslation();
-  const { data: records = [], isLoading } = useModelMetadata();
+  const { data: records = [], isLoading } = useMarketplaceModels();
   const [search, setSearch] = useState("");
 
   const filtered = records.filter((r) =>

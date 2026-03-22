@@ -33,6 +33,7 @@ const fetchers = {
   providers: () => api.listProviders(),
   transformRegistry: () => api.getTransformRegistry(),
   modelMetadata: () => api.listModelMetadata(),
+  marketplaceModels: () => api.listMarketplaceModels(),
 };
 
 // SWR cache keys
@@ -47,6 +48,7 @@ export const SWR_KEYS = {
   PROVIDERS: "/dashboard/providers",
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
   MODEL_METADATA: "/dashboard/model-metadata",
+  MARKETPLACE_MODELS: "/dashboard/marketplace/models",
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
 } as const;
@@ -139,6 +141,14 @@ export function useModelMetadata(config?: SWRConfiguration) {
   return useSWR<ModelMetadataRecord[]>(
     SWR_KEYS.MODEL_METADATA,
     fetchers.modelMetadata,
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useMarketplaceModels(config?: SWRConfiguration) {
+  return useSWR<ModelMetadataRecord[]>(
+    api.getToken() ? SWR_KEYS.MARKETPLACE_MODELS : null,
+    fetchers.marketplaceModels,
     { ...defaultConfig, ...config }
   );
 }

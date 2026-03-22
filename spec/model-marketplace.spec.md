@@ -15,9 +15,10 @@ The Model Marketplace page presents all registered model metadata to logged-in d
 
 ## 3. Data Source
 
-- Reuses the existing `GET /api/dashboard/model-metadata` endpoint (via the `useModelMetadata()` SWR hook).
-- No new backend endpoint is introduced.
-- The page renders the full `ModelMetadataRecord[]` array returned by the hook.
+- Uses a dedicated `GET /api/dashboard/marketplace/models` endpoint (via the `useMarketplaceModels()` SWR hook).
+- This endpoint requires login (any role) but NOT admin.
+- Server-side: collects all model IDs from enabled monoize providers (same set as `/v1/models`), then returns `model_metadata_records` filtered to only those model IDs.
+- The page renders the filtered `ModelMetadataRecord[]` array.
 
 ## 4. UI Structure
 
@@ -84,10 +85,11 @@ When `filtered.length === 0`:
 ## 5. Invariants
 
 1. The page MUST NOT expose any mutation controls (no create, edit, delete, sync buttons).
-2. The page MUST reuse `useModelMetadata()` from `@/lib/swr` — no duplicate fetcher.
-3. The page MUST use `TableVirtuoso` with the same component override pattern as `model-metadata.tsx`.
-4. All user-visible strings MUST go through `t()` (i18next). Keys live under `modelMarketplace.*`.
-5. Navigation entry MUST appear in the common `navItems` array (visible to all roles).
+2. The page MUST use `useMarketplaceModels()` from `@/lib/swr` — which calls `GET /api/dashboard/marketplace/models`.
+3. The backend endpoint MUST only return metadata for models present in at least one enabled provider.
+4. The page MUST use `TableVirtuoso` with the same component override pattern as `model-metadata.tsx`.
+5. All user-visible strings MUST go through `t()` (i18next). Keys live under `modelMarketplace.*`.
+6. Navigation entry MUST appear in the common `navItems` array (visible to all roles).
 
 ## 6. i18n Keys
 

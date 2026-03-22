@@ -698,6 +698,10 @@ class ApiClient {
       body: model ? JSON.stringify({ model }) : JSON.stringify({}),
     });
   }
+
+  async listMarketplaceModels(): Promise<ModelMetadataRecord[]> {
+    return this.request("/marketplace/models");
+  }
 }
 
 export const api = new ApiClient();
