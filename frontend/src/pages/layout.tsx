@@ -16,6 +16,7 @@ import {
   MessageSquareCode,
   ScrollText,
   Database,
+  Store,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -104,6 +105,7 @@ function Sidebar({ onNavigate, layoutId = "nav-active", disableLayoutAnimation =
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
     { to: "/dashboard/logs", icon: ScrollText, label: t("nav.logs") },
     { to: "/dashboard/playground", icon: MessageSquareCode, label: t("nav.playground") },
+    { to: "/dashboard/marketplace", icon: Store, label: t("nav.marketplace") },
   ];
 
   const adminNavItems = [

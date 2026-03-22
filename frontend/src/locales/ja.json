@@ -52,7 +52,8 @@
 		"settings": "設定",
 		"admin": "管理",
 		"logs": "ログ",
-		"models": "モデルデータベース"
+		"models": "モデルデータベース",
+		"marketplace": "モデルマーケット"
 	},
 	"roles": {
 		"super_admin": "スーパー管理者",
@@ -509,6 +510,20 @@
 		"limits": "トークン制限",
 		"mode": "モード",
 		"providerSource": "価格ソース"
+	},
+	"modelMarketplace": {
+		"title": "モデルマーケット",
+		"description": "利用可能なモデル、料金、仕様を閲覧",
+		"searchPlaceholder": "モデルを検索...",
+		"modelId": "モデル",
+		"mode": "モード",
+		"inputCost": "入力コスト",
+		"outputCost": "出力コスト",
+		"context": "コンテキスト",
+		"maxOutput": "最大出力",
+		"provider": "プロバイダー",
+		"noModels": "利用可能なモデルがありません",
+		"noModelsDesc": "管理者がモデルデータベースを同期すると、モデルデータがここに表示されます。"
 	},
 	"requestLogs": {
 		"title": "リクエストログ",

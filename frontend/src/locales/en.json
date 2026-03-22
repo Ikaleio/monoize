@@ -52,7 +52,8 @@
 		"settings": "Settings",
 		"admin": "Admin",
 		"logs": "Logs",
-		"models": "Models"
+		"models": "Models",
+		"marketplace": "Models"
 	},
 	"roles": {
 		"super_admin": "Super Admin",
@@ -510,6 +511,20 @@
 		"limits": "Token Limits",
 		"mode": "Mode",
 		"providerSource": "Pricing Source"
+	},
+	"modelMarketplace": {
+		"title": "Model Marketplace",
+		"description": "Browse available models, pricing and specifications",
+		"searchPlaceholder": "Search models...",
+		"modelId": "Model",
+		"mode": "Mode",
+		"inputCost": "Input Cost",
+		"outputCost": "Output Cost",
+		"context": "Context",
+		"maxOutput": "Max Output",
+		"provider": "Provider",
+		"noModels": "No models available",
+		"noModelsDesc": "Model data will appear here once the administrator syncs the model database."
 	},
 	"requestLogs": {
 		"title": "Request Logs",

@@ -14,6 +14,7 @@ import { UserSettingsPage } from "@/pages/user-settings";
 import { PlaygroundPage } from "@/pages/playground";
 import { RequestLogsPage } from "@/pages/request-logs";
 import { ModelMetadataPage } from "@/pages/model-metadata";
+import { ModelMarketplacePage } from "@/pages/model-marketplace";
 import "@/i18n";
 
 function App() {
@@ -36,6 +37,7 @@ function App() {
             <Route path="tokens" element={<ApiKeysPage />} />
             <Route path="logs" element={<RequestLogsPage />} />
             <Route path="playground" element={<PlaygroundPage />} />
+            <Route path="marketplace" element={<ModelMarketplacePage />} />
             <Route path="models" element={<ModelMetadataPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="admin-settings" element={<SettingsPage />} />

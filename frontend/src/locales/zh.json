@@ -52,7 +52,8 @@
 		"settings": "系统设置",
 		"admin": "管理",
 		"logs": "日志",
-		"models": "模型数据库"
+		"models": "模型数据库",
+		"marketplace": "模型广场"
 	},
 	"roles": {
 		"super_admin": "超级管理员",
@@ -510,6 +511,20 @@
 		"limits": "Token 限制",
 		"mode": "模式",
 		"providerSource": "定价来源"
+	},
+	"modelMarketplace": {
+		"title": "模型广场",
+		"description": "浏览可用模型、定价和规格",
+		"searchPlaceholder": "搜索模型...",
+		"modelId": "模型",
+		"mode": "模式",
+		"inputCost": "输入价格",
+		"outputCost": "输出价格",
+		"context": "上下文",
+		"maxOutput": "最大输出",
+		"provider": "提供者",
+		"noModels": "暂无可用模型",
+		"noModelsDesc": "管理员同步模型数据库后，模型数据将显示在此处。"
 	},
 	"requestLogs": {
 		"title": "请求日志",

@@ -52,7 +52,8 @@
 		"settings": "系統設定",
 		"admin": "管理",
 		"logs": "日誌",
-		"models": "模型資料庫"
+		"models": "模型資料庫",
+		"marketplace": "模型廣場"
 	},
 	"roles": {
 		"super_admin": "超級管理員",
@@ -510,6 +511,20 @@
 		"limits": "Token 限制",
 		"mode": "模式",
 		"providerSource": "定價來源"
+	},
+	"modelMarketplace": {
+		"title": "模型廣場",
+		"description": "瀏覽可用模型、定價和規格",
+		"searchPlaceholder": "搜尋模型...",
+		"modelId": "模型",
+		"mode": "模式",
+		"inputCost": "輸入價格",
+		"outputCost": "輸出價格",
+		"context": "上下文",
+		"maxOutput": "最大輸出",
+		"provider": "供應商",
+		"noModels": "尚無可用模型",
+		"noModelsDesc": "管理員同步模型資料庫後，模型資料將顯示在此處。"
 	},
 	"requestLogs": {
 		"title": "請求日誌",
