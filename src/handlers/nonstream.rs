@@ -32,96 +32,142 @@ pub(super) async fn execute_nonstream_typed(
     .await;
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
+    let mut execution_state = AttemptExecutionState::default();
     for attempt in attempts {
-        let mut req_attempt = req.clone();
-        req_attempt.model = attempt.upstream_model.clone();
-        apply_transform_rules_request(
-            state,
-            &mut req_attempt,
-            &attempt.provider_transforms,
-            &transform_match_model,
-        )
-        .await?;
+        execution_state.enter_provider(&attempt.provider_id);
+        if !execution_state.provider_budget_remaining(&attempt) {
+            continue;
+        }
 
-        let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
-        let provider = build_channel_provider_config(&attempt);
-        let path = upstream_path_for_model(
-            attempt.provider_type,
-            &req_attempt.model,
-            req_attempt.stream.unwrap_or(false),
-        );
-        log_outgoing_request_shape(
-            request_id.as_deref(),
-            &logical_model,
-            &req_attempt.model,
-            attempt.provider_type,
-            req_attempt.stream.unwrap_or(false),
-            &path,
-            &upstream_body,
-            &req_attempt,
-        );
-        let call = upstream::call_upstream_with_timeout_and_headers(
-            client_http(state),
-            &provider,
-            &attempt.api_key,
-            &path,
-            &upstream_body,
-            attempt.request_timeout_ms,
-            provider_extra_headers(attempt.provider_type),
-        )
-        .await;
-        match call {
-            Ok(value) => {
-                update_pending_channel_info(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    false,
-                    request_id.as_deref(),
-                    request_ip.as_deref(),
-                    started_at,
-                )
-                .await;
-                mark_channel_success(state, &attempt).await;
-                let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
-                apply_transform_rules_response(
-                    state,
-                    &mut resp,
-                    &attempt.provider_transforms,
-                    &req.model,
-                )
-                .await?;
-                apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
-                    .await?;
-                let charge =
-                    maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;
-                spawn_request_log(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    resp.usage.clone(),
-                    charge.charge_nano_usd,
-                    charge.billing_breakdown,
-                    false,
-                    started_at,
-                    request_id.clone(),
-                    request_ip.clone(),
-                    attempt.channel_id.clone(),
-                    None,
-                    None,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                    tried_providers,
-                );
-                return Ok((resp, logical_model.clone()));
+        let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
+        for _channel_attempt in 0..max_channel_attempts {
+            if !execution_state.provider_budget_remaining(&attempt) {
+                break;
             }
-            Err(err) => {
-                let non_retryable = is_non_retryable_client_error(&err);
-                let retryable = is_retryable_error(&err);
-                let retryable_failure_class = classify_retryable_failure(&err);
-                let app_err = upstream_error_to_app(err);
-                if non_retryable {
+
+            let attempt_number = execution_state.record_upstream_attempt();
+            let mut req_attempt = req.clone();
+            req_attempt.model = attempt.upstream_model.clone();
+            apply_transform_rules_request(
+                state,
+                &mut req_attempt,
+                &attempt.provider_transforms,
+                &transform_match_model,
+            )
+            .await?;
+
+            let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
+            let provider = build_channel_provider_config(&attempt);
+            let path = upstream_path_for_model(
+                attempt.provider_type,
+                &req_attempt.model,
+                req_attempt.stream.unwrap_or(false),
+            );
+            log_outgoing_request_shape(
+                request_id.as_deref(),
+                &logical_model,
+                &req_attempt.model,
+                attempt.provider_type,
+                req_attempt.stream.unwrap_or(false),
+                &path,
+                &upstream_body,
+                &req_attempt,
+            );
+            let call = upstream::call_upstream_with_timeout_and_headers(
+                client_http(state),
+                &provider,
+                &attempt.api_key,
+                &path,
+                &upstream_body,
+                attempt.request_timeout_ms,
+                provider_extra_headers(attempt.provider_type),
+            )
+            .await;
+            match call {
+                Ok(value) => {
+                    update_pending_channel_info(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        false,
+                        request_id.as_deref(),
+                        request_ip.as_deref(),
+                        started_at,
+                    )
+                    .await;
+                    mark_channel_success(state, &attempt).await;
+                    let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
+                    apply_transform_rules_response(
+                        state,
+                        &mut resp,
+                        &attempt.provider_transforms,
+                        &req.model,
+                    )
+                    .await?;
+                    apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
+                        .await?;
+                    let charge =
+                        maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;
+                    spawn_request_log(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        resp.usage.clone(),
+                        charge.charge_nano_usd,
+                        charge.billing_breakdown,
+                        false,
+                        started_at,
+                        request_id.clone(),
+                        request_ip.clone(),
+                        attempt.channel_id.clone(),
+                        None,
+                        None,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
+                    );
+                    return Ok((resp, logical_model.clone()));
+                }
+                Err(err) => {
+                    let non_retryable = is_non_retryable_client_error(&err);
+                    let retryable = is_retryable_error(&err);
+                    let retryable_failure_class = classify_retryable_failure(&err);
+                    let app_err = upstream_error_to_app(err);
+                    if non_retryable {
+                        spawn_request_log_error(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            false,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            &app_err,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                        );
+                        return Err(app_err);
+                    }
+                    if retryable {
+                        tried_providers.push(TriedProvider {
+                            attempt_number,
+                            provider_id: attempt.provider_id.clone(),
+                            channel_id: attempt.channel_id.clone(),
+                            error: app_err.message.clone(),
+                        });
+                        mark_channel_retryable_failure(state, &attempt, retryable_failure_class)
+                            .await;
+                        last_failed_attempt = Some(attempt.clone());
+                        if !is_attempt_channel_healthy(state, &attempt).await {
+                            break;
+                        }
+                        if execution_state.provider_budget_remaining(&attempt) {
+                            continue;
+                        }
+                        break;
+                    }
                     spawn_request_log_error(
                         state,
                         auth,
@@ -137,30 +183,6 @@ pub(super) async fn execute_nonstream_typed(
                     );
                     return Err(app_err);
                 }
-                if retryable {
-                    tried_providers.push(TriedProvider {
-                        provider_id: attempt.provider_id.clone(),
-                        channel_id: attempt.channel_id.clone(),
-                        error: app_err.message.clone(),
-                    });
-                    mark_channel_retryable_failure(state, &attempt, retryable_failure_class).await;
-                    last_failed_attempt = Some(attempt.clone());
-                    continue;
-                }
-                spawn_request_log_error(
-                    state,
-                    auth,
-                    &attempt,
-                    &logical_model,
-                    false,
-                    started_at,
-                    request_id.clone(),
-                    request_ip.clone(),
-                    &app_err,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                    tried_providers,
-                );
-                return Err(app_err);
             }
         }
     }

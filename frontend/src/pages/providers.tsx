@@ -190,6 +190,7 @@ export function ProvidersPage() {
 				transformRegistry={transformRegistry}
 				modelMetadata={modelMetadata}
 				reasoningSuffixMap={reasoningSuffixMap}
+				settings={settings}
 			/>
 
 			<ProviderDialog
@@ -205,6 +206,7 @@ export function ProvidersPage() {
 				transformRegistry={transformRegistry}
 				modelMetadata={modelMetadata}
 				reasoningSuffixMap={reasoningSuffixMap}
+				settings={settings}
 			/>
 		</PageWrapper>
 	)

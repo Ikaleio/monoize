@@ -620,14 +620,14 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                passive_failure_threshold_override: None,
+                passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
-                passive_min_samples_override: None,
-                passive_failure_rate_threshold_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
             }],
             max_retries: -1,
+            channel_max_retries: 0,
+            per_model_circuit_break: false,
             transforms: vec![
                 monoize::transforms::TransformRuleConfig {
                     transform: "assistant_markdown_images_to_output".to_string(),

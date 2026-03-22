@@ -125,6 +125,32 @@ export function ProviderBasicsSection({
 					}
 				/>
 			</div>
+			<div className='space-y-2'>
+				<Label>{t('providers.channelMaxRetries')}</Label>
+				<Input
+					type='number'
+					min='0'
+					value={form.channel_max_retries}
+					onChange={e =>
+						onFormChange(prev => ({
+							...prev,
+							channel_max_retries: Number(e.target.value) || 0
+						}))
+					}
+				/>
+			</div>
+			<div className='flex items-center gap-2'>
+				<Switch
+					checked={form.per_model_circuit_break}
+					onCheckedChange={checked =>
+						onFormChange(prev => ({
+							...prev,
+							per_model_circuit_break: checked
+						}))
+					}
+				/>
+				<Label>{t('providers.perModelCircuitBreak')}</Label>
+			</div>
 		</>
 	)
 }
@@ -132,14 +158,26 @@ export function ProviderBasicsSection({
 interface ProbeSettingsSectionProps {
 	form: ProviderForm
 	t: Translator
+	globalDefaults?: {
+		active_probe_interval_seconds?: number
+		active_probe_success_threshold?: number
+		active_probe_model?: string | null
+	}
 	onFormChange: (updater: (prev: ProviderForm) => ProviderForm) => void
 }
 
 export function ProbeSettingsSection({
 	form,
 	t,
+	globalDefaults,
 	onFormChange
 }: ProbeSettingsSectionProps) {
+	const inheritGlobal = t('providers.inheritGlobal')
+	const probeModelPlaceholder =
+		globalDefaults?.active_probe_model?.trim() ?
+			`${inheritGlobal} (${globalDefaults.active_probe_model})`
+		:	t('providers.probeModelOverridePlaceholder')
+
 	return (
 		<div className='md:col-span-2 rounded-md border p-3 space-y-3'>
 			<div className='text-sm font-medium'>{t('providers.probeOverrideTitle')}</div>
@@ -188,7 +226,7 @@ export function ProbeSettingsSection({
 								active_probe_model_override: e.target.value
 							}))
 						}
-						placeholder={t('providers.probeModelOverridePlaceholder')}
+						placeholder={probeModelPlaceholder}
 					/>
 				</div>
 				<div className='space-y-2'>
@@ -206,7 +244,7 @@ export function ProbeSettingsSection({
 									: 	null
 							}))
 						}
-						placeholder={t('providers.inheritGlobal')}
+						placeholder={`${inheritGlobal} (${globalDefaults?.active_probe_interval_seconds ?? 30})`}
 					/>
 				</div>
 				<div className='space-y-2'>
@@ -224,7 +262,7 @@ export function ProbeSettingsSection({
 									: 	null
 							}))
 						}
-						placeholder={t('providers.inheritGlobal')}
+						placeholder={`${inheritGlobal} (${globalDefaults?.active_probe_success_threshold ?? 1})`}
 					/>
 				</div>
 			</div>
@@ -238,14 +276,20 @@ export function ProbeSettingsSection({
 interface TimeoutEnabledSectionProps {
 	form: ProviderForm
 	t: Translator
+	globalDefaults?: {
+		request_timeout_ms?: number
+	}
 	onFormChange: (updater: (prev: ProviderForm) => ProviderForm) => void
 }
 
 export function TimeoutEnabledSection({
 	form,
 	t,
+	globalDefaults,
 	onFormChange
 }: TimeoutEnabledSectionProps) {
+	const inheritGlobal = t('providers.inheritGlobal')
+
 	return (
 		<>
 			<div className='space-y-2'>
@@ -253,7 +297,7 @@ export function TimeoutEnabledSection({
 				<Input
 					type='number'
 					min='1'
-					placeholder={t('providers.inheritGlobal')}
+					placeholder={`${inheritGlobal} (${globalDefaults?.request_timeout_ms ?? 30000})`}
 					value={form.request_timeout_ms_override}
 					onChange={e =>
 						onFormChange(prev => ({

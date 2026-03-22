@@ -430,15 +430,15 @@ export function SettingsPage() {
               </div>
               <Separator />
               <div className="space-y-2">
-                <Label htmlFor="passive_failure_threshold">{t("settings.passiveFailureThreshold")}</Label>
+                <Label htmlFor="passive_failure_count_threshold">{t("settings.passiveFailureThreshold")}</Label>
                 <Input
-                  id="passive_failure_threshold"
+                  id="passive_failure_count_threshold"
                   type="number"
                   min="1"
-                  value={currentSettings.monoize_passive_failure_threshold}
+                  value={currentSettings.monoize_passive_failure_count_threshold}
                   onChange={(e) =>
                     handleChange({
-                      monoize_passive_failure_threshold: Math.max(1, parseInt(e.target.value) || 3),
+                      monoize_passive_failure_count_threshold: Math.max(1, parseInt(e.target.value) || 3),
                     })
                   }
                   className="transition-all focus:scale-[1.01]"
@@ -481,47 +481,6 @@ export function SettingsPage() {
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveWindowSecondsDescription")}
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="passive_min_samples">{t("settings.passiveMinSamples")}</Label>
-                <Input
-                  id="passive_min_samples"
-                  type="number"
-                  min="1"
-                  value={currentSettings.monoize_passive_min_samples}
-                  onChange={(e) =>
-                    handleChange({
-                      monoize_passive_min_samples: Math.max(1, parseInt(e.target.value) || 20),
-                    })
-                  }
-                  className="transition-all focus:scale-[1.01]"
-                />
-                <p className="text-sm text-muted-foreground">
-                  {t("settings.passiveMinSamplesDescription")}
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="passive_failure_rate_threshold">{t("settings.passiveFailureRateThreshold")}</Label>
-                <Input
-                  id="passive_failure_rate_threshold"
-                  type="number"
-                  min="0.01"
-                  max="1"
-                  step="0.01"
-                  value={currentSettings.monoize_passive_failure_rate_threshold}
-                  onChange={(e) => {
-                    const next = parseFloat(e.target.value);
-                    handleChange({
-                      monoize_passive_failure_rate_threshold: Number.isFinite(next)
-                        ? Math.min(1, Math.max(0.01, next))
-                        : 0.6,
-                    });
-                  }}
-                  className="transition-all focus:scale-[1.01]"
-                />
-                <p className="text-sm text-muted-foreground">
-                  {t("settings.passiveFailureRateThresholdDescription")}
                 </p>
               </div>
               <div className="space-y-2">

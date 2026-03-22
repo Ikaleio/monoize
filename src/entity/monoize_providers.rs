@@ -1,5 +1,5 @@
-use sea_orm::DeriveRelation;
 use sea_orm::entity::prelude::*;
+use sea_orm::DeriveRelation;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "monoize_providers")]
@@ -11,6 +11,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub provider_type: String,
     pub max_retries: i32,
+    pub channel_max_retries: i32,
+    pub per_model_circuit_break: i32,
     #[sea_orm(column_type = "Text")]
     pub transforms: String,
     #[sea_orm(column_type = "Text")]

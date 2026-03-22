@@ -38,17 +38,14 @@ pub(super) async fn forward_stream_typed(
     )
     .await;
 
+    let mut execution_state = AttemptExecutionState::default();
+
     for attempt in attempts {
-        let mut req_attempt = req.clone();
-        req_attempt.model = attempt.upstream_model.clone();
-        apply_transform_rules_request(
-            &state,
-            &mut req_attempt,
-            &attempt.provider_transforms,
-            &transform_match_model,
-        )
-        .await?;
-        ensure_stream_usage_requested(&mut req_attempt, attempt.provider_type);
+        execution_state.enter_provider(&attempt.provider_id);
+        if !execution_state.provider_budget_remaining(&attempt) {
+            continue;
+        }
+
         let sse_max_frame_length = effective_sse_max_frame_length(
             &attempt.provider_transforms,
             &auth.transforms,
@@ -60,24 +57,202 @@ pub(super) async fn forward_stream_typed(
             &logical_model,
             downstream,
         );
+        let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
 
-        if requires_buffered_stream {
-            let mut nonstream_req = req_attempt.clone();
-            nonstream_req.stream = Some(false);
-            let upstream_body = encode_request_for_provider(&nonstream_req, &attempt)?;
+        for _channel_attempt in 0..max_channel_attempts {
+            if !execution_state.provider_budget_remaining(&attempt) {
+                break;
+            }
+
+            let attempt_number = execution_state.record_upstream_attempt();
+            let mut req_attempt = req.clone();
+            req_attempt.model = attempt.upstream_model.clone();
+            apply_transform_rules_request(
+                &state,
+                &mut req_attempt,
+                &attempt.provider_transforms,
+                &transform_match_model,
+            )
+            .await?;
+            ensure_stream_usage_requested(&mut req_attempt, attempt.provider_type);
+
+            if requires_buffered_stream {
+                let mut nonstream_req = req_attempt.clone();
+                nonstream_req.stream = Some(false);
+                let upstream_body = encode_request_for_provider(&nonstream_req, &attempt)?;
+                let provider = build_channel_provider_config(&attempt);
+                let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
+                log_outgoing_request_shape(
+                    request_id.as_deref(),
+                    &logical_model,
+                    &nonstream_req.model,
+                    attempt.provider_type,
+                    false,
+                    &path,
+                    &upstream_body,
+                    &nonstream_req,
+                );
+                let call = upstream::call_upstream_with_timeout_and_headers(
+                    client_http(&state),
+                    &provider,
+                    &attempt.api_key,
+                    &path,
+                    &upstream_body,
+                    attempt.request_timeout_ms,
+                    provider_extra_headers(attempt.provider_type),
+                )
+                .await;
+                match call {
+                    Ok(value) => {
+                        update_pending_channel_info(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            true,
+                            request_id.as_deref(),
+                            request_ip.as_deref(),
+                            started_at,
+                        )
+                        .await;
+                        mark_channel_success(&state, &attempt).await;
+                        let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
+                        apply_transform_rules_response(
+                            &state,
+                            &mut resp,
+                            &attempt.provider_transforms,
+                            &logical_model,
+                        )
+                        .await?;
+                        apply_transform_rules_response(
+                            &state,
+                            &mut resp,
+                            &auth.transforms,
+                            &logical_model,
+                        )
+                        .await?;
+                        let charge =
+                            maybe_charge_response(&state, &auth, &attempt, &logical_model, &resp)
+                                .await?;
+                        spawn_request_log(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            resp.usage.clone(),
+                            charge.charge_nano_usd,
+                            charge.billing_breakdown,
+                            true,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            attempt.channel_id.clone(),
+                            Some(started_at.elapsed().as_millis() as u64),
+                            None,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                        );
+                        let (tx, rx) = mpsc::channel::<Event>(64);
+                        let logical_model_for_stream = logical_model.clone();
+                        tokio::spawn(async move {
+                            let tx_err = tx.clone();
+                            let stream_result =
+                                crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
+                                    downstream,
+                                    &logical_model_for_stream,
+                                    &resp,
+                                    sse_max_frame_length,
+                                    tx,
+                                )
+                                .await;
+                            if let Err(err) = stream_result {
+                                tracing::warn!("synthetic stream failed: {}", err.message);
+                                if matches!(
+                                    downstream,
+                                    DownstreamProtocol::ChatCompletions
+                                        | DownstreamProtocol::Responses
+                                ) {
+                                    let _ = tx_err.send(Event::default().data("[DONE]")).await;
+                                }
+                            }
+                        });
+                        return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
+                    }
+                    Err(err) => {
+                        let non_retryable = is_non_retryable_client_error(&err);
+                        let retryable = is_retryable_error(&err);
+                        let retryable_failure_class = classify_retryable_failure(&err);
+                        let app_err = upstream_error_to_app(err);
+                        if non_retryable {
+                            spawn_request_log_error(
+                                &state,
+                                &auth,
+                                &attempt,
+                                &logical_model,
+                                true,
+                                started_at,
+                                request_id.clone(),
+                                request_ip.clone(),
+                                &app_err,
+                                req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                tried_providers,
+                            );
+                            return Err(app_err);
+                        }
+                        if retryable {
+                            tried_providers.push(TriedProvider {
+                                attempt_number,
+                                provider_id: attempt.provider_id.clone(),
+                                channel_id: attempt.channel_id.clone(),
+                                error: app_err.message.clone(),
+                            });
+                            mark_channel_retryable_failure(
+                                &state,
+                                &attempt,
+                                retryable_failure_class,
+                            )
+                            .await;
+                            last_failed_attempt = Some(attempt.clone());
+                            if !is_attempt_channel_healthy(&state, &attempt).await {
+                                break;
+                            }
+                            if execution_state.provider_budget_remaining(&attempt) {
+                                continue;
+                            }
+                            break;
+                        }
+                        spawn_request_log_error(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            true,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            &app_err,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                        );
+                        return Err(app_err);
+                    }
+                }
+            }
+
+            let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
             let provider = build_channel_provider_config(&attempt);
-            let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
+            let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             log_outgoing_request_shape(
                 request_id.as_deref(),
                 &logical_model,
-                &nonstream_req.model,
+                &req_attempt.model,
                 attempt.provider_type,
-                false,
+                true,
                 &path,
                 &upstream_body,
-                &nonstream_req,
+                &req_attempt,
             );
-            let call = upstream::call_upstream_with_timeout_and_headers(
+            let call = upstream::call_upstream_raw_with_timeout_and_headers(
                 client_http(&state),
                 &provider,
                 &attempt.api_key,
@@ -88,7 +263,7 @@ pub(super) async fn forward_stream_typed(
             )
             .await;
             match call {
-                Ok(value) => {
+                Ok(upstream_resp) => {
                     update_pending_channel_info(
                         &state,
                         &auth,
@@ -101,63 +276,193 @@ pub(super) async fn forward_stream_typed(
                     )
                     .await;
                     mark_channel_success(&state, &attempt).await;
-                    let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
-                    apply_transform_rules_response(
-                        &state,
-                        &mut resp,
-                        &attempt.provider_transforms,
-                        &logical_model,
-                    )
-                    .await?;
-                    apply_transform_rules_response(
-                        &state,
-                        &mut resp,
-                        &auth.transforms,
-                        &logical_model,
-                    )
-                    .await?;
-                    let charge =
-                        maybe_charge_response(&state, &auth, &attempt, &logical_model, &resp)
-                            .await?;
-                    spawn_request_log(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        resp.usage.clone(),
-                        charge.charge_nano_usd,
-                        charge.billing_breakdown,
-                        true,
-                        started_at,
-                        request_id.clone(),
-                        request_ip.clone(),
-                        attempt.channel_id.clone(),
-                        Some(started_at.elapsed().as_millis() as u64),
-                        None,
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                        tried_providers,
-                    );
+                    let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
+                    let provider_type = attempt.provider_type;
                     let (tx, rx) = mpsc::channel::<Event>(64);
-                    let logical_model_for_stream = logical_model.clone();
+                    let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
+                        ttfb_ms: None,
+                        usage: None,
+                        terminal: StreamTerminalDiagnostics::default(),
+                    }));
+                    let metrics_for_stream = runtime_metrics.clone();
+                    let state_for_log = state.clone();
+                    let auth_for_log = auth.clone();
+                    let attempt_for_log = attempt.clone();
+                    let model_for_log = logical_model.clone();
+                    let model_for_encode = logical_model.clone();
+                    let model_for_transform = logical_model.clone();
+                    let request_id_for_log = request_id.clone();
+                    let request_ip_for_log = request_ip.clone();
+                    let channel_id_for_log = attempt.channel_id.clone();
+                    let reasoning_effort_for_log =
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone());
+                    let tried_providers_for_log = tried_providers.clone();
+                    let state_for_transform = state.clone();
+                    let provider_rules_for_transform = attempt.provider_transforms.clone();
+                    let auth_rules_for_transform = auth.transforms.clone();
                     tokio::spawn(async move {
                         let tx_err = tx.clone();
-                        let stream_result =
-                            crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                                downstream,
-                                &logical_model_for_stream,
-                                &resp,
-                                sse_max_frame_length,
-                                tx,
+                        let stream_result = {
+                            let (decoded_tx, decoded_rx) =
+                                mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                            let (transformed_tx, transformed_rx) =
+                                mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+
+                            let decode_handle = {
+                                let metrics = metrics_for_stream.clone();
+                                tokio::spawn(async move {
+                                    stream_upstream_to_urp_events(
+                                        &legacy,
+                                        provider_type,
+                                        upstream_resp,
+                                        decoded_tx,
+                                        Some(started_at),
+                                        Some(metrics),
+                                    )
+                                    .await
+                                })
+                            };
+
+                            let transform_handle = tokio::spawn(async move {
+                                transform_urp_stream(
+                                    &state_for_transform,
+                                    decoded_rx,
+                                    transformed_tx,
+                                    &provider_rules_for_transform,
+                                    &auth_rules_for_transform,
+                                    &model_for_transform,
+                                )
+                                .await
+                            });
+
+                            let encode_handle = {
+                                let tx = tx;
+                                tokio::spawn(async move {
+                                    encode_urp_stream(
+                                        downstream,
+                                        transformed_rx,
+                                        tx,
+                                        &model_for_encode,
+                                        sse_max_frame_length,
+                                    )
+                                    .await
+                                })
+                            };
+
+                            let (decode_result, transform_result, encode_result) =
+                                tokio::join!(decode_handle, transform_handle, encode_handle);
+                            decode_result
+                                .unwrap_or_else(|e| {
+                                    Err(AppError::new(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        "task_panic",
+                                        e.to_string(),
+                                    ))
+                                })
+                                .and(transform_result.unwrap_or_else(|e| {
+                                    Err(AppError::new(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        "task_panic",
+                                        e.to_string(),
+                                    ))
+                                }))
+                                .and(encode_result.unwrap_or_else(|e| {
+                                    Err(AppError::new(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        "task_panic",
+                                        e.to_string(),
+                                    ))
+                                }))
+                        };
+
+                        let (ttfb_ms, usage, terminal_diagnostics) = {
+                            let guard = runtime_metrics.lock().await;
+                            (guard.ttfb_ms, guard.usage.clone(), guard.terminal.clone())
+                        };
+
+                        let charge = match usage.as_ref() {
+                            Some(usage_row) => match maybe_charge_usage(
+                                &state_for_log,
+                                &auth_for_log,
+                                &attempt_for_log,
+                                &model_for_log,
+                                usage_row,
                             )
-                            .await;
-                        if let Err(err) = stream_result {
-                            tracing::warn!("synthetic stream failed: {}", err.message);
-                            if matches!(
+                            .await
+                            {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    tracing::error!(
+                                        "failed to charge passthrough stream request: {}",
+                                        err.message
+                                    );
+                                    ChargeComputation::default()
+                                }
+                            },
+                            None => ChargeComputation::default(),
+                        };
+
+                        spawn_request_log(
+                            &state_for_log,
+                            &auth_for_log,
+                            &attempt_for_log,
+                            &model_for_log,
+                            usage,
+                            charge.charge_nano_usd,
+                            charge.billing_breakdown,
+                            true,
+                            started_at,
+                            request_id_for_log,
+                            request_ip_for_log,
+                            channel_id_for_log,
+                            ttfb_ms,
+                            Some(terminal_diagnostics),
+                            reasoning_effort_for_log,
+                            tried_providers_for_log,
+                        );
+
+                        let stream_failed = stream_result.is_err();
+                        if let Err(ref err) = stream_result {
+                            tracing::warn!("stream passthrough adapter failed: {}", err.message);
+                            let error_json = json!({
+                                "error": {
+                                    "message": err.message,
+                                    "type": err.error_type,
+                                    "code": err.code,
+                                    "param": err.param,
+                                }
+                            });
+                            match downstream {
+                                DownstreamProtocol::Responses => {
+                                    let _ = tx_err
+                                        .send(
+                                            Event::default()
+                                                .event("error")
+                                                .data(error_json.to_string()),
+                                        )
+                                        .await;
+                                }
+                                DownstreamProtocol::ChatCompletions => {
+                                    let _ = tx_err
+                                        .send(Event::default().data(error_json.to_string()))
+                                        .await;
+                                }
+                                DownstreamProtocol::AnthropicMessages => {
+                                    let _ = tx_err
+                                        .send(Event::default().event("error").data(
+                                            json!({"type": "error", "error": {"type": err.code, "message": err.message}}).to_string()
+                                        ))
+                                        .await;
+                                }
+                            }
+                        }
+                        if stream_failed
+                            && matches!(
                                 downstream,
                                 DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses
-                            ) {
-                                let _ = tx_err.send(Event::default().data("[DONE]")).await;
-                            }
+                            )
+                        {
+                            let _ = tx_err.send(Event::default().data("[DONE]")).await;
                         }
                     });
                     return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
@@ -185,6 +490,7 @@ pub(super) async fn forward_stream_typed(
                     }
                     if retryable {
                         tried_providers.push(TriedProvider {
+                            attempt_number,
                             provider_id: attempt.provider_id.clone(),
                             channel_id: attempt.channel_id.clone(),
                             error: app_err.message.clone(),
@@ -192,260 +498,14 @@ pub(super) async fn forward_stream_typed(
                         mark_channel_retryable_failure(&state, &attempt, retryable_failure_class)
                             .await;
                         last_failed_attempt = Some(attempt.clone());
-                        continue;
-                    }
-                    spawn_request_log_error(
-                        &state,
-                        &auth,
-                        &attempt,
-                        &logical_model,
-                        true,
-                        started_at,
-                        request_id.clone(),
-                        request_ip.clone(),
-                        &app_err,
-                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                        tried_providers,
-                    );
-                    return Err(app_err);
-                }
-            }
-        }
-
-        let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
-        let provider = build_channel_provider_config(&attempt);
-        let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
-        log_outgoing_request_shape(
-            request_id.as_deref(),
-            &logical_model,
-            &req_attempt.model,
-            attempt.provider_type,
-            true,
-            &path,
-            &upstream_body,
-            &req_attempt,
-        );
-        let call = upstream::call_upstream_raw_with_timeout_and_headers(
-            client_http(&state),
-            &provider,
-            &attempt.api_key,
-            &path,
-            &upstream_body,
-            attempt.request_timeout_ms,
-            provider_extra_headers(attempt.provider_type),
-        )
-        .await;
-        match call {
-            Ok(upstream_resp) => {
-                update_pending_channel_info(
-                    &state,
-                    &auth,
-                    &attempt,
-                    &logical_model,
-                    true,
-                    request_id.as_deref(),
-                    request_ip.as_deref(),
-                    started_at,
-                )
-                .await;
-                mark_channel_success(&state, &attempt).await;
-                let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
-                let provider_type = attempt.provider_type;
-                let (tx, rx) = mpsc::channel::<Event>(64);
-                let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
-                    ttfb_ms: None,
-                    usage: None,
-                    terminal: StreamTerminalDiagnostics::default(),
-                }));
-                let metrics_for_stream = runtime_metrics.clone();
-                let state_for_log = state.clone();
-                let auth_for_log = auth.clone();
-                let attempt_for_log = attempt.clone();
-                let model_for_log = logical_model.clone();
-                let model_for_encode = logical_model.clone();
-                let model_for_transform = logical_model.clone();
-                let request_id_for_log = request_id.clone();
-                let request_ip_for_log = request_ip.clone();
-                let channel_id_for_log = attempt.channel_id.clone();
-                let reasoning_effort_for_log =
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone());
-                let tried_providers_for_log = tried_providers.clone();
-                let state_for_transform = state.clone();
-                let provider_rules_for_transform = attempt.provider_transforms.clone();
-                let auth_rules_for_transform = auth.transforms.clone();
-                tokio::spawn(async move {
-                    let tx_err = tx.clone();
-                    let stream_result = {
-                        let (decoded_tx, decoded_rx) =
-                            mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-                        let (transformed_tx, transformed_rx) =
-                            mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-
-                        let decode_handle = {
-                            let metrics = metrics_for_stream.clone();
-                            tokio::spawn(async move {
-                                stream_upstream_to_urp_events(
-                                    &legacy,
-                                    provider_type,
-                                    upstream_resp,
-                                    decoded_tx,
-                                    Some(started_at),
-                                    Some(metrics),
-                                )
-                                .await
-                            })
-                        };
-
-                        let transform_handle = tokio::spawn(async move {
-                            transform_urp_stream(
-                                &state_for_transform,
-                                decoded_rx,
-                                transformed_tx,
-                                &provider_rules_for_transform,
-                                &auth_rules_for_transform,
-                                &model_for_transform,
-                            )
-                            .await
-                        });
-
-                        let encode_handle = {
-                            let tx = tx;
-                            tokio::spawn(async move {
-                                encode_urp_stream(
-                                    downstream,
-                                    transformed_rx,
-                                    tx,
-                                    &model_for_encode,
-                                    sse_max_frame_length,
-                                )
-                                .await
-                            })
-                        };
-
-                        let (decode_result, transform_result, encode_result) =
-                            tokio::join!(decode_handle, transform_handle, encode_handle);
-                        decode_result
-                            .unwrap_or_else(|e| {
-                                Err(AppError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "task_panic",
-                                    e.to_string(),
-                                ))
-                            })
-                            .and(transform_result.unwrap_or_else(|e| {
-                                Err(AppError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "task_panic",
-                                    e.to_string(),
-                                ))
-                            }))
-                            .and(encode_result.unwrap_or_else(|e| {
-                                Err(AppError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "task_panic",
-                                    e.to_string(),
-                                ))
-                            }))
-                    };
-
-                    let (ttfb_ms, usage, terminal_diagnostics) = {
-                        let guard = runtime_metrics.lock().await;
-                        (guard.ttfb_ms, guard.usage.clone(), guard.terminal.clone())
-                    };
-
-                    let charge = match usage.as_ref() {
-                        Some(usage_row) => match maybe_charge_usage(
-                            &state_for_log,
-                            &auth_for_log,
-                            &attempt_for_log,
-                            &model_for_log,
-                            usage_row,
-                        )
-                        .await
-                        {
-                            Ok(v) => v,
-                            Err(err) => {
-                                tracing::error!(
-                                    "failed to charge passthrough stream request: {}",
-                                    err.message
-                                );
-                                ChargeComputation::default()
-                            }
-                        },
-                        None => ChargeComputation::default(),
-                    };
-
-                    spawn_request_log(
-                        &state_for_log,
-                        &auth_for_log,
-                        &attempt_for_log,
-                        &model_for_log,
-                        usage,
-                        charge.charge_nano_usd,
-                        charge.billing_breakdown,
-                        true,
-                        started_at,
-                        request_id_for_log,
-                        request_ip_for_log,
-                        channel_id_for_log,
-                        ttfb_ms,
-                        Some(terminal_diagnostics),
-                        reasoning_effort_for_log,
-                        tried_providers_for_log,
-                    );
-
-                    let stream_failed = stream_result.is_err();
-                    if let Err(ref err) = stream_result {
-                        tracing::warn!("stream passthrough adapter failed: {}", err.message);
-                        let error_json = json!({
-                            "error": {
-                                "message": err.message,
-                                "type": err.error_type,
-                                "code": err.code,
-                                "param": err.param,
-                            }
-                        });
-                        match downstream {
-                            DownstreamProtocol::Responses => {
-                                let _ = tx_err
-                                    .send(
-                                        Event::default()
-                                            .event("error")
-                                            .data(error_json.to_string()),
-                                    )
-                                    .await;
-                            }
-                            DownstreamProtocol::ChatCompletions => {
-                                let _ = tx_err
-                                    .send(Event::default().data(error_json.to_string()))
-                                    .await;
-                            }
-                            DownstreamProtocol::AnthropicMessages => {
-                                let _ = tx_err.send(
-                                    Event::default().event("error").data(
-                                        json!({"type": "error", "error": {"type": err.code, "message": err.message}}).to_string()
-                                    )
-                                ).await;
-                            }
+                        if !is_attempt_channel_healthy(&state, &attempt).await {
+                            break;
                         }
+                        if execution_state.provider_budget_remaining(&attempt) {
+                            continue;
+                        }
+                        break;
                     }
-                    if stream_failed
-                        && matches!(
-                            downstream,
-                            DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses
-                        )
-                    {
-                        let _ = tx_err.send(Event::default().data("[DONE]")).await;
-                    }
-                });
-                return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
-            }
-            Err(err) => {
-                let non_retryable = is_non_retryable_client_error(&err);
-                let retryable = is_retryable_error(&err);
-                let retryable_failure_class = classify_retryable_failure(&err);
-                let app_err = upstream_error_to_app(err);
-                if non_retryable {
                     spawn_request_log_error(
                         &state,
                         &auth,
@@ -461,44 +521,20 @@ pub(super) async fn forward_stream_typed(
                     );
                     return Err(app_err);
                 }
-                if retryable {
-                    tried_providers.push(TriedProvider {
-                        provider_id: attempt.provider_id.clone(),
-                        channel_id: attempt.channel_id.clone(),
-                        error: app_err.message.clone(),
-                    });
-                    mark_channel_retryable_failure(&state, &attempt, retryable_failure_class).await;
-                    last_failed_attempt = Some(attempt.clone());
-                    continue;
-                }
-                spawn_request_log_error(
-                    &state,
-                    &auth,
-                    &attempt,
-                    &logical_model,
-                    true,
-                    started_at,
-                    request_id.clone(),
-                    request_ip.clone(),
-                    &app_err,
-                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
-                    tried_providers,
-                );
-                return Err(app_err);
             }
         }
     }
     let final_err = AppError::new(
         StatusCode::BAD_GATEWAY,
         "upstream_error",
-        build_exhausted_error_message(&req.model, &tried_providers),
+        build_exhausted_error_message(&logical_model, &tried_providers),
     );
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
             &state,
             &auth,
             &attempt,
-            &req.model,
+            &logical_model,
             true,
             started_at,
             request_id,
@@ -511,7 +547,7 @@ pub(super) async fn forward_stream_typed(
         spawn_request_log_error_no_attempt(
             &state,
             &auth,
-            &req.model,
+            &logical_model,
             true,
             started_at,
             request_id,

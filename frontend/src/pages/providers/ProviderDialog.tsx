@@ -18,6 +18,7 @@ import type {
 	CreateProviderInput,
 	ModelMetadataRecord,
 	Provider,
+	SystemSettings,
 	TransformRegistryItem
 } from '@/lib/api'
 import { createProviderOptimistic, updateProviderOptimistic } from '@/lib/swr'
@@ -80,7 +81,8 @@ export function ProviderDialog({
 	providers,
 	transformRegistry,
 	modelMetadata,
-	reasoningSuffixMap
+	reasoningSuffixMap,
+	settings
 }: {
 	open: boolean
 	onOpenChange: (open: boolean) => void
@@ -90,6 +92,7 @@ export function ProviderDialog({
 	transformRegistry: TransformRegistryItem[]
 	modelMetadata: ModelMetadataRecord[]
 	reasoningSuffixMap: Record<string, string>
+	settings?: SystemSettings
 }) {
 	const { t } = useTranslation()
 	const [loading, setLoading] = useState(false)
@@ -132,6 +135,31 @@ export function ProviderDialog({
 	const pricedModelIdSet = useMemo(
 		() => buildPricedModelIdSet(modelMetadata),
 		[modelMetadata]
+	)
+	const probeGlobalDefaults = useMemo(
+		() => ({
+			active_probe_interval_seconds:
+				settings?.monoize_active_probe_interval_seconds,
+			active_probe_success_threshold:
+				settings?.monoize_active_probe_success_threshold,
+			active_probe_model: settings?.monoize_active_probe_model ?? null
+		}),
+		[settings]
+	)
+	const channelGlobalDefaults = useMemo(
+		() => ({
+			passive_failure_count_threshold:
+				settings?.monoize_passive_failure_count_threshold,
+			passive_window_seconds: settings?.monoize_passive_window_seconds,
+			passive_cooldown_seconds: settings?.monoize_passive_cooldown_seconds,
+			passive_rate_limit_cooldown_seconds:
+				settings?.monoize_passive_rate_limit_cooldown_seconds,
+		}),
+		[settings]
+	)
+	const timeoutGlobalDefaults = useMemo(
+		() => ({ request_timeout_ms: settings?.monoize_request_timeout_ms }),
+		[settings]
 	)
 
 	const closeModelDialog = useCallback(() => {
@@ -484,30 +512,22 @@ export function ProviderDialog({
 			api_key: row.api_key.trim() || undefined,
 			weight: Number(row.weight),
 			enabled: row.enabled,
-			passive_failure_threshold_override:
-				row.passive_failure_threshold_override.trim() ?
-					Number(row.passive_failure_threshold_override)
-				: 	null,
+			passive_failure_count_threshold_override:
+				row.passive_failure_count_threshold_override.trim() ?
+					Number(row.passive_failure_count_threshold_override)
+				: null,
 			passive_cooldown_seconds_override:
 				row.passive_cooldown_seconds_override.trim() ?
 					Number(row.passive_cooldown_seconds_override)
-				: 	null,
+				: null,
 			passive_window_seconds_override:
 				row.passive_window_seconds_override.trim() ?
 					Number(row.passive_window_seconds_override)
-				: 	null,
-			passive_min_samples_override:
-				row.passive_min_samples_override.trim() ?
-					Number(row.passive_min_samples_override)
-				: 	null,
-			passive_failure_rate_threshold_override:
-				row.passive_failure_rate_threshold_override.trim() ?
-					Number(row.passive_failure_rate_threshold_override)
-				: 	null,
+				: null,
 			passive_rate_limit_cooldown_seconds_override:
 				row.passive_rate_limit_cooldown_seconds_override.trim() ?
 					Number(row.passive_rate_limit_cooldown_seconds_override)
-				: 	null
+				: null
 		}))
 
 		for (const channel of channels) {
@@ -528,9 +548,9 @@ export function ProviderDialog({
 				return null
 			}
 			if (
-				channel.passive_failure_threshold_override !== null &&
-				(!Number.isFinite(channel.passive_failure_threshold_override) ||
-					channel.passive_failure_threshold_override < 1)
+				channel.passive_failure_count_threshold_override !== null &&
+				(!Number.isFinite(channel.passive_failure_count_threshold_override) ||
+					channel.passive_failure_count_threshold_override < 1)
 			) {
 				toast.error(t('providers.validationChannelPassiveThreshold'))
 				return null
@@ -549,23 +569,6 @@ export function ProviderDialog({
 					channel.passive_window_seconds_override < 1)
 			) {
 				toast.error(t('providers.validationChannelPassiveWindow'))
-				return null
-			}
-			if (
-				channel.passive_min_samples_override !== null &&
-				(!Number.isFinite(channel.passive_min_samples_override) ||
-					channel.passive_min_samples_override < 1)
-			) {
-				toast.error(t('providers.validationChannelPassiveSamples'))
-				return null
-			}
-			if (
-				channel.passive_failure_rate_threshold_override !== null &&
-				(!Number.isFinite(channel.passive_failure_rate_threshold_override) ||
-					channel.passive_failure_rate_threshold_override < 0.01 ||
-					channel.passive_failure_rate_threshold_override > 1)
-			) {
-				toast.error(t('providers.validationChannelPassiveRate'))
 				return null
 			}
 			if (
@@ -601,7 +604,7 @@ export function ProviderDialog({
 		const requestTimeoutMsOverride =
 			form.request_timeout_ms_override.trim() ?
 				Number(form.request_timeout_ms_override)
-			: 	null
+			: null
 		if (
 			requestTimeoutMsOverride !== null &&
 			(!Number.isFinite(requestTimeoutMsOverride) || requestTimeoutMsOverride < 1)
@@ -628,6 +631,8 @@ export function ProviderDialog({
 			models,
 			channels,
 			max_retries: form.max_retries,
+			channel_max_retries: form.channel_max_retries,
+			per_model_circuit_break: form.per_model_circuit_break,
 			transforms: form.transforms,
 			active_probe_enabled_override: form.active_probe_enabled_override,
 			active_probe_interval_seconds_override:
@@ -637,7 +642,7 @@ export function ProviderDialog({
 			active_probe_model_override:
 				form.active_probe_model_override?.trim() ?
 					form.active_probe_model_override.trim()
-				: 	null,
+				: null,
 			request_timeout_ms_override: requestTimeoutMsOverride,
 			enabled: form.enabled,
 			priority: form.priority
@@ -705,11 +710,13 @@ export function ProviderDialog({
 								<ProbeSettingsSection
 									form={form}
 									t={t}
+									globalDefaults={probeGlobalDefaults}
 									onFormChange={applyFormUpdate}
 								/>
 								<TimeoutEnabledSection
 									form={form}
 									t={t}
+									globalDefaults={timeoutGlobalDefaults}
 									onFormChange={applyFormUpdate}
 								/>
 							</div>
@@ -868,6 +875,7 @@ export function ProviderDialog({
 				t={t}
 				isEdit={isEdit}
 				canDelete={editingChannelIndex !== null}
+				globalDefaults={channelGlobalDefaults}
 				onOpenChange={value => {
 					if (!value) {
 						closeChannelDialog()

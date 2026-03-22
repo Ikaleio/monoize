@@ -1,6 +1,7 @@
 use crate::auth::AuthState;
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
+use crate::handlers::routing::health_key;
 use crate::image_transform_cache::ImageTransformCache;
 use crate::model_registry::ModelRegistry;
 use crate::model_registry_store::ModelRegistryStore;
@@ -199,16 +200,12 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     })?;
 
     let mut monoize_runtime = MonoizeRuntimeConfig::default();
-    monoize_runtime.passive_failure_threshold =
+    monoize_runtime.passive_failure_count_threshold =
         settings_snapshot.monoize_passive_failure_threshold.max(1);
     monoize_runtime.passive_cooldown_seconds =
         settings_snapshot.monoize_passive_cooldown_seconds.max(1);
     monoize_runtime.passive_window_seconds =
         settings_snapshot.monoize_passive_window_seconds.max(1);
-    monoize_runtime.passive_min_samples = settings_snapshot.monoize_passive_min_samples.max(1);
-    monoize_runtime.passive_failure_rate_threshold = settings_snapshot
-        .monoize_passive_failure_rate_threshold
-        .clamp(0.01, 1.0);
     monoize_runtime.passive_rate_limit_cooldown_seconds = settings_snapshot
         .monoize_passive_rate_limit_cooldown_seconds
         .max(1);
@@ -272,20 +269,31 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 for channel in provider.channels {
                     let probe_due = {
                         let guard = probe_health.lock().await;
-                        let state = guard
-                            .get(&channel.id)
-                            .cloned()
-                            .unwrap_or_else(ChannelHealthState::new);
-                        let cooldown_elapsed = if state.healthy {
-                            false
-                        } else if let Some(until) = state.cooldown_until {
-                            now >= until
+                        let states = if provider.per_model_circuit_break {
+                            channel_health_keys(&guard, &channel.id)
+                                .into_iter()
+                                .filter_map(|key| guard.get(&key).cloned())
+                                .collect::<Vec<_>>()
                         } else {
-                            true
+                            vec![guard
+                                .get(&health_key(&channel.id, None))
+                                .cloned()
+                                .unwrap_or_else(ChannelHealthState::new)]
                         };
-                        if !cooldown_elapsed {
+                        let unhealthy_states: Vec<ChannelHealthState> =
+                            states.into_iter().filter(|state| !state.healthy).collect();
+                        if unhealthy_states.is_empty() {
                             false
-                        } else if let Some(last_probe_at) = state.last_probe_at {
+                        } else if !unhealthy_states.iter().any(|state| {
+                            state
+                                .cooldown_until
+                                .map(|until| now >= until)
+                                .unwrap_or(true)
+                        }) {
+                            false
+                        } else if let Some(last_probe_at) =
+                            unhealthy_states.iter().filter_map(|state| state.last_probe_at).max()
+                        {
                             now.saturating_sub(last_probe_at) >= probe_interval_seconds as i64
                         } else {
                             true
@@ -346,23 +354,60 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     );
 
                     let mut guard = probe_health.lock().await;
-                    let state = guard
-                        .entry(channel.id.clone())
-                        .or_insert_with(ChannelHealthState::new);
-                    state.last_probe_at = Some(now);
                     if ok {
-                        state.probe_success_count = state.probe_success_count.saturating_add(1);
-                        if state.probe_success_count >= probe_success_threshold {
-                            state.healthy = true;
-                            state.failure_count = 0;
-                            state.cooldown_until = None;
-                            state.last_success_at = Some(now);
-                            state.probe_success_count = 0;
+                        if provider.per_model_circuit_break {
+                            let keys = channel_health_keys(&guard, &channel.id);
+                            let mut reached_threshold = false;
+                            for key in &keys {
+                                if let Some(state) = guard.get_mut(key) {
+                                    state.last_probe_at = Some(now);
+                                    state.probe_success_count =
+                                        state.probe_success_count.saturating_add(1);
+                                    reached_threshold |=
+                                        state.probe_success_count >= probe_success_threshold;
+                                }
+                            }
+                            if reached_threshold {
+                                for key in keys {
+                                    if let Some(state) = guard.get_mut(&key) {
+                                        clear_channel_health_state(state, now);
+                                    }
+                                }
+                            }
+                        } else {
+                            let state = guard
+                                .entry(health_key(&channel.id, None))
+                                .or_insert_with(ChannelHealthState::new);
+                            state.last_probe_at = Some(now);
+                            state.probe_success_count =
+                                state.probe_success_count.saturating_add(1);
+                            if state.probe_success_count >= probe_success_threshold {
+                                clear_channel_health_state(state, now);
+                            }
                         }
                     } else {
-                        state.healthy = false;
-                        state.probe_success_count = 0;
-                        state.cooldown_until = Some(now + rt_snap.passive_cooldown_seconds as i64);
+                        let cooldown_seconds = channel
+                            .passive_cooldown_seconds_override
+                            .unwrap_or(rt_snap.passive_cooldown_seconds)
+                            .max(1);
+                        if provider.per_model_circuit_break {
+                            for key in channel_health_keys(&guard, &channel.id) {
+                                if let Some(state) = guard.get_mut(&key) {
+                                    state.healthy = false;
+                                    state.probe_success_count = 0;
+                                    state.last_probe_at = Some(now);
+                                    state.cooldown_until = Some(now + cooldown_seconds as i64);
+                                }
+                            }
+                        } else {
+                            let state = guard
+                                .entry(health_key(&channel.id, None))
+                                .or_insert_with(ChannelHealthState::new);
+                            state.healthy = false;
+                            state.probe_success_count = 0;
+                            state.last_probe_at = Some(now);
+                            state.cooldown_until = Some(now + cooldown_seconds as i64);
+                        }
                     }
                 }
             }
@@ -722,6 +767,26 @@ fn resolve_database_dsn() -> String {
                 .filter(|v| !v.trim().is_empty())
         })
         .unwrap_or_else(|| "sqlite://./data/monoize.db".to_string())
+}
+
+fn clear_channel_health_state(state: &mut ChannelHealthState, now: i64) {
+    state.healthy = true;
+    state.cooldown_until = None;
+    state.last_success_at = Some(now);
+    state.probe_success_count = 0;
+    state.last_probe_at = None;
+}
+
+fn channel_health_keys(
+    health: &HashMap<String, ChannelHealthState>,
+    channel_id: &str,
+) -> Vec<String> {
+    let prefix = format!("{channel_id}::");
+    health
+        .keys()
+        .filter(|key| key.as_str() == channel_id || key.starts_with(&prefix))
+        .cloned()
+        .collect()
 }
 
 pub fn build_app(state: AppState) -> Router {

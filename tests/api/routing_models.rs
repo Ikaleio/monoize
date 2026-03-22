@@ -117,14 +117,14 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                passive_failure_threshold_override: Some(1),
+                passive_failure_count_threshold_override: Some(1),
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
-                passive_min_samples_override: None,
-                passive_failure_rate_threshold_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
             }],
             max_retries: -1,
+            channel_max_retries: 0,
+            per_model_circuit_break: false,
             transforms: Vec::new(),
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
@@ -161,8 +161,9 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         "channel should become unhealthy after one transient failure when override threshold=1"
     );
     assert_eq!(
-        state.failure_count, 1,
-        "consecutive failure count should be tracked per channel"
+        state.passive_samples.iter().filter(|sample| sample.failed).count(),
+        1,
+        "one failed sample should be recorded in the passive breaker window"
     );
 }
 
@@ -194,14 +195,14 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
-            passive_failure_threshold_override: None,
+            passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
-            passive_min_samples_override: None,
-            passive_failure_rate_threshold_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
         }],
         max_retries: -1,
+        channel_max_retries: 0,
+        per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
             transform: "set_field".to_string(),
             enabled: true,

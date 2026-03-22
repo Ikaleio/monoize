@@ -1,6 +1,7 @@
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
+use crate::handlers::routing::health_key;
 use crate::monoize_routing::{
     ChannelHealthState, CreateMonoizeProviderInput, MonoizeChannel, MonoizeProvider,
     ReorderProvidersInput, UpdateMonoizeProviderInput,
@@ -16,7 +17,6 @@ use serde_json::{Value, json};
 fn apply_channel_runtime(channel: &mut MonoizeChannel, health: &ChannelHealthState) {
     let now = chrono::Utc::now().timestamp();
     channel._healthy = Some(health.healthy);
-    channel._failure_count = Some(health.failure_count);
     channel._health_status = Some(health.status(now).to_string());
     channel._last_success_at = health
         .last_success_at
@@ -28,7 +28,7 @@ async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) 
     let health = state.channel_health.lock().await;
     for channel in &mut provider.channels {
         let state = health
-            .get(&channel.id)
+            .get(&health_key(&channel.id, None))
             .cloned()
             .unwrap_or_else(ChannelHealthState::new);
         apply_channel_runtime(channel, &state);
@@ -42,7 +42,12 @@ async fn prune_provider_channel_health(state: &AppState, channel_ids: &[String])
     }
     let ids: std::collections::HashSet<&str> = channel_ids.iter().map(String::as_str).collect();
     let mut health = state.channel_health.lock().await;
-    health.retain(|channel_id, _| !ids.contains(channel_id.as_str()));
+    health.retain(|channel_key, _| {
+        !ids.iter().any(|channel_id| {
+            channel_key.as_str() == *channel_id
+                || channel_key.starts_with(&format!("{channel_id}::"))
+        })
+    });
 }
 
 pub(super) fn provider_pricing_model<'a>(
@@ -504,15 +509,32 @@ pub async fn test_channel(
     if ok {
         let now = chrono::Utc::now().timestamp();
         let mut health = state.channel_health.lock().await;
-        let entry = health
-            .entry(channel_id.clone())
-            .or_insert_with(ChannelHealthState::new);
-        entry.healthy = true;
-        entry.failure_count = 0;
-        entry.cooldown_until = None;
-        entry.last_success_at = Some(now);
-        entry.probe_success_count = 0;
-        entry.last_probe_at = None;
+        let prefix = format!("{channel_id}::");
+        let keys: Vec<String> = health
+            .keys()
+            .filter(|key| key.as_str() == channel_id || key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        if keys.is_empty() {
+            let entry = health
+                .entry(health_key(&channel_id, None))
+                .or_insert_with(ChannelHealthState::new);
+            entry.healthy = true;
+            entry.cooldown_until = None;
+            entry.last_success_at = Some(now);
+            entry.probe_success_count = 0;
+            entry.last_probe_at = None;
+        } else {
+            for key in keys {
+                if let Some(entry) = health.get_mut(&key) {
+                    entry.healthy = true;
+                    entry.cooldown_until = None;
+                    entry.last_success_at = Some(now);
+                    entry.probe_success_count = 0;
+                    entry.last_probe_at = None;
+                }
+            }
+        }
     }
 
     let error_msg = if ok {

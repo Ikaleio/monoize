@@ -32,22 +32,28 @@ R-CH-1. Candidate channels are channels with:
 
 - `enabled == true`
 - `weight > 0`
-- runtime state healthy or probing-eligible
+- runtime health state is healthy or probing-eligible for the requested model (respecting per-model health keying when `per_model_circuit_break == true`)
 
 R-CH-2. If no candidate channels exist, router MUST continue to next provider.
 
-R-CH-3. Attempt count per provider MUST be:
+R-CH-3. Total attempt budget per provider MUST be:
 
-- all candidate channels when `max_retries == -1`
-- otherwise `min(max_retries + 1, candidate_channel_count)`
+- unlimited when `max_retries == -1`
+- otherwise `max_retries + 1`
 
-R-CH-4. Channel attempt order MUST use weighted randomization by `weight`.
+R-CH-4. Per-channel attempt limit MUST be `channel_max_retries + 1` (default 1, no intra-channel retry).
 
-R-CH-5. On successful attempt, router MUST return immediately.
+R-CH-5. Channel attempt order MUST use weighted randomization by `weight`.
 
-R-CH-6. If provider attempts are exhausted, router MUST continue to next provider (fail-forward).
+R-CH-6. Execution is nested: for each channel in weighted order, try up to per-channel limit, then move to next channel. All attempts are bounded by total attempt budget.
 
-R-CH-7. If all providers are exhausted, router MUST return `502 upstream_error`.
+R-CH-7. If the channel becomes unhealthy (breaker trips) during intra-channel retries, remaining retries on that channel MUST be aborted immediately.
+
+R-CH-8. On successful attempt, router MUST return immediately.
+
+R-CH-9. If provider attempts are exhausted, router MUST continue to next provider (fail-forward).
+
+R-CH-10. If all providers are exhausted, router MUST return `502 upstream_error`.
 
 ## 4. Model Rewriting
 
@@ -81,21 +87,21 @@ R-STR-2. After first downstream byte emission, channel/provider switching MUST N
 
 ## 7. Health State
 
-R-H-1. Passive threshold and cooldown defaults:
+R-H-1. Passive breaker defaults:
 
-- `failure_threshold = 3`
-- `cooldown_seconds = 60`
+- `failure_count_threshold = 3`
 - `window_seconds = 30`
-- `min_samples = 20`
-- `failure_rate_threshold = 0.6`
+- `cooldown_seconds = 60`
 - `rate_limit_cooldown_seconds = 15`
 
 R-H-2. Effective passive breaker parameters MUST be resolved per channel: channel override first, global setting fallback.
 
-R-H-3. Channel MUST be marked unhealthy when either consecutive transient failures reach `failure_threshold`, or windowed failure rate reaches `failure_rate_threshold` with at least `min_samples`.
+R-H-3. Health state MUST be keyed by `channel_id` when `per_model_circuit_break == false`, or by `(channel_id, logical_model)` when `per_model_circuit_break == true`.
 
-R-H-4. If unhealthy is triggered by retryable `429`, cooldown MUST use `rate_limit_cooldown_seconds`; otherwise use `cooldown_seconds`.
+R-H-4. Health state entry MUST be marked unhealthy when the count of failed samples within the sliding window (`window_seconds`) reaches `failure_count_threshold`.
 
-R-H-5. Unhealthy channels MUST be skipped during cooldown.
+R-H-5. If unhealthy is triggered by retryable `429`, cooldown MUST use `rate_limit_cooldown_seconds`; otherwise use `cooldown_seconds`.
 
-R-H-6. If active probing is enabled, channels whose cooldown elapsed MUST be probed periodically and recover after success threshold is reached.
+R-H-6. Unhealthy state entries MUST be skipped during cooldown.
+
+R-H-7. If active probing is enabled, channels whose cooldown elapsed MUST be probed periodically and recover after success threshold is reached. When `per_model_circuit_break == true`, a successful probe MUST clear all model-specific unhealthy entries for that channel.

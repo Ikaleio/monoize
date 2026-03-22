@@ -30,17 +30,14 @@ A channel record MUST include:
 Runtime-only state MUST be maintained in memory:
 
 - `_healthy: boolean` default `true`
-- `_failure_count: integer` default `0`
 - `_last_success_at: timestamp | null`
 - `_passive_samples: sequence<{at_ts: timestamp, failed: boolean}>` (bounded by time-window pruning)
 
 Channel-level passive breaker override fields MAY be present:
 
-- `passive_failure_threshold_override: integer? (>= 1)`
-- `passive_cooldown_seconds_override: integer? (>= 1)`
+- `passive_failure_count_threshold_override: integer? (>= 1)`
 - `passive_window_seconds_override: integer? (>= 1)`
-- `passive_min_samples_override: integer? (>= 1)`
-- `passive_failure_rate_threshold_override: number? ([0.01, 1.0])`
+- `passive_cooldown_seconds_override: integer? (>= 1)`
 - `passive_rate_limit_cooldown_seconds_override: integer? (>= 1)`
 
 ### 2.2 Model Entry
@@ -58,6 +55,8 @@ A provider record MUST include:
 - `name: string`
 - `enabled: boolean` default `true`
 - `max_retries: integer` default `-1`
+- `channel_max_retries: integer` default `0`
+- `per_model_circuit_break: boolean` default `false`
 - `models: Record<string, ModelEntry>`
 - `channels: Channel[]` where `length >= 1`
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
@@ -87,11 +86,9 @@ The router subsystem MUST support:
 - `request_timeout_ms` default `30000`
 - health-check config with passive and active sections
 - global passive breaker defaults:
-  - `passive_failure_threshold` default `3`
-  - `passive_cooldown_seconds` default `60`
+  - `passive_failure_count_threshold` default `3`
   - `passive_window_seconds` default `30`
-  - `passive_min_samples` default `20`
-  - `passive_failure_rate_threshold` default `0.6`
+  - `passive_cooldown_seconds` default `60`
   - `passive_rate_limit_cooldown_seconds` default `15`
 
 CFG-1. Provider configuration decoding MUST be fail-fast: invalid serialized provider fields (including `transforms`, `created_at`, `updated_at`) MUST return an explicit error and MUST NOT be silently coerced to defaults.
@@ -109,8 +106,10 @@ CFG-4. Global active probe settings MUST be treated as defaults. If global `enab
 
 CFG-5. Passive breaker effective parameters MUST be resolved per channel with precedence:
 
-1. channel override field (if present)
+1. channel override field (if present and non-null)
 2. global passive breaker setting
+
+The resolved parameters are: `passive_failure_count_threshold`, `passive_window_seconds`, `passive_cooldown_seconds`, `passive_rate_limit_cooldown_seconds`.
 
 CFG-6. Each provider MAY define a timeout override field:
 
@@ -139,16 +138,19 @@ RTA-2. Static filter rules for each provider:
 
 RTA-3. Availability pre-check:
 
-- candidate channels are those where `enabled == true`, `weight > 0`, and runtime state is healthy/probing-eligible.
+- candidate channels are those where `enabled == true`, `weight > 0`, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
 - if candidate channels are empty, skip provider.
 
 RTA-4. Execute provider with intra-provider retry:
 
 - rewritten model = `redirect ?? requested model`
 - attempt ordering uses weighted randomization over candidate channels
-- attempts count:
-  - if `max_retries == -1`: up to all candidate channels
-  - else: `min(max_retries + 1, candidate_count)`
+- total attempt budget:
+  - if `max_retries == -1`: unlimited (try all channels × per-channel retries)
+  - else: `max_retries + 1` total attempts across all channels
+- per-channel attempt limit: `channel_max_retries + 1` (default `0 + 1 = 1`, i.e. one attempt per channel with no intra-channel retry)
+- execution is nested: for each channel in weighted order, try up to per-channel limit, then move to next channel, all bounded by total attempt budget
+- if the channel becomes unhealthy (breaker trips) during intra-channel retries, remaining retries on that channel MUST be aborted and execution MUST move to the next channel
 
 RTA-5. Error policy per attempt:
 
@@ -169,31 +171,34 @@ STRM-2. Provider/channel fallback is allowed only before first downstream byte i
 
 ## 6. Health Check
 
-### 6.1 Passive
+### 6.1 Health State Keying
 
-- `failure_threshold` default `3`
-- `cooldown_seconds` default `60`
+HSK-1. When `provider.per_model_circuit_break == false` (default), health state MUST be keyed by `channel_id` alone. All models sharing a channel share one health state.
+
+HSK-2. When `provider.per_model_circuit_break == true`, health state MUST be keyed by `(channel_id, logical_model)` where `logical_model` is the pre-redirect requested model. A circuit break for model A on channel X MUST NOT affect model B on the same channel.
+
+HSK-3. Eligibility filtering (RTA-3) MUST use the appropriate health key when determining whether a channel is healthy for a given request model.
+
+### 6.2 Passive
+
+- `failure_count_threshold` default `3`
 - `window_seconds` default `30`
-- `min_samples` default `20`
-- `failure_rate_threshold` default `0.6`
+- `cooldown_seconds` default `60`
 - `rate_limit_cooldown_seconds` default `15`
 
-PHS-1. For retryable failures classified as transient (`5xx`, timeout/network), channel consecutive failure counter MUST increment by `1`.
+PHS-1. On each retryable failure (transient or rate-limited), the health state entry MUST append one sample `{at_ts: now, failed: true}` and MUST prune samples older than `window_seconds`.
 
-PHS-2. On successful attempts, channel consecutive failure counter MUST reset to `0`.
+PHS-2. On each successful attempt, the health state entry MUST append one sample `{at_ts: now, failed: false}` and MUST prune samples older than `window_seconds`.
 
-PHS-3. Channel MUST append one passive sample per completed attempt (`failed=true/false`) and MUST prune samples older than `window_seconds`.
+PHS-3. The health state entry MUST become unhealthy when the count of failed samples within the current window reaches `failure_count_threshold`.
 
-PHS-4. Channel MUST become unhealthy when either condition is true:
+PHS-4. When unhealthy is triggered by a retryable `429` failure, cooldown MUST use `rate_limit_cooldown_seconds`. Otherwise cooldown MUST use `cooldown_seconds`.
 
-- consecutive transient failures `>= failure_threshold`; or
-- `sample_count >= min_samples` and `failed_count / sample_count >= failure_rate_threshold`.
+PHS-5. Unhealthy state entries MUST NOT receive normal traffic while `now < cooldown_until`.
 
-PHS-5. When unhealthy is triggered by retryable `429`, cooldown MUST use `rate_limit_cooldown_seconds`. Otherwise cooldown MUST use `cooldown_seconds`.
+PHS-6. On successful attempts, the health state entry MUST be restored to healthy immediately: `healthy := true`, `cooldown_until := None`, `probe_success_count := 0`, `last_probe_at := None`.
 
-PHS-6. Unhealthy channel MUST not receive normal traffic while `now < cooldown_until`.
-
-### 6.2 Active
+### 6.3 Active
 
 - `enabled` default `true`
 - `interval_seconds` default `30`
@@ -213,6 +218,10 @@ AHS-5. Probe results MUST be logged at debug level with channel ID, provider nam
 
 AHS-6. Probe scheduler MUST enforce provider-level probe interval independently. A channel that is probe-eligible MUST be skipped until `now - last_probe_at >= effective_interval_seconds`.
 
+AHS-7. When `per_model_circuit_break == true`, a successful active probe MUST clear unhealthy state for ALL model-specific health entries associated with the probed channel. Active probing does not probe each model individually.
+
+AHS-8. Active probe failure cooldown MUST use the effective `passive_cooldown_seconds` for the channel (channel override first, global fallback), consistent with passive breaker resolution.
+
 ## 7. Dashboard Requirements
 
 UI-1. Providers page MUST be provider-centric and editable without exposing `api_key` values in read responses.
@@ -226,3 +235,7 @@ UI-3. Provider editor MUST include:
 - channel table (name, base URL, weight, enabled)
 - channel runtime indicator (healthy/probing/unhealthy)
 - max_retries setting
+- channel_max_retries setting
+- per_model_circuit_break toggle
+
+UI-4. Override fields (provider-level probe overrides, channel-level breaker overrides, timeout override) MUST display the effective global default value as placeholder text when the override is not set. Leaving a field empty MUST mean "inherit from global settings".

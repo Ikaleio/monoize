@@ -206,6 +206,12 @@ interface ChannelEditorDialogProps {
 	t: Translator
 	isEdit: boolean
 	canDelete: boolean
+	globalDefaults?: {
+		passive_failure_count_threshold?: number
+		passive_window_seconds?: number
+		passive_cooldown_seconds?: number
+		passive_rate_limit_cooldown_seconds?: number
+	}
 	onOpenChange: (open: boolean) => void
 	onChange: (patch: Partial<ChannelRow>) => void
 	onBaseUrlChange: (value: string) => void
@@ -220,6 +226,7 @@ export function ChannelEditorDialog({
 	t,
 	isEdit,
 	canDelete,
+	globalDefaults,
 	onOpenChange,
 	onChange,
 	onBaseUrlChange,
@@ -227,6 +234,8 @@ export function ChannelEditorDialog({
 	onDelete,
 	onSave
 }: ChannelEditorDialogProps) {
+	const inheritGlobal = t('providers.inheritGlobal')
+
 	return (
 		<Dialog open={open && channel !== null} onOpenChange={onOpenChange}>
 			<DialogContent className='max-w-lg max-h-[85vh] flex flex-col overflow-hidden'>
@@ -283,27 +292,16 @@ export function ChannelEditorDialog({
 						<Separator />
 
 						<div className='space-y-2'>
-							<Label>{t('providers.passiveFailureThresholdOverride')}</Label>
+							<Label>{t('providers.passiveFailureCountThresholdOverride')}</Label>
 							<Input
 								type='number'
 								min='1'
-								placeholder={t('providers.inheritGlobal')}
-								value={channel.passive_failure_threshold_override}
+								placeholder={`${inheritGlobal} (${globalDefaults?.passive_failure_count_threshold ?? 3})`}
+								value={channel.passive_failure_count_threshold_override}
 								onChange={e =>
-									onChange({ passive_failure_threshold_override: e.target.value })
-								}
-							/>
-						</div>
-
-						<div className='space-y-2'>
-							<Label>{t('providers.passiveCooldownSecondsOverride')}</Label>
-							<Input
-								type='number'
-								min='1'
-								placeholder={t('providers.inheritGlobal')}
-								value={channel.passive_cooldown_seconds_override}
-								onChange={e =>
-									onChange({ passive_cooldown_seconds_override: e.target.value })
+									onChange({
+										passive_failure_count_threshold_override: e.target.value
+									})
 								}
 							/>
 						</div>
@@ -313,7 +311,7 @@ export function ChannelEditorDialog({
 							<Input
 								type='number'
 								min='1'
-								placeholder={t('providers.inheritGlobal')}
+								placeholder={`${inheritGlobal} (${globalDefaults?.passive_window_seconds ?? 30})`}
 								value={channel.passive_window_seconds_override}
 								onChange={e =>
 									onChange({ passive_window_seconds_override: e.target.value })
@@ -322,31 +320,14 @@ export function ChannelEditorDialog({
 						</div>
 
 						<div className='space-y-2'>
-							<Label>{t('providers.passiveMinSamplesOverride')}</Label>
+							<Label>{t('providers.passiveCooldownSecondsOverride')}</Label>
 							<Input
 								type='number'
 								min='1'
-								placeholder={t('providers.inheritGlobal')}
-								value={channel.passive_min_samples_override}
+								placeholder={`${inheritGlobal} (${globalDefaults?.passive_cooldown_seconds ?? 60})`}
+								value={channel.passive_cooldown_seconds_override}
 								onChange={e =>
-									onChange({ passive_min_samples_override: e.target.value })
-								}
-							/>
-						</div>
-
-						<div className='space-y-2'>
-							<Label>{t('providers.passiveFailureRateThresholdOverride')}</Label>
-							<Input
-								type='number'
-								min='0.01'
-								max='1'
-								step='0.01'
-								placeholder={t('providers.inheritGlobal')}
-								value={channel.passive_failure_rate_threshold_override}
-								onChange={e =>
-									onChange({
-										passive_failure_rate_threshold_override: e.target.value
-									})
+									onChange({ passive_cooldown_seconds_override: e.target.value })
 								}
 							/>
 						</div>
@@ -356,7 +337,7 @@ export function ChannelEditorDialog({
 							<Input
 								type='number'
 								min='1'
-								placeholder={t('providers.inheritGlobal')}
+								placeholder={`${inheritGlobal} (${globalDefaults?.passive_rate_limit_cooldown_seconds ?? 15})`}
 								value={channel.passive_rate_limit_cooldown_seconds_override}
 								onChange={e =>
 									onChange({

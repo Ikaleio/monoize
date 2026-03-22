@@ -142,13 +142,9 @@ pub async fn update_settings(
     {
         let mut rt = state.monoize_runtime.write().await;
         rt.request_timeout_ms = updated.monoize_request_timeout_ms.max(1);
-        rt.passive_failure_threshold = updated.monoize_passive_failure_threshold.max(1);
+        rt.passive_failure_count_threshold = updated.monoize_passive_failure_threshold.max(1);
         rt.passive_cooldown_seconds = updated.monoize_passive_cooldown_seconds.max(1);
         rt.passive_window_seconds = updated.monoize_passive_window_seconds.max(1);
-        rt.passive_min_samples = updated.monoize_passive_min_samples.max(1);
-        rt.passive_failure_rate_threshold = updated
-            .monoize_passive_failure_rate_threshold
-            .clamp(0.01, 1.0);
         rt.passive_rate_limit_cooldown_seconds =
             updated.monoize_passive_rate_limit_cooldown_seconds.max(1);
         rt.active_enabled = updated.monoize_active_probe_enabled;

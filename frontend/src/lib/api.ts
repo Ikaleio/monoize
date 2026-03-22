@@ -98,11 +98,9 @@ export interface SystemSettings {
   monoize_active_probe_interval_seconds: number;
   monoize_active_probe_success_threshold: number;
   monoize_active_probe_model?: string | null;
-  monoize_passive_failure_threshold: number;
+  monoize_passive_failure_count_threshold: number;
   monoize_passive_cooldown_seconds: number;
   monoize_passive_window_seconds: number;
-  monoize_passive_min_samples: number;
-  monoize_passive_failure_rate_threshold: number;
   monoize_passive_rate_limit_cooldown_seconds: number;
   monoize_request_timeout_ms: number;
   updated_at: string;
@@ -158,14 +156,11 @@ export interface MonoizeChannel {
   base_url: string;
   weight: number;
   enabled: boolean;
-  passive_failure_threshold_override?: number | null;
+  passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
-  passive_min_samples_override?: number | null;
-  passive_failure_rate_threshold_override?: number | null;
   passive_rate_limit_cooldown_seconds_override?: number | null;
   _healthy?: boolean;
-  _failure_count?: number;
   _last_success_at?: string;
   _health_status?: "healthy" | "probing" | "unhealthy";
 }
@@ -183,6 +178,8 @@ export interface Provider {
   models: Record<string, MonoizeModelEntry>;
   channels: MonoizeChannel[];
   max_retries: number;
+  channel_max_retries: number;
+  per_model_circuit_break: boolean;
   transforms: TransformRuleConfig[];
   api_type_overrides: ApiTypeOverride[];
   active_probe_enabled_override?: boolean | null;
@@ -204,11 +201,9 @@ export interface CreateMonoizeChannelInput {
   api_key?: string;
   weight?: number;
   enabled?: boolean;
-  passive_failure_threshold_override?: number | null;
+  passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
-  passive_min_samples_override?: number | null;
-  passive_failure_rate_threshold_override?: number | null;
   passive_rate_limit_cooldown_seconds_override?: number | null;
 }
 
@@ -218,6 +213,8 @@ export interface CreateProviderInput {
   models: Record<string, MonoizeModelEntry>;
   channels: CreateMonoizeChannelInput[];
   max_retries?: number;
+  channel_max_retries?: number;
+  per_model_circuit_break?: boolean;
   transforms?: TransformRuleConfig[];
   api_type_overrides?: ApiTypeOverride[];
   active_probe_enabled_override?: boolean | null;
@@ -235,6 +232,8 @@ export interface UpdateProviderInput {
   models?: Record<string, MonoizeModelEntry>;
   channels?: CreateMonoizeChannelInput[];
   max_retries?: number;
+  channel_max_retries?: number;
+  per_model_circuit_break?: boolean;
   transforms?: TransformRuleConfig[];
   api_type_overrides?: ApiTypeOverride[];
   active_probe_enabled_override?: boolean | null;

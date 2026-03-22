@@ -18,6 +18,8 @@ A provider object MUST include:
 - `enabled: boolean`
 - `priority: integer` (lower value means earlier routing order)
 - `max_retries: integer` (default `-1`)
+- `channel_max_retries: integer` (default `0`)
+- `per_model_circuit_break: boolean` (default `false`)
 - `models: Record<string, { redirect: string | null, multiplier: number }>`
 - `channels: Channel[]`
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
@@ -39,9 +41,15 @@ A channel object MUST include:
 Runtime projection fields MAY be returned by list/get APIs:
 
 - `_healthy: boolean`
-- `_failure_count: integer`
 - `_last_success_at: RFC3339 | null`
 - `_health_status: enum("healthy","probing","unhealthy")`
+
+Channel-level passive breaker override fields MAY be present:
+
+- `passive_failure_count_threshold_override: integer? (>= 1)`
+- `passive_window_seconds_override: integer? (>= 1)`
+- `passive_cooldown_seconds_override: integer? (>= 1)`
+- `passive_rate_limit_cooldown_seconds_override: integer? (>= 1)`
 
 ## 2. Invariants
 
@@ -81,8 +89,10 @@ All endpoints require an authenticated dashboard admin session.
   - `enabled?: boolean`
   - `priority?: integer`
   - `max_retries?: integer`
+  - `channel_max_retries?: integer`
+  - `per_model_circuit_break?: boolean`
   - `models: Record<string, { redirect: string | null, multiplier: number }>`
-  - `channels: Array<{ id?: string, name: string, base_url: string, api_key: string, weight?: number, enabled?: boolean }>`
+  - `channels: Array<{ id?: string, name: string, base_url: string, api_key: string, weight?: number, enabled?: boolean, passive_failure_count_threshold_override?: integer, passive_window_seconds_override?: integer, passive_cooldown_seconds_override?: integer, passive_rate_limit_cooldown_seconds_override?: integer }>`
   - `api_type_overrides?: Array<{ pattern: string, api_type: "responses" | "chat_completion" | "messages" | "gemini" | "grok" }>`
 - Response: `201` + created provider
 - Errors: `400 invalid_request` when invariants fail
@@ -131,7 +141,7 @@ CP-DEL-1. After a successful provider deletion, runtime `channel_health` entries
   - `grok`: same path/payload shape as `responses`
   - `gemini`: `POST /v1beta/models/{model}:generateContent` with `{ "contents": [{"role":"user","parts":[{"text":"hi"}]}], "generationConfig": {"maxOutputTokens": 16} }` and header `x-goog-api-key: <channel api key>`
   Measures wall-clock time from request start to response completion.
-  - **Health side-effect**: If `success` is `true`, the channel's health state MUST be reset to healthy. Specifically: `healthy := true`, `failure_count := 0`, `cooldown_until := None`, `last_success_at := now`, `probe_success_count := 0`, `last_probe_at := None`. This allows manual testing to recover an unhealthy channel without waiting for the active probe cycle.
+  - **Health side-effect**: If `success` is `true`, the channel's health state MUST be reset to healthy. Specifically: `healthy := true`, `cooldown_until := None`, `last_success_at := now`, `probe_success_count := 0`, `last_probe_at := None`. When `per_model_circuit_break == true`, this MUST clear ALL model-specific health entries for the tested channel. This allows manual testing to recover an unhealthy channel without waiting for the active probe cycle.
 - Response: `200`
   ```json
   {

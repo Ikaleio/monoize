@@ -9,6 +9,13 @@ pub(super) fn client_http(state: &AppState) -> &reqwest::Client {
     &state.http
 }
 
+pub(crate) fn health_key(channel_id: &str, model: Option<&str>) -> String {
+    match model {
+        Some(m) => format!("{channel_id}::{m}"),
+        None => channel_id.to_string(),
+    }
+}
+
 pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
     match provider_type {
         ProviderType::Responses => "/v1/responses",
@@ -195,25 +202,30 @@ pub(super) async fn collect_provider_attempts(
             return;
         }
     }
-    let channels = filter_eligible_channels(state, &provider.channels).await;
+    let channels = filter_eligible_channels(
+        state,
+        &provider.channels,
+        provider.per_model_circuit_break.then_some(urp.model.as_str()),
+    )
+    .await;
     if channels.is_empty() {
         return;
     }
 
     let ordered = weighted_shuffle_channels(channels);
-    let max_attempts = if provider.max_retries == -1 {
-        ordered.len()
+    let provider_attempt_limit = if provider.max_retries == -1 {
+        None
     } else {
-        let retries = provider.max_retries.max(0) as usize;
-        (retries + 1).min(ordered.len())
+        Some(provider.max_retries.max(0) as usize + 1)
     };
+    let max_attempts = provider_attempt_limit.unwrap_or(ordered.len()).min(ordered.len());
     let upstream_model = resolve_upstream_model(&urp.model, model_entry);
 
     let runtime = state.monoize_runtime.read().await;
     for channel in ordered.into_iter().take(max_attempts) {
-        let passive_failure_threshold = channel
-            .passive_failure_threshold_override
-            .unwrap_or(runtime.passive_failure_threshold)
+        let passive_failure_count_threshold = channel
+            .passive_failure_count_threshold_override
+            .unwrap_or(runtime.passive_failure_count_threshold)
             .max(1);
         let passive_cooldown_seconds = channel
             .passive_cooldown_seconds_override
@@ -223,14 +235,6 @@ pub(super) async fn collect_provider_attempts(
             .passive_window_seconds_override
             .unwrap_or(runtime.passive_window_seconds)
             .max(1);
-        let passive_min_samples = channel
-            .passive_min_samples_override
-            .unwrap_or(runtime.passive_min_samples)
-            .max(1);
-        let passive_failure_rate_threshold = channel
-            .passive_failure_rate_threshold_override
-            .unwrap_or(runtime.passive_failure_rate_threshold)
-            .clamp(0.01, 1.0);
         let passive_rate_limit_cooldown_seconds = channel
             .passive_rate_limit_cooldown_seconds_override
             .unwrap_or(runtime.passive_rate_limit_cooldown_seconds)
@@ -250,15 +254,17 @@ pub(super) async fn collect_provider_attempts(
             channel_id: channel.id.clone(),
             base_url: channel.base_url.clone(),
             api_key: channel.api_key.clone(),
+            logical_model: urp.model.clone(),
             upstream_model: upstream_model.clone(),
             model_multiplier: model_entry.multiplier,
             provider_transforms: provider.transforms.clone(),
-            passive_failure_threshold,
+            passive_failure_count_threshold,
             passive_cooldown_seconds,
             passive_window_seconds,
-            passive_min_samples,
-            passive_failure_rate_threshold,
             passive_rate_limit_cooldown_seconds,
+            channel_max_retries: provider.channel_max_retries,
+            per_model_circuit_break: provider.per_model_circuit_break,
+            provider_attempt_limit,
             request_timeout_ms,
         });
     }
@@ -280,6 +286,7 @@ pub(super) fn resolve_upstream_model(
 pub(super) async fn filter_eligible_channels(
     state: &AppState,
     channels: &[crate::monoize_routing::MonoizeChannel],
+    model: Option<&str>,
 ) -> Vec<crate::monoize_routing::MonoizeChannel> {
     let now = now_ts();
     let health = state.channel_health.lock().await;
@@ -288,8 +295,9 @@ pub(super) async fn filter_eligible_channels(
         if !channel.enabled || channel.weight <= 0 {
             continue;
         }
+        let key = health_key(&channel.id, model);
         let channel_health = health
-            .get(&channel.id)
+            .get(&key)
             .cloned()
             .unwrap_or_else(crate::monoize_routing::ChannelHealthState::new);
         let is_candidate = if channel_health.healthy {
@@ -305,6 +313,22 @@ pub(super) async fn filter_eligible_channels(
         }
     }
     out
+}
+
+fn attempt_health_model(attempt: &MonoizeAttempt) -> Option<&str> {
+    attempt
+        .per_model_circuit_break
+        .then_some(attempt.logical_model.as_str())
+}
+
+pub(super) async fn is_attempt_channel_healthy(state: &AppState, attempt: &MonoizeAttempt) -> bool {
+    let health = state.channel_health.lock().await;
+    let key = health_key(&attempt.channel_id, attempt_health_model(attempt));
+    health
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(crate::monoize_routing::ChannelHealthState::new)
+        .healthy
 }
 
 pub(super) fn weighted_shuffle_channels(
@@ -446,12 +470,12 @@ pub(super) fn prune_passive_samples(
 pub(super) async fn mark_channel_success(state: &AppState, attempt: &MonoizeAttempt) {
     let now = now_ts();
     let mut health = state.channel_health.lock().await;
+    let key = health_key(&attempt.channel_id, attempt_health_model(attempt));
     let entry = health
-        .entry(attempt.channel_id.to_string())
+        .entry(key)
         .or_insert_with(crate::monoize_routing::ChannelHealthState::new);
     let was_unhealthy = !entry.healthy;
     entry.healthy = true;
-    entry.failure_count = 0;
     entry.cooldown_until = None;
     entry.last_success_at = Some(now);
     entry.probe_success_count = 0;
@@ -479,12 +503,10 @@ pub(super) async fn mark_channel_retryable_failure(
 ) {
     let now = now_ts();
     let mut health = state.channel_health.lock().await;
+    let key = health_key(&attempt.channel_id, attempt_health_model(attempt));
     let entry = health
-        .entry(attempt.channel_id.to_string())
+        .entry(key)
         .or_insert_with(crate::monoize_routing::ChannelHealthState::new);
-    if failure_class == RetryableFailureClass::Transient {
-        entry.failure_count = entry.failure_count.saturating_add(1);
-    }
     entry
         .passive_samples
         .push_back(crate::monoize_routing::PassiveHealthSample {
@@ -497,18 +519,8 @@ pub(super) async fn mark_channel_retryable_failure(
         attempt.passive_window_seconds,
     );
 
-    let sample_count = entry.passive_samples.len() as u32;
     let failure_samples = entry.passive_samples.iter().filter(|s| s.failed).count() as u32;
-    let failure_rate = if sample_count == 0 {
-        0.0
-    } else {
-        failure_samples as f64 / sample_count as f64
-    };
-    let reached_consecutive = entry.failure_count >= attempt.passive_failure_threshold;
-    let reached_failure_rate = sample_count >= attempt.passive_min_samples
-        && failure_rate >= attempt.passive_failure_rate_threshold;
-
-    if reached_consecutive || reached_failure_rate {
+    if failure_samples >= attempt.passive_failure_count_threshold {
         entry.healthy = false;
         let cooldown_seconds = if failure_class == RetryableFailureClass::RateLimited {
             attempt.passive_rate_limit_cooldown_seconds
@@ -521,9 +533,7 @@ pub(super) async fn mark_channel_retryable_failure(
         tracing::info!(
             channel_id = %attempt.channel_id,
             failure_class = ?failure_class,
-            failure_count = entry.failure_count,
-            sample_count,
-            failure_rate,
+            failed_samples = failure_samples,
             cooldown_seconds,
             "channel marked unhealthy after passive breaker threshold"
         );

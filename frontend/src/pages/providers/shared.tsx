@@ -22,11 +22,9 @@ export type ChannelRow = {
 	api_key: string
 	weight: string
 	enabled: boolean
-	passive_failure_threshold_override: string
+	passive_failure_count_threshold_override: string
 	passive_cooldown_seconds_override: string
 	passive_window_seconds_override: string
-	passive_min_samples_override: string
-	passive_failure_rate_threshold_override: string
 	passive_rate_limit_cooldown_seconds_override: string
 }
 
@@ -36,6 +34,8 @@ export type ProviderForm = {
 	provider_type: ProviderType
 	enabled: boolean
 	max_retries: number
+	channel_max_retries: number
+	per_model_circuit_break: boolean
 	active_probe_enabled_override: boolean | null
 	active_probe_interval_seconds_override: number | null
 	active_probe_success_threshold_override: number | null
@@ -96,6 +96,8 @@ export function emptyForm(): ProviderForm {
 		provider_type: 'chat_completion',
 		enabled: true,
 		max_retries: -1,
+		channel_max_retries: 0,
+		per_model_circuit_break: false,
 		active_probe_enabled_override: null,
 		active_probe_interval_seconds_override: null,
 		active_probe_success_threshold_override: null,
@@ -125,11 +127,9 @@ export function emptyChannelRow(): ChannelRow {
 		api_key: '',
 		weight: '1',
 		enabled: true,
-		passive_failure_threshold_override: '',
+		passive_failure_count_threshold_override: '',
 		passive_cooldown_seconds_override: '',
 		passive_window_seconds_override: '',
-		passive_min_samples_override: '',
-		passive_failure_rate_threshold_override: '',
 		passive_rate_limit_cooldown_seconds_override: ''
 	}
 }
@@ -141,6 +141,8 @@ export function fromProvider(provider: Provider): ProviderForm {
 		provider_type: provider.provider_type,
 		enabled: provider.enabled,
 		max_retries: provider.max_retries,
+		channel_max_retries: provider.channel_max_retries ?? 0,
+		per_model_circuit_break: provider.per_model_circuit_break ?? false,
 		active_probe_enabled_override:
 			provider.active_probe_enabled_override ?? null,
 		active_probe_interval_seconds_override:
@@ -165,9 +167,9 @@ export function fromProvider(provider: Provider): ProviderForm {
 			api_key: '',
 			weight: String(channel.weight),
 			enabled: channel.enabled,
-			passive_failure_threshold_override:
-				channel.passive_failure_threshold_override != null ?
-					String(channel.passive_failure_threshold_override)
+			passive_failure_count_threshold_override:
+				channel.passive_failure_count_threshold_override != null ?
+					String(channel.passive_failure_count_threshold_override)
 				:	'',
 			passive_cooldown_seconds_override:
 				channel.passive_cooldown_seconds_override != null ?
@@ -176,14 +178,6 @@ export function fromProvider(provider: Provider): ProviderForm {
 			passive_window_seconds_override:
 				channel.passive_window_seconds_override != null ?
 					String(channel.passive_window_seconds_override)
-				:	'',
-			passive_min_samples_override:
-				channel.passive_min_samples_override != null ?
-					String(channel.passive_min_samples_override)
-				:	'',
-			passive_failure_rate_threshold_override:
-				channel.passive_failure_rate_threshold_override != null ?
-					String(channel.passive_failure_rate_threshold_override)
 				:	'',
 			passive_rate_limit_cooldown_seconds_override:
 				channel.passive_rate_limit_cooldown_seconds_override != null ?

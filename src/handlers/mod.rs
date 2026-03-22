@@ -311,82 +311,128 @@ pub async fn create_embeddings(
     .await;
     let mut last_failed_attempt: Option<MonoizeAttempt> = None;
     let mut tried_providers: Vec<TriedProvider> = Vec::new();
+    let mut execution_state = AttemptExecutionState::default();
 
     for attempt in attempts {
-        let mut upstream_body = body.clone();
-        if let Some(upstream_obj) = upstream_body.as_object_mut() {
-            upstream_obj.insert(
-                "model".to_string(),
-                Value::String(attempt.upstream_model.clone()),
-            );
+        execution_state.enter_provider(&attempt.provider_id);
+        if !execution_state.provider_budget_remaining(&attempt) {
+            continue;
         }
 
-        let provider = build_channel_provider_config(&attempt);
-        let result = upstream::call_upstream_with_timeout_and_headers(
-            client_http(&state),
-            &provider,
-            &attempt.api_key,
-            "/v1/embeddings",
-            &upstream_body,
-            attempt.request_timeout_ms,
-            &[],
-        )
-        .await;
-
-        match result {
-            Ok(mut value) => {
-                update_pending_channel_info(
-                    &state,
-                    &auth,
-                    &attempt,
-                    &logical_model,
-                    false,
-                    request_id.as_deref(),
-                    request_ip.as_deref(),
-                    started_at,
-                )
-                .await;
-                mark_channel_success(&state, &attempt).await;
-                let usage = parse_usage_from_embeddings_object(&value);
-                let charge = match usage.as_ref() {
-                    Some(usage_row) => {
-                        maybe_charge_usage(&state, &auth, &attempt, &logical_model, usage_row)
-                            .await?
-                    }
-                    None => ChargeComputation::default(),
-                };
-
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert("model".to_string(), Value::String(logical_model.clone()));
-                }
-
-                spawn_request_log(
-                    &state,
-                    &auth,
-                    &attempt,
-                    &logical_model,
-                    usage,
-                    charge.charge_nano_usd,
-                    charge.billing_breakdown,
-                    false,
-                    started_at,
-                    request_id.clone(),
-                    request_ip.clone(),
-                    attempt.channel_id.clone(),
-                    None,
-                    None,
-                    None,
-                    tried_providers,
-                );
-
-                return Ok(Json(value).into_response());
+        let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
+        for _channel_attempt in 0..max_channel_attempts {
+            if !execution_state.provider_budget_remaining(&attempt) {
+                break;
             }
-            Err(err) => {
-                let non_retryable = is_non_retryable_client_error(&err);
-                let retryable = is_retryable_error(&err);
-                let retryable_failure_class = classify_retryable_failure(&err);
-                let app_err = upstream_error_to_app(err);
-                if non_retryable {
+
+            let attempt_number = execution_state.record_upstream_attempt();
+            let mut upstream_body = body.clone();
+            if let Some(upstream_obj) = upstream_body.as_object_mut() {
+                upstream_obj.insert(
+                    "model".to_string(),
+                    Value::String(attempt.upstream_model.clone()),
+                );
+            }
+
+            let provider = build_channel_provider_config(&attempt);
+            let result = upstream::call_upstream_with_timeout_and_headers(
+                client_http(&state),
+                &provider,
+                &attempt.api_key,
+                "/v1/embeddings",
+                &upstream_body,
+                attempt.request_timeout_ms,
+                &[],
+            )
+            .await;
+
+            match result {
+                Ok(mut value) => {
+                    update_pending_channel_info(
+                        &state,
+                        &auth,
+                        &attempt,
+                        &logical_model,
+                        false,
+                        request_id.as_deref(),
+                        request_ip.as_deref(),
+                        started_at,
+                    )
+                    .await;
+                    mark_channel_success(&state, &attempt).await;
+                    let usage = parse_usage_from_embeddings_object(&value);
+                    let charge = match usage.as_ref() {
+                        Some(usage_row) => {
+                            maybe_charge_usage(&state, &auth, &attempt, &logical_model, usage_row)
+                                .await?
+                        }
+                        None => ChargeComputation::default(),
+                    };
+
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("model".to_string(), Value::String(logical_model.clone()));
+                    }
+
+                    spawn_request_log(
+                        &state,
+                        &auth,
+                        &attempt,
+                        &logical_model,
+                        usage,
+                        charge.charge_nano_usd,
+                        charge.billing_breakdown,
+                        false,
+                        started_at,
+                        request_id.clone(),
+                        request_ip.clone(),
+                        attempt.channel_id.clone(),
+                        None,
+                        None,
+                        None,
+                        tried_providers,
+                    );
+
+                    return Ok(Json(value).into_response());
+                }
+                Err(err) => {
+                    let non_retryable = is_non_retryable_client_error(&err);
+                    let retryable = is_retryable_error(&err);
+                    let retryable_failure_class = classify_retryable_failure(&err);
+                    let app_err = upstream_error_to_app(err);
+                    if non_retryable {
+                        spawn_request_log_error(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            false,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            &app_err,
+                            None,
+                            tried_providers,
+                        );
+                        return Err(app_err);
+                    }
+                    if retryable {
+                        tried_providers.push(TriedProvider {
+                            attempt_number,
+                            provider_id: attempt.provider_id.clone(),
+                            channel_id: attempt.channel_id.clone(),
+                            error: app_err.message.clone(),
+                        });
+                        mark_channel_retryable_failure(&state, &attempt, retryable_failure_class)
+                            .await;
+                        last_failed_attempt = Some(attempt.clone());
+                        if !is_attempt_channel_healthy(&state, &attempt).await {
+                            break;
+                        }
+                        if execution_state.provider_budget_remaining(&attempt) {
+                            continue;
+                        }
+                        break;
+                    }
                     spawn_request_log_error(
                         &state,
                         &auth,
@@ -402,30 +448,6 @@ pub async fn create_embeddings(
                     );
                     return Err(app_err);
                 }
-                if retryable {
-                    tried_providers.push(TriedProvider {
-                        provider_id: attempt.provider_id.clone(),
-                        channel_id: attempt.channel_id.clone(),
-                        error: app_err.message.clone(),
-                    });
-                    mark_channel_retryable_failure(&state, &attempt, retryable_failure_class).await;
-                    last_failed_attempt = Some(attempt.clone());
-                    continue;
-                }
-                spawn_request_log_error(
-                    &state,
-                    &auth,
-                    &attempt,
-                    &logical_model,
-                    false,
-                    started_at,
-                    request_id.clone(),
-                    request_ip.clone(),
-                    &app_err,
-                    None,
-                    tried_providers,
-                );
-                return Err(app_err);
             }
         }
     }
@@ -516,15 +538,17 @@ struct MonoizeAttempt {
     channel_id: String,
     base_url: String,
     api_key: String,
+    logical_model: String,
     upstream_model: String,
     model_multiplier: f64,
     provider_transforms: Vec<TransformRuleConfig>,
-    passive_failure_threshold: u32,
+    passive_failure_count_threshold: u32,
     passive_cooldown_seconds: u64,
     passive_window_seconds: u64,
-    passive_min_samples: u32,
-    passive_failure_rate_threshold: f64,
     passive_rate_limit_cooldown_seconds: u64,
+    channel_max_retries: i32,
+    per_model_circuit_break: bool,
+    provider_attempt_limit: Option<usize>,
     request_timeout_ms: u64,
 }
 
@@ -568,9 +592,40 @@ async fn resolve_billable_pricing(
 
 #[derive(Clone, Debug, serde::Serialize)]
 struct TriedProvider {
+    attempt_number: u32,
     provider_id: String,
     channel_id: String,
     error: String,
+}
+
+#[derive(Default)]
+struct AttemptExecutionState {
+    current_provider_id: Option<String>,
+    provider_attempts_used: usize,
+    next_attempt_number: u32,
+}
+
+impl AttemptExecutionState {
+    fn enter_provider(&mut self, provider_id: &str) {
+        if self.current_provider_id.as_deref() == Some(provider_id) {
+            return;
+        }
+        self.current_provider_id = Some(provider_id.to_string());
+        self.provider_attempts_used = 0;
+    }
+
+    fn provider_budget_remaining(&self, attempt: &MonoizeAttempt) -> bool {
+        attempt
+            .provider_attempt_limit
+            .map(|limit| self.provider_attempts_used < limit)
+            .unwrap_or(true)
+    }
+
+    fn record_upstream_attempt(&mut self) -> u32 {
+        self.provider_attempts_used = self.provider_attempts_used.saturating_add(1);
+        self.next_attempt_number = self.next_attempt_number.saturating_add(1);
+        self.next_attempt_number
+    }
 }
 
 #[derive(Clone, Copy)]
