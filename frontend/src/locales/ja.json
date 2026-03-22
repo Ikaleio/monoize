@@ -350,6 +350,7 @@
 		"emptyStateDesc": "最初のプロバイダーを作成して、上流 API へのリクエストルーティングを開始しましょう。",
 		"validationNameRequired": "プロバイダー名は必須です",
 		"validationModelRequired": "モデル名は必須です",
+		"validationDuplicateModel": "モデル名は一意である必要があります",
 		"validationMultiplier": "モデル倍率は 0 以上である必要があります",
 		"validationAtLeastOneModel": "少なくとも 1 つのモデルが必要です",
 		"validationChannelName": "Channel 名は必須です",

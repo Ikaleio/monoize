@@ -350,6 +350,7 @@
 		"emptyStateDesc": "建立您的第一個供應商，開始將請求路由至上游 API。",
 		"validationNameRequired": "供應商名稱為必填",
 		"validationModelRequired": "模型名稱為必填",
+		"validationDuplicateModel": "模型名稱必須唯一",
 		"validationMultiplier": "模型倍率不可為負數",
 		"validationAtLeastOneModel": "至少需要一個模型",
 		"validationChannelName": "Channel 名稱為必填",

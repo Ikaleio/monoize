@@ -21,6 +21,42 @@ const env = {
   MONOIZE_LISTEN: `127.0.0.1:${monoizePort}`,
 };
 
+type SpawnedProcess = ReturnType<typeof Bun.spawn>;
+
+interface RegisterResponseBody {
+  token?: string;
+  user?: {
+    id?: string;
+  };
+}
+
+interface ApiKeyResponseBody {
+  key?: string;
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function parseRegisterResponse(value: unknown): RegisterResponseBody {
+  const root = asObject(value);
+  const user = asObject(root?.user);
+  return {
+    token: typeof root?.token === "string" ? root.token : undefined,
+    user: user ? { id: typeof user.id === "string" ? user.id : undefined } : undefined,
+  };
+}
+
+function parseApiKeyResponse(value: unknown): ApiKeyResponseBody {
+  const root = asObject(value);
+  return {
+    key: typeof root?.key === "string" ? root.key : undefined,
+  };
+}
+
 async function waitFor(url: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -82,7 +118,7 @@ async function bootstrapMonoizeRouting() {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username: adminUsername, password: adminPassword }),
   });
-  const registerBody = await registerResp.json();
+  const registerBody = parseRegisterResponse(await registerResp.json());
   const sessionToken = registerBody?.token;
   const userId = registerBody?.user?.id;
   if (!registerResp.ok || typeof sessionToken !== "string" || typeof userId !== "string") {
@@ -109,7 +145,7 @@ async function bootstrapMonoizeRouting() {
     },
     body: JSON.stringify({ name: "sdk-forward-key" }),
   });
-  const apiKeyBody = await apiKeyResp.json();
+  const apiKeyBody = parseApiKeyResponse(await apiKeyResp.json());
   const forwardApiKey = apiKeyBody?.key;
   if (!apiKeyResp.ok || typeof forwardApiKey !== "string") {
     throw new Error(`Failed to create forwarding key: ${JSON.stringify(apiKeyBody)}`);
@@ -145,7 +181,7 @@ async function bootstrapMonoizeRouting() {
 
 async function main() {
   const mockProcess = await ensureMockServer();
-  let monoizeProcess: Bun.ChildProcess | null = null;
+  let monoizeProcess: SpawnedProcess | null = null;
   try {
     monoizeProcess = await startMonoizeServer();
     const forwardApiKey = await bootstrapMonoizeRouting();

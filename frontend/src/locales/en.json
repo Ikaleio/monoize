@@ -350,6 +350,7 @@
 		"emptyStateDesc": "Create your first provider to start routing requests to upstream APIs.",
 		"validationNameRequired": "Provider name is required",
 		"validationModelRequired": "Model name is required",
+		"validationDuplicateModel": "Model names must be unique",
 		"validationMultiplier": "Model multiplier must be >= 0",
 		"validationAtLeastOneModel": "At least one model is required",
 		"validationChannelName": "Channel name is required",

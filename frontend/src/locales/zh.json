@@ -350,6 +350,7 @@
 		"emptyStateDesc": "创建您的第一个提供者，开始将请求路由到上游 API。",
 		"validationNameRequired": "提供者名称为必填项",
 		"validationModelRequired": "模型名称为必填项",
+		"validationDuplicateModel": "模型名称必须唯一",
 		"validationMultiplier": "模型倍率不能为负数",
 		"validationAtLeastOneModel": "至少需要一个模型",
 		"validationChannelName": "通道名称为必填项",

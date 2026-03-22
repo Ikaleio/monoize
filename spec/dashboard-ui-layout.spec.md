@@ -133,6 +133,8 @@ PL15. In provider editor model section, each model row MUST be rendered as a com
 - Clicking "Add Model" MUST open a draft model dialog without appending a row immediately.
 - A new model row MUST be appended only when user confirms via dialog save action.
 - Closing/canceling the add-model dialog without saving MUST NOT create an empty model row.
+- Editing an existing model row MUST operate on a draft copy. Closing/canceling the edit dialog without saving MUST leave the underlying row unchanged.
+- The provider editor UI MUST reject duplicate logical model names before save or final submit. It MUST NOT silently overwrite an earlier model row when two rows use the same trimmed model name.
 
 PL16. Model tag bracket details in provider card/editor MUST follow omission rules:
 
@@ -169,6 +171,7 @@ PL21. Unpriced models on the Providers page MUST be visually highlighted at mode
 
 - Unpriced check target MUST be `redirect` model when `redirect` is non-empty; otherwise the logical model key.
 - A model is treated as unpriced when pricing metadata does not provide both input and output token prices for that target model.
+- A pricing value of `0` MUST be treated as present pricing metadata, not as missing metadata.
 - Unpriced model badges MUST use a yellow warning style distinct from normal model badges.
 
 PL22. In the provider unsaved-changes confirmation dialog ("Save Changes?"), the "Discard" action MUST use destructive red hover styling.
@@ -181,6 +184,14 @@ PL23. Provider channel edit dialog MUST expose channel-level passive breaker ove
 - `passive_min_samples_override`
 - `passive_failure_rate_threshold_override`
 - `passive_rate_limit_cooldown_seconds_override`
+
+PL23a. Provider channel edit dialog MUST operate on a draft copy of the selected channel row.
+
+- Clicking "Add Channel" MUST open a draft channel dialog without appending a row immediately.
+- A new channel row MUST be appended only when user confirms via dialog save action.
+- Closing/canceling the add-channel dialog without saving MUST NOT create an empty channel row.
+- Editing an existing channel row MUST NOT mutate the underlying list row until user confirms via dialog save action.
+- Closing/canceling the existing-channel dialog without saving MUST leave the underlying row unchanged.
 
 ## 3. Playground Page
 
