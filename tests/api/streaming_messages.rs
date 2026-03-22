@@ -525,6 +525,8 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
             }],
             max_retries: -1,
             channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "plaintext_reasoning_to_summary".to_string(),

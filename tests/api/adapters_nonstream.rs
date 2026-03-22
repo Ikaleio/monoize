@@ -627,6 +627,8 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
             }],
             max_retries: -1,
             channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![
                 monoize::transforms::TransformRuleConfig {

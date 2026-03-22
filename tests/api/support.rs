@@ -1977,6 +1977,8 @@ async fn create_test_provider(
             }],
             max_retries: -1,
             channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: Vec::new(),
             active_probe_enabled_override: None,

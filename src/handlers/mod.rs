@@ -320,7 +320,7 @@ pub async fn create_embeddings(
         }
 
         let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
-        for _channel_attempt in 0..max_channel_attempts {
+        for channel_attempt in 0..max_channel_attempts {
             if !execution_state.provider_budget_remaining(&attempt) {
                 break;
             }
@@ -429,6 +429,9 @@ pub async fn create_embeddings(
                             break;
                         }
                         if execution_state.provider_budget_remaining(&attempt) {
+                            if channel_attempt + 1 < max_channel_attempts {
+                                maybe_sleep_before_channel_retry(&attempt).await;
+                            }
                             continue;
                         }
                         break;
@@ -547,9 +550,21 @@ struct MonoizeAttempt {
     passive_window_seconds: u64,
     passive_rate_limit_cooldown_seconds: u64,
     channel_max_retries: i32,
+    channel_retry_interval_ms: u64,
+    circuit_breaker_enabled: bool,
     per_model_circuit_break: bool,
     provider_attempt_limit: Option<usize>,
     request_timeout_ms: u64,
+}
+
+async fn maybe_sleep_before_channel_retry(attempt: &MonoizeAttempt) {
+    if attempt.channel_retry_interval_ms == 0 {
+        return;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(
+        attempt.channel_retry_interval_ms,
+    ))
+    .await;
 }
 
 async fn get_model_pricing_or_internal_error(

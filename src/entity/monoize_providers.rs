@@ -12,6 +12,8 @@ pub struct Model {
     pub provider_type: String,
     pub max_retries: i32,
     pub channel_max_retries: i32,
+    pub channel_retry_interval_ms: i32,
+    pub circuit_breaker_enabled: i32,
     pub per_model_circuit_break: i32,
     #[sea_orm(column_type = "Text")]
     pub transforms: String,

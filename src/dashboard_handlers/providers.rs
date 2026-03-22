@@ -25,6 +25,12 @@ fn apply_channel_runtime(channel: &mut MonoizeChannel, health: &ChannelHealthSta
 }
 
 async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) -> MonoizeProvider {
+    if !provider.circuit_breaker_enabled {
+        for channel in &mut provider.channels {
+            apply_channel_runtime(channel, &ChannelHealthState::new());
+        }
+        return provider;
+    }
     let health = state.channel_health.lock().await;
     for channel in &mut provider.channels {
         let state = health
@@ -224,6 +230,10 @@ pub async fn update_provider(
         .map(|ch| ch.id.clone())
         .collect();
     prune_provider_channel_health(&state, &removed_channel_ids).await;
+    if !provider.circuit_breaker_enabled {
+        let all_channel_ids: Vec<String> = provider.channels.iter().map(|ch| ch.id.clone()).collect();
+        prune_provider_channel_health(&state, &all_channel_ids).await;
+    }
     for id in &removed_channel_ids {
         state.name_caches.channels.remove(id);
     }

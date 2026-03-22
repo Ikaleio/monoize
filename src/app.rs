@@ -251,6 +251,9 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             let now = chrono::Utc::now().timestamp();
             let rt_snap = probe_runtime.read().await.clone();
             for provider in providers {
+                if !provider.circuit_breaker_enabled {
+                    continue;
+                }
                 let active_enabled = provider
                     .active_probe_enabled_override
                     .unwrap_or(rt_snap.active_enabled);

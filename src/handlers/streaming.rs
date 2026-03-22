@@ -59,7 +59,7 @@ pub(super) async fn forward_stream_typed(
         );
         let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
 
-        for _channel_attempt in 0..max_channel_attempts {
+        for channel_attempt in 0..max_channel_attempts {
             if !execution_state.provider_budget_remaining(&attempt) {
                 break;
             }
@@ -217,6 +217,9 @@ pub(super) async fn forward_stream_typed(
                                 break;
                             }
                             if execution_state.provider_budget_remaining(&attempt) {
+                                if channel_attempt + 1 < max_channel_attempts {
+                                    maybe_sleep_before_channel_retry(&attempt).await;
+                                }
                                 continue;
                             }
                             break;
@@ -502,6 +505,9 @@ pub(super) async fn forward_stream_typed(
                             break;
                         }
                         if execution_state.provider_budget_remaining(&attempt) {
+                            if channel_attempt + 1 < max_channel_attempts {
+                                maybe_sleep_before_channel_retry(&attempt).await;
+                            }
                             continue;
                         }
                         break;

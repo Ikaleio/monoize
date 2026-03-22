@@ -43,17 +43,21 @@ R-CH-3. Total attempt budget per provider MUST be:
 
 R-CH-4. Per-channel attempt limit MUST be `channel_max_retries + 1` (default 1, no intra-channel retry).
 
-R-CH-5. Channel attempt order MUST use weighted randomization by `weight`.
+R-CH-5. Between same-channel retry attempts, the router MUST sleep for `channel_retry_interval_ms` milliseconds. If `channel_retry_interval_ms == 0`, no sleep is inserted.
 
-R-CH-6. Execution is nested: for each channel in weighted order, try up to per-channel limit, then move to next channel. All attempts are bounded by total attempt budget.
+R-CH-6. Channel attempt order MUST use weighted randomization by `weight`.
 
-R-CH-7. If the channel becomes unhealthy (breaker trips) during intra-channel retries, remaining retries on that channel MUST be aborted immediately.
+R-CH-7. Execution is nested: for each channel in weighted order, try up to per-channel limit, then move to next channel. All attempts are bounded by total attempt budget.
 
-R-CH-8. On successful attempt, router MUST return immediately.
+R-CH-8. If the channel becomes unhealthy (breaker trips) during intra-channel retries, remaining retries on that channel MUST be aborted immediately.
 
-R-CH-9. If provider attempts are exhausted, router MUST continue to next provider (fail-forward).
+R-CH-9. On successful attempt, router MUST return immediately.
 
-R-CH-10. If all providers are exhausted, router MUST return `502 upstream_error`.
+R-CH-10. If provider attempts are exhausted, router MUST continue to next provider (fail-forward).
+
+R-CH-11. If all providers are exhausted, router MUST return `502 upstream_error`.
+
+R-CH-12. If `provider.circuit_breaker_enabled == false`, routing MUST ignore runtime health state for that provider and retryable failures MUST NOT trip passive circuit breaking.
 
 ## 4. Model Rewriting
 
@@ -105,3 +109,5 @@ R-H-5. If unhealthy is triggered by retryable `429`, cooldown MUST use `rate_lim
 R-H-6. Unhealthy state entries MUST be skipped during cooldown.
 
 R-H-7. If active probing is enabled, channels whose cooldown elapsed MUST be probed periodically and recover after success threshold is reached. When `per_model_circuit_break == true`, a successful probe MUST clear all model-specific unhealthy entries for that channel.
+
+R-H-8. If `provider.circuit_breaker_enabled == false`, active probing MUST be skipped for that provider.

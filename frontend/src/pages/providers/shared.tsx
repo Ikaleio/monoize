@@ -35,6 +35,8 @@ export type ProviderForm = {
 	enabled: boolean
 	max_retries: number
 	channel_max_retries: number
+	channel_retry_interval_ms: number
+	circuit_breaker_enabled: boolean
 	per_model_circuit_break: boolean
 	active_probe_enabled_override: boolean | null
 	active_probe_interval_seconds_override: number | null
@@ -97,6 +99,8 @@ export function emptyForm(): ProviderForm {
 		enabled: true,
 		max_retries: -1,
 		channel_max_retries: 0,
+		channel_retry_interval_ms: 0,
+		circuit_breaker_enabled: true,
 		per_model_circuit_break: false,
 		active_probe_enabled_override: null,
 		active_probe_interval_seconds_override: null,
@@ -142,6 +146,8 @@ export function fromProvider(provider: Provider): ProviderForm {
 		enabled: provider.enabled,
 		max_retries: provider.max_retries,
 		channel_max_retries: provider.channel_max_retries ?? 0,
+		channel_retry_interval_ms: provider.channel_retry_interval_ms ?? 0,
+		circuit_breaker_enabled: provider.circuit_breaker_enabled ?? true,
 		per_model_circuit_break: provider.per_model_circuit_break ?? false,
 		active_probe_enabled_override:
 			provider.active_probe_enabled_override ?? null,

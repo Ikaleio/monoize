@@ -19,6 +19,8 @@ A provider object MUST include:
 - `priority: integer` (lower value means earlier routing order)
 - `max_retries: integer` (default `-1`)
 - `channel_max_retries: integer` (default `0`)
+- `channel_retry_interval_ms: integer` (default `0`)
+- `circuit_breaker_enabled: boolean` (default `true`)
 - `per_model_circuit_break: boolean` (default `false`)
 - `models: Record<string, { redirect: string | null, multiplier: number }>`
 - `channels: Channel[]`
@@ -90,6 +92,8 @@ All endpoints require an authenticated dashboard admin session.
   - `priority?: integer`
   - `max_retries?: integer`
   - `channel_max_retries?: integer`
+  - `channel_retry_interval_ms?: integer`
+  - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
   - `models: Record<string, { redirect: string | null, multiplier: number }>`
   - `channels: Array<{ id?: string, name: string, base_url: string, api_key: string, weight?: number, enabled?: boolean, passive_failure_count_threshold_override?: integer, passive_window_seconds_override?: integer, passive_cooldown_seconds_override?: integer, passive_rate_limit_cooldown_seconds_override?: integer }>`

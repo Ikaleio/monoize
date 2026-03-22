@@ -56,6 +56,8 @@ A provider record MUST include:
 - `enabled: boolean` default `true`
 - `max_retries: integer` default `-1`
 - `channel_max_retries: integer` default `0`
+- `channel_retry_interval_ms: integer` default `0`
+- `circuit_breaker_enabled: boolean` default `true`
 - `per_model_circuit_break: boolean` default `false`
 - `models: Record<string, ModelEntry>`
 - `channels: Channel[]` where `length >= 1`
@@ -139,6 +141,7 @@ RTA-2. Static filter rules for each provider:
 RTA-3. Availability pre-check:
 
 - candidate channels are those where `enabled == true`, `weight > 0`, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
+- if `provider.circuit_breaker_enabled == false`, runtime health state MUST be ignored for normal routing eligibility. Disabled/zero-weight channels are still excluded.
 - if candidate channels are empty, skip provider.
 
 RTA-4. Execute provider with intra-provider retry:
@@ -151,6 +154,7 @@ RTA-4. Execute provider with intra-provider retry:
 - per-channel attempt limit: `channel_max_retries + 1` (default `0 + 1 = 1`, i.e. one attempt per channel with no intra-channel retry)
 - execution is nested: for each channel in weighted order, try up to per-channel limit, then move to next channel, all bounded by total attempt budget
 - if the channel becomes unhealthy (breaker trips) during intra-channel retries, remaining retries on that channel MUST be aborted and execution MUST move to the next channel
+- between intra-channel retry attempts on the same channel, the router MUST sleep for `channel_retry_interval_ms` milliseconds. If `channel_retry_interval_ms == 0` (default), no sleep is inserted.
 
 RTA-5. Error policy per attempt:
 
@@ -158,6 +162,8 @@ RTA-5. Error policy per attempt:
 - retryable errors (`429`, `5xx`, timeout, connection refused) MUST advance to next channel attempt
 
 RTA-6. On retryable attempt failure, channel passive health state MUST be updated.
+
+RTA-6a. If `provider.circuit_breaker_enabled == false`, retryable attempt failures MUST NOT trip passive health state and MUST NOT mark the channel unhealthy.
 
 RTA-7. If all attempts in provider fail, router MUST continue with next provider.
 
@@ -174,6 +180,8 @@ STRM-2. Provider/channel fallback is allowed only before first downstream byte i
 ### 6.1 Health State Keying
 
 HSK-1. When `provider.per_model_circuit_break == false` (default), health state MUST be keyed by `channel_id` alone. All models sharing a channel share one health state.
+
+HSK-1a. When `provider.circuit_breaker_enabled == false`, health state MAY still exist in memory from prior configuration, but routing MUST ignore it and passive updates MUST NOT create new unhealthy state for that provider.
 
 HSK-2. When `provider.per_model_circuit_break == true`, health state MUST be keyed by `(channel_id, logical_model)` where `logical_model` is the pre-redirect requested model. A circuit break for model A on channel X MUST NOT affect model B on the same channel.
 
@@ -208,6 +216,8 @@ PHS-6. On successful attempts, the health state entry MUST be restored to health
 
 AHS-1. Active probing MUST target unhealthy channels whose cooldown has elapsed.
 
+AHS-1a. If `provider.circuit_breaker_enabled == false`, active probing MUST be skipped for that provider.
+
 AHS-2. Channel MUST return to healthy only after reaching success threshold.
 
 AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using `probe_model` when configured; otherwise it MUST use the provider's first model from its model map. If no model can be resolved, probing for that provider/channel MUST be skipped.
@@ -236,6 +246,10 @@ UI-3. Provider editor MUST include:
 - channel runtime indicator (healthy/probing/unhealthy)
 - max_retries setting
 - channel_max_retries setting
+- channel_retry_interval_ms setting
+- circuit_breaker_enabled toggle
 - per_model_circuit_break toggle
 
 UI-4. Override fields (provider-level probe overrides, channel-level breaker overrides, timeout override) MUST display the effective global default value as placeholder text when the override is not set. Leaving a field empty MUST mean "inherit from global settings".
+
+UI-5. Nullable boolean overrides MAY use a switch plus a separate reset-to-inherit affordance instead of a three-value selector. When inherited, the UI MUST display the effective global boolean value.

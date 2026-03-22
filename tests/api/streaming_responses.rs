@@ -702,6 +702,8 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         }],
         max_retries: -1,
         channel_max_retries: 0,
+        channel_retry_interval_ms: 0,
+        circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
             transform: "strip_reasoning".to_string(),
@@ -782,6 +784,8 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         }],
         max_retries: -1,
         channel_max_retries: 0,
+        channel_retry_interval_ms: 0,
+        circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
             transform: "split_sse_frames".to_string(),
@@ -889,6 +893,8 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             }],
             max_retries: -1,
             channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "plaintext_reasoning_to_summary".to_string(),
@@ -968,6 +974,8 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             }],
             max_retries: -1,
             channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![
                 monoize::transforms::TransformRuleConfig {

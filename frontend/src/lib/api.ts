@@ -179,6 +179,8 @@ export interface Provider {
   channels: MonoizeChannel[];
   max_retries: number;
   channel_max_retries: number;
+  channel_retry_interval_ms: number;
+  circuit_breaker_enabled: boolean;
   per_model_circuit_break: boolean;
   transforms: TransformRuleConfig[];
   api_type_overrides: ApiTypeOverride[];
@@ -214,6 +216,8 @@ export interface CreateProviderInput {
   channels: CreateMonoizeChannelInput[];
   max_retries?: number;
   channel_max_retries?: number;
+  channel_retry_interval_ms?: number;
+  circuit_breaker_enabled?: boolean;
   per_model_circuit_break?: boolean;
   transforms?: TransformRuleConfig[];
   api_type_overrides?: ApiTypeOverride[];
@@ -233,6 +237,8 @@ export interface UpdateProviderInput {
   channels?: CreateMonoizeChannelInput[];
   max_retries?: number;
   channel_max_retries?: number;
+  channel_retry_interval_ms?: number;
+  circuit_breaker_enabled?: boolean;
   per_model_circuit_break?: boolean;
   transforms?: TransformRuleConfig[];
   api_type_overrides?: ApiTypeOverride[];

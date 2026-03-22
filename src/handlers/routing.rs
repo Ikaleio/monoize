@@ -205,6 +205,7 @@ pub(super) async fn collect_provider_attempts(
     let channels = filter_eligible_channels(
         state,
         &provider.channels,
+        provider.circuit_breaker_enabled,
         provider.per_model_circuit_break.then_some(urp.model.as_str()),
     )
     .await;
@@ -263,6 +264,8 @@ pub(super) async fn collect_provider_attempts(
             passive_window_seconds,
             passive_rate_limit_cooldown_seconds,
             channel_max_retries: provider.channel_max_retries,
+            channel_retry_interval_ms: provider.channel_retry_interval_ms,
+            circuit_breaker_enabled: provider.circuit_breaker_enabled,
             per_model_circuit_break: provider.per_model_circuit_break,
             provider_attempt_limit,
             request_timeout_ms,
@@ -286,6 +289,7 @@ pub(super) fn resolve_upstream_model(
 pub(super) async fn filter_eligible_channels(
     state: &AppState,
     channels: &[crate::monoize_routing::MonoizeChannel],
+    circuit_breaker_enabled: bool,
     model: Option<&str>,
 ) -> Vec<crate::monoize_routing::MonoizeChannel> {
     let now = now_ts();
@@ -293,6 +297,10 @@ pub(super) async fn filter_eligible_channels(
     let mut out = Vec::new();
     for channel in channels {
         if !channel.enabled || channel.weight <= 0 {
+            continue;
+        }
+        if !circuit_breaker_enabled {
+            out.push(channel.clone());
             continue;
         }
         let key = health_key(&channel.id, model);
@@ -322,6 +330,9 @@ fn attempt_health_model(attempt: &MonoizeAttempt) -> Option<&str> {
 }
 
 pub(super) async fn is_attempt_channel_healthy(state: &AppState, attempt: &MonoizeAttempt) -> bool {
+    if !attempt.circuit_breaker_enabled {
+        return true;
+    }
     let health = state.channel_health.lock().await;
     let key = health_key(&attempt.channel_id, attempt_health_model(attempt));
     health
@@ -501,6 +512,9 @@ pub(super) async fn mark_channel_retryable_failure(
     attempt: &MonoizeAttempt,
     failure_class: RetryableFailureClass,
 ) {
+    if !attempt.circuit_breaker_enabled {
+        return;
+    }
     let now = now_ts();
     let mut health = state.channel_health.lock().await;
     let key = health_key(&attempt.channel_id, attempt_health_model(attempt));

@@ -138,6 +138,7 @@ export function ProviderDialog({
 	)
 	const probeGlobalDefaults = useMemo(
 		() => ({
+			active_probe_enabled: settings?.monoize_active_probe_enabled,
 			active_probe_interval_seconds:
 				settings?.monoize_active_probe_interval_seconds,
 			active_probe_success_threshold:
@@ -606,6 +607,13 @@ export function ProviderDialog({
 				Number(form.request_timeout_ms_override)
 			: null
 		if (
+			!Number.isFinite(form.channel_retry_interval_ms) ||
+			form.channel_retry_interval_ms < 0
+		) {
+			toast.error(t('providers.validationChannelRetryInterval'))
+			return null
+		}
+		if (
 			requestTimeoutMsOverride !== null &&
 			(!Number.isFinite(requestTimeoutMsOverride) || requestTimeoutMsOverride < 1)
 		) {
@@ -632,6 +640,8 @@ export function ProviderDialog({
 			channels,
 			max_retries: form.max_retries,
 			channel_max_retries: form.channel_max_retries,
+			channel_retry_interval_ms: form.channel_retry_interval_ms,
+			circuit_breaker_enabled: form.circuit_breaker_enabled,
 			per_model_circuit_break: form.per_model_circuit_break,
 			transforms: form.transforms,
 			active_probe_enabled_override: form.active_probe_enabled_override,

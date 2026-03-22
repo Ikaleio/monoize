@@ -99,6 +99,8 @@ pub struct MonoizeProvider {
     pub channels: Vec<MonoizeChannel>,
     pub max_retries: i32,
     pub channel_max_retries: i32,
+    pub channel_retry_interval_ms: u64,
+    pub circuit_breaker_enabled: bool,
     pub per_model_circuit_break: bool,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
@@ -147,6 +149,10 @@ pub struct CreateMonoizeProviderInput {
     #[serde(default)]
     pub channel_max_retries: i32,
     #[serde(default)]
+    pub channel_retry_interval_ms: u64,
+    #[serde(default = "default_enabled")]
+    pub circuit_breaker_enabled: bool,
+    #[serde(default)]
     pub per_model_circuit_break: bool,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
@@ -170,6 +176,8 @@ pub struct UpdateMonoizeProviderInput {
     pub channels: Option<Vec<CreateMonoizeChannelInput>>,
     pub max_retries: Option<i32>,
     pub channel_max_retries: Option<i32>,
+    pub channel_retry_interval_ms: Option<u64>,
+    pub circuit_breaker_enabled: Option<bool>,
     pub per_model_circuit_break: Option<bool>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub active_probe_enabled_override: Option<Option<bool>>,
@@ -309,6 +317,7 @@ impl MonoizeRoutingStore {
             .read()
             .query_all(self.db.stmt(
                 r#"SELECT id, name, provider_type, max_retries, channel_max_retries,
+                          channel_retry_interval_ms, circuit_breaker_enabled,
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
                           active_probe_success_threshold_override, active_probe_model_override,
@@ -334,6 +343,7 @@ impl MonoizeRoutingStore {
             .read()
             .query_one(self.db.stmt(
                 r#"SELECT id, name, provider_type, max_retries, channel_max_retries,
+                          channel_retry_interval_ms, circuit_breaker_enabled,
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
                           active_probe_success_threshold_override, active_probe_model_override,
@@ -412,18 +422,21 @@ impl MonoizeRoutingStore {
             .execute(self.db.stmt(
                 r#"INSERT INTO monoize_providers (
                         id, name, provider_type, max_retries, channel_max_retries,
+                        channel_retry_interval_ms, circuit_breaker_enabled,
                         per_model_circuit_break, transforms, api_type_overrides,
                         active_probe_enabled_override, active_probe_interval_seconds_override,
                         active_probe_success_threshold_override, active_probe_model_override,
                         request_timeout_ms_override,
                         enabled, priority, created_at, updated_at
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"#,
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)"#,
                 vec![
                         id.clone().into(),
                         input.name.clone().into(),
                         input.provider_type.as_str().into(),
                         SeaValue::Int(Some(input.max_retries)),
                         SeaValue::Int(Some(input.channel_max_retries)),
+                        opt_u64_to_value(Some(input.channel_retry_interval_ms)),
+                        SeaValue::Int(Some(if input.circuit_breaker_enabled { 1 } else { 0 })),
                         SeaValue::Int(Some(if input.per_model_circuit_break { 1 } else { 0 })),
                         transforms_json.into(),
                         api_type_overrides_json.into(),
@@ -491,6 +504,12 @@ impl MonoizeRoutingStore {
         let channel_max_retries = input
             .channel_max_retries
             .unwrap_or(existing.channel_max_retries);
+        let channel_retry_interval_ms = input
+            .channel_retry_interval_ms
+            .unwrap_or(existing.channel_retry_interval_ms);
+        let circuit_breaker_enabled = input
+            .circuit_breaker_enabled
+            .unwrap_or(existing.circuit_breaker_enabled);
         let per_model_circuit_break = input
             .per_model_circuit_break
             .unwrap_or(existing.per_model_circuit_break);
@@ -529,20 +548,25 @@ impl MonoizeRoutingStore {
             .execute(self.db.stmt(
                 r#"UPDATE monoize_providers
                    SET name = $1, provider_type = $2, max_retries = $3,
-                       channel_max_retries = $4, per_model_circuit_break = $5,
-                       transforms = $6, api_type_overrides = $7,
-                       active_probe_enabled_override = $8,
-                       active_probe_interval_seconds_override = $9,
-                       active_probe_success_threshold_override = $10,
-                       active_probe_model_override = $11,
-                       request_timeout_ms_override = $12,
-                       enabled = $13, priority = $14, updated_at = $15
-                   WHERE id = $16"#,
+                       channel_max_retries = $4,
+                       channel_retry_interval_ms = $5,
+                       circuit_breaker_enabled = $6,
+                       per_model_circuit_break = $7,
+                       transforms = $8, api_type_overrides = $9,
+                       active_probe_enabled_override = $10,
+                       active_probe_interval_seconds_override = $11,
+                       active_probe_success_threshold_override = $12,
+                       active_probe_model_override = $13,
+                       request_timeout_ms_override = $14,
+                       enabled = $15, priority = $16, updated_at = $17
+                   WHERE id = $18"#,
                 vec![
                     name.into(),
                     provider_type.as_str().into(),
                     SeaValue::Int(Some(max_retries)),
                     SeaValue::Int(Some(channel_max_retries)),
+                    opt_u64_to_value(Some(channel_retry_interval_ms)),
+                    SeaValue::Int(Some(if circuit_breaker_enabled { 1 } else { 0 })),
                     SeaValue::Int(Some(if per_model_circuit_break { 1 } else { 0 })),
                     transforms_json.into(),
                     api_type_overrides_json.into(),
@@ -937,6 +961,13 @@ impl MonoizeRoutingStore {
             channel_max_retries: row
                 .try_get("", "channel_max_retries")
                 .map_err(|e| e.to_string())?,
+            channel_retry_interval_ms: row
+                .try_get::<i64>("", "channel_retry_interval_ms")
+                .map_err(|e| e.to_string())? as u64,
+            circuit_breaker_enabled: row
+                .try_get::<i32>("", "circuit_breaker_enabled")
+                .map_err(|e| e.to_string())?
+                != 0,
             per_model_circuit_break: row
                 .try_get::<i32>("", "per_model_circuit_break")
                 .map_err(|e| e.to_string())?

@@ -124,6 +124,8 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
             }],
             max_retries: -1,
             channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: Vec::new(),
             active_probe_enabled_override: None,
@@ -202,6 +204,8 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
         }],
         max_retries: -1,
         channel_max_retries: 0,
+        channel_retry_interval_ms: 0,
+        circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
             transform: "set_field".to_string(),
