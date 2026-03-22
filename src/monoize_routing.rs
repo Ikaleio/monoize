@@ -435,7 +435,7 @@ impl MonoizeRoutingStore {
                         input.provider_type.as_str().into(),
                         SeaValue::Int(Some(input.max_retries)),
                         SeaValue::Int(Some(input.channel_max_retries)),
-                        opt_u64_to_value(Some(input.channel_retry_interval_ms)),
+                        SeaValue::Int(Some(input.channel_retry_interval_ms as i32)),
                         SeaValue::Int(Some(if input.circuit_breaker_enabled { 1 } else { 0 })),
                         SeaValue::Int(Some(if input.per_model_circuit_break { 1 } else { 0 })),
                         transforms_json.into(),
@@ -565,7 +565,7 @@ impl MonoizeRoutingStore {
                     provider_type.as_str().into(),
                     SeaValue::Int(Some(max_retries)),
                     SeaValue::Int(Some(channel_max_retries)),
-                    opt_u64_to_value(Some(channel_retry_interval_ms)),
+                    SeaValue::Int(Some(channel_retry_interval_ms as i32)),
                     SeaValue::Int(Some(if circuit_breaker_enabled { 1 } else { 0 })),
                     SeaValue::Int(Some(if per_model_circuit_break { 1 } else { 0 })),
                     transforms_json.into(),
@@ -962,7 +962,7 @@ impl MonoizeRoutingStore {
                 .try_get("", "channel_max_retries")
                 .map_err(|e| e.to_string())?,
             channel_retry_interval_ms: row
-                .try_get::<i64>("", "channel_retry_interval_ms")
+                .try_get::<i32>("", "channel_retry_interval_ms")
                 .map_err(|e| e.to_string())? as u64,
             circuit_breaker_enabled: row
                 .try_get::<i32>("", "circuit_breaker_enabled")
