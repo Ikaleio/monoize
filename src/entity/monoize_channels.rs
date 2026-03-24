@@ -1,5 +1,5 @@
-use sea_orm::entity::prelude::*;
 use sea_orm::DeriveRelation;
+use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "monoize_channels")]
@@ -21,6 +21,8 @@ pub struct Model {
     pub passive_window_seconds_override: Option<i64>,
     pub passive_rate_limit_cooldown_seconds_override: Option<i64>,
     pub request_timeout_ms_override: Option<i64>,
+    #[sea_orm(column_type = "Text")]
+    pub groups: String,
     #[sea_orm(column_type = "Text")]
     pub created_at: String,
     #[sea_orm(column_type = "Text")]

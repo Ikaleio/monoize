@@ -132,7 +132,7 @@ const DialogContent = React.forwardRef<
                 transition: { duration: 0.18, ease: easings.easeInOutQuart },
               }}
               className={cn(
-                "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg gap-4 border bg-background p-6 shadow-lg sm:rounded-lg [&_*]:ring-offset-background",
+                "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg max-h-[85dvh] gap-4 border bg-background p-6 shadow-lg sm:rounded-lg [&_*]:ring-offset-background",
                 className
               )}
             >
@@ -152,7 +152,7 @@ const DialogContent = React.forwardRef<
                   y: 4,
                   transition: { duration: 0.16, ease: easings.easeInOutQuart },
                 }}
-                className="grid gap-4 min-h-0 overflow-hidden"
+                className="grid gap-4 min-h-0 overflow-y-auto"
               >
                 {children}
               </motion.div>

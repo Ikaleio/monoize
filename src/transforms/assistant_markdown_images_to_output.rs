@@ -1,8 +1,10 @@
 use crate::transforms::{
-    Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, response_output_items_mut,
+    Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
+    TransformScope, TransformState, UrpData, response_output_items_mut,
 };
-use crate::urp::{ImageSource, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent};
+use crate::urp::{
+    ImageSource, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
+};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -323,18 +325,19 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState) {
             usage,
             extra_body,
         } => {
-            let mut part_state = state
-                .text_parts
-                .remove(part_index)
-                .unwrap_or_else(|| StreamTextPartState {
-                    item_index: allocate_synthetic_item_for_delta(state, extra_body.clone()),
-                    source_part_index: *part_index,
-                    source_part_used: false,
-                    part_extra_body: extra_body.clone(),
-                    buffered_tail: String::new(),
-                    active_text_part: None,
-                    saw_delta: false,
-                });
+            let mut part_state =
+                state
+                    .text_parts
+                    .remove(part_index)
+                    .unwrap_or_else(|| StreamTextPartState {
+                        item_index: allocate_synthetic_item_for_delta(state, extra_body.clone()),
+                        source_part_index: *part_index,
+                        source_part_used: false,
+                        part_extra_body: extra_body.clone(),
+                        buffered_tail: String::new(),
+                        active_text_part: None,
+                        saw_delta: false,
+                    });
             part_state.saw_delta = true;
             let combined = format!("{}{}", part_state.buffered_tail, content);
             let (segments, tail) = split_stream_segments(&combined, false);
@@ -564,10 +567,7 @@ fn emit_segments(
     }
 }
 
-fn close_active_text_part(
-    part_state: &mut StreamTextPartState,
-    emitted: &mut Vec<UrpStreamEvent>,
-) {
+fn close_active_text_part(part_state: &mut StreamTextPartState, emitted: &mut Vec<UrpStreamEvent>) {
     let Some(active) = part_state.active_text_part.take() else {
         return;
     };
@@ -586,7 +586,9 @@ fn flush_open_parts_for_item(state: &mut StreamState, item_index: u32) -> Vec<Ur
     let matching_part_indices = state
         .text_parts
         .iter()
-        .filter_map(|(part_index, part_state)| (part_state.item_index == item_index).then_some(*part_index))
+        .filter_map(|(part_index, part_state)| {
+            (part_state.item_index == item_index).then_some(*part_index)
+        })
         .collect::<Vec<_>>();
     let mut emitted = Vec::new();
     for part_index in matching_part_indices {

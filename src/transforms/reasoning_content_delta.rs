@@ -120,19 +120,19 @@ fn mark_item(item: &mut Item) {
 fn mark_stream(event: &mut UrpStreamEvent) {
     match event {
         UrpStreamEvent::Delta {
-            delta, extra_body, ..
+            delta:
+                PartDelta::Reasoning {
+                    content,
+                    encrypted,
+                    summary,
+                    ..
+                },
+            extra_body,
+            ..
         } => {
-            if let PartDelta::Reasoning {
-                content,
-                encrypted,
-                summary,
-                ..
-            } = delta
-            {
-                let _ = encrypted;
-                if let Some(value) = extract_reasoning_content(content, summary) {
-                    extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
-                }
+            let _ = encrypted;
+            if let Some(value) = extract_reasoning_content(content, summary) {
+                extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
             }
         }
         UrpStreamEvent::PartDone { part, .. } => {
@@ -299,7 +299,7 @@ mod tests {
             panic!("expected delta");
         };
         assert!(
-            extra_body.get("inject_reasoning_content").is_none(),
+            !extra_body.contains_key("inject_reasoning_content"),
             "should not inject encrypted-only reasoning content"
         );
     }

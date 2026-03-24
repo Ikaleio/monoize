@@ -172,7 +172,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                             arguments,
                             ..
                         } => {
-                            let args = serde_json::from_str::<Value>(&arguments)
+                            let args = serde_json::from_str::<Value>(arguments)
                                 .unwrap_or_else(|_| json!({}));
                             parts.push(json!({
                                 "functionCall": {
@@ -182,9 +182,9 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                                 }
                             }));
                         }
-                        Part::Image { source, .. } => parts.push(encode_image_part(&source)),
-                        Part::File { source, .. } => parts.push(encode_file_part(&source)),
-                        Part::Audio { source, .. } => parts.push(encode_audio_part(&source)),
+                        Part::Image { source, .. } => parts.push(encode_image_part(source)),
+                        Part::File { source, .. } => parts.push(encode_file_part(source)),
+                        Part::Audio { source, .. } => parts.push(encode_audio_part(source)),
                         Part::Refusal { content, .. } => parts.push(json!({ "text": content })),
                         Part::ProviderItem { body, .. } => parts.push(body.clone()),
                     }
@@ -490,12 +490,11 @@ mod tests {
         assert_eq!(output.accepted_prediction_tokens, 6);
         assert_eq!(output.rejected_prediction_tokens, 7);
         assert!(
-            decoded_usage
+            !decoded_usage
                 .extra_body
-                .get("cachedContentTokenCount")
-                .is_none()
+                .contains_key("cachedContentTokenCount")
         );
-        assert!(decoded_usage.extra_body.get("thoughtsTokenCount").is_none());
+        assert!(!decoded_usage.extra_body.contains_key("thoughtsTokenCount"));
         assert_eq!(
             decoded_usage.extra_body.get("providerCounter"),
             Some(&json!(9))

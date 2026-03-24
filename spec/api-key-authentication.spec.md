@@ -44,7 +44,7 @@ AKP2. If AKP1 holds, Monoize MUST:
 5. If validation succeeds:
    - Monoize MUST update `last_used_at` to the current time.
    - Monoize MUST authenticate the request with `tenant_id = user.id`.
-   - Monoize MUST attach API key routing policy (`max_multiplier`, ordered `transforms`) to the authenticated context.
+   - Monoize MUST attach API key routing policy (`max_multiplier`, `effective_groups`, ordered `transforms`) to the authenticated context.
    - The attached `transforms` value MUST already satisfy the API-key transform safety boundary in `api-token-management.spec.md` §2.4a. Stored disallowed transform rules MUST be discarded before request processing continues.
 
 AKP3. If database validation fails or is skipped, Monoize MUST return:
@@ -52,11 +52,32 @@ AKP3. If database validation fails or is skipped, Monoize MUST return:
 - HTTP `401`
 - error code `unauthorized`
 
-## 4. Error response uniformity
+## 4. Effective group resolution
+
+AKG1. The owning user row MUST be read as if it contains `allowed_groups: string[]`. `[]` means the user grants access to all channel groups. Any write path that persists `users.allowed_groups` MUST canonicalize it by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+
+AKG2. For backward compatibility, if `users.allowed_groups` is absent, null, empty string, or serialized empty array, authentication MUST treat it as `[]`.
+
+AKG3. The authenticated API key row MUST be read as if it contains `allowed_groups: string[]`. `[]` means inherit from the owning user at request-authentication time.
+
+AKG4. The authenticated context MUST represent request-scoped group access as `effective_groups: string[] | null`. `null` means the request is unrestricted by group filtering. A non-null array means the request is restricted to the named groups in that array.
+
+AKG5. Authentication MUST resolve `effective_groups` as follows:
+
+1. If `user.allowed_groups == []` and `api_key.allowed_groups == []`, `effective_groups = null`.
+2. If `user.allowed_groups == []` and `api_key.allowed_groups != []`, `effective_groups = api_key.allowed_groups`.
+3. If `user.allowed_groups != []` and `api_key.allowed_groups == []`, `effective_groups = user.allowed_groups`.
+4. If both arrays are non-empty, `effective_groups = intersection(user.allowed_groups, api_key.allowed_groups)`.
+
+AKG6. When `effective_groups` is non-null, the attached array MUST be canonicalized: lowercase, trimmed, non-empty, deduplicated, sorted ascending.
+
+AKG7. Authentication MUST succeed even when `effective_groups = []`. The downstream routing consequence is that only public channels are group-eligible for that request.
+
+## 5. Error response uniformity
 
 AKE1. Authentication failures MUST NOT reveal whether a token partially matched (e.g. prefix exists but hash mismatch).
 
-## 5. Max multiplier enforcement
+## 6. Max multiplier enforcement
 
 AKM1. The effective `max_multiplier` for a request is resolved as follows:
 
@@ -74,7 +95,7 @@ AKM2. Consequence: a per-request `requested` value can only lower the effective 
 
 AKM3. During provider selection, if `effective` is not null, providers whose model entry `multiplier` exceeds `effective` MUST be excluded from the candidate set.
 
-## 6. Model allowlist enforcement
+## 7. Model allowlist enforcement
 
 AKL1. If `model_limits_enabled = true` and `model_limits` is non-empty on the authenticated API key, every forwarding request MUST be rejected unless the logical model requested by the client is an exact member of `model_limits`.
 

@@ -16,6 +16,12 @@ pub struct LastUsedBatcher {
     buffer: Arc<DashMap<String, DateTime<Utc>>>,
 }
 
+impl Default for LastUsedBatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LastUsedBatcher {
     pub fn new() -> Self {
         Self {
@@ -102,8 +108,7 @@ impl RequestLogBatcher {
             if buf.is_empty() {
                 return;
             }
-            let drained = std::mem::replace(&mut *buf, Vec::with_capacity(self.capacity_hint));
-            drained
+            std::mem::replace(&mut *buf, Vec::with_capacity(self.capacity_hint))
         };
         if entries.is_empty() {
             return;
@@ -221,7 +226,6 @@ impl RequestLogBatcher {
 
         if let Err(e) = tx.commit().await {
             tracing::warn!("request_log_batcher commit error: {e}");
-            return;
         }
     }
 

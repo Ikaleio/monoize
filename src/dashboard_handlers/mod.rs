@@ -1,6 +1,7 @@
 mod analytics_request_logs;
 mod api_keys;
 mod auth;
+mod groups;
 mod model_registry;
 mod providers;
 mod session_helpers;
@@ -23,6 +24,7 @@ pub use auth::{
     AuthResponse, LoginRequest, RegisterRequest, UpdateMeRequest, UserResponse, get_me, login,
     logout, register, update_me,
 };
+pub use groups::{DashboardGroupsResponse, list_dashboard_groups};
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,
     list_marketplace_models, list_model_metadata, list_models, sync_model_metadata_models_dev,

@@ -311,7 +311,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                                 "delta": { "type": "thinking_delta", "thinking": "" }
                             }),
                             messages_delta_path_thinking,
-                            &content,
+                            content,
                             sse_max_frame_length,
                         )
                         .await?;
@@ -472,6 +472,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 fn content_block_from_part(part: &Part, saw_tool_use: &mut bool) -> AppResult<Value> {
     let content_block = match part {
         Part::Text { .. } | Part::Refusal { .. } => json!({ "type": "text", "text": "" }),

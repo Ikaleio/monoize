@@ -452,8 +452,7 @@ impl UserStore {
         };
 
         // Rows query
-        let mut rows_sql = format!(
-            r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
                       rl.channel_id, rl.is_stream,
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
@@ -464,7 +463,7 @@ impl UserStore {
                       rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at
                FROM request_logs rl
                WHERE rl.user_id = $1"#
-        );
+            .to_string();
         let mut rows_values: Vec<SeaValue> = vec![user_id.into()];
         let mut rows_idx = 2usize;
         append_request_log_filters(
@@ -605,8 +604,7 @@ impl UserStore {
         };
 
         // Rows query
-        let mut rows_sql = format!(
-            r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
+        let mut rows_sql = r#"SELECT rl.id, rl.request_id, rl.user_id, rl.api_key_id, rl.model, rl.provider_id, rl.upstream_model,
                       rl.channel_id, rl.is_stream,
                       rl.input_tokens, rl.output_tokens, rl.cache_read_tokens, rl.cache_creation_tokens,
                       rl.tool_prompt_tokens, rl.reasoning_tokens,
@@ -617,7 +615,7 @@ impl UserStore {
                       rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at
                FROM request_logs rl
                WHERE 1 = 1"#
-        );
+            .to_string();
         let mut rows_values: Vec<SeaValue> = Vec::new();
         let mut rows_idx = 1usize;
         append_request_log_filters(
@@ -696,11 +694,7 @@ impl UserStore {
                  COUNT(*) AS call_count
                FROM request_logs rl
                WHERE {time_col} >= $3 AND {time_col} < $4"#,
-            time_col = if is_sqlite {
-                "rl.created_at_unix_ms".to_string()
-            } else {
-                "rl.created_at_unix_ms".to_string()
-            }
+            time_col = "rl.created_at_unix_ms"
         );
         model_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let time_from_unix_ms = chrono::DateTime::parse_from_rfc3339(time_from)
@@ -756,14 +750,10 @@ impl UserStore {
                  {bucket_expr} AS bucket_idx,
                  COALESCE(mp.name, rl.provider_id, 'unknown') AS provider_label,
                  COUNT(*) AS call_count
-               FROM request_logs rl
-               LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
+                FROM request_logs rl
+                LEFT JOIN monoize_providers mp ON rl.provider_id = mp.id
                WHERE {time_col} >= $3 AND {time_col} < $4"#,
-            time_col = if is_sqlite {
-                "rl.created_at_unix_ms".to_string()
-            } else {
-                "rl.created_at_unix_ms".to_string()
-            }
+            time_col = "rl.created_at_unix_ms"
         );
         prov_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let mut prov_values: Vec<SeaValue> = vec![
@@ -808,11 +798,7 @@ impl UserStore {
                  COUNT(*) AS total_calls
                FROM request_logs rl
                WHERE {time_col} >= $1 AND {time_col} < $2"#,
-            time_col = if is_sqlite {
-                "rl.created_at_unix_ms".to_string()
-            } else {
-                "rl.created_at_unix_ms".to_string()
-            }
+            time_col = "rl.created_at_unix_ms"
         );
         total_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let mut total_values: Vec<SeaValue> =
@@ -859,11 +845,7 @@ impl UserStore {
                  COUNT(*) AS today_calls
                FROM request_logs rl
                WHERE {time_col} >= $1"#,
-            time_col = if is_sqlite {
-                "rl.created_at_unix_ms".to_string()
-            } else {
-                "rl.created_at_unix_ms".to_string()
-            }
+            time_col = "rl.created_at_unix_ms"
         );
         today_sql.push_str(" AND rl.created_at_unix_ms IS NOT NULL");
         let today_start_unix_ms = chrono::DateTime::parse_from_rfc3339(today_start)

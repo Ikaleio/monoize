@@ -18,11 +18,13 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
+
 struct TestContext {
     router: axum::Router,
     auth_header: String,
     state: monoize::app::AppState,
-    captured_headers: Arc<Mutex<Vec<(String, String)>>>,
+    captured_headers: CapturedHeaders,
     _temp_dir: TempDir,
 }
 
@@ -169,12 +171,10 @@ async fn maybe_forced_upstream_delay(body: &Value) {
     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 }
 
-async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
-    let captured_headers: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
+    let captured_headers: CapturedHeaders = Arc::new(Mutex::new(Vec::new()));
     async fn responses(
-        axum::extract::State(captured_headers): axum::extract::State<
-            Arc<Mutex<Vec<(String, String)>>>,
-        >,
+        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> impl axum::response::IntoResponse {
@@ -842,9 +842,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
     }
 
     async fn chat(
-        axum::extract::State(captured_headers): axum::extract::State<
-            Arc<Mutex<Vec<(String, String)>>>,
-        >,
+        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> impl axum::response::IntoResponse {
@@ -1403,9 +1401,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
     }
 
     async fn messages(
-        axum::extract::State(captured_headers): axum::extract::State<
-            Arc<Mutex<Vec<(String, String)>>>,
-        >,
+        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> impl axum::response::IntoResponse {
@@ -1706,9 +1702,7 @@ async fn start_upstream() -> (SocketAddr, Arc<Mutex<Vec<(String, String)>>>) {
     }
 
     async fn gemini_dispatch(
-        axum::extract::State(captured_headers): axum::extract::State<
-            Arc<Mutex<Vec<(String, String)>>>,
-        >,
+        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
         axum::extract::Path(rest): axum::extract::Path<String>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
@@ -1970,6 +1964,7 @@ async fn create_test_provider(
                 api_key: Some(api_key.to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -2033,7 +2028,12 @@ async fn setup_with_unknown_fields() -> TestContext {
 
     let user = state
         .user_store
-        .create_user("tenant-1", "test-password", monoize::users::UserRole::User)
+        .create_user(
+            "tenant-1",
+            "test-password",
+            monoize::users::UserRole::User,
+            &[],
+        )
         .await
         .expect("create user");
     state
@@ -2046,6 +2046,7 @@ async fn setup_with_unknown_fields() -> TestContext {
             None,
             Some("1000000000"),
             Some(true),
+            None,
             None,
         )
         .await

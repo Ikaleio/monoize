@@ -666,7 +666,7 @@ impl ModelRegistryStore {
                 continue;
             }
 
-            let winner = pick_best_variant(variants);
+            let winner = pick_best_variant(model_name, variants);
             let mode = if variants
                 .iter()
                 .any(|v| is_embedding_family(v.family.as_deref()))
@@ -820,7 +820,59 @@ struct SyncProviderVariant {
     raw: Value,
 }
 
-fn pick_best_variant(variants: &[SyncProviderVariant]) -> &SyncProviderVariant {
+/// Maps a canonical (bare, lowercase) model ID to its official provider ID on models.dev.
+/// Returns `None` for models that don't belong to a recognized family.
+fn official_provider_for_model(model_id: &str) -> Option<&'static str> {
+    if model_id.starts_with("gpt-") {
+        return Some("openai");
+    }
+    // OpenAI o-series: "o" followed by a digit (o1, o3-pro, o4-mini, etc.)
+    if model_id.starts_with('o')
+        && model_id
+            .as_bytes()
+            .get(1)
+            .is_some_and(|b| b.is_ascii_digit())
+    {
+        return Some("openai");
+    }
+    if model_id.starts_with("claude-") {
+        return Some("anthropic");
+    }
+    if model_id.starts_with("gemini-") {
+        return Some("google");
+    }
+    if model_id.starts_with("grok-") {
+        return Some("xai");
+    }
+    if model_id.starts_with("deepseek-") {
+        return Some("deepseek");
+    }
+    if model_id.starts_with("mistral-")
+        || model_id.starts_with("codestral-")
+        || model_id.starts_with("pixtral-")
+        || model_id.starts_with("ministral-")
+    {
+        return Some("mistral");
+    }
+    None
+}
+
+fn pick_best_variant<'a>(
+    model_id: &str,
+    variants: &'a [SyncProviderVariant],
+) -> &'a SyncProviderVariant {
+    if let Some(official) = official_provider_for_model(model_id) {
+        if let Some(v) = variants.iter().find(|v| {
+            v.provider_id == official
+                && v.input_cost_nano
+                    .as_ref()
+                    .and_then(|s| s.parse::<i128>().ok())
+                    .is_some_and(|n| n > 0)
+        }) {
+            return v;
+        }
+    }
+
     variants
         .iter()
         .max_by(|a, b| {

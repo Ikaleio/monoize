@@ -53,6 +53,7 @@ pub(crate) async fn send_responses_delta_string(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn send_chat_chunk_string(
     tx: &mpsc::Sender<Event>,
     id: &str,
@@ -487,7 +488,7 @@ pub(crate) fn extract_chat_reasoning_content_block(
         .map(|format| format.to_string());
     let content = (!text.is_empty()).then_some(text);
     let summary = (!summary.is_empty()).then_some(summary);
-    let encrypted = (!signature.is_empty()).then(|| Value::String(signature));
+    let encrypted = (!signature.is_empty()).then_some(Value::String(signature));
 
     if content.is_none() && summary.is_none() && encrypted.is_none() {
         return None;

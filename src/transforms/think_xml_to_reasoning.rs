@@ -85,7 +85,7 @@ impl Transform for ThinkXmlToReasoningTransform {
                         let mut out = Vec::new();
                         for part in parts.iter() {
                             if let Part::Text { content, .. } = part {
-                                let parsed = extract_text_and_reasoning(&content, &cfg.tag);
+                                let parsed = extract_text_and_reasoning(content, &cfg.tag);
                                 for piece in parsed {
                                     out.push(piece);
                                 }

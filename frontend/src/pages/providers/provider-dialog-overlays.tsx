@@ -22,6 +22,7 @@ import {
 	AlertDialogTitle
 } from '@/components/ui/alert-dialog'
 import { Separator } from '@/components/ui/separator'
+import { ChannelGroupsInput } from './provider-dialog-sections'
 import type { ChannelRow, ModelRow } from './shared'
 
 type Translator = (key: string) => string
@@ -212,6 +213,8 @@ interface ChannelEditorDialogProps {
 		passive_cooldown_seconds?: number
 		passive_rate_limit_cooldown_seconds?: number
 	}
+	groupSuggestions: string[]
+	groupSuggestionsLoading: boolean
 	onOpenChange: (open: boolean) => void
 	onChange: (patch: Partial<ChannelRow>) => void
 	onBaseUrlChange: (value: string) => void
@@ -227,6 +230,8 @@ export function ChannelEditorDialog({
 	isEdit,
 	canDelete,
 	globalDefaults,
+	groupSuggestions,
+	groupSuggestionsLoading,
 	onOpenChange,
 	onChange,
 	onBaseUrlChange,
@@ -288,6 +293,14 @@ export function ChannelEditorDialog({
 								onChange={e => onChange({ weight: e.target.value })}
 							/>
 						</div>
+
+						<ChannelGroupsInput
+							value={channel.groups}
+							suggestions={groupSuggestions}
+							suggestionsLoading={groupSuggestionsLoading}
+							t={t}
+							onChange={groups => onChange({ groups })}
+						/>
 
 						<Separator />
 

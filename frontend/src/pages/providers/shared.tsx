@@ -22,6 +22,7 @@ export type ChannelRow = {
 	api_key: string
 	weight: string
 	enabled: boolean
+	groups: string[]
 	passive_failure_count_threshold_override: string
 	passive_cooldown_seconds_override: string
 	passive_window_seconds_override: string
@@ -131,6 +132,7 @@ export function emptyChannelRow(): ChannelRow {
 		api_key: '',
 		weight: '1',
 		enabled: true,
+		groups: [],
 		passive_failure_count_threshold_override: '',
 		passive_cooldown_seconds_override: '',
 		passive_window_seconds_override: '',
@@ -173,6 +175,7 @@ export function fromProvider(provider: Provider): ProviderForm {
 			api_key: '',
 			weight: String(channel.weight),
 			enabled: channel.enabled,
+			groups: channel.groups ?? [],
 			passive_failure_count_threshold_override:
 				channel.passive_failure_count_threshold_override != null ?
 					String(channel.passive_failure_count_threshold_override)

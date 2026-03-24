@@ -709,18 +709,14 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         item_obj,
                         &["type", "encrypted_content", "summary", "text", "source"],
                     );
-                    let encrypted =
-                        item_obj
-                            .get("encrypted_content")
-                            .and_then(|value| match value {
-                                Value::String(text) => Some(Value::String(text.clone())),
-                                _ => Some(value.clone()),
-                            });
+                    let encrypted = item_obj.get("encrypted_content").map(|value| match value {
+                        Value::String(text) => Value::String(text.clone()),
+                        _ => value.clone(),
+                    });
                     let summary = item_obj
                         .get("summary")
                         .and_then(|value| value.as_array())
-                        .map(|_| summary_to_text(item_obj))
-                        .flatten();
+                        .and_then(|_| summary_to_text(item_obj));
                     let text = item_obj
                         .get("text")
                         .and_then(|v| v.as_str())
@@ -847,6 +843,43 @@ fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
         })
 }
 
+fn tool_choice_from_value(v: Value) -> ToolChoice {
+    if let Some(s) = v.as_str() {
+        ToolChoice::Mode(s.to_string())
+    } else {
+        ToolChoice::Specific(v)
+    }
+}
+
+fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
+    if let Some(obj) = v.as_object() {
+        if obj.get("type").and_then(|x| x.as_str()) == Some("json_schema") {
+            let schema_obj = obj.get("json_schema")?.as_object()?;
+            let name = schema_obj.get("name")?.as_str()?.to_string();
+            let schema = schema_obj.get("schema").cloned().unwrap_or(Value::Null);
+            return Some(crate::urp::ResponseFormat::JsonSchema {
+                json_schema: crate::urp::JsonSchemaDefinition {
+                    name,
+                    description: schema_obj
+                        .get("description")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
+                    schema,
+                    strict: schema_obj.get("strict").and_then(|x| x.as_bool()),
+                    extra_body: split_extra(
+                        schema_obj,
+                        &["name", "description", "schema", "strict"],
+                    ),
+                },
+            });
+        }
+        if obj.get("type").and_then(|x| x.as_str()) == Some("json_object") {
+            return Some(crate::urp::ResponseFormat::JsonObject);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,41 +928,4 @@ mod tests {
         assert_eq!(details.cache_read_tokens, 0);
         assert_eq!(details.cache_creation_tokens, 98);
     }
-}
-
-fn tool_choice_from_value(v: Value) -> ToolChoice {
-    if let Some(s) = v.as_str() {
-        ToolChoice::Mode(s.to_string())
-    } else {
-        ToolChoice::Specific(v)
-    }
-}
-
-fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
-    if let Some(obj) = v.as_object() {
-        if obj.get("type").and_then(|x| x.as_str()) == Some("json_schema") {
-            let schema_obj = obj.get("json_schema")?.as_object()?;
-            let name = schema_obj.get("name")?.as_str()?.to_string();
-            let schema = schema_obj.get("schema").cloned().unwrap_or(Value::Null);
-            return Some(crate::urp::ResponseFormat::JsonSchema {
-                json_schema: crate::urp::JsonSchemaDefinition {
-                    name,
-                    description: schema_obj
-                        .get("description")
-                        .and_then(|x| x.as_str())
-                        .map(|s| s.to_string()),
-                    schema,
-                    strict: schema_obj.get("strict").and_then(|x| x.as_bool()),
-                    extra_body: split_extra(
-                        schema_obj,
-                        &["name", "description", "schema", "strict"],
-                    ),
-                },
-            });
-        }
-        if obj.get("type").and_then(|x| x.as_str()) == Some("json_object") {
-            return Some(crate::urp::ResponseFormat::JsonObject);
-        }
-    }
-    None
 }

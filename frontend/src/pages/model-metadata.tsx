@@ -549,7 +549,7 @@ export function ModelMetadataPage() {
               </div>
             ) : (
               <TableVirtuoso
-                style={{ height: "calc(100vh - 280px)", minHeight: 400 }}
+                style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
                 data={filtered}
                 components={{
                   Table: (props) => (

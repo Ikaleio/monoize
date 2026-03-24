@@ -278,24 +278,27 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                                 .filter_map(|key| guard.get(&key).cloned())
                                 .collect::<Vec<_>>()
                         } else {
-                            vec![guard
-                                .get(&health_key(&channel.id, None))
-                                .cloned()
-                                .unwrap_or_else(ChannelHealthState::new)]
+                            vec![
+                                guard
+                                    .get(&health_key(&channel.id, None))
+                                    .cloned()
+                                    .unwrap_or_else(ChannelHealthState::new),
+                            ]
                         };
                         let unhealthy_states: Vec<ChannelHealthState> =
                             states.into_iter().filter(|state| !state.healthy).collect();
-                        if unhealthy_states.is_empty() {
-                            false
-                        } else if !unhealthy_states.iter().any(|state| {
+                        let probe_recovered_state = unhealthy_states.iter().any(|state| {
                             state
                                 .cooldown_until
                                 .map(|until| now >= until)
                                 .unwrap_or(true)
-                        }) {
+                        });
+                        if !probe_recovered_state {
                             false
-                        } else if let Some(last_probe_at) =
-                            unhealthy_states.iter().filter_map(|state| state.last_probe_at).max()
+                        } else if let Some(last_probe_at) = unhealthy_states
+                            .iter()
+                            .filter_map(|state| state.last_probe_at)
+                            .max()
                         {
                             now.saturating_sub(last_probe_at) >= probe_interval_seconds as i64
                         } else {
@@ -382,8 +385,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                                 .entry(health_key(&channel.id, None))
                                 .or_insert_with(ChannelHealthState::new);
                             state.last_probe_at = Some(now);
-                            state.probe_success_count =
-                                state.probe_success_count.saturating_add(1);
+                            state.probe_success_count = state.probe_success_count.saturating_add(1);
                             if state.probe_success_count >= probe_success_threshold {
                                 clear_channel_health_state(state, now);
                             }
@@ -440,6 +442,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn init_metrics() -> AppResult<PrometheusHandle> {
     METRICS_INIT.call_once(|| {
         match metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder() {
@@ -482,7 +485,17 @@ async fn ensure_active_probe_system_user(user_store: &UserStore) -> Option<Strin
     if let Some(user) = existing {
         if !user.balance_unlimited {
             if let Err(err) = user_store
-                .update_user(&user.id, None, None, None, None, None, Some(true), None)
+                .update_user(
+                    &user.id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(true),
+                    None,
+                    None,
+                )
                 .await
             {
                 tracing::warn!("failed to set active probe system user unlimited balance: {err}");
@@ -495,12 +508,23 @@ async fn ensure_active_probe_system_user(user_store: &UserStore) -> Option<Strin
             ACTIVE_PROBE_SYSTEM_USER,
             &uuid::Uuid::new_v4().to_string(),
             UserRole::User,
+            &[],
         )
         .await
     {
         Ok(user) => {
             if let Err(err) = user_store
-                .update_user(&user.id, None, None, None, None, None, Some(true), None)
+                .update_user(
+                    &user.id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(true),
+                    None,
+                    None,
+                )
                 .await
             {
                 tracing::warn!("failed to set active probe system user unlimited balance: {err}");
@@ -931,6 +955,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/config",
             get(crate::dashboard_handlers::get_config_overview),
+        )
+        .route(
+            "/dashboard/groups",
+            get(crate::dashboard_handlers::list_dashboard_groups),
         )
         .route(
             "/dashboard/providers",

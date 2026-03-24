@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
 use crate::transforms::TransformRuleConfig;
+use crate::users::{CreateApiKeyInput, UpdateApiKeyInput, canonicalize_groups};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -25,6 +26,8 @@ pub struct CreateApiKeyRequest {
     #[serde(default = "default_group")]
     pub group: String,
     #[serde(default)]
+    pub allowed_groups: Vec<String>,
+    #[serde(default)]
     pub max_multiplier: Option<f64>,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
@@ -36,6 +39,10 @@ fn default_quota_unlimited() -> bool {
 
 fn default_group() -> String {
     "default".to_string()
+}
+
+pub(super) fn canonicalize_dashboard_api_key_allowed_groups(groups: &mut Vec<String>) {
+    *groups = canonicalize_groups(groups);
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +61,7 @@ pub struct ApiKeyResponse {
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
     pub group: String,
+    pub allowed_groups: Vec<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
 }
@@ -72,6 +80,7 @@ pub struct ApiKeyCreatedResponse {
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
     pub group: String,
+    pub allowed_groups: Vec<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
 }
@@ -86,6 +95,7 @@ pub struct UpdateApiKeyRequest {
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
     pub group: Option<String>,
+    pub allowed_groups: Option<Vec<String>>,
     pub max_multiplier: Option<f64>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub expires_at: Option<String>,
@@ -126,6 +136,7 @@ pub async fn list_my_api_keys(
             model_limits: k.model_limits,
             ip_whitelist: k.ip_whitelist,
             group: k.group,
+            allowed_groups: k.allowed_groups,
             max_multiplier: k.max_multiplier,
             transforms: k.transforms,
         })
@@ -137,12 +148,14 @@ pub async fn list_my_api_keys(
 pub async fn create_api_key(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<CreateApiKeyRequest>,
+    Json(mut body): Json<CreateApiKeyRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
 
     let user_store = &state.user_store;
     let settings_store = &state.settings_store;
+
+    canonicalize_dashboard_api_key_allowed_groups(&mut body.allowed_groups);
 
     let settings = settings_store
         .get_all()
@@ -165,7 +178,6 @@ pub async fn create_api_key(
         ));
     }
 
-    use crate::users::CreateApiKeyInput;
     let input = CreateApiKeyInput {
         name: body.name,
         expires_in_days: body.expires_in_days,
@@ -175,6 +187,7 @@ pub async fn create_api_key(
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
         group: body.group,
+        allowed_groups: body.allowed_groups,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
     };
@@ -205,6 +218,7 @@ pub async fn create_api_key(
             model_limits: api_key.model_limits,
             ip_whitelist: api_key.ip_whitelist,
             group: api_key.group,
+            allowed_groups: api_key.allowed_groups,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
         }),
@@ -282,6 +296,7 @@ pub async fn get_api_key(
         model_limits: api_key.model_limits,
         ip_whitelist: api_key.ip_whitelist,
         group: api_key.group,
+        allowed_groups: api_key.allowed_groups,
         max_multiplier: api_key.max_multiplier,
         transforms: api_key.transforms,
     }))
@@ -291,11 +306,15 @@ pub async fn update_api_key(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(key_id): Path<String>,
-    Json(body): Json<UpdateApiKeyRequest>,
+    Json(mut body): Json<UpdateApiKeyRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
 
     let user_store = &state.user_store;
+
+    if let Some(groups) = body.allowed_groups.as_mut() {
+        canonicalize_dashboard_api_key_allowed_groups(groups);
+    }
 
     let keys = user_store
         .list_user_api_keys(&user.id)
@@ -310,7 +329,6 @@ pub async fn update_api_key(
         ));
     }
 
-    use crate::users::UpdateApiKeyInput;
     let input = UpdateApiKeyInput {
         name: body.name,
         enabled: body.enabled,
@@ -320,6 +338,7 @@ pub async fn update_api_key(
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
         group: body.group,
+        allowed_groups: body.allowed_groups,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         expires_at: body.expires_at,
@@ -351,6 +370,7 @@ pub async fn update_api_key(
         model_limits: updated_key.model_limits,
         ip_whitelist: updated_key.ip_whitelist,
         group: updated_key.group,
+        allowed_groups: updated_key.allowed_groups,
         max_multiplier: updated_key.max_multiplier,
         transforms: updated_key.transforms,
     }))

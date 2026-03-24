@@ -1,13 +1,26 @@
-use super::providers::{
-    build_models_list_url, provider_has_billable_pricing, provider_pricing_model,
+use super::api_keys::{
+    ApiKeyCreatedResponse, ApiKeyResponse, CreateApiKeyRequest, UpdateApiKeyRequest,
+    canonicalize_dashboard_api_key_allowed_groups,
 };
+use super::providers::{
+    build_models_list_url, canonicalize_dashboard_channel_groups, provider_has_billable_pricing,
+    provider_pricing_model,
+};
+use super::users::{
+    CreateUserRequest, UpdateUserRequest, canonicalize_dashboard_user_allowed_groups,
+};
+use crate::dashboard_handlers::auth::UserResponse;
 use crate::db::DbPool;
 use crate::migration::Migrator;
-use crate::monoize_routing::MonoizeModelEntry;
+use crate::monoize_routing::{
+    CreateMonoizeProviderInput, MonoizeChannel, MonoizeModelEntry, MonoizeRoutingStore,
+    UpdateMonoizeProviderInput,
+};
 use crate::providers::ProviderStore;
 use crate::users::{
-    RequestLogApiKey, RequestLogBilling, RequestLogChannel, RequestLogError, RequestLogProvider,
-    RequestLogRow, RequestLogTiming, RequestLogTokens, RequestLogUser,
+    CreateApiKeyInput, RequestLogApiKey, RequestLogBilling, RequestLogChannel, RequestLogError,
+    RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens, RequestLogUser,
+    UpdateApiKeyInput, User, UserRole, UserStore,
 };
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
@@ -90,6 +103,633 @@ fn provider_has_billable_pricing_strips_reasoning_suffix_before_lookup() {
         &priced_ids,
         &reasoning_suffix_map,
     ));
+}
+
+#[test]
+fn dashboard_create_provider_channel_groups_default_to_public_and_canonicalize() {
+    let mut body: CreateMonoizeProviderInput = serde_json::from_value(json!({
+        "name": "OpenAI",
+        "provider_type": "responses",
+        "models": {
+            "gpt-5": {
+                "redirect": null,
+                "multiplier": 1.0
+            }
+        },
+        "channels": [
+            {
+                "name": "public",
+                "base_url": "https://example.com/public",
+                "api_key": "secret"
+            },
+            {
+                "name": "restricted",
+                "base_url": "https://example.com/restricted",
+                "api_key": "secret",
+                "groups": [" Beta ", "alpha", "ALPHA", ""]
+            }
+        ]
+    }))
+    .expect("payload deserializes");
+
+    canonicalize_dashboard_channel_groups(&mut body.channels);
+
+    assert!(body.channels[0].groups.is_empty());
+    assert_eq!(
+        body.channels[1].groups,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+}
+
+#[test]
+fn dashboard_update_provider_channel_groups_default_to_public_on_full_replacement() {
+    let mut body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
+        "channels": [
+            {
+                "id": "mono_ch_existing",
+                "name": "existing",
+                "base_url": "https://example.com/existing"
+            }
+        ]
+    }))
+    .expect("payload deserializes");
+
+    let channels = body.channels.as_mut().expect("channels present");
+    canonicalize_dashboard_channel_groups(channels);
+
+    assert!(channels[0].groups.is_empty());
+}
+
+#[test]
+fn dashboard_provider_channel_response_includes_groups_but_hides_api_key() {
+    let channel = MonoizeChannel {
+        id: "mono_ch_123".to_string(),
+        name: "primary".to_string(),
+        base_url: "https://example.com".to_string(),
+        api_key: "secret".to_string(),
+        weight: 1,
+        enabled: true,
+        groups: vec!["alpha".to_string(), "beta".to_string()],
+        passive_failure_count_threshold_override: None,
+        passive_cooldown_seconds_override: None,
+        passive_window_seconds_override: None,
+        passive_rate_limit_cooldown_seconds_override: None,
+        _healthy: None,
+        _last_success_at: None,
+        _health_status: None,
+    };
+
+    let value = serde_json::to_value(&channel).expect("channel serializes");
+    let object = value.as_object().expect("channel object");
+
+    assert_eq!(object.get("groups"), Some(&json!(["alpha", "beta"])));
+    assert!(!object.contains_key("api_key"));
+}
+
+#[tokio::test]
+async fn dashboard_provider_channel_groups_round_trip_through_store_and_reset_to_public_when_omitted()
+ {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let store = MonoizeRoutingStore::new(db).await.expect("store creates");
+
+    let mut create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
+        "name": "OpenAI",
+        "provider_type": "responses",
+        "models": {
+            "gpt-5": {
+                "redirect": null,
+                "multiplier": 1.0
+            }
+        },
+        "channels": [
+            {
+                "name": "primary",
+                "base_url": "https://example.com",
+                "api_key": "secret",
+                "groups": [" Beta ", "alpha", "ALPHA", ""]
+            }
+        ]
+    }))
+    .expect("create payload deserializes");
+    canonicalize_dashboard_channel_groups(&mut create_body.channels);
+
+    let created = store
+        .create_provider(create_body)
+        .await
+        .expect("provider created");
+    let channel_id = created.channels[0].id.clone();
+
+    assert_eq!(
+        created.channels[0].groups,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+    assert_eq!(created.channels[0].api_key, "secret");
+
+    let mut update_body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
+        "channels": [
+            {
+                "id": channel_id,
+                "name": "primary",
+                "base_url": "https://example.com",
+                "api_key": ""
+            }
+        ]
+    }))
+    .expect("update payload deserializes");
+    canonicalize_dashboard_channel_groups(update_body.channels.as_mut().expect("channels present"));
+
+    let updated = store
+        .update_provider(&created.id, update_body)
+        .await
+        .expect("provider updated");
+
+    assert!(updated.channels[0].groups.is_empty());
+    assert_eq!(updated.channels[0].api_key, "secret");
+}
+
+#[test]
+fn dashboard_create_user_allowed_groups_default_to_unrestricted_and_canonicalize() {
+    let mut body: CreateUserRequest = serde_json::from_value(json!({
+        "username": "alice",
+        "password": "password123",
+        "role": "user"
+    }))
+    .expect("payload deserializes");
+
+    assert!(body.allowed_groups.is_empty());
+
+    body.allowed_groups = vec![
+        " Beta ".to_string(),
+        "alpha".to_string(),
+        "ALPHA".to_string(),
+        "".to_string(),
+    ];
+    canonicalize_dashboard_user_allowed_groups(&mut body.allowed_groups);
+
+    assert_eq!(
+        body.allowed_groups,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+}
+
+#[test]
+fn dashboard_create_api_key_allowed_groups_default_to_inherit_and_canonicalize() {
+    let mut body: CreateApiKeyRequest = serde_json::from_value(json!({
+        "name": "default key"
+    }))
+    .expect("payload deserializes");
+
+    assert!(body.allowed_groups.is_empty());
+
+    body.allowed_groups = vec![
+        " Beta ".to_string(),
+        "alpha".to_string(),
+        "ALPHA".to_string(),
+        "".to_string(),
+    ];
+    canonicalize_dashboard_api_key_allowed_groups(&mut body.allowed_groups);
+
+    assert_eq!(
+        body.allowed_groups,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+}
+
+#[test]
+fn dashboard_update_api_key_allowed_groups_is_partial_and_canonicalized_when_present() {
+    let omitted: UpdateApiKeyRequest = serde_json::from_value(json!({
+        "name": "renamed key"
+    }))
+    .expect("payload deserializes");
+    assert!(omitted.allowed_groups.is_none());
+
+    let mut present: UpdateApiKeyRequest = serde_json::from_value(json!({
+        "allowed_groups": [" Beta ", "alpha", "ALPHA", ""]
+    }))
+    .expect("payload deserializes");
+    canonicalize_dashboard_api_key_allowed_groups(
+        present
+            .allowed_groups
+            .as_mut()
+            .expect("allowed_groups present"),
+    );
+
+    assert_eq!(
+        present.allowed_groups,
+        Some(vec!["alpha".to_string(), "beta".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn dashboard_user_allowed_groups_round_trip_through_store_and_response() {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let (log_tx, _) = tokio::sync::broadcast::channel(1);
+    let store = UserStore::new(db, log_tx).await.expect("store creates");
+
+    let mut create_body: CreateUserRequest = serde_json::from_value(json!({
+        "username": "alice",
+        "password": "password123",
+        "role": "user",
+        "allowed_groups": [" Beta ", "alpha", "ALPHA", ""]
+    }))
+    .expect("create payload deserializes");
+    canonicalize_dashboard_user_allowed_groups(&mut create_body.allowed_groups);
+
+    let created = store
+        .create_user(
+            &create_body.username,
+            &create_body.password,
+            UserRole::User,
+            &create_body.allowed_groups,
+        )
+        .await
+        .expect("user created");
+
+    assert_eq!(
+        created.allowed_groups,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+
+    let mut update_body: UpdateUserRequest = serde_json::from_value(json!({
+        "allowed_groups": [" Gamma ", "alpha", "ALPHA", ""]
+    }))
+    .expect("update payload deserializes");
+
+    let groups = update_body
+        .allowed_groups
+        .as_mut()
+        .expect("allowed_groups present");
+    canonicalize_dashboard_user_allowed_groups(groups);
+
+    store
+        .update_user(
+            &created.id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            update_body.allowed_groups.as_deref(),
+        )
+        .await
+        .expect("user updated");
+
+    let fetched = store
+        .get_user_by_id(&created.id)
+        .await
+        .expect("lookup succeeds")
+        .expect("user exists");
+    assert_eq!(
+        fetched.allowed_groups,
+        vec!["alpha".to_string(), "gamma".to_string()]
+    );
+
+    let listed = store.list_users().await.expect("list succeeds");
+    let listed_user = listed
+        .into_iter()
+        .find(|user| user.id == created.id)
+        .expect("listed user exists");
+    assert_eq!(
+        listed_user.allowed_groups,
+        vec!["alpha".to_string(), "gamma".to_string()]
+    );
+
+    let response = serde_json::to_value(UserResponse::from(fetched)).expect("response serializes");
+    assert_eq!(
+        response.get("allowed_groups"),
+        Some(&json!(["alpha", "gamma"]))
+    );
+}
+
+#[test]
+fn user_response_serializes_allowed_groups() {
+    let user = User {
+        id: "user-1".to_string(),
+        username: "alice".to_string(),
+        password_hash: "hash".to_string(),
+        role: UserRole::User,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        last_login_at: None,
+        enabled: true,
+        balance_nano_usd: "0".to_string(),
+        balance_unlimited: false,
+        email: None,
+        allowed_groups: vec!["alpha".to_string(), "beta".to_string()],
+    };
+
+    let value = serde_json::to_value(UserResponse::from(user)).expect("response serializes");
+    assert_eq!(value.get("allowed_groups"), Some(&json!(["alpha", "beta"])));
+}
+
+#[tokio::test]
+async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses() {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let (log_tx, _) = tokio::sync::broadcast::channel(1);
+    let store = UserStore::new(db, log_tx).await.expect("store creates");
+
+    let user = store
+        .create_user(
+            "alice",
+            "password123",
+            UserRole::User,
+            &["alpha".to_string(), "beta".to_string()],
+        )
+        .await
+        .expect("user created");
+
+    let mut create_body: CreateApiKeyRequest = serde_json::from_value(json!({
+        "name": "dashboard key",
+        "group": "legacy-group",
+        "allowed_groups": [" Beta ", "alpha", "ALPHA", ""]
+    }))
+    .expect("create payload deserializes");
+    canonicalize_dashboard_api_key_allowed_groups(&mut create_body.allowed_groups);
+
+    let (created, key) = store
+        .create_api_key_extended(
+            &user.id,
+            CreateApiKeyInput {
+                name: create_body.name,
+                expires_in_days: create_body.expires_in_days,
+                quota: create_body.quota,
+                quota_unlimited: create_body.quota_unlimited,
+                model_limits_enabled: create_body.model_limits_enabled,
+                model_limits: create_body.model_limits,
+                ip_whitelist: create_body.ip_whitelist,
+                group: create_body.group,
+                allowed_groups: create_body.allowed_groups,
+                max_multiplier: create_body.max_multiplier,
+                transforms: create_body.transforms,
+            },
+            false,
+        )
+        .await
+        .expect("api key created");
+
+    assert_eq!(
+        created.allowed_groups,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+    assert_eq!(created.group, "legacy-group");
+
+    let created_value = serde_json::to_value(ApiKeyCreatedResponse {
+        id: created.id.clone(),
+        name: created.name.clone(),
+        key,
+        key_prefix: created.key_prefix.clone(),
+        created_at: created.created_at.to_rfc3339(),
+        expires_at: created.expires_at.map(|date| date.to_rfc3339()),
+        quota_remaining: created.quota_remaining,
+        quota_unlimited: created.quota_unlimited,
+        model_limits_enabled: created.model_limits_enabled,
+        model_limits: created.model_limits.clone(),
+        ip_whitelist: created.ip_whitelist.clone(),
+        group: created.group.clone(),
+        allowed_groups: created.allowed_groups.clone(),
+        max_multiplier: created.max_multiplier,
+        transforms: created.transforms.clone(),
+    })
+    .expect("created response serializes");
+    assert_eq!(
+        created_value.get("allowed_groups"),
+        Some(&json!(["alpha", "beta"]))
+    );
+    assert_eq!(created_value.get("group"), Some(&json!("legacy-group")));
+
+    let mut update_body: UpdateApiKeyRequest = serde_json::from_value(json!({
+        "allowed_groups": [" Beta ", ""]
+    }))
+    .expect("update payload deserializes");
+    canonicalize_dashboard_api_key_allowed_groups(
+        update_body
+            .allowed_groups
+            .as_mut()
+            .expect("allowed_groups present"),
+    );
+
+    let updated = store
+        .update_api_key(
+            &created.id,
+            UpdateApiKeyInput {
+                name: None,
+                enabled: None,
+                quota: None,
+                quota_unlimited: None,
+                model_limits_enabled: None,
+                model_limits: None,
+                ip_whitelist: None,
+                group: None,
+                allowed_groups: update_body.allowed_groups,
+                max_multiplier: None,
+                transforms: None,
+                expires_at: None,
+            },
+            false,
+        )
+        .await
+        .expect("api key updated");
+
+    assert_eq!(updated.allowed_groups, vec!["beta".to_string()]);
+    assert_eq!(updated.group, "legacy-group");
+
+    let fetched = store
+        .get_api_key_by_id(&updated.id)
+        .await
+        .expect("lookup succeeds")
+        .expect("api key exists");
+    assert_eq!(fetched.allowed_groups, vec!["beta".to_string()]);
+
+    let listed_key = store
+        .list_user_api_keys(&user.id)
+        .await
+        .expect("list succeeds")
+        .into_iter()
+        .find(|api_key| api_key.id == updated.id)
+        .expect("listed api key exists");
+    assert_eq!(listed_key.allowed_groups, vec!["beta".to_string()]);
+
+    let response_value = serde_json::to_value(ApiKeyResponse {
+        id: fetched.id,
+        name: fetched.name,
+        key_prefix: fetched.key_prefix,
+        key: fetched.key,
+        created_at: fetched.created_at.to_rfc3339(),
+        expires_at: fetched.expires_at.map(|date| date.to_rfc3339()),
+        last_used_at: fetched.last_used_at.map(|date| date.to_rfc3339()),
+        enabled: fetched.enabled,
+        quota_remaining: fetched.quota_remaining,
+        quota_unlimited: fetched.quota_unlimited,
+        model_limits_enabled: fetched.model_limits_enabled,
+        model_limits: fetched.model_limits,
+        ip_whitelist: fetched.ip_whitelist,
+        group: fetched.group,
+        allowed_groups: fetched.allowed_groups,
+        max_multiplier: fetched.max_multiplier,
+        transforms: fetched.transforms,
+    })
+    .expect("response serializes");
+    assert_eq!(response_value.get("allowed_groups"), Some(&json!(["beta"])));
+    assert_eq!(response_value.get("group"), Some(&json!("legacy-group")));
+}
+
+#[tokio::test]
+async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let (log_tx, _) = tokio::sync::broadcast::channel(1);
+    let store = UserStore::new(db, log_tx).await.expect("store creates");
+
+    let restricted_user = store
+        .create_user(
+            "restricted",
+            "password123",
+            UserRole::User,
+            &["alpha".to_string()],
+        )
+        .await
+        .expect("restricted user created");
+
+    let mut invalid_create_body: CreateApiKeyRequest = serde_json::from_value(json!({
+        "name": "invalid key",
+        "allowed_groups": [" beta "]
+    }))
+    .expect("create payload deserializes");
+    canonicalize_dashboard_api_key_allowed_groups(&mut invalid_create_body.allowed_groups);
+
+    let create_err = store
+        .create_api_key_extended(
+            &restricted_user.id,
+            CreateApiKeyInput {
+                name: invalid_create_body.name,
+                expires_in_days: invalid_create_body.expires_in_days,
+                quota: invalid_create_body.quota,
+                quota_unlimited: invalid_create_body.quota_unlimited,
+                model_limits_enabled: invalid_create_body.model_limits_enabled,
+                model_limits: invalid_create_body.model_limits,
+                ip_whitelist: invalid_create_body.ip_whitelist,
+                group: invalid_create_body.group,
+                allowed_groups: invalid_create_body.allowed_groups,
+                max_multiplier: invalid_create_body.max_multiplier,
+                transforms: invalid_create_body.transforms,
+            },
+            false,
+        )
+        .await
+        .expect_err("create should reject groups outside user ceiling");
+    assert!(create_err.contains("invalid_request"));
+    assert!(create_err.contains("subset"));
+
+    let (created, _) = store
+        .create_api_key_extended(
+            &restricted_user.id,
+            CreateApiKeyInput {
+                name: "valid key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: false,
+                model_limits: Vec::new(),
+                ip_whitelist: Vec::new(),
+                group: "default".to_string(),
+                allowed_groups: Vec::new(),
+                max_multiplier: None,
+                transforms: Vec::new(),
+            },
+            false,
+        )
+        .await
+        .expect("baseline key created");
+
+    let mut invalid_update_body: UpdateApiKeyRequest = serde_json::from_value(json!({
+        "allowed_groups": ["beta"]
+    }))
+    .expect("update payload deserializes");
+    canonicalize_dashboard_api_key_allowed_groups(
+        invalid_update_body
+            .allowed_groups
+            .as_mut()
+            .expect("allowed_groups present"),
+    );
+
+    let update_err = store
+        .update_api_key(
+            &created.id,
+            UpdateApiKeyInput {
+                name: None,
+                enabled: None,
+                quota: None,
+                quota_unlimited: None,
+                model_limits_enabled: None,
+                model_limits: None,
+                ip_whitelist: None,
+                group: None,
+                allowed_groups: invalid_update_body.allowed_groups,
+                max_multiplier: None,
+                transforms: None,
+                expires_at: None,
+            },
+            false,
+        )
+        .await
+        .expect_err("update should reject groups outside user ceiling");
+    assert!(update_err.contains("invalid_request"));
+    assert!(update_err.contains("subset"));
+
+    let unrestricted_user = store
+        .create_user("unrestricted", "password123", UserRole::User, &[])
+        .await
+        .expect("unrestricted user created");
+    let unrestricted_key = store
+        .create_api_key_extended(
+            &unrestricted_user.id,
+            CreateApiKeyInput {
+                name: "open key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: false,
+                model_limits: Vec::new(),
+                ip_whitelist: Vec::new(),
+                group: "default".to_string(),
+                allowed_groups: vec![" Beta ".to_string()],
+                max_multiplier: None,
+                transforms: Vec::new(),
+            },
+            false,
+        )
+        .await
+        .expect("unrestricted user may create scoped key");
+    assert_eq!(unrestricted_key.0.allowed_groups, vec!["beta".to_string()]);
 }
 
 #[test]

@@ -35,7 +35,15 @@ SP2. Rows with `source = 'models_dev'` (or no prior row) MUST be upserted normal
 
 SP3. When models.dev contains the same bare model name under multiple providers:
   - Group all variants by bare model name.
-  - Select the variant with the **highest** non-zero `input_cost_per_token_nano` as the default. This prevents resale losses when the platform charges users based on the stored price — using the maximum ensures the billed price is never below the actual upstream cost of any provider.
+  - Select the default variant using the following priority:
+    1. **Official provider preference**: If the canonical `model_id` belongs to a known model family, prefer the variant from that family's official provider — but only when that variant has strictly positive `input_cost_per_token_nano`. The known family→provider mappings are:
+       - Model IDs starting with `gpt-` or `o` followed by a digit (e.g. `o1`, `o3-pro`) → provider `openai`
+       - Model IDs starting with `claude-` → provider `anthropic`
+       - Model IDs starting with `gemini-` → provider `google`
+       - Model IDs starting with `grok-` → provider `xai`
+       - Model IDs starting with `deepseek-` → provider `deepseek`
+       - Model IDs starting with `mistral-` or `codestral-` or `pixtral-` or `ministral-` → provider `mistral`
+    2. **Highest-cost fallback**: If no official provider variant exists or it lacks positive pricing, fall back to the variant with the highest non-zero `input_cost_per_token_nano`. This prevents resale losses when the platform charges users based on the stored price.
   - Store all variants in `raw_json.providers` so the user can switch sources in the edit UI.
 
 SP4. Sync MUST first delete all records with `source != 'manual'`, then insert new data. This ensures models removed upstream are also cleaned up. Sync response MUST return `upserted`, `skipped`, and `deleted` counts.

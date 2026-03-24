@@ -1,8 +1,10 @@
+import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, Download, Globe, Layers, Plus, Radio, Settings2, Trash2, Weight, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
 	Select,
 	SelectContent,
@@ -29,6 +31,152 @@ import {
 } from './shared'
 
 type Translator = (key: string) => string
+
+function groupKey(value: string): string {
+	return value.trim().toLowerCase()
+}
+
+function dedupeChannelGroups(values: string[]): string[] {
+	const seen = new Set<string>()
+	const next: string[] = []
+
+	for (const value of values) {
+		const trimmed = value.trim()
+		const key = groupKey(trimmed)
+		if (!key || seen.has(key)) {
+			continue
+		}
+		seen.add(key)
+		next.push(key)
+	}
+
+	return next
+}
+
+interface ChannelGroupsInputProps {
+	value: string[]
+	suggestions: string[]
+	suggestionsLoading: boolean
+	t: Translator
+	onChange: (next: string[]) => void
+}
+
+export function ChannelGroupsInput({
+	value,
+	suggestions,
+	suggestionsLoading,
+	t,
+	onChange
+}: ChannelGroupsInputProps) {
+	const [draft, setDraft] = useState('')
+	const groups = useMemo(() => dedupeChannelGroups(value), [value])
+	const draftKey = groupKey(draft)
+	const filteredSuggestions = useMemo(
+		() =>
+			suggestions.filter(suggestion => {
+				const suggestionKey = groupKey(suggestion)
+				if (!suggestionKey) {
+					return false
+				}
+				if (groups.some(group => groupKey(group) === suggestionKey)) {
+					return false
+				}
+				return !draftKey || suggestionKey.includes(draftKey)
+			}),
+		[draftKey, groups, suggestions]
+	)
+
+	const commitGroups = (nextValues: string[]) => {
+		onChange(dedupeChannelGroups(nextValues))
+	}
+
+	const flushDraft = () => {
+		const parts = draft
+			.split(',')
+			.map(part => part.trim())
+			.filter(Boolean)
+		if (parts.length > 0) {
+			commitGroups([...groups, ...parts])
+		}
+		setDraft('')
+	}
+
+	const removeGroup = (group: string) => {
+		commitGroups(groups.filter(entry => groupKey(entry) !== groupKey(group)))
+	}
+
+	const addSuggestion = (group: string) => {
+		commitGroups([...groups, group])
+		setDraft('')
+	}
+
+	return (
+		<div className='space-y-2'>
+			<div className='flex items-center justify-between gap-2'>
+				<Label>{t('providers.groups')}</Label>
+				<span className='text-xs text-muted-foreground'>
+					{t('providers.optional')}
+				</span>
+			</div>
+			<Input
+				value={draft}
+				placeholder={t('providers.groupsPlaceholder')}
+				onChange={e => setDraft(e.target.value)}
+				onBlur={flushDraft}
+				onKeyDown={e => {
+					if (e.key === 'Enter' || e.key === ',') {
+						e.preventDefault()
+						flushDraft()
+					}
+				}}
+			/>
+			{groups.length > 0 && (
+				<div className='flex flex-wrap gap-2'>
+					{groups.map(group => (
+						<Badge
+							key={groupKey(group)}
+							variant='secondary'
+							className='flex items-center gap-1 font-mono'
+						>
+							<span>{group}</span>
+							<Button
+								type='button'
+								variant='ghost'
+								size='icon'
+								className='h-4 w-4'
+								onClick={() => removeGroup(group)}
+							>
+								<X className='h-3 w-3' />
+							</Button>
+						</Badge>
+					))}
+				</div>
+			)}
+			{suggestionsLoading ? (
+				<div className='flex flex-wrap gap-2'>
+					<Skeleton className='h-7 w-20 rounded-full' />
+					<Skeleton className='h-7 w-24 rounded-full' />
+					<Skeleton className='h-7 w-16 rounded-full' />
+				</div>
+			) : filteredSuggestions.length > 0 ? (
+				<div className='flex flex-wrap gap-2'>
+					{filteredSuggestions.slice(0, 8).map(group => (
+						<Button
+							key={group}
+							type='button'
+							variant='outline'
+							size='sm'
+							className='h-7 rounded-full px-3 font-mono text-xs'
+							onClick={() => addSuggestion(group)}
+						>
+							{group}
+						</Button>
+					))}
+				</div>
+			) : null}
+		</div>
+	)
+}
 
 interface ProviderBasicsSectionProps {
 	form: ProviderForm

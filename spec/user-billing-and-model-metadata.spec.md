@@ -28,6 +28,7 @@ U1. User read model exposed by dashboard/auth APIs MUST include:
 - `balance_usd: string`
 - `balance_unlimited: boolean`
 - `email: string | null`
+- `allowed_groups: string[]`
 
 U2. `balance_usd` MUST be computed from `balance_nano_usd` with nano precision and no binary floating conversion.
 
@@ -36,6 +37,7 @@ U3. New users created by register or dashboard create-user MUST default to:
 - `balance_nano_usd = "0"`
 - `balance_unlimited = false`
 - `email = null`
+- `allowed_groups = []`
 
 U4. Usernames with prefix `_monoize_` (case-insensitive) are reserved for internal system accounts and MUST NOT be allowed in public register/login flows or admin create/update username operations.
 
@@ -61,6 +63,16 @@ A2. `PUT /api/dashboard/users/{user_id}` MUST accept optional fields:
 - `balance_usd: string`
 - `balance_unlimited: boolean`
 - `email: string | null`
+- `allowed_groups: string[]`
+
+A2a. `POST /api/dashboard/users` MUST accept optional field `allowed_groups: string[]`. If the field is omitted, the stored value MUST be `[]`.
+
+A2b. `PUT /api/dashboard/users/{user_id}` MUST treat `allowed_groups` as a partial-update field:
+
+- if `allowed_groups` is omitted, the stored value MUST remain unchanged;
+- if `allowed_groups` is present, the stored value MUST be replaced by that array.
+
+A2c. Any dashboard/admin write path that persists `users.allowed_groups` MUST canonicalize the array before storage by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
 
 A3. If both `balance_nano_usd` and `balance_usd` are provided, server MUST use `balance_nano_usd`.
 

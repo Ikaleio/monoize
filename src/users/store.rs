@@ -1,7 +1,8 @@
 use super::utils::parse_nano_usd;
 use super::{
     ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput, RESERVED_INTERNAL_USER_PREFIX,
-    Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore,
+    Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore, canonicalize_groups,
+    parse_groups_json,
 };
 use crate::transforms::TransformRuleConfig;
 use argon2::{
@@ -12,6 +13,7 @@ use chrono::{DateTime, Utc};
 use sea_orm::Value as SeaValue;
 use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryResult, TransactionTrait};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
     "inject_system_prompt",
@@ -78,109 +80,60 @@ pub(crate) fn validate_api_key_transforms(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{sanitize_api_key_transforms, validate_api_key_transforms};
-    use crate::transforms::{Phase, TransformRuleConfig};
-    use serde_json::json;
+fn parse_allowed_groups_json(raw: &str) -> Vec<String> {
+    parse_groups_json(raw)
+}
 
-    #[test]
-    fn sanitize_api_key_transforms_drops_disallowed_rules() {
-        let transforms = vec![TransformRuleConfig {
-            transform: "set_field".to_string(),
-            enabled: true,
-            models: Some(vec!["gpt-5.4-fast".to_string()]),
-            phase: Phase::Request,
-            config: json!({
-                "path": "service_tier",
-                "value": "priority"
-            }),
-        }];
+impl UserStore {
+    pub async fn list_all_user_allowed_groups_json(&self) -> Result<Vec<String>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt("SELECT allowed_groups FROM users", vec![]))
+            .await
+            .map_err(|e| e.to_string())?;
 
-        let sanitized = sanitize_api_key_transforms(transforms, false);
-        assert!(sanitized.is_empty());
+        rows.into_iter()
+            .map(|row| row.try_get("", "allowed_groups").map_err(|e| e.to_string()))
+            .collect()
     }
 
-    #[test]
-    fn validate_api_key_transforms_allows_image_compression() {
-        let transforms = vec![TransformRuleConfig {
-            transform: "compress_user_message_images".to_string(),
-            enabled: true,
-            models: None,
-            phase: Phase::Request,
-            config: json!({
-                "max_edge_px": 1024,
-                "jpeg_quality": 80,
-                "skip_if_smaller": true
-            }),
-        }];
+    pub async fn list_all_api_key_allowed_groups_json(&self) -> Result<Vec<String>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt("SELECT allowed_groups FROM api_keys", vec![]))
+            .await
+            .map_err(|e| e.to_string())?;
 
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+        rows.into_iter()
+            .map(|row| row.try_get("", "allowed_groups").map_err(|e| e.to_string()))
+            .collect()
+    }
+}
+
+fn serialize_allowed_groups_json(groups: &[String]) -> Result<String, String> {
+    serde_json::to_string(&canonicalize_groups(groups)).map_err(|e| e.to_string())
+}
+
+fn validate_api_key_allowed_groups_subset(
+    user_groups: &[String],
+    key_groups: &[String],
+) -> Result<(), String> {
+    let user_groups = canonicalize_groups(user_groups);
+    if user_groups.is_empty() {
+        return Ok(());
     }
 
-    #[test]
-    fn validate_api_key_transforms_allows_new_response_transforms() {
-        let transforms = vec![
-            TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
-                enabled: true,
-                models: None,
-                phase: Phase::Response,
-                config: json!({}),
-            },
-            TransformRuleConfig {
-                transform: "assistant_markdown_images_to_output".to_string(),
-                enabled: true,
-                models: None,
-                phase: Phase::Response,
-                config: json!({}),
-            },
-            TransformRuleConfig {
-                transform: "reasoning_content_delta".to_string(),
-                enabled: true,
-                models: None,
-                phase: Phase::Response,
-                config: json!({}),
-            },
-            TransformRuleConfig {
-                transform: "reasoning_summary_to_raw_cot".to_string(),
-                enabled: true,
-                models: None,
-                phase: Phase::Response,
-                config: json!({}),
-            },
-            TransformRuleConfig {
-                transform: "assistant_output_images_to_markdown".to_string(),
-                enabled: true,
-                models: None,
-                phase: Phase::Response,
-                config: json!({}),
-            },
-        ];
-
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
-    }
-
-    #[test]
-    fn sanitize_api_key_transforms_preserves_disallowed_rules_for_admin() {
-        let transforms = vec![TransformRuleConfig {
-            transform: "set_field".to_string(),
-            enabled: true,
-            models: Some(vec!["gpt-5.4-fast".to_string()]),
-            phase: Phase::Request,
-            config: json!({
-                "path": "service_tier",
-                "value": "priority"
-            }),
-        }];
-
-        let sanitized = sanitize_api_key_transforms(transforms.clone(), true);
-        assert_eq!(sanitized.len(), 1);
-        assert_eq!(sanitized[0].transform, transforms[0].transform);
-        assert_eq!(sanitized[0].enabled, transforms[0].enabled);
-        assert_eq!(sanitized[0].models, transforms[0].models);
-        assert_eq!(sanitized[0].phase as u8, transforms[0].phase as u8);
-        assert_eq!(sanitized[0].config, transforms[0].config);
+    let user_groups: BTreeSet<_> = user_groups.into_iter().collect();
+    let key_groups = canonicalize_groups(key_groups);
+    if key_groups.iter().all(|group| user_groups.contains(group)) {
+        Ok(())
+    } else {
+        Err(
+            "invalid_request: api key allowed_groups must be a subset of the owning user's allowed_groups"
+                .to_string(),
+        )
     }
 }
 
@@ -271,15 +224,18 @@ impl UserStore {
         username: &str,
         password: &str,
         role: UserRole,
+        allowed_groups: &[String],
     ) -> Result<User, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let password_hash = Self::hash_password(password)?;
         let now = Utc::now();
+        let allowed_groups = canonicalize_groups(allowed_groups);
+        let allowed_groups_json = serialize_allowed_groups_json(&allowed_groups)?;
 
         self.db.write().await
             .execute(self.db.stmt(
-                r#"INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled, balance_nano_usd, balance_unlimited)
-                   VALUES ($1, $2, $3, $4, $5, $6, 1, '0', 0)"#,
+                r#"INSERT INTO users (id, username, password_hash, role, created_at, updated_at, enabled, balance_nano_usd, balance_unlimited, allowed_groups)
+                   VALUES ($1, $2, $3, $4, $5, $6, 1, '0', 0, $7)"#,
                 vec![
                     id.clone().into(),
                     username.into(),
@@ -287,6 +243,7 @@ impl UserStore {
                     role.as_str().into(),
                     now.to_rfc3339().into(),
                     now.to_rfc3339().into(),
+                    allowed_groups_json.into(),
                 ],
             ))
             .await
@@ -304,13 +261,14 @@ impl UserStore {
             balance_nano_usd: "0".to_string(),
             balance_unlimited: false,
             email: None,
+            allowed_groups,
         })
     }
 
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE id = $1",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups FROM users WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -326,7 +284,7 @@ impl UserStore {
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE username = $1",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups FROM users WHERE username = $1",
                 vec![username.into()],
             ))
             .await
@@ -342,7 +300,7 @@ impl UserStore {
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
                 vec![],
             ))
             .await
@@ -362,6 +320,7 @@ impl UserStore {
         balance_nano_usd: Option<&str>,
         balance_unlimited: Option<bool>,
         email: Option<Option<&str>>,
+        allowed_groups: Option<&[String]>,
     ) -> Result<(), String> {
         let mut set_clauses = Vec::new();
         let mut values: Vec<SeaValue> = Vec::new();
@@ -410,7 +369,11 @@ impl UserStore {
                 }
             }
         }
-
+        if let Some(groups) = allowed_groups {
+            set_clauses.push(format!("allowed_groups = ${idx}"));
+            values.push(serialize_allowed_groups_json(groups)?.into());
+            idx += 1;
+        }
         if set_clauses.is_empty() {
             return Ok(());
         }
@@ -593,6 +556,7 @@ impl UserStore {
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
                 group: "default".to_string(),
+                allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
@@ -608,6 +572,13 @@ impl UserStore {
         is_admin: bool,
     ) -> Result<(ApiKey, String), String> {
         validate_api_key_transforms(&input.transforms, is_admin)?;
+        let user_allowed_groups = self
+            .get_user_by_id(user_id)
+            .await?
+            .map(|user| user.allowed_groups)
+            .unwrap_or_default();
+        let allowed_groups = canonicalize_groups(&input.allowed_groups);
+        validate_api_key_allowed_groups_subset(&user_allowed_groups, &allowed_groups)?;
         let id = uuid::Uuid::new_v4().to_string();
         let key = format!("sk-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
         let key_prefix = key[..12].to_string();
@@ -621,11 +592,12 @@ impl UserStore {
             serde_json::to_string(&input.model_limits).map_err(|e| e.to_string())?;
         let ip_whitelist_json =
             serde_json::to_string(&input.ip_whitelist).map_err(|e| e.to_string())?;
+        let allowed_groups_json = serialize_allowed_groups_json(&allowed_groups)?;
 
         self.db.write().await
             .execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16)"#,
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16, $17)"#,
                 vec![
                     id.clone().into(),
                     user_id.into(),
@@ -640,6 +612,7 @@ impl UserStore {
                     SeaValue::Int(Some(if input.model_limits_enabled { 1 } else { 0 })),
                     model_limits_json.into(),
                     ip_whitelist_json.into(),
+                    allowed_groups_json.into(),
                     input.group.clone().into(),
                     input.max_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
                     serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?.into(),
@@ -665,6 +638,7 @@ impl UserStore {
             model_limits: input.model_limits,
             ip_whitelist: input.ip_whitelist,
             group: input.group,
+            allowed_groups,
             max_multiplier: input.max_multiplier,
             transforms: input.transforms,
         };
@@ -675,7 +649,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE key_prefix = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms FROM api_keys WHERE key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -691,7 +665,7 @@ impl UserStore {
     pub async fn list_user_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
                 vec![user_id.into()],
             ))
             .await
@@ -815,6 +789,10 @@ impl UserStore {
             .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
             .transpose()
             .map_err(|e| e.to_string())?;
+        let allowed_groups = parse_allowed_groups_json(
+            &row.try_get::<String>("", "allowed_groups")
+                .unwrap_or_else(|_| "[]".to_string()),
+        );
 
         Ok(User {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -845,6 +823,7 @@ impl UserStore {
                 .unwrap_or_else(|_| "0".to_string()),
             balance_unlimited: row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1,
             email: row.try_get::<Option<String>>("", "email").unwrap_or(None),
+            allowed_groups,
         })
     }
 
@@ -876,6 +855,10 @@ impl UserStore {
             .try_get("", "ip_whitelist")
             .unwrap_or_else(|_| "[]".to_string());
         let ip_whitelist: Vec<String> = serde_json::from_str(&ip_whitelist_str).unwrap_or_default();
+        let allowed_groups = parse_allowed_groups_json(
+            &row.try_get::<String>("", "allowed_groups")
+                .unwrap_or_else(|_| "[]".to_string()),
+        );
 
         let group: String = row
             .try_get("", "token_group")
@@ -919,6 +902,7 @@ impl UserStore {
             model_limits,
             ip_whitelist,
             group,
+            allowed_groups,
             max_multiplier,
             transforms,
         })
@@ -934,6 +918,15 @@ impl UserStore {
         if let Some(transforms) = &input.transforms {
             validate_api_key_transforms(transforms, is_admin)?;
         }
+        let existing_key = self
+            .get_api_key_by_id(key_id)
+            .await?
+            .ok_or_else(|| "API key not found".to_string())?;
+        let allowed_groups = input
+            .allowed_groups
+            .as_ref()
+            .map(|groups| canonicalize_groups(groups))
+            .unwrap_or_else(|| existing_key.allowed_groups.clone());
         let mut set_clauses = Vec::new();
         let mut values: Vec<SeaValue> = Vec::new();
         let mut idx = 1usize;
@@ -990,6 +983,11 @@ impl UserStore {
             values.push(group.clone().into());
             idx += 1;
         }
+        if input.allowed_groups.is_some() {
+            set_clauses.push(format!("allowed_groups = ${idx}"));
+            values.push(serialize_allowed_groups_json(&allowed_groups)?.into());
+            idx += 1;
+        }
         if let Some(max_multiplier) = input.max_multiplier {
             set_clauses.push(format!("max_multiplier = ${idx}"));
             values.push(SeaValue::Double(Some(max_multiplier)));
@@ -1011,11 +1009,15 @@ impl UserStore {
         }
 
         if set_clauses.is_empty() {
-            return self
-                .get_api_key_by_id(key_id)
-                .await?
-                .ok_or_else(|| "API key not found".to_string());
+            return Ok(existing_key);
         }
+
+        let user_allowed_groups = self
+            .get_user_by_id(&existing_key.user_id)
+            .await?
+            .map(|user| user.allowed_groups)
+            .unwrap_or_default();
+        validate_api_key_allowed_groups_subset(&user_allowed_groups, &allowed_groups)?;
 
         values.push(key_id.into());
 
@@ -1042,7 +1044,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, token_group, max_multiplier, transforms FROM api_keys WHERE id = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms FROM api_keys WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -1339,5 +1341,153 @@ impl UserStore {
         .await
         .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_allowed_groups_json, sanitize_api_key_transforms, serialize_allowed_groups_json,
+        validate_api_key_allowed_groups_subset, validate_api_key_transforms,
+    };
+    use crate::transforms::{Phase, TransformRuleConfig};
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_api_key_transforms_drops_disallowed_rules() {
+        let transforms = vec![TransformRuleConfig {
+            transform: "set_field".to_string(),
+            enabled: true,
+            models: Some(vec!["gpt-5.4-fast".to_string()]),
+            phase: Phase::Request,
+            config: json!({
+                "path": "service_tier",
+                "value": "priority"
+            }),
+        }];
+
+        let sanitized = sanitize_api_key_transforms(transforms, false);
+        assert!(sanitized.is_empty());
+    }
+
+    #[test]
+    fn validate_api_key_transforms_allows_image_compression() {
+        let transforms = vec![TransformRuleConfig {
+            transform: "compress_user_message_images".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Request,
+            config: json!({
+                "max_edge_px": 1024,
+                "jpeg_quality": 80,
+                "skip_if_smaller": true
+            }),
+        }];
+
+        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+    }
+
+    #[test]
+    fn validate_api_key_transforms_allows_new_response_transforms() {
+        let transforms = vec![
+            TransformRuleConfig {
+                transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "assistant_markdown_images_to_output".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "reasoning_content_delta".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "reasoning_summary_to_raw_cot".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "assistant_output_images_to_markdown".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+        ];
+
+        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+    }
+
+    #[test]
+    fn sanitize_api_key_transforms_preserves_disallowed_rules_for_admin() {
+        let transforms = vec![TransformRuleConfig {
+            transform: "set_field".to_string(),
+            enabled: true,
+            models: Some(vec!["gpt-5.4-fast".to_string()]),
+            phase: Phase::Request,
+            config: json!({
+                "path": "service_tier",
+                "value": "priority"
+            }),
+        }];
+
+        let sanitized = sanitize_api_key_transforms(transforms.clone(), true);
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].transform, transforms[0].transform);
+        assert_eq!(sanitized[0].enabled, transforms[0].enabled);
+        assert_eq!(sanitized[0].models, transforms[0].models);
+        assert_eq!(sanitized[0].phase as u8, transforms[0].phase as u8);
+        assert_eq!(sanitized[0].config, transforms[0].config);
+    }
+
+    #[test]
+    fn allowed_groups_json_parsing_is_tolerant_and_canonical() {
+        assert!(parse_allowed_groups_json("").is_empty());
+        assert!(parse_allowed_groups_json("not-json").is_empty());
+        assert_eq!(
+            parse_allowed_groups_json(r#"[" Beta ","alpha","ALPHA",""]"#),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+        assert_eq!(
+            serialize_allowed_groups_json(&[
+                " Beta ".to_string(),
+                "alpha".to_string(),
+                "ALPHA".to_string(),
+            ])
+            .expect("serialize groups"),
+            r#"["alpha","beta"]"#
+        );
+    }
+
+    #[test]
+    fn api_key_allowed_groups_must_stay_within_non_empty_user_ceiling() {
+        assert!(
+            validate_api_key_allowed_groups_subset(
+                &["team-a".to_string()],
+                &["TEAM-A".to_string()]
+            )
+            .is_ok()
+        );
+        assert!(validate_api_key_allowed_groups_subset(&[], &["team-b".to_string()]).is_ok());
+
+        let err = validate_api_key_allowed_groups_subset(
+            &["team-a".to_string()],
+            &["team-b".to_string()],
+        )
+        .expect_err("expected subset validation failure");
+        assert!(err.contains("invalid_request"));
+        assert!(err.contains("subset"));
     }
 }

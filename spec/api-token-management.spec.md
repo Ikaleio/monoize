@@ -27,8 +27,28 @@ An API key row has:
 - `model_limits: string[]`
 - `ip_whitelist: string[]`
 - `group: string`
+- `allowed_groups: string[]`
 - `max_multiplier: number?`
 - `transforms: TransformRuleConfig[]`
+
+### 1.2 Group-scoped routing fields
+
+TM-GRP-1. The existing API key `group` field remains a separate field persisted as `api_keys.token_group`. This spec MUST NOT reinterpret that field as `allowed_groups`.
+
+TM-GRP-2. `allowed_groups` is a routing authorization field. It MUST use the same JSON TEXT array storage pattern used for other string-array columns such as `model_limits` and `ip_whitelist`.
+
+TM-GRP-3. `allowed_groups = []` on an API key means the key inherits the owning user's group ceiling at request-authentication time.
+
+TM-GRP-4. On API key create/update, the server MUST canonicalize `allowed_groups` by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+
+TM-GRP-5. On API key create/update, subset validation against the owning user's `allowed_groups` MUST be applied after canonicalization:
+
+- if the owning user's `allowed_groups == []`, any canonicalized API key `allowed_groups` array is valid;
+- otherwise, every element of the API key's canonicalized `allowed_groups` array MUST be a member of the owning user's `allowed_groups` array.
+
+TM-GRP-6. API key create/update requests that violate TM-GRP-5 MUST be rejected with HTTP `400` and code `invalid_request`.
+
+TM-GRP-7. If a stored API key row has `allowed_groups` absent, null, empty string, or serialized empty array, runtime MUST treat it as `[]` for backward compatibility.
 
 ## 2. Endpoints
 
@@ -59,6 +79,7 @@ All endpoints in this spec require an authenticated dashboard session.
   - `model_limits: string[]` (default empty)
   - `ip_whitelist: string[]` (default empty)
   - `group: string` (default `"default"`)
+  - `allowed_groups: string[]` (default empty, meaning inherit from owning user)
   - `max_multiplier: number?` (default null)
   - `transforms: TransformRuleConfig[]` (default empty)
 - **Response:** The created key object including the full key string.
@@ -84,6 +105,7 @@ TM-CREATE-4. After successful key creation, there is no required cache invalidat
   - `model_limits`
   - `ip_whitelist`
   - `group`
+  - `allowed_groups`
   - `max_multiplier`
   - `transforms`
   - `expires_at` (RFC3339 string or null)

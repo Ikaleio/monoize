@@ -205,6 +205,7 @@ pub async fn call_messages(
     call_upstream(client, provider, auth_value, "/v1/messages", body).await
 }
 
+#[allow(clippy::result_large_err)]
 fn apply_auth(
     req: reqwest::RequestBuilder,
     auth: &ProviderAuthConfig,

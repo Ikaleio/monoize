@@ -63,8 +63,7 @@ fn assert_non_interleaved_message_blocks(events: &[Value], label: &str) {
             "content_block_start" => {
                 assert!(
                     active_block.is_none(),
-                    "{label}: block {index} started while block {:?} was still open",
-                    active_block
+                    "{label}: block {index} started while block {active_block:?} was still open"
                 );
                 *seen_starts.entry(index).or_insert(0) += 1;
                 active_block = Some(index);
@@ -73,16 +72,14 @@ fn assert_non_interleaved_message_blocks(events: &[Value], label: &str) {
                 assert_eq!(
                     active_block,
                     Some(index),
-                    "{label}: delta for block {index} appeared while active block was {:?}",
-                    active_block
+                    "{label}: delta for block {index} appeared while active block was {active_block:?}"
                 );
             }
             "content_block_stop" => {
                 assert_eq!(
                     active_block,
                     Some(index),
-                    "{label}: stop for block {index} appeared while active block was {:?}",
-                    active_block
+                    "{label}: stop for block {index} appeared while active block was {active_block:?}"
                 );
                 *seen_stops.entry(index).or_insert(0) += 1;
                 active_block = None;
@@ -518,6 +515,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,

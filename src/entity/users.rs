@@ -24,6 +24,8 @@ pub struct Model {
     pub balance_unlimited: i32,
     #[sea_orm(column_type = "Text")]
     pub email: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub allowed_groups: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

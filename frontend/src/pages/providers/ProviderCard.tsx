@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
+import { mutate } from 'swr'
 import { ModelBadge } from '@/components/ModelBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,6 +32,7 @@ import {
 } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { SWR_KEYS } from '@/lib/swr'
 import { Virtuoso } from 'react-virtuoso'
 import type { ChannelTestResult, ModelMetadataRecord, Provider } from '@/lib/api'
 import { ChannelTestDialog } from './ChannelTestDialog'
@@ -119,6 +121,7 @@ export function ProviderCard({
 			toast.error(err instanceof Error ? err.message : t('common.error'))
 		} finally {
 			setQuickTestingChannelId(null)
+			mutate(SWR_KEYS.PROVIDERS)
 		}
 	}
 

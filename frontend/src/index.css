@@ -84,10 +84,14 @@
 		@apply border-border;
 	}
 
+	html, body, #root {
+		height: 100dvh;
+		overflow: hidden;
+	}
+
 	body {
 		@apply bg-background text-foreground antialiased;
 		font-family: var(--font-sans-cjk);
-		min-height: 100vh;
 		background-image:
 			linear-gradient(to right, hsl(var(--grid-color)) 1px, transparent 1px),
 			linear-gradient(to bottom, hsl(var(--grid-color)) 1px, transparent 1px);

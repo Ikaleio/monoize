@@ -209,18 +209,16 @@ pub(crate) async fn stream_gemini_to_urp_events(
             reasoning_text = current_reasoning_text;
         }
 
-        if current_reasoning_sig.len() > reasoning_sig.len() {
-            if !started_reasoning_part {
-                let _ = tx
-                    .send(UrpStreamEvent::PartStart {
-                        part_index: 1,
-                        item_index: 0,
-                        header: PartHeader::Reasoning,
-                        extra_body: HashMap::new(),
-                    })
-                    .await;
-                started_reasoning_part = true;
-            }
+        if current_reasoning_sig.len() > reasoning_sig.len() && !started_reasoning_part {
+            let _ = tx
+                .send(UrpStreamEvent::PartStart {
+                    part_index: 1,
+                    item_index: 0,
+                    header: PartHeader::Reasoning,
+                    extra_body: HashMap::new(),
+                })
+                .await;
+            started_reasoning_part = true;
         }
         reasoning_sig = current_reasoning_sig;
 

@@ -19,7 +19,8 @@ pub(super) async fn execute_nonstream_typed(
     resolve_model_suffix(state, &mut req).await;
     let logical_model = req.model.clone();
     let routing_stub = build_routing_stub(&req, max_multiplier);
-    let attempts = build_monoize_attempts(state, &routing_stub).await?;
+    let attempts =
+        build_monoize_attempts(state, &routing_stub, auth.effective_groups.clone()).await?;
     insert_pending_request_log(
         state,
         auth,
@@ -243,6 +244,7 @@ pub(super) async fn forward_nonstream_typed(
     ))
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) fn encode_request_for_provider(
     req: &urp::UrpRequest,
     attempt: &MonoizeAttempt,
@@ -265,6 +267,7 @@ pub(super) fn encode_request_for_provider(
     Ok(value)
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) fn decode_response_from_provider(
     provider_type: ProviderType,
     value: &Value,

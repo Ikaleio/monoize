@@ -42,6 +42,7 @@ pub struct UserResponse {
     pub balance_unlimited: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+    pub allowed_groups: Vec<String>,
 }
 
 impl From<User> for UserResponse {
@@ -57,6 +58,7 @@ impl From<User> for UserResponse {
             balance_nano_usd: u.balance_nano_usd,
             balance_unlimited: u.balance_unlimited,
             email: u.email,
+            allowed_groups: u.allowed_groups,
         }
     }
 }
@@ -149,7 +151,7 @@ pub async fn register(
     };
 
     let user = user_store
-        .create_user(&body.username, &body.password, role)
+        .create_user(&body.username, &body.password, role, &[])
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
@@ -300,6 +302,7 @@ pub async fn update_me(
             None,
             None,
             body.email.as_ref().map(|e| e.as_deref()),
+            None,
         )
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;

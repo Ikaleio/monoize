@@ -435,10 +435,10 @@ export function SettingsPage() {
                   id="passive_failure_count_threshold"
                   type="number"
                   min="1"
-                  value={currentSettings.monoize_passive_failure_count_threshold}
+                  value={currentSettings.monoize_passive_failure_threshold}
                   onChange={(e) =>
                     handleChange({
-                      monoize_passive_failure_count_threshold: Math.max(1, parseInt(e.target.value) || 3),
+                      monoize_passive_failure_threshold: Math.max(1, parseInt(e.target.value) || 3),
                     })
                   }
                   className="transition-all focus:scale-[1.01]"

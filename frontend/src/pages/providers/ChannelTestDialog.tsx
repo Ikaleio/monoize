@@ -17,6 +17,8 @@ import {
 	TooltipTrigger
 } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
+import { SWR_KEYS } from '@/lib/swr'
+import { mutate } from 'swr'
 import { Virtuoso } from 'react-virtuoso'
 import type { ChannelTestResult } from '@/lib/api'
 
@@ -97,6 +99,7 @@ export function ChannelTestDialog({
 			await runSingleTest(model)
 		}
 		setTestingAll(false)
+		mutate(SWR_KEYS.PROVIDERS)
 	}
 
 	const testedCount = Object.values(testState).filter(

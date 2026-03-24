@@ -6,6 +6,7 @@ fn request_created_at(started_at: std::time::Instant) -> chrono::DateTime<Utc> {
     Utc::now() - elapsed
 }
 
+#[allow(clippy::too_many_arguments)]
 fn broadcast_pending_snapshot(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -91,6 +92,7 @@ pub(super) async fn insert_pending_request_log(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn update_pending_channel_info(
     state: &AppState,
     auth: &crate::auth::AuthResult,

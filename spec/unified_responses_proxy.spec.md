@@ -305,8 +305,8 @@ RC3. If multiple sources in RC2 are present, Monoize MUST use this precedence:
 
 RC4. When the selected upstream provider type is:
 
-- `chat_completion`: Monoize MUST send normalized effort as `reasoning_effort`.
-- `responses`: Monoize MUST send normalized effort as `reasoning: { "effort": <level> }`.
+- `chat_completion`: If effort is `none`, Monoize MUST omit the `reasoning_effort` field entirely. For any other effort value, Monoize MUST send normalized effort as `reasoning_effort`.
+- `responses`: If effort is `none`, Monoize MUST omit the `effort` key from the `reasoning` object (the object MAY still contain other keys such as `summary`). For any other effort value, Monoize MUST send normalized effort as `reasoning: { "effort": <level> }`.
 - `messages`: Monoize MUST select the encoding based on the upstream model:
   - For models that support adaptive thinking (Claude Opus 4.6+, Sonnet 4.6+, and any future Claude model with major version ≥ 5): Monoize MUST send `thinking: { "type": "adaptive" }` combined with `output_config: { "effort": <level> }`.
   - For all other Anthropic models: Monoize MUST send `thinking: { "type": "enabled", "budget_tokens": N }`, where:

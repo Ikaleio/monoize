@@ -695,6 +695,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
+            groups: Vec::new(),
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -777,6 +778,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
+            groups: Vec::new(),
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -886,6 +888,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -967,6 +970,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1026,8 +1030,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
     let frames = parse_responses_sse_json(&text);
 
     assert!(frames.iter().any(|(event, payload)| {
-        event == "response.output_text.delta"
-            && payload["delta"].as_str() == Some("see ")
+        event == "response.output_text.delta" && payload["delta"].as_str() == Some("see ")
     }));
     assert!(!frames.iter().any(|(event, payload)| {
         event == "response.output_text.delta"
@@ -1054,9 +1057,9 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
                                             == Some("https://example.com/chart.png")
                                 }) && content.iter().any(|part| {
                                     part["type"].as_str() == Some("output_text")
-                                        && part["text"]
-                                            .as_str()
-                                            .is_some_and(|text| text.contains("![image](https://example.com/chart.png)"))
+                                        && part["text"].as_str().is_some_and(|text| {
+                                            text.contains("![image](https://example.com/chart.png)")
+                                        })
                                 })
                             })
                     })

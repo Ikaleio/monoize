@@ -152,6 +152,7 @@ async fn request_logs_pending_transitions_to_success_and_charges_once() {
             Some("1000000000"),
             Some(false),
             None,
+            None,
         )
         .await
         .expect("set finite balance");
@@ -669,6 +670,7 @@ async fn billing_injected_usage_field_ignored() {
             Some("1000000000"),
             Some(false),
             None,
+            None,
         )
         .await
         .expect("update user");
@@ -729,6 +731,7 @@ async fn billing_injected_pricing_field_ignored() {
             None,
             Some("1000000000"),
             Some(false),
+            None,
             None,
         )
         .await
@@ -807,6 +810,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -866,6 +870,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
             None,
             Some("1000000000"),
             Some(false),
+            None,
             None,
         )
         .await
@@ -943,6 +948,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1002,6 +1008,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
             None,
             Some("1000000000"),
             Some(false),
+            None,
             None,
         )
         .await
@@ -1079,6 +1086,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1118,6 +1126,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
             None,
             Some("1000000000"),
             Some(false),
+            None,
             None,
         )
         .await
@@ -1179,6 +1188,7 @@ async fn balance_zero_returns_payment_required() {
             Some("0"),
             Some(false),
             None,
+            None,
         )
         .await
         .expect("update user");
@@ -1214,6 +1224,7 @@ async fn balance_exact_covers_request() {
             None,
             Some("20000"),
             Some(false),
+            None,
             None,
         )
         .await
@@ -1265,6 +1276,7 @@ async fn balance_insufficient_after_charge() {
             Some("10000"),
             Some(false),
             None,
+            None,
         )
         .await
         .expect("update user");
@@ -1315,6 +1327,7 @@ async fn extra_fields_do_not_corrupt_response() {
             None,
             Some("1000000000"),
             Some(false),
+            None,
             None,
         )
         .await

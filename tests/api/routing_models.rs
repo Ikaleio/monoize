@@ -117,6 +117,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: Some(1),
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -163,7 +164,11 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         "channel should become unhealthy after one transient failure when override threshold=1"
     );
     assert_eq!(
-        state.passive_samples.iter().filter(|sample| sample.failed).count(),
+        state
+            .passive_samples
+            .iter()
+            .filter(|sample| sample.failed)
+            .count(),
         1,
         "one failed sample should be recorded in the passive breaker window"
     );
@@ -197,6 +202,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
+            groups: Vec::new(),
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -297,6 +303,7 @@ async fn models_list_respects_api_key_model_limits() {
                 model_limits: vec!["gpt-5-mini".to_string(), "grok-4".to_string()],
                 ip_whitelist: Vec::new(),
                 group: "default".to_string(),
+                allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
@@ -350,6 +357,7 @@ async fn models_list_model_limits_disabled_shows_all() {
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: Vec::new(),
                 group: "default".to_string(),
+                allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
             },
@@ -406,6 +414,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
                 group: "default".to_string(),
+                allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
             },

@@ -728,16 +728,14 @@ mod tests {
         assert_eq!(decoded_output.accepted_prediction_tokens, 7);
         assert_eq!(decoded_output.rejected_prediction_tokens, 8);
         assert!(
-            decoded_usage
+            !decoded_usage
                 .extra_body
-                .get("tool_prompt_input_tokens")
-                .is_none()
+                .contains_key("tool_prompt_input_tokens")
         );
         assert!(
-            decoded_usage
+            !decoded_usage
                 .extra_body
-                .get("reasoning_output_tokens")
-                .is_none()
+                .contains_key("reasoning_output_tokens")
         );
         assert_eq!(
             decoded_usage.extra_body.get("native_counter"),

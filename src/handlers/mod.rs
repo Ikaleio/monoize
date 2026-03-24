@@ -38,6 +38,7 @@ use routing::*;
 use streaming::*;
 use usage::*;
 
+#[allow(clippy::result_large_err)]
 fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {
     if !auth.model_limits_enabled || auth.model_limits.is_empty() {
         return Ok(());
@@ -298,7 +299,8 @@ pub async fn create_embeddings(
     let request_ip = extract_client_ip(&headers);
     let started_at = std::time::Instant::now();
     let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
-    let attempts = build_monoize_attempts(&state, &routing_stub).await?;
+    let attempts =
+        build_monoize_attempts(&state, &routing_stub, auth.effective_groups.clone()).await?;
     insert_pending_request_log(
         &state,
         &auth,
@@ -744,6 +746,7 @@ async fn ensure_quota_before_forward(
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 fn split_body(value: Value, known_keys: &[&str]) -> AppResult<(Value, Map<String, Value>)> {
     let known: HashSet<&str> = known_keys.iter().copied().collect();
     let obj = value.as_object().ok_or_else(|| {
@@ -775,6 +778,7 @@ fn parse_max_multiplier_header(headers: &HeaderMap) -> Option<f64> {
         .filter(|v| v.is_finite() && *v > 0.0)
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_urp_request(known: &Value, extra: Map<String, Value>) -> AppResult<UrpRequest> {
     let merged = merge_known_and_extra(known.clone(), extra);
     let obj = merged.as_object().ok_or_else(|| {

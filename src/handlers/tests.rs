@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::{RuntimeConfig, load_state_with_runtime};
+use crate::auth::AuthResult;
 use crate::config::ProviderType;
 use crate::model_registry_store::ModelPricing;
 use crate::monoize_routing::{
@@ -8,7 +9,116 @@ use crate::monoize_routing::{
 use crate::settings::normalize_pricing_model_key;
 use crate::urp;
 use axum::http::StatusCode;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+const GROUP_ROUTING_MODEL: &str = "gpt-group-routing";
+
+fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {
+    AuthResult {
+        tenant_id: "tenant-1".to_string(),
+        user_id: None,
+        username: None,
+        api_key_id: None,
+        max_multiplier: None,
+        transforms: Vec::new(),
+        effective_groups,
+        model_limits_enabled: false,
+        model_limits: Vec::new(),
+        ip_whitelist: Vec::new(),
+        quota_remaining: None,
+        quota_unlimited: true,
+    }
+}
+
+fn build_test_urp_request(model: &str) -> urp::UrpRequest {
+    urp::UrpRequest {
+        model: model.to_string(),
+        inputs: vec![urp::Item::Message {
+            role: urp::Role::User,
+            parts: vec![urp::Part::Text {
+                content: "hello".to_string(),
+                extra_body: HashMap::new(),
+            }],
+            extra_body: HashMap::new(),
+        }],
+        stream: Some(false),
+        temperature: None,
+        top_p: None,
+        max_output_tokens: None,
+        reasoning: None,
+        tools: None,
+        tool_choice: None,
+        response_format: None,
+        user: None,
+        extra_body: HashMap::new(),
+    }
+}
+
+async fn seed_group_routing_provider(
+    state: &AppState,
+    circuit_breaker_enabled: bool,
+    channels: Vec<CreateMonoizeChannelInput>,
+) {
+    state
+        .monoize_store
+        .create_provider(CreateMonoizeProviderInput {
+            name: "OpenAI".to_string(),
+            provider_type: MonoizeProviderType::Responses,
+            max_retries: -1,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled,
+            per_model_circuit_break: false,
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            enabled: true,
+            priority: Some(0),
+            models: std::collections::HashMap::from([(
+                GROUP_ROUTING_MODEL.to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
+            channels,
+        })
+        .await
+        .expect("provider created");
+}
+
+async fn seed_model_pricing(state: &AppState, model: &str) {
+    state
+        .model_registry_store
+        .upsert_model_metadata(
+            model,
+            crate::model_registry_store::UpsertModelMetadataInput {
+                models_dev_provider: Some("test".to_string()),
+                mode: Some("chat".to_string()),
+                input_cost_per_token_nano: Some("1000".to_string()),
+                output_cost_per_token_nano: Some("1000".to_string()),
+                cache_read_input_cost_per_token_nano: None,
+                cache_creation_input_cost_per_token_nano: None,
+                output_cost_per_reasoning_token_nano: None,
+                max_input_tokens: None,
+                max_output_tokens: None,
+                max_tokens: None,
+            },
+        )
+        .await
+        .expect("pricing seeded");
+}
+
+fn attempt_channel_ids(attempts: &[MonoizeAttempt]) -> BTreeSet<&str> {
+    attempts
+        .iter()
+        .map(|attempt| attempt.channel_id.as_str())
+        .collect()
+}
 
 #[test]
 fn calculate_charge_nano_uses_model_price_and_multiplier() {
@@ -241,6 +351,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 weight: 1,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -254,7 +365,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
         model: "gpt-unpriced".to_string(),
         max_multiplier: None,
     };
-    let err = build_monoize_attempts(&state, &req)
+    let err = build_monoize_attempts(&state, &req, None)
         .await
         .expect_err("must reject unpriced model");
 
@@ -305,6 +416,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 weight: 1,
+                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -338,10 +450,143 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
         model: "gpt-fallback-src".to_string(),
         max_multiplier: None,
     };
-    let attempts = build_monoize_attempts(&state, &req)
+    let attempts = build_monoize_attempts(&state, &req, None)
         .await
         .expect("fallback-priced model should be allowed");
 
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].upstream_model, "gpt-fallback-dest");
+}
+
+#[tokio::test]
+async fn build_monoize_attempts_filters_channels_by_effective_groups_before_health_logic() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+
+    seed_group_routing_provider(
+        &state,
+        false,
+        vec![
+            CreateMonoizeChannelInput {
+                id: Some("public".to_string()),
+                name: "public".to_string(),
+                base_url: "https://public.example.com".to_string(),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                weight: 1,
+                groups: Vec::new(),
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            },
+            CreateMonoizeChannelInput {
+                id: Some("team-a".to_string()),
+                name: "team-a".to_string(),
+                base_url: "https://team-a.example.com".to_string(),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                weight: 1,
+                groups: vec!["team-a".to_string()],
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            },
+            CreateMonoizeChannelInput {
+                id: Some("team-b".to_string()),
+                name: "team-b".to_string(),
+                base_url: "https://team-b.example.com".to_string(),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                weight: 1,
+                groups: vec!["team-b".to_string()],
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            },
+        ],
+    )
+    .await;
+    seed_model_pricing(&state, GROUP_ROUTING_MODEL).await;
+
+    let req = UrpRequest {
+        model: GROUP_ROUTING_MODEL.to_string(),
+        max_multiplier: None,
+    };
+
+    let unrestricted = build_monoize_attempts(&state, &req, None)
+        .await
+        .expect("unrestricted routing succeeds");
+    let team_a = build_monoize_attempts(&state, &req, Some(vec!["team-a".to_string()]))
+        .await
+        .expect("team-a routing succeeds");
+    let public_only = build_monoize_attempts(&state, &req, Some(Vec::new()))
+        .await
+        .expect("public-only routing succeeds");
+
+    assert_eq!(
+        attempt_channel_ids(&unrestricted),
+        BTreeSet::from(["public", "team-a", "team-b"])
+    );
+    assert_eq!(
+        attempt_channel_ids(&team_a),
+        BTreeSet::from(["public", "team-a"])
+    );
+    assert_eq!(
+        attempt_channel_ids(&public_only),
+        BTreeSet::from(["public"])
+    );
+}
+
+#[tokio::test]
+async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_channel() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+
+    seed_group_routing_provider(
+        &state,
+        true,
+        vec![CreateMonoizeChannelInput {
+            id: Some("team-a".to_string()),
+            name: "team-a".to_string(),
+            base_url: "https://team-a.example.com".to_string(),
+            api_key: Some("secret".to_string()),
+            enabled: true,
+            weight: 1,
+            groups: vec!["team-a".to_string()],
+            passive_failure_count_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
+        }],
+    )
+    .await;
+
+    let err = execute_nonstream_typed(
+        &state,
+        &build_test_auth(Some(Vec::new())),
+        build_test_urp_request(GROUP_ROUTING_MODEL),
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect_err("public-only restriction should leave no attempts");
+
+    assert_eq!(err.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(err.code, "upstream_error");
+    assert_eq!(
+        err.message,
+        format!("No available upstream provider for model: {GROUP_ROUTING_MODEL}")
+    );
 }

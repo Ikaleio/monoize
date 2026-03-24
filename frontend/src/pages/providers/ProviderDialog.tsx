@@ -21,7 +21,12 @@ import type {
 	SystemSettings,
 	TransformRegistryItem
 } from '@/lib/api'
-import { createProviderOptimistic, updateProviderOptimistic } from '@/lib/swr'
+import {
+	createProviderOptimistic,
+	providerDetailSWRKey,
+	updateProviderOptimistic,
+	useDashboardGroups
+} from '@/lib/swr'
 import { findFirstInvalidTransformRule } from '@/components/transforms/transform-schema'
 import { ModelPickerDialog } from './ModelPickerDialog'
 import {
@@ -58,7 +63,7 @@ function cloneModelRow(row: ModelRow): ModelRow {
 }
 
 function cloneChannelRow(row: ChannelRow): ChannelRow {
-	return { ...row }
+	return { ...row, groups: [...row.groups] }
 }
 
 function hasModelNameConflict(
@@ -114,13 +119,15 @@ export function ProviderDialog({
 	const initialFormRef = useRef<string | null>(null)
 
 	const isEdit = mode === 'edit'
+	const { data: dashboardGroups = [], isLoading: isDashboardGroupsLoading } =
+		useDashboardGroups(open)
 
 	const {
 		data: editProviderDetail,
 		isLoading: isLoadingEditProviderDetail,
 		error: editProviderDetailError
 	} = useSWR(
-		open && isEdit && current ? `provider-detail:${current.id}` : null,
+		open && isEdit && current ? providerDetailSWRKey(current.id) : null,
 		() => api.getProvider(current!.id)
 	)
 
@@ -150,7 +157,7 @@ export function ProviderDialog({
 	const channelGlobalDefaults = useMemo(
 		() => ({
 			passive_failure_count_threshold:
-				settings?.monoize_passive_failure_count_threshold,
+				settings?.monoize_passive_failure_threshold,
 			passive_window_seconds: settings?.monoize_passive_window_seconds,
 			passive_cooldown_seconds: settings?.monoize_passive_cooldown_seconds,
 			passive_rate_limit_cooldown_seconds:
@@ -513,6 +520,7 @@ export function ProviderDialog({
 			api_key: row.api_key.trim() || undefined,
 			weight: Number(row.weight),
 			enabled: row.enabled,
+			groups: row.groups.map(group => group.trim()).filter(Boolean),
 			passive_failure_count_threshold_override:
 				row.passive_failure_count_threshold_override.trim() ?
 					Number(row.passive_failure_count_threshold_override)
@@ -886,6 +894,8 @@ export function ProviderDialog({
 				isEdit={isEdit}
 				canDelete={editingChannelIndex !== null}
 				globalDefaults={channelGlobalDefaults}
+				groupSuggestions={dashboardGroups}
+				groupSuggestionsLoading={isDashboardGroupsLoading}
 				onOpenChange={value => {
 					if (!value) {
 						closeChannelDialog()

@@ -12,6 +12,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260314_000004_request_log_retention_indexes::Migration),
             Box::new(m20260322_000005_retry_breaker_refactor::Migration),
             Box::new(m20260322_000006_provider_retry_interval_and_breaker_toggle::Migration),
+            Box::new(m20260323_000007_channel_group_system::Migration),
         ]
     }
 }
@@ -22,3 +23,4 @@ mod m20260307_000003_drop_pg_request_logs_shadow;
 mod m20260314_000004_request_log_retention_indexes;
 mod m20260322_000005_retry_breaker_refactor;
 mod m20260322_000006_provider_retry_interval_and_breaker_toggle;
+mod m20260323_000007_channel_group_system;

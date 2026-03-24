@@ -39,6 +39,7 @@ A channel object MUST include:
 - `api_key: string` (write-only: MUST NOT be returned by list/get APIs)
 - `weight: integer >= 0`
 - `enabled: boolean`
+- `groups: string[]` (default empty)
 
 Runtime projection fields MAY be returned by list/get APIs:
 
@@ -53,6 +54,12 @@ Channel-level passive breaker override fields MAY be present:
 - `passive_cooldown_seconds_override: integer? (>= 1)`
 - `passive_rate_limit_cooldown_seconds_override: integer? (>= 1)`
 
+Channel group routing semantics:
+
+- `groups = []` means the channel is public.
+- On create/update, the server MUST canonicalize `groups` by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+- If a stored channel row has `groups` absent, null, empty string, or serialized empty array, read APIs and routing MUST treat it as `[]` for backward compatibility.
+
 ## 2. Invariants
 
 CP-INV-1. `channels.length >= 1`.
@@ -66,6 +73,8 @@ CP-INV-4. Every channel weight MUST satisfy `weight >= 0`.
 CP-INV-5. `provider_type` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `grok`.
 
 CP-INV-6. If `api_type_overrides` is present, every entry's `api_type` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `grok`, and every entry's `pattern` MUST be a non-empty string.
+
+CP-INV-7. Every returned `channel.groups` value MUST already be canonicalized: lowercase, trimmed, non-empty, deduplicated, sorted ascending.
 
 ## 3. Endpoints
 
@@ -96,7 +105,7 @@ All endpoints require an authenticated dashboard admin session.
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
   - `models: Record<string, { redirect: string | null, multiplier: number }>`
-  - `channels: Array<{ id?: string, name: string, base_url: string, api_key: string, weight?: number, enabled?: boolean, passive_failure_count_threshold_override?: integer, passive_window_seconds_override?: integer, passive_cooldown_seconds_override?: integer, passive_rate_limit_cooldown_seconds_override?: integer }>`
+  - `channels: Array<{ id?: string, name: string, base_url: string, api_key: string, weight?: number, enabled?: boolean, groups?: string[], passive_failure_count_threshold_override?: integer, passive_window_seconds_override?: integer, passive_cooldown_seconds_override?: integer, passive_rate_limit_cooldown_seconds_override?: integer }>`
   - `api_type_overrides?: Array<{ pattern: string, api_type: "responses" | "chat_completion" | "messages" | "gemini" | "grok" }>`
 - Response: `201` + created provider
 - Errors: `400 invalid_request` when invariants fail

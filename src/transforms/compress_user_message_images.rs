@@ -149,7 +149,7 @@ impl Transform for CompressUserMessageImagesTransform {
                         *source = next_source;
                     }
                     ImageSource::Url { url, detail } => {
-                        let Some((media_type, data)) = split_image_data_url(&url) else {
+                        let Some((media_type, data)) = split_image_data_url(url) else {
                             continue;
                         };
                         let Some(next_source) =
@@ -183,7 +183,7 @@ fn split_image_data_url(url: &str) -> Option<(String, String)> {
 fn preserve_url_detail(source: ImageSource, detail: Option<String>) -> ImageSource {
     match source {
         ImageSource::Base64 { media_type, data } => ImageSource::Url {
-            url: format!("data:{};base64,{}", media_type, data),
+            url: format!("data:{media_type};base64,{data}"),
             detail,
         },
         ImageSource::Url {

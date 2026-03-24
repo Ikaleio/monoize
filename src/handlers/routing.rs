@@ -137,6 +137,7 @@ pub(super) async fn normalized_logical_model_for_matching(
 pub(super) async fn build_monoize_attempts(
     state: &AppState,
     urp: &UrpRequest,
+    effective_groups: Option<Vec<String>>,
 ) -> AppResult<Vec<MonoizeAttempt>> {
     let providers =
         state.monoize_store.list_providers().await.map_err(|e| {
@@ -144,7 +145,7 @@ pub(super) async fn build_monoize_attempts(
         })?;
     let mut attempts = Vec::new();
     for provider in providers {
-        collect_provider_attempts(state, urp, &provider, &mut attempts).await;
+        collect_provider_attempts(state, urp, &effective_groups, &provider, &mut attempts).await;
     }
     if attempts.is_empty() {
         return Ok(attempts);
@@ -188,6 +189,7 @@ pub(super) async fn build_monoize_attempts(
 pub(super) async fn collect_provider_attempts(
     state: &AppState,
     urp: &UrpRequest,
+    effective_groups: &Option<Vec<String>>,
     provider: &crate::monoize_routing::MonoizeProvider,
     out: &mut Vec<MonoizeAttempt>,
 ) {
@@ -205,8 +207,11 @@ pub(super) async fn collect_provider_attempts(
     let channels = filter_eligible_channels(
         state,
         &provider.channels,
+        effective_groups,
         provider.circuit_breaker_enabled,
-        provider.per_model_circuit_break.then_some(urp.model.as_str()),
+        provider
+            .per_model_circuit_break
+            .then_some(urp.model.as_str()),
     )
     .await;
     if channels.is_empty() {
@@ -219,7 +224,9 @@ pub(super) async fn collect_provider_attempts(
     } else {
         Some(provider.max_retries.max(0) as usize + 1)
     };
-    let max_attempts = provider_attempt_limit.unwrap_or(ordered.len()).min(ordered.len());
+    let max_attempts = provider_attempt_limit
+        .unwrap_or(ordered.len())
+        .min(ordered.len());
     let upstream_model = resolve_upstream_model(&urp.model, model_entry);
 
     let runtime = state.monoize_runtime.read().await;
@@ -289,6 +296,7 @@ pub(super) fn resolve_upstream_model(
 pub(super) async fn filter_eligible_channels(
     state: &AppState,
     channels: &[crate::monoize_routing::MonoizeChannel],
+    effective_groups: &Option<Vec<String>>,
     circuit_breaker_enabled: bool,
     model: Option<&str>,
 ) -> Vec<crate::monoize_routing::MonoizeChannel> {
@@ -297,6 +305,9 @@ pub(super) async fn filter_eligible_channels(
     let mut out = Vec::new();
     for channel in channels {
         if !channel.enabled || channel.weight <= 0 {
+            continue;
+        }
+        if !crate::users::is_channel_group_eligible(&channel.groups, effective_groups) {
             continue;
         }
         if !circuit_breaker_enabled {

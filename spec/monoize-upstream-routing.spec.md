@@ -26,6 +26,7 @@ A channel record MUST include:
 - `api_key: string`
 - `weight: integer` where `weight >= 0` and default `1`
 - `enabled: boolean` default `true`
+- `groups: string[]` default `[]`
 
 Runtime-only state MUST be maintained in memory:
 
@@ -39,6 +40,14 @@ Channel-level passive breaker override fields MAY be present:
 - `passive_window_seconds_override: integer? (>= 1)`
 - `passive_cooldown_seconds_override: integer? (>= 1)`
 - `passive_rate_limit_cooldown_seconds_override: integer? (>= 1)`
+
+### 2.1a Channel Group Semantics
+
+CG-1. `groups` is an array of opaque string labels. `groups = []` means the channel is public.
+
+CG-2. On create/update, channel `groups` MUST be canonicalized by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+
+CG-3. If a stored channel row has `groups` absent, null, empty string, or serialized empty array, routing and read models MUST treat it as `[]` for backward compatibility.
 
 ### 2.2 Model Entry
 
@@ -123,8 +132,17 @@ The router MUST read:
 
 - `model: string`
 - `max_multiplier: number | null`
+- `effective_groups: string[] | null`
 
 `max_multiplier` MAY be supplied by request body field `max_multiplier` or header `X-Max-Multiplier`.
+
+RRP-1. `effective_groups` is the request-scoped group filter produced by `api-key-authentication.spec.md` §4.
+
+RRP-2. If `effective_groups == null`, the request is unrestricted by group filtering and may use all enabled channels, subject to the other routing rules.
+
+RRP-3. If `effective_groups != null`, the request is restricted to the named groups in that array. Public channels remain eligible. Non-public channels are eligible only when `intersection(channel.groups, effective_groups)` is non-empty.
+
+RRP-4. If `effective_groups == []`, only public channels are group-eligible.
 
 ## 4. Routing Algorithm
 
@@ -140,8 +158,10 @@ RTA-2. Static filter rules for each provider:
 
 RTA-3. Availability pre-check:
 
-- candidate channels are those where `enabled == true`, `weight > 0`, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
-- if `provider.circuit_breaker_enabled == false`, runtime health state MUST be ignored for normal routing eligibility. Disabled/zero-weight channels are still excluded.
+- candidate channels are those where `enabled == true`, `weight > 0`, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying), and where group eligibility is determined as follows:
+  - if `effective_groups == null`, group filtering does not exclude the channel;
+  - if `effective_groups != null`, the channel is group-eligible if and only if `channel.groups == []` or `intersection(channel.groups, effective_groups)` is non-empty.
+- if `provider.circuit_breaker_enabled == false`, runtime health state MUST be ignored for normal routing eligibility. Disabled, zero-weight, or group-ineligible channels are still excluded.
 - if candidate channels are empty, skip provider.
 
 RTA-4. Execute provider with intra-provider retry:

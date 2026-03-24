@@ -139,7 +139,7 @@ function Sidebar({ onNavigate, layoutId = "nav-active", disableLayoutAnimation =
 
       <Separator />
 
-      <nav className="flex flex-1 flex-col gap-1">
+      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
         {navItems.map((item, index) => (
           <motion.div
             key={item.to}
@@ -283,7 +283,7 @@ export function DashboardLayout() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-dvh items-center justify-center">
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -300,7 +300,7 @@ export function DashboardLayout() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-dvh overflow-hidden">
       {/* Mobile: floating menu button + sheet */}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
@@ -322,7 +322,7 @@ export function DashboardLayout() {
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className="m-4 mr-0 hidden h-[calc(100vh-2rem)] w-64 shrink-0 rounded-xl border bg-card shadow-md lg:block"
+        className="m-4 mr-0 hidden h-[calc(100dvh-2rem)] w-64 shrink-0 rounded-xl border bg-card shadow-md lg:block"
       >
         <Sidebar />
       </motion.aside>

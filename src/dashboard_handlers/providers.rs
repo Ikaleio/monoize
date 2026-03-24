@@ -3,10 +3,11 @@ use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
 use crate::monoize_routing::{
-    ChannelHealthState, CreateMonoizeProviderInput, MonoizeChannel, MonoizeProvider,
-    ReorderProvidersInput, UpdateMonoizeProviderInput,
+    ChannelHealthState, CreateMonoizeChannelInput, CreateMonoizeProviderInput, MonoizeChannel,
+    MonoizeProvider, ReorderProvidersInput, UpdateMonoizeProviderInput,
 };
 use crate::settings::normalize_pricing_model_key;
+use crate::users::canonicalize_groups;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -22,6 +23,12 @@ fn apply_channel_runtime(channel: &mut MonoizeChannel, health: &ChannelHealthSta
         .last_success_at
         .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0))
         .map(|t| t.to_rfc3339());
+}
+
+pub(super) fn canonicalize_dashboard_channel_groups(channels: &mut [CreateMonoizeChannelInput]) {
+    for channel in channels {
+        channel.groups = canonicalize_groups(&channel.groups);
+    }
 }
 
 async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) -> MonoizeProvider {
@@ -156,9 +163,11 @@ pub async fn get_provider(
 pub async fn create_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<CreateMonoizeProviderInput>,
+    Json(mut body): Json<CreateMonoizeProviderInput>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
+
+    canonicalize_dashboard_channel_groups(&mut body.channels);
 
     let provider = state
         .monoize_store
@@ -187,9 +196,13 @@ pub async fn update_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(provider_id): Path<String>,
-    Json(body): Json<UpdateMonoizeProviderInput>,
+    Json(mut body): Json<UpdateMonoizeProviderInput>,
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
+
+    if let Some(channels) = body.channels.as_mut() {
+        canonicalize_dashboard_channel_groups(channels);
+    }
 
     let prev_provider = state
         .monoize_store
@@ -231,7 +244,8 @@ pub async fn update_provider(
         .collect();
     prune_provider_channel_health(&state, &removed_channel_ids).await;
     if !provider.circuit_breaker_enabled {
-        let all_channel_ids: Vec<String> = provider.channels.iter().map(|ch| ch.id.clone()).collect();
+        let all_channel_ids: Vec<String> =
+            provider.channels.iter().map(|ch| ch.id.clone()).collect();
         prune_provider_channel_health(&state, &all_channel_ids).await;
     }
     for id in &removed_channel_ids {

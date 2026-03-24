@@ -1,6 +1,7 @@
 use super::*;
 use crate::transforms::split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
 
+#[allow(clippy::result_large_err)]
 pub(super) fn decode_urp_request(
     protocol: DownstreamProtocol,
     known: Value,
@@ -55,6 +56,7 @@ pub(super) fn extract_client_ip(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Reject the request if the API key has an IP whitelist and the client IP is not in it.
+#[allow(clippy::result_large_err)]
 pub(super) fn check_ip_whitelist(
     auth: &crate::auth::AuthResult,
     headers: &HeaderMap,
@@ -114,10 +116,10 @@ pub(super) fn summarize_user_image_request_metrics(
                 urp::ImageSource::Base64 { data, .. } => {
                     metrics.base64_parts += 1;
                     metrics.base64_chars += data.len();
-                    metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(&data);
+                    metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
                 }
                 urp::ImageSource::Url { url, .. } => {
-                    if let Some(data) = extract_base64_data_url_payload(&url) {
+                    if let Some(data) = extract_base64_data_url_payload(url) {
                         metrics.base64_parts += 1;
                         metrics.base64_chars += data.len();
                         metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
@@ -137,6 +139,7 @@ pub(super) fn encoded_json_size_bytes(value: &Value) -> usize {
         .unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn log_outgoing_request_shape(
     request_id: Option<&str>,
     downstream_model: &str,
@@ -370,6 +373,7 @@ pub(super) async fn transform_urp_stream(
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn typed_request_to_legacy(
     req: &urp::UrpRequest,
     max_multiplier: Option<f64>,

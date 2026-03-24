@@ -290,8 +290,13 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
     if let Some(reasoning) = &req.reasoning {
         let mut reasoning_obj = Map::new();
+        // "none" means "disable reasoning". OpenAI's Responses API only disables
+        // reasoning when the effort field is *absent*; sending `"effort":"none"`
+        // silently activates low-effort reasoning. So we omit the field entirely.
         if let Some(effort) = &reasoning.effort {
-            reasoning_obj.insert("effort".to_string(), Value::String(effort.clone()));
+            if effort != "none" {
+                reasoning_obj.insert("effort".to_string(), Value::String(effort.clone()));
+            }
         }
         merge_extra(&mut reasoning_obj, &reasoning.extra_body);
         if !reasoning_obj.is_empty() {
@@ -1148,16 +1153,14 @@ mod tests {
         assert_eq!(output.accepted_prediction_tokens, 6);
         assert_eq!(output.rejected_prediction_tokens, 7);
         assert!(
-            decoded_usage
+            !decoded_usage
                 .extra_body
-                .get("input_tokens_details")
-                .is_none()
+                .contains_key("input_tokens_details")
         );
         assert!(
-            decoded_usage
+            !decoded_usage
                 .extra_body
-                .get("output_tokens_details")
-                .is_none()
+                .contains_key("output_tokens_details")
         );
         assert_eq!(
             decoded_usage.extra_body.get("upstream_counter"),

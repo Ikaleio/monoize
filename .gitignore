@@ -6,3 +6,5 @@ frontend/test-results/
 .env
 .env.*
 deploy.sh
+.Sisyphus/
+.sisyphus/

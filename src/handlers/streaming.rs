@@ -26,7 +26,8 @@ pub(super) async fn forward_stream_typed(
     resolve_model_suffix(&state, &mut req).await;
     let logical_model = req.model.clone();
     let routing_stub = build_routing_stub(&req, max_multiplier);
-    let attempts = build_monoize_attempts(&state, &routing_stub).await?;
+    let attempts =
+        build_monoize_attempts(&state, &routing_stub, auth.effective_groups.clone()).await?;
     insert_pending_request_log(
         &state,
         &auth,
@@ -81,7 +82,8 @@ pub(super) async fn forward_stream_typed(
                 nonstream_req.stream = Some(false);
                 let upstream_body = encode_request_for_provider(&nonstream_req, &attempt)?;
                 let provider = build_channel_provider_config(&attempt);
-                let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
+                let path =
+                    upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
                 log_outgoing_request_shape(
                     request_id.as_deref(),
                     &logical_model,
@@ -116,7 +118,8 @@ pub(super) async fn forward_stream_typed(
                         )
                         .await;
                         mark_channel_success(&state, &attempt).await;
-                        let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
+                        let mut resp =
+                            decode_response_from_provider(attempt.provider_type, &value)?;
                         apply_transform_rules_response(
                             &state,
                             &mut resp,

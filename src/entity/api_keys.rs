@@ -31,6 +31,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub ip_whitelist: String,
     #[sea_orm(column_type = "Text")]
+    pub allowed_groups: String,
+    #[sea_orm(column_type = "Text")]
     pub token_group: String,
     pub max_multiplier: Option<f64>,
     #[sea_orm(column_type = "Text")]

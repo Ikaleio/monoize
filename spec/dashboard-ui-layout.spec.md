@@ -318,3 +318,19 @@ AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized renderi
 - Table body rows MUST be rendered via `itemContent` callback.
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 - Select-all checkbox MUST remain in the fixed header; per-row checkboxes MUST remain in `itemContent`.
+
+AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include both the existing legacy `group` text input and a distinct `allowed_groups` chip input.
+
+AK6. The `allowed_groups` chip input MUST follow the same interaction contract as the provider/user group editors:
+
+- freeform text entry;
+- `Enter`, comma, and blur commit pending draft labels;
+- selected labels render as removable chips;
+- suggestion buttons are sourced from `GET /api/dashboard/groups`;
+- suggestion buttons for labels already selected in the current draft MUST be hidden.
+
+AK6a. Typed commits, chip removals, and suggestion clicks in the API-key `allowed_groups` editor MUST apply against the latest in-session chip draft. A typed commit MUST NOT resurrect labels the user has already removed from the current draft.
+
+AK7. The API key `allowed_groups` helper text MUST explain that an empty array means the key inherits the owning user's `allowed_groups`. If the authenticated dashboard user payload exposes `allowed_groups`, the dialog MUST render that value as a non-authoritative hint only. The frontend MUST NOT block save with client-side subset validation.
+
+AK8. If `POST /api/dashboard/tokens` or `PUT /api/dashboard/tokens/{key_id}` returns a validation error for `allowed_groups` subset rules, the frontend MUST surface the server-provided message in a toast and MUST keep the dialog open with the current draft state intact.

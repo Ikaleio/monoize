@@ -11,6 +11,7 @@ export interface User {
   balance_usd: string;
   balance_unlimited: boolean;
   email?: string | null;
+  allowed_groups: string[];
 }
 
 export interface AuthResponse {
@@ -52,6 +53,7 @@ export interface ApiKey {
   model_limits: string[];
   ip_whitelist: string[];
   group: string;
+  allowed_groups: string[];
   max_multiplier?: number;
   transforms: TransformRuleConfig[];
 }
@@ -67,6 +69,7 @@ export interface CreateApiKeyInput {
   model_limits?: string[];
   ip_whitelist?: string[];
   group?: string;
+  allowed_groups?: string[];
   max_multiplier?: number;
   transforms?: TransformRuleConfig[];
 }
@@ -80,6 +83,7 @@ export interface UpdateApiKeyInput {
   model_limits?: string[];
   ip_whitelist?: string[];
   group?: string;
+  allowed_groups?: string[];
   max_multiplier?: number;
   transforms?: TransformRuleConfig[];
   expires_at?: string;
@@ -98,7 +102,7 @@ export interface SystemSettings {
   monoize_active_probe_interval_seconds: number;
   monoize_active_probe_success_threshold: number;
   monoize_active_probe_model?: string | null;
-  monoize_passive_failure_count_threshold: number;
+  monoize_passive_failure_threshold: number;
   monoize_passive_cooldown_seconds: number;
   monoize_passive_window_seconds: number;
   monoize_passive_rate_limit_cooldown_seconds: number;
@@ -119,6 +123,10 @@ export interface DashboardStats {
   providers_count: number;
   config_providers_count: number;
   current_user: User;
+}
+
+export interface DashboardGroupsResponse {
+  groups: string[];
 }
 
 export interface ConfigOverview {
@@ -156,6 +164,7 @@ export interface MonoizeChannel {
   base_url: string;
   weight: number;
   enabled: boolean;
+  groups: string[];
   passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
@@ -203,6 +212,7 @@ export interface CreateMonoizeChannelInput {
   api_key?: string;
   weight?: number;
   enabled?: boolean;
+  groups: string[];
   passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
@@ -485,11 +495,12 @@ class ApiClient {
   async createUser(
     username: string,
     password: string,
-    role?: string
+    role?: string,
+    allowed_groups?: string[]
   ): Promise<User> {
     return this.request("/users", {
       method: "POST",
-      body: JSON.stringify({ username, password, role }),
+      body: JSON.stringify({ username, password, role, allowed_groups }),
     });
   }
 
@@ -504,6 +515,7 @@ class ApiClient {
       balance_usd?: string;
       balance_unlimited?: boolean;
       email?: string | null;
+      allowed_groups?: string[];
     }
   ): Promise<User> {
     return this.request(`/users/${id}`, {
@@ -582,6 +594,10 @@ class ApiClient {
 
   async getConfigOverview(): Promise<ConfigOverview> {
     return this.request("/config");
+  }
+
+  async listDashboardGroups(): Promise<DashboardGroupsResponse> {
+    return this.request("/groups");
   }
 
   // Providers

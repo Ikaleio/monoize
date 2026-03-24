@@ -406,6 +406,7 @@ pub(crate) async fn stream_chat_to_urp_events(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_text_delta(
     tx: &mpsc::Sender<UrpStreamEvent>,
     response_id: &str,
@@ -454,6 +455,7 @@ fn resolve_reasoning_source(
     reasoning_source.clone()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_reasoning_summary_delta(
     tx: &mpsc::Sender<UrpStreamEvent>,
     response_id: &str,
@@ -501,6 +503,7 @@ async fn process_reasoning_summary_delta(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_reasoning_text_delta(
     tx: &mpsc::Sender<UrpStreamEvent>,
     response_id: &str,
@@ -548,6 +551,7 @@ async fn process_reasoning_text_delta(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_reasoning_encrypted_delta(
     tx: &mpsc::Sender<UrpStreamEvent>,
     response_id: &str,
@@ -734,10 +738,10 @@ async fn process_tool_call_delta(
 
 fn tool_call_arguments_delta_text(tc_obj: &Map<String, Value>) -> Option<String> {
     let value = parse_tool_call_arguments_value(tc_obj)?;
-    if tc_obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-        if value.as_object().map(|obj| obj.is_empty()).unwrap_or(false) {
-            return None;
-        }
+    if tc_obj.get("type").and_then(|v| v.as_str()) == Some("tool_use")
+        && value.as_object().map(|obj| obj.is_empty()).unwrap_or(false)
+    {
+        return None;
     }
     value
         .as_str()
@@ -824,6 +828,7 @@ fn parse_finish_reason(s: &str) -> FinishReason {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_assistant_item(
     assistant_message_phase: Option<String>,
     text_part_index: Option<u32>,
@@ -858,6 +863,7 @@ fn build_assistant_item(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sorted_parts(
     text_part_index: Option<u32>,
     output_text: &str,

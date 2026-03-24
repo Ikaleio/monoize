@@ -4,7 +4,7 @@ use crate::dashboard_handlers::session_helpers::{
     is_reserved_internal_username, is_valid_username, require_admin,
 };
 use crate::error::{AppError, AppResult};
-use crate::users::{UserRole, parse_usd_to_nano};
+use crate::users::{UserRole, canonicalize_groups, parse_usd_to_nano};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -17,6 +17,8 @@ pub struct CreateUserRequest {
     pub username: String,
     pub password: String,
     pub role: Option<String>,
+    #[serde(default)]
+    pub allowed_groups: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +31,11 @@ pub struct UpdateUserRequest {
     pub balance_usd: Option<String>,
     pub balance_unlimited: Option<bool>,
     pub email: Option<Option<String>>,
+    pub allowed_groups: Option<Vec<String>>,
+}
+
+pub(super) fn canonicalize_dashboard_user_allowed_groups(groups: &mut Vec<String>) {
+    *groups = canonicalize_groups(groups);
 }
 
 pub async fn list_users(
@@ -69,11 +76,13 @@ pub async fn get_user(
 pub async fn create_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<CreateUserRequest>,
+    Json(mut body): Json<CreateUserRequest>,
 ) -> AppResult<impl IntoResponse> {
     let current_user = require_admin(&headers, &state).await?;
 
     let user_store = &state.user_store;
+
+    canonicalize_dashboard_user_allowed_groups(&mut body.allowed_groups);
 
     let role = body
         .role
@@ -127,7 +136,7 @@ pub async fn create_user(
     }
 
     let user = user_store
-        .create_user(&body.username, &body.password, role)
+        .create_user(&body.username, &body.password, role, &body.allowed_groups)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
@@ -142,11 +151,15 @@ pub async fn update_user(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(user_id): Path<String>,
-    Json(body): Json<UpdateUserRequest>,
+    Json(mut body): Json<UpdateUserRequest>,
 ) -> AppResult<impl IntoResponse> {
     let current_user = require_admin(&headers, &state).await?;
 
     let user_store = &state.user_store;
+
+    if let Some(groups) = body.allowed_groups.as_mut() {
+        canonicalize_dashboard_user_allowed_groups(groups);
+    }
 
     let target_user = user_store
         .get_user_by_id(&user_id)
@@ -228,6 +241,7 @@ pub async fn update_user(
             None,
             None,
             body.email.as_ref().map(|e| e.as_deref()),
+            body.allowed_groups.as_deref(),
         )
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;

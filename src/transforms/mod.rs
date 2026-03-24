@@ -182,32 +182,6 @@ pub fn registry() -> TransformRegistry {
     map
 }
 
-#[cfg(test)]
-mod registry_tests {
-    use super::registry;
-
-    #[test]
-    fn registry_contains_reasoning_content_delta_and_api_key_scope_metadata() {
-        let registry = registry();
-        let transform = registry
-            .get("reasoning_content_delta")
-            .expect("reasoning_content_delta should be registered");
-
-        assert!(
-            transform
-                .supported_phases()
-                .iter()
-                .any(|phase| matches!(phase, super::Phase::Response))
-        );
-        assert!(
-            transform
-                .supported_scopes()
-                .iter()
-                .any(|scope| matches!(scope, super::TransformScope::ApiKey))
-        );
-    }
-}
-
 pub fn build_states_for_rules(
     rules: &[TransformRuleConfig],
     registry: &TransformRegistry,
@@ -500,4 +474,30 @@ pub fn state_set_contains(state: &mut dyn TransformState, key: u32) -> bool {
         return set.contains(&key);
     }
     false
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::registry;
+
+    #[test]
+    fn registry_contains_reasoning_content_delta_and_api_key_scope_metadata() {
+        let registry = registry();
+        let transform = registry
+            .get("reasoning_content_delta")
+            .expect("reasoning_content_delta should be registered");
+
+        assert!(
+            transform
+                .supported_phases()
+                .iter()
+                .any(|phase| matches!(phase, super::Phase::Response))
+        );
+        assert!(
+            transform
+                .supported_scopes()
+                .iter()
+                .any(|scope| matches!(scope, super::TransformScope::ApiKey))
+        );
+    }
 }

@@ -1,5 +1,6 @@
 use crate::db::DbPool;
 use crate::transforms::TransformRuleConfig;
+use crate::users::{canonicalize_groups, parse_groups_json};
 use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,8 @@ pub struct MonoizeChannel {
     pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub groups: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,6 +131,8 @@ pub struct CreateMonoizeChannelInput {
     pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub groups: Vec<String>,
     #[serde(default)]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(default)]
@@ -284,6 +289,14 @@ fn default_channel_weight() -> i32 {
     1
 }
 
+fn parse_channel_groups_json(raw: &str) -> Vec<String> {
+    parse_groups_json(raw)
+}
+
+fn serialize_channel_groups_json(groups: &[String]) -> Result<String, String> {
+    serde_json::to_string(&canonicalize_groups(groups)).map_err(|e| e.to_string())
+}
+
 fn generate_short_id() -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let bytes = uuid::Uuid::new_v4().into_bytes();
@@ -335,6 +348,19 @@ impl MonoizeRoutingStore {
             providers.push(self.row_to_provider(row).await?);
         }
         Ok(providers)
+    }
+
+    pub async fn list_all_channel_groups_json(&self) -> Result<Vec<String>, String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt("SELECT groups FROM monoize_channels", vec![]))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        rows.into_iter()
+            .map(|row| row.try_get("", "groups").map_err(|e| e.to_string()))
+            .collect()
     }
 
     pub async fn get_provider(&self, id: &str) -> Result<Option<MonoizeProvider>, String> {
@@ -780,6 +806,7 @@ impl MonoizeRoutingStore {
                     })?,
             };
             let existing = existing_channels.get(&id);
+            let groups_json = serialize_channel_groups_json(&input.groups)?;
             let passive_failure_count_threshold_override = input
                 .passive_failure_count_threshold_override
                 .or_else(|| existing.and_then(|c| c.passive_failure_count_threshold_override));
@@ -799,11 +826,11 @@ impl MonoizeRoutingStore {
                 .write().await
                 .execute(self.db.stmt(
                     r#"INSERT INTO monoize_channels
-                       (id, provider_id, name, base_url, api_key, weight, enabled,
-                        passive_failure_count_threshold_override, passive_cooldown_seconds_override,
-                        passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override,
-                        created_at, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
+                       (id, provider_id, name, base_url, api_key, weight, enabled, groups,
+                         passive_failure_count_threshold_override, passive_cooldown_seconds_override,
+                         passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override,
+                         created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
                     vec![
                         id.into(),
                         provider_id.into(),
@@ -812,6 +839,7 @@ impl MonoizeRoutingStore {
                         api_key.into(),
                         SeaValue::Int(Some(input.weight)),
                         SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
+                        groups_json.into(),
                         opt_u64_to_value(
                             passive_failure_count_threshold_override.map(|v| v as u64),
                         ),
@@ -870,7 +898,8 @@ impl MonoizeRoutingStore {
                           passive_failure_count_threshold_override,
                           passive_cooldown_seconds_override,
                           passive_window_seconds_override,
-                          passive_rate_limit_cooldown_seconds_override
+                          passive_rate_limit_cooldown_seconds_override,
+                          groups
                    FROM monoize_channels
                    WHERE provider_id = $1
                    ORDER BY created_at ASC"#,
@@ -881,6 +910,9 @@ impl MonoizeRoutingStore {
 
         let mut channels = Vec::new();
         for cr in &channel_rows {
+            let groups_raw: String = cr
+                .try_get("", "groups")
+                .unwrap_or_else(|_| "[]".to_string());
             channels.push(MonoizeChannel {
                 id: cr.try_get("", "id").map_err(|e| e.to_string())?,
                 name: cr.try_get("", "name").map_err(|e| e.to_string())?,
@@ -891,6 +923,7 @@ impl MonoizeRoutingStore {
                     .try_get::<i32>("", "enabled")
                     .map_err(|e| e.to_string())?
                     == 1,
+                groups: parse_channel_groups_json(&groups_raw),
                 passive_failure_count_threshold_override: cr
                     .try_get::<Option<i64>>("", "passive_failure_count_threshold_override")
                     .map_err(|e| e.to_string())?
@@ -1375,5 +1408,15 @@ mod tests {
         }])
         .expect_err("expected invalid empty override pattern");
         assert!(err.contains("api_type_overrides[0].pattern must not be empty"));
+    }
+
+    #[test]
+    fn parse_channel_groups_json_is_backward_compatible_for_empty_and_malformed_values() {
+        assert!(parse_channel_groups_json("").is_empty());
+        assert!(parse_channel_groups_json("not-json").is_empty());
+        assert_eq!(
+            parse_channel_groups_json(r#"[" Beta ","alpha","ALPHA",""]"#),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
     }
 }

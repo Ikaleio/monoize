@@ -161,10 +161,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     reasoning_output_index.get_or_insert(idx);
                 }
-                merge_reasoning_source(
-                    &mut reasoning_source,
-                    reasoning_source_from_value(item),
-                );
+                merge_reasoning_source(&mut reasoning_source, reasoning_source_from_value(item));
                 let (text, summary, sig) = extract_reasoning_parts(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
@@ -251,10 +248,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     reasoning_output_index.get_or_insert(idx);
                 }
-                merge_reasoning_source(
-                    &mut reasoning_source,
-                    reasoning_source_from_value(item),
-                );
+                merge_reasoning_source(&mut reasoning_source, reasoning_source_from_value(item));
                 let (text, summary, sig) = extract_reasoning_parts(item);
                 if reasoning_text.is_empty() && !text.is_empty() {
                     reasoning_text = text;
@@ -769,7 +763,10 @@ fn map_output_item_added(
         output_state.role = Some(role);
         output_state.item_extra_body = item_extra_body.clone();
         if item_type == "reasoning" {
-            merge_reasoning_source(&mut output_state.reasoning_source, reasoning_source_from_value(item));
+            merge_reasoning_source(
+                &mut output_state.reasoning_source,
+                reasoning_source_from_value(item),
+            );
         }
     }
 
@@ -1170,7 +1167,7 @@ fn urp_part_index_from_delta(data_val: &Value, index_state: &mut ResponsesStream
     index_state.synthetic_part_index_for_output(output_index)
 }
 
-fn output_text_delta_content<'a>(data_val: &'a Value) -> &'a str {
+fn output_text_delta_content(data_val: &Value) -> &str {
     data_val
         .get("delta")
         .and_then(|v| v.as_str())
@@ -1406,6 +1403,7 @@ fn feed_assistant_part(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_accumulated_output_items(
     reasoning_text: &str,
     reasoning_summary_text: &str,
@@ -2058,10 +2056,7 @@ mod tests {
         let Item::Message { parts, .. } = &outputs[0] else {
             panic!("expected assistant message output");
         };
-        assert!(matches!(
-            &parts[0],
-            Part::Reasoning { source: None, .. }
-        ));
+        assert!(matches!(&parts[0], Part::Reasoning { source: None, .. }));
     }
 
     #[test]

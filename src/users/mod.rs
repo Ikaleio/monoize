@@ -7,6 +7,7 @@ use crate::transforms::TransformRuleConfig;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,6 +72,8 @@ pub struct User {
     /// Optional email for Gravatar display.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+    #[serde(default)]
+    pub allowed_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +150,8 @@ pub struct ApiKey {
     /// Token group identifier for rate limiting/policies
     #[serde(default)]
     pub group: String,
+    #[serde(default)]
+    pub allowed_groups: Vec<String>,
     /// Maximum accepted multiplier for routing
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_multiplier: Option<f64>,
@@ -172,6 +177,8 @@ pub struct CreateApiKeyInput {
     #[serde(default = "default_group")]
     pub group: String,
     #[serde(default)]
+    pub allowed_groups: Vec<String>,
+    #[serde(default)]
     pub max_multiplier: Option<f64>,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
@@ -185,6 +192,74 @@ fn default_group() -> String {
     "default".to_string()
 }
 
+pub fn canonicalize_groups(groups: &[String]) -> Vec<String> {
+    groups
+        .iter()
+        .map(|group| group.trim().to_lowercase())
+        .filter(|group| !group.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+pub fn parse_groups_json(raw: &str) -> Vec<String> {
+    if raw.trim().is_empty() {
+        return Vec::new();
+    }
+
+    serde_json::from_str::<Vec<String>>(raw)
+        .map(|groups| canonicalize_groups(&groups))
+        .unwrap_or_default()
+}
+
+pub fn compute_effective_groups(
+    user_groups: &[String],
+    key_groups: &[String],
+) -> Option<Vec<String>> {
+    let user_groups = canonicalize_groups(user_groups);
+    let key_groups = canonicalize_groups(key_groups);
+
+    if user_groups.is_empty() && key_groups.is_empty() {
+        return None;
+    }
+
+    if key_groups.is_empty() {
+        return if user_groups.is_empty() {
+            None
+        } else {
+            Some(user_groups)
+        };
+    }
+
+    if user_groups.is_empty() {
+        return Some(key_groups);
+    }
+
+    let user_groups: BTreeSet<_> = user_groups.into_iter().collect();
+    let key_groups: BTreeSet<_> = key_groups.into_iter().collect();
+
+    Some(user_groups.intersection(&key_groups).cloned().collect())
+}
+
+pub fn is_channel_group_eligible(
+    channel_groups: &[String],
+    effective_groups: &Option<Vec<String>>,
+) -> bool {
+    let channel_groups = canonicalize_groups(channel_groups);
+    if channel_groups.is_empty() {
+        return true;
+    }
+
+    let Some(effective_groups) = effective_groups else {
+        return true;
+    };
+    let effective_groups: BTreeSet<_> = canonicalize_groups(effective_groups).into_iter().collect();
+
+    channel_groups
+        .into_iter()
+        .any(|group| effective_groups.contains(&group))
+}
+
 /// Input for updating an existing API key
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateApiKeyInput {
@@ -196,6 +271,7 @@ pub struct UpdateApiKeyInput {
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
     pub group: Option<String>,
+    pub allowed_groups: Option<Vec<String>>,
     pub max_multiplier: Option<f64>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub expires_at: Option<String>, // RFC3339 format or null
@@ -363,3 +439,78 @@ pub struct DashboardAnalyticsRaw {
 }
 
 pub use utils::{format_nano_to_usd, parse_nano_usd, parse_usd_to_nano};
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        canonicalize_groups, compute_effective_groups, is_channel_group_eligible, parse_groups_json,
+    };
+
+    #[test]
+    fn canonicalize_groups_trims_lowercases_deduplicates_and_sorts() {
+        let groups = vec![
+            " Beta ".to_string(),
+            "alpha".to_string(),
+            "ALPHA".to_string(),
+            "   ".to_string(),
+            "gamma".to_string(),
+        ];
+
+        assert_eq!(
+            canonicalize_groups(&groups),
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string(),]
+        );
+    }
+
+    #[test]
+    fn compute_effective_groups_distinguishes_unrestricted_from_public_only() {
+        assert_eq!(compute_effective_groups(&[], &[]), None);
+        assert_eq!(
+            compute_effective_groups(&["Team-A".to_string()], &[]),
+            Some(vec!["team-a".to_string()])
+        );
+        assert_eq!(
+            compute_effective_groups(&[], &["Team-B".to_string()]),
+            Some(vec!["team-b".to_string()])
+        );
+        assert_eq!(
+            compute_effective_groups(
+                &["Team-A".to_string()],
+                &["team-b".to_string(), "TEAM-A".to_string()]
+            ),
+            Some(vec!["team-a".to_string()])
+        );
+        assert_eq!(
+            compute_effective_groups(&["team-a".to_string()], &["team-b".to_string()]),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn parse_groups_json_is_tolerant_and_canonical() {
+        assert!(parse_groups_json("").is_empty());
+        assert!(parse_groups_json("not-json").is_empty());
+        assert_eq!(
+            parse_groups_json(r#"[" Beta ","alpha","ALPHA",""]"#),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+    }
+
+    #[test]
+    fn channel_group_eligibility_respects_public_and_unrestricted_semantics() {
+        assert!(is_channel_group_eligible(&["team-a".to_string()], &None));
+        assert!(is_channel_group_eligible(&[], &Some(Vec::new())));
+        assert!(!is_channel_group_eligible(
+            &["team-a".to_string()],
+            &Some(Vec::new())
+        ));
+        assert!(is_channel_group_eligible(
+            &["TEAM-A".to_string()],
+            &Some(vec!["team-a".to_string()])
+        ));
+        assert!(!is_channel_group_eligible(
+            &["team-a".to_string()],
+            &Some(vec!["team-b".to_string()])
+        ));
+    }
+}

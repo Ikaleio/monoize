@@ -222,10 +222,12 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
     if let Some(reasoning) = &req.reasoning {
         if let Some(effort) = &reasoning.effort {
-            obj.insert(
-                "reasoning_effort".to_string(),
-                Value::String(effort.clone()),
-            );
+            if effort != "none" {
+                obj.insert(
+                    "reasoning_effort".to_string(),
+                    Value::String(effort.clone()),
+                );
+            }
         }
     }
     if let Some(tools) = &req.tools {
@@ -839,16 +841,14 @@ mod tests {
         assert_eq!(output.accepted_prediction_tokens, 5);
         assert_eq!(output.rejected_prediction_tokens, 6);
         assert!(
-            decoded_usage
+            !decoded_usage
                 .extra_body
-                .get("prompt_tokens_details")
-                .is_none()
+                .contains_key("prompt_tokens_details")
         );
         assert!(
-            decoded_usage
+            !decoded_usage
                 .extra_body
-                .get("completion_tokens_details")
-                .is_none()
+                .contains_key("completion_tokens_details")
         );
         assert_eq!(
             decoded_usage.extra_body.get("provider_specific"),

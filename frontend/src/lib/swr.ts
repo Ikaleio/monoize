@@ -31,6 +31,7 @@ const fetchers = {
   settings: () => api.getSettings(),
   publicSettings: () => api.getPublicSettings(),
   providers: () => api.listProviders(),
+  dashboardGroups: async () => (await api.listDashboardGroups()).groups,
   transformRegistry: () => api.getTransformRegistry(),
   modelMetadata: () => api.listModelMetadata(),
   marketplaceModels: () => api.listMarketplaceModels(),
@@ -46,12 +47,17 @@ export const SWR_KEYS = {
   SETTINGS: "/dashboard/settings",
   PUBLIC_SETTINGS: "/dashboard/public-settings",
   PROVIDERS: "/dashboard/providers",
+  DASHBOARD_GROUPS: "/dashboard/groups",
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
   MODEL_METADATA: "/dashboard/model-metadata",
   MARKETPLACE_MODELS: "/dashboard/marketplace/models",
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
 } as const;
+
+export function providerDetailSWRKey(providerId: string) {
+  return `provider-detail:${providerId}`;
+}
 
 // Default SWR config
 const defaultConfig: SWRConfiguration = {
@@ -124,6 +130,17 @@ export function useProviders(config?: SWRConfiguration) {
     ...defaultConfig,
     ...config,
   });
+}
+
+export function useDashboardGroups(enabled = true, config?: SWRConfiguration) {
+  return useSWR<string[]>(
+    enabled ? SWR_KEYS.DASHBOARD_GROUPS : null,
+    fetchers.dashboardGroups,
+    {
+      ...defaultConfig,
+      ...config,
+    }
+  );
 }
 
 export function useTransformRegistry(config?: SWRConfiguration) {
@@ -220,6 +237,7 @@ export async function createUserOptimistic(
   username: string,
   password: string,
   role: string,
+  allowedGroups: string[],
   currentUsers: User[],
   onError?: (error: Error) => void
 ) {
@@ -234,13 +252,15 @@ export async function createUserOptimistic(
     balance_nano_usd: "0",
     balance_usd: "0",
     balance_unlimited: false,
+    allowed_groups: allowedGroups,
   };
   mutate(SWR_KEYS.USERS, [...currentUsers, tempUser], false);
 
   try {
-    await api.createUser(username, password, role);
+    await api.createUser(username, password, role, allowedGroups);
     // Revalidate to get the real user data
     mutate(SWR_KEYS.USERS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
   } catch (error) {
     // Rollback on error
     mutate(SWR_KEYS.USERS, currentUsers, false);
@@ -267,6 +287,7 @@ export async function updateUserOptimistic(
     await api.updateUser(userId, updates);
     // Revalidate to get the real data
     mutate(SWR_KEYS.USERS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
   } catch (error) {
     // Rollback on error
     mutate(SWR_KEYS.USERS, currentUsers, false);
@@ -290,6 +311,7 @@ export async function deleteUserOptimistic(
     await api.deleteUser(userId);
     // Revalidate
     mutate(SWR_KEYS.USERS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     mutate(SWR_KEYS.STATS);
   } catch (error) {
     // Rollback on error
@@ -310,6 +332,7 @@ export async function createApiKeyOptimistic(
     const result = await api.createApiKey(input);
     // Revalidate to get the new key in list
     mutate(SWR_KEYS.API_KEYS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     mutate(SWR_KEYS.STATS);
     return result;
   } catch (error) {
@@ -336,6 +359,7 @@ export async function updateApiKeyOptimistic(
     const result = await api.updateApiKey(keyId, input);
     // Revalidate
     mutate(SWR_KEYS.API_KEYS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     return result;
   } catch (error) {
     // Rollback on error
@@ -360,6 +384,7 @@ export async function deleteApiKeyOptimistic(
     await api.deleteApiKey(keyId);
     // Revalidate
     mutate(SWR_KEYS.API_KEYS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     mutate(SWR_KEYS.STATS);
   } catch (error) {
     // Rollback on error
@@ -384,6 +409,7 @@ export async function batchDeleteApiKeysOptimistic(
     await api.batchDeleteApiKeys(keyIds);
     // Revalidate
     mutate(SWR_KEYS.API_KEYS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     mutate(SWR_KEYS.STATS);
   } catch (error) {
     // Rollback on error
@@ -405,6 +431,7 @@ export async function createProviderOptimistic(
     const result = await api.createProvider(input);
     // Revalidate to get the new provider
     mutate(SWR_KEYS.PROVIDERS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     mutate(SWR_KEYS.STATS);
     mutate(SWR_KEYS.CONFIG);
     return result;
@@ -429,7 +456,9 @@ export async function updateProviderOptimistic(
 
   try {
     const result = await api.updateProvider(id, input);
+    mutate(providerDetailSWRKey(id), result, false);
     mutate(SWR_KEYS.PROVIDERS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     mutate(SWR_KEYS.CONFIG);
     return result;
   } catch (error) {
@@ -455,6 +484,7 @@ export async function deleteProviderOptimistic(
     await api.deleteProvider(id);
     // Revalidate
     mutate(SWR_KEYS.PROVIDERS);
+    mutate(SWR_KEYS.DASHBOARD_GROUPS);
     mutate(SWR_KEYS.STATS);
     mutate(SWR_KEYS.CONFIG);
   } catch (error) {
@@ -567,6 +597,7 @@ export function revalidateAll() {
   mutate(SWR_KEYS.STATS);
   mutate(SWR_KEYS.CONFIG);
   mutate(SWR_KEYS.SETTINGS);
+  mutate(SWR_KEYS.DASHBOARD_GROUPS);
   mutate(SWR_KEYS.TRANSFORM_REGISTRY);
 }
 
@@ -577,5 +608,6 @@ export function clearCache() {
   mutate(SWR_KEYS.STATS, undefined, false);
   mutate(SWR_KEYS.CONFIG, undefined, false);
   mutate(SWR_KEYS.SETTINGS, undefined, false);
+  mutate(SWR_KEYS.DASHBOARD_GROUPS, undefined, false);
   mutate(SWR_KEYS.TRANSFORM_REGISTRY, undefined, false);
 }
