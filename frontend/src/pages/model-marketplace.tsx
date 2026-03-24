@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Search, Store } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ModelBadge } from "@/components/ModelBadge";
 import { useMarketplaceModels } from "@/lib/swr";
@@ -92,7 +91,7 @@ export function ModelMarketplacePage() {
               </div>
             ) : (
               <TableVirtuoso
-                style={{ height: "calc(100vh - 280px)", minHeight: 400 }}
+                style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
                 data={filtered}
                 components={{
                   Table: (props) => <table {...props} className="w-full caption-bottom text-sm" />,
@@ -104,12 +103,6 @@ export function ModelMarketplacePage() {
                   <tr className="border-b bg-background">
                     <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground min-w-[200px]">
                       {t("modelMarketplace.modelId")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
-                      {t("modelMarketplace.provider")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
-                      {t("modelMarketplace.mode")}
                     </th>
                     <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
                       {t("modelMarketplace.inputCost")}
@@ -137,12 +130,6 @@ export function ModelMarketplacePage() {
                           provider={record.models_dev_provider}
                           showDetails={false}
                         />
-                      </td>
-                      <td className="p-4 align-middle text-xs text-muted-foreground">
-                        {record.models_dev_provider?.toLowerCase() ?? "-"}
-                      </td>
-                      <td className="p-4 align-middle">
-                        <Badge variant="secondary">{record.mode ?? "-"}</Badge>
                       </td>
                       <td className="p-4 align-middle font-mono text-xs">
                         {inputCost === "-" ? "-" : `${inputCost} / 1M`}
