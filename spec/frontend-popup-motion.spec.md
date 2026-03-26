@@ -58,3 +58,15 @@ PM12. Shared popup primitives MUST apply a secondary content-layer motion withou
 - inner content container animates opacity `0 -> 1` and y-offset `8px -> 0px` on open,
 - inner content container exit animates opacity `1 -> 0` and y-offset `0px -> 4px`,
 - inner content motion MUST use non-linear easing from PM4 and duration between `0.16s` and `0.22s`.
+
+PM13. Centered popup primitives (`Dialog`, `AlertDialog`) MUST remain reachable inside the visible viewport on desktop, tablet, and mobile browsers.
+
+- Popup viewport positioning MUST NOT depend on translate-based centering of a fixed panel.
+- A full-screen viewport wrapper MAY center the popup visually, but it MUST remain vertically scrollable when popup content exceeds available height.
+- The scroll contract MUST work on iPadOS Safari using the visible viewport rather than the document scroll position.
+
+PM14. Page-level dialogs that contain long forms MAY place the scroll boundary on an internal body container instead of the popup shell, but they MUST satisfy all of the following:
+
+- header and footer remain reachable inside the visible viewport,
+- the form body can scroll independently when fields exceed available height,
+- no portion of the dialog becomes permanently unreachable below the viewport.

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, X } from "lucide-react";
+import { GroupsBadge } from "@/components/GroupsBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -770,16 +771,8 @@ export function ApiKeysPage() {
                         )}
                       </div>
                       {key.allowed_groups && key.allowed_groups.length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {key.allowed_groups.map((group) => (
-                            <Badge
-                              key={group}
-                              variant="secondary"
-                              className="px-1.5 py-0 font-mono text-xs"
-                            >
-                              {group}
-                            </Badge>
-                          ))}
+                        <div className="mt-1">
+                          <GroupsBadge groups={key.allowed_groups} variant="secondary" />
                         </div>
                       )}
                     </td>

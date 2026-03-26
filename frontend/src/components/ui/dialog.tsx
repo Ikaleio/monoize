@@ -87,6 +87,9 @@ const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => {
   const { open } = useDialogState()
+  const touchScrollStyle: React.CSSProperties = {
+    WebkitOverflowScrolling: "touch",
+  }
 
   return (
     <DialogPortal forceMount>
@@ -112,56 +115,59 @@ const DialogContent = React.forwardRef<
 
       <AnimatePresence>
         {open ? (
-          <DialogPrimitive.Content forceMount asChild {...props}>
-            <motion.div
-              key="dialog-content"
-              ref={ref}
-              initial={{ opacity: 0, scale: 0.96, x: "-50%", y: "-47%" }}
-              animate={{
-                opacity: 1,
-                scale: 1,
-                x: "-50%",
-                y: "-50%",
-                transition: { duration: 0.24, ease: easings.easeOutExpo },
-              }}
-              exit={{
-                opacity: 0,
-                scale: 0.96,
-                x: "-50%",
-                y: "-47%",
-                transition: { duration: 0.18, ease: easings.easeInOutQuart },
-              }}
-              className={cn(
-                "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg max-h-[85dvh] gap-4 border bg-background p-6 shadow-lg sm:rounded-lg [&_*]:ring-offset-background",
-                className
-              )}
-            >
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{
-                  opacity: 1,
-                  y: 0,
-                  transition: {
-                    duration: 0.2,
-                    ease: easings.easeOutExpo,
-                    delay: 0.03,
-                  },
-                }}
-                exit={{
-                  opacity: 0,
-                  y: 4,
-                  transition: { duration: 0.16, ease: easings.easeInOutQuart },
-                }}
-                className="grid gap-4 min-h-0 overflow-y-auto"
-              >
-                {children}
-              </motion.div>
-              <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-                <X className="h-4 w-4" />
-                <span className="sr-only">Close</span>
-              </DialogPrimitive.Close>
-            </motion.div>
-          </DialogPrimitive.Content>
+          <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain p-4 sm:p-6">
+            <div className="flex min-h-full items-start justify-center sm:items-center">
+              <DialogPrimitive.Content forceMount asChild {...props}>
+                <motion.div
+                  key="dialog-content"
+                  ref={ref}
+                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  animate={{
+                    opacity: 1,
+                    scale: 1,
+                    y: 0,
+                    transition: { duration: 0.24, ease: easings.easeOutExpo },
+                  }}
+                  exit={{
+                    opacity: 0,
+                    scale: 0.96,
+                    y: 12,
+                    transition: { duration: 0.18, ease: easings.easeInOutQuart },
+                  }}
+                  style={touchScrollStyle}
+                  className={cn(
+                    "relative z-50 flex w-full max-w-lg flex-col overflow-y-auto overscroll-contain border bg-background p-6 shadow-lg sm:rounded-lg [&_*]:ring-offset-background",
+                    className
+                  )}
+                >
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{
+                      opacity: 1,
+                      y: 0,
+                      transition: {
+                        duration: 0.2,
+                        ease: easings.easeOutExpo,
+                        delay: 0.03,
+                      },
+                    }}
+                    exit={{
+                      opacity: 0,
+                      y: 4,
+                      transition: { duration: 0.16, ease: easings.easeInOutQuart },
+                    }}
+                    className="flex min-h-0 flex-col gap-4"
+                  >
+                    {children}
+                  </motion.div>
+                  <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">Close</span>
+                  </DialogPrimitive.Close>
+                </motion.div>
+              </DialogPrimitive.Content>
+            </div>
+          </div>
         ) : null}
       </AnimatePresence>
     </DialogPortal>

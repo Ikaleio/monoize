@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail, X } from "lucide-react";
+import { GroupsBadge } from "@/components/GroupsBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -415,174 +416,188 @@ export function UsersPage() {
               </Button>
             </motion.div>
           </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("users.createUser")}</DialogTitle>
-              <DialogDescription>{t("users.addNewUser")}</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="username">{t("auth.username")}</Label>
-                <Input
-                  id="username"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  placeholder="johndoe"
-                  minLength={3}
-                  maxLength={22}
-                  pattern="[a-zA-Z0-9_]+"
-                />
-            </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">{t("auth.password")}</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  placeholder="••••••••"
-                />
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
+            <div className="flex min-h-0 flex-col p-6">
+              <DialogHeader className="shrink-0">
+                <DialogTitle>{t("users.createUser")}</DialogTitle>
+                <DialogDescription>{t("users.addNewUser")}</DialogDescription>
+              </DialogHeader>
+              <div
+                className="min-h-0 flex-1 overflow-y-auto pr-1"
+                style={{ WebkitOverflowScrolling: "touch" }}
+              >
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="username">{t("auth.username")}</Label>
+                    <Input
+                      id="username"
+                      value={formData.username}
+                      onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                      placeholder="johndoe"
+                      minLength={3}
+                      maxLength={22}
+                      pattern="[a-zA-Z0-9_]+"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="password">{t("auth.password")}</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      value={formData.password}
+                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                      placeholder="••••••••"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("users.role")}</Label>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" className="w-full justify-start">
+                          {t(`roles.${formData.role}`)}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-full">
+                        {currentUser?.role === "super_admin" && (
+                          <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "admin" })}>
+                            {t("roles.admin")}
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "user" })}>
+                          {t("roles.user")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <AllowedGroupsInput
+                    inputId="allowed-groups"
+                    value={formData.allowedGroups}
+                    suggestions={groupSuggestions}
+                    suggestionsLoading={groupsLoading}
+                    t={t}
+                    onChange={(allowedGroups) => setFormData({ ...formData, allowedGroups })}
+                  />
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label>{t("users.role")}</Label>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="w-full justify-start">
-                      {t(`roles.${formData.role}`)}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-full">
-                    {currentUser?.role === "super_admin" && (
-                      <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "admin" })}>
-                        {t("roles.admin")}
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "user" })}>
-                      {t("roles.user")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-              <AllowedGroupsInput
-                inputId="allowed-groups"
-                value={formData.allowedGroups}
-                suggestions={groupSuggestions}
-                suggestionsLoading={groupsLoading}
-                t={t}
-                onChange={(allowedGroups) => setFormData({ ...formData, allowedGroups })}
-              />
+              <DialogFooter className="shrink-0 pt-4">
+                <Button variant="outline" onClick={() => setCreateOpen(false)}>
+                  {t("common.cancel")}
+                </Button>
+                <Button onClick={handleCreate} disabled={saving || !formData.username.trim() || !formData.password}>
+                  {saving ? t("common.creating") : t("common.create")}
+                </Button>
+              </DialogFooter>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setCreateOpen(false)}>
-                {t("common.cancel")}
-              </Button>
-              <Button onClick={handleCreate} disabled={saving || !formData.username.trim() || !formData.password}>
-                {saving ? t("common.creating") : t("common.create")}
-              </Button>
-            </DialogFooter>
           </DialogContent>
         </Dialog>
       </motion.div>
 
       <Dialog open={!!editUser} onOpenChange={(open) => !open && setEditUser(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("users.editUser")}</DialogTitle>
-            <DialogDescription>{t("users.updateDetails")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="edit-username">{t("auth.username")}</Label>
-              <Input
-                id="edit-username"
-                value={formData.username}
-                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                minLength={3}
-                maxLength={22}
-                pattern="[a-zA-Z0-9_]+"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="edit-password">{t("users.newPassword")}</Label>
-              <Input
-                id="edit-password"
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                placeholder="••••••••"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="edit-email">{t("userSettings.email")}</Label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id="edit-email"
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="user@example.com"
-                  className="pl-9"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">{t("userSettings.emailDescription")}</p>
-            </div>
-            {currentUser?.role === "super_admin" && editUser?.role !== "super_admin" && (
-              <div className="space-y-2">
-                <Label>{t("users.role")}</Label>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="w-full justify-start">
-                      {t(`roles.${formData.role}`)}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-full">
-                    <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "admin" })}>
-                      {t("roles.admin")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "user" })}>
-                      {t("roles.user")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
-            <AllowedGroupsInput
-              inputId="edit-allowed-groups"
-              value={formData.allowedGroups}
-              suggestions={groupSuggestions}
-              suggestionsLoading={groupsLoading}
-              t={t}
-              onChange={(allowedGroups) => setFormData({ ...formData, allowedGroups })}
-            />
-            {currentUser?.role && (
-              <div className="space-y-2">
-                <Label>Balance (USD)</Label>
-                <Input
-                  value={formData.balanceUsd}
-                  onChange={(e) => setFormData({ ...formData, balanceUsd: e.target.value })}
-                  placeholder="0"
-                />
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={formData.balanceUnlimited}
-                    onCheckedChange={(checked) =>
-                      setFormData({ ...formData, balanceUnlimited: checked })
-                    }
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
+          <div className="flex min-h-0 flex-col p-6">
+            <DialogHeader className="shrink-0">
+              <DialogTitle>{t("users.editUser")}</DialogTitle>
+              <DialogDescription>{t("users.updateDetails")}</DialogDescription>
+            </DialogHeader>
+            <div
+              className="min-h-0 flex-1 overflow-y-auto pr-1"
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-username">{t("auth.username")}</Label>
+                  <Input
+                    id="edit-username"
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    minLength={3}
+                    maxLength={22}
+                    pattern="[a-zA-Z0-9_]+"
                   />
-                  <span className="text-sm text-muted-foreground">Unlimited</span>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-password">{t("users.newPassword")}</Label>
+                  <Input
+                    id="edit-password"
+                    type="password"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    placeholder="••••••••"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-email">{t("userSettings.email")}</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="edit-email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                      placeholder="user@example.com"
+                      className="pl-9"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t("userSettings.emailDescription")}</p>
+                </div>
+                {currentUser?.role === "super_admin" && editUser?.role !== "super_admin" && (
+                  <div className="space-y-2">
+                    <Label>{t("users.role")}</Label>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" className="w-full justify-start">
+                          {t(`roles.${formData.role}`)}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-full">
+                        <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "admin" })}>
+                          {t("roles.admin")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setFormData({ ...formData, role: "user" })}>
+                          {t("roles.user")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                )}
+                <AllowedGroupsInput
+                  inputId="edit-allowed-groups"
+                  value={formData.allowedGroups}
+                  suggestions={groupSuggestions}
+                  suggestionsLoading={groupsLoading}
+                  t={t}
+                  onChange={(allowedGroups) => setFormData({ ...formData, allowedGroups })}
+                />
+                {currentUser?.role && (
+                  <div className="space-y-2">
+                    <Label>Balance (USD)</Label>
+                    <Input
+                      value={formData.balanceUsd}
+                      onChange={(e) => setFormData({ ...formData, balanceUsd: e.target.value })}
+                      placeholder="0"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={formData.balanceUnlimited}
+                        onCheckedChange={(checked) =>
+                          setFormData({ ...formData, balanceUnlimited: checked })
+                        }
+                      />
+                      <span className="text-sm text-muted-foreground">Unlimited</span>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
+            <DialogFooter className="shrink-0 pt-4">
+              <Button variant="outline" onClick={() => setEditUser(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button onClick={handleUpdate} disabled={saving}>
+                {saving ? t("common.saving") : t("common.save")}
+              </Button>
+            </DialogFooter>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditUser(null)}>
-              {t("common.cancel")}
-            </Button>
-            <Button onClick={handleUpdate} disabled={saving}>
-              {saving ? t("common.saving") : t("common.save")}
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -661,17 +676,7 @@ export function UsersPage() {
                         <div className="flex flex-col gap-1">
                           <span className="font-medium">{user.username}</span>
                           {user.allowed_groups.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              {user.allowed_groups.map((group) => (
-                                <Badge
-                                  key={group}
-                                  variant="outline"
-                                  className="px-1.5 py-0 font-mono text-xs"
-                                >
-                                  {group}
-                                </Badge>
-                              ))}
-                            </div>
+                            <GroupsBadge groups={user.allowed_groups} />
                           )}
                         </div>
                       </div>

@@ -17,6 +17,7 @@ import {
 import { AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import { mutate } from 'swr'
+import { GroupsBadge } from '@/components/GroupsBadge'
 import { ModelBadge } from '@/components/ModelBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -188,6 +189,7 @@ export function ProviderCard({
 										{t('providers.unpricedModels', { count: unpricedCount })}
 									</Badge>
 								)}
+								{provider.groups.length > 0 && <GroupsBadge groups={provider.groups} />}
 								<span className='hidden lg:inline text-xs text-muted-foreground whitespace-nowrap'>
 									[{t('providers.priority')}: {provider.priority} ·{' '}
 									{t('providers.maxRetriesLabel')}: {provider.max_retries}]

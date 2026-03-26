@@ -85,47 +85,55 @@ const AlertDialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => {
   const { open } = useAlertDialogState()
+  const touchScrollStyle: React.CSSProperties = {
+    WebkitOverflowScrolling: "touch",
+  }
 
   return (
     <AlertDialogPortal>
       {open ? (
         <>
           <AlertDialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80" />
-          <AlertDialogPrimitive.Content
-            ref={ref}
-            {...props}
-            className={cn(
-              "fixed left-[50%] top-[50%] z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 border bg-background p-6 shadow-lg sm:rounded-lg",
-              className
-            )}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 8 }}
-              animate={{
-                opacity: 1,
-                scale: 1,
-                y: 0,
-                transition: { duration: 0.24, ease: easings.easeOutExpo },
-              }}
-              className="grid gap-4"
-            >
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{
-                  opacity: 1,
-                  y: 0,
-                  transition: {
-                    duration: 0.2,
-                    ease: easings.easeOutExpo,
-                    delay: 0.03,
-                  },
-                }}
-                className="grid gap-4"
+          <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain p-4 sm:p-6">
+            <div className="flex min-h-full items-start justify-center sm:items-center">
+              <AlertDialogPrimitive.Content
+                ref={ref}
+                {...props}
+                style={touchScrollStyle}
+                className={cn(
+                  "relative z-50 flex w-full max-w-lg flex-col overflow-y-auto overscroll-contain border bg-background p-6 shadow-lg sm:rounded-lg",
+                  className
+                )}
               >
-                {children}
-              </motion.div>
-            </motion.div>
-          </AlertDialogPrimitive.Content>
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  animate={{
+                    opacity: 1,
+                    scale: 1,
+                    y: 0,
+                    transition: { duration: 0.24, ease: easings.easeOutExpo },
+                  }}
+                  className="flex min-h-0 flex-col gap-4"
+                >
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{
+                      opacity: 1,
+                      y: 0,
+                      transition: {
+                        duration: 0.2,
+                        ease: easings.easeOutExpo,
+                        delay: 0.03,
+                      },
+                    }}
+                    className="flex min-h-0 flex-col gap-4"
+                  >
+                    {children}
+                  </motion.div>
+                </motion.div>
+              </AlertDialogPrimitive.Content>
+            </div>
+          </div>
         </>
       ) : null}
     </AlertDialogPortal>
