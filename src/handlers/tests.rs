@@ -553,7 +553,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
     );
     assert_eq!(
         attempt_channel_ids(&team_a),
-        BTreeSet::from(["public", "team-a"])
+        BTreeSet::from(["team-a"])
     );
     assert_eq!(
         attempt_channel_ids(&public_only),

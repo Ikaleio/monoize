@@ -33,15 +33,17 @@ R-ORD-3. If any rule in R-ORD-2 fails, router MUST continue to next provider.
 
 R-GRP-0. For routing eligibility, `provider.groups` MUST be treated as the provider's canonical string-array label set. `provider.groups = []` means the provider is public. If a stored provider row has `groups` absent, null, empty string, or serialized empty array, routing MUST treat it as `[]` for backward compatibility.
 
-R-GRP-0a. Public providers are always group-eligible.
+R-GRP-0a. Public providers are group-eligible only when `effective_groups` is `null` or `[]`.
 
 R-GRP-1. A provider is group-eligible if and only if:
 
 - `effective_groups == null` (unrestricted access), OR
-- `provider.groups == []` (public provider), OR
-- `intersection(provider.groups, effective_groups)` is non-empty
+- `effective_groups == []` AND `provider.groups == []` (public-only access to public providers), OR
+- `effective_groups` is non-empty AND `intersection(provider.groups, effective_groups)` is non-empty
 
-R-GRP-1a. If `effective_groups == []`, only public providers satisfy the group rule.
+R-GRP-1a. If `effective_groups == []`, only public providers (`provider.groups == []`) satisfy the group rule.
+
+R-GRP-1b. If `effective_groups` is non-empty, public providers (`provider.groups == []`) are NOT group-eligible. Only providers whose groups explicitly overlap with `effective_groups` are eligible.
 
 ## 4. Channel Availability and Retry
 

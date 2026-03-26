@@ -241,23 +241,34 @@ pub fn compute_effective_groups(
     Some(user_groups.intersection(&key_groups).cloned().collect())
 }
 
+/// Exclusive group routing: when effective_groups is non-empty, only providers
+/// with explicitly matching groups are eligible — public providers are excluded.
 pub fn is_channel_group_eligible(
     channel_groups: &[String],
     effective_groups: &Option<Vec<String>>,
 ) -> bool {
     let channel_groups = canonicalize_groups(channel_groups);
-    if channel_groups.is_empty() {
-        return true;
-    }
 
     let Some(effective_groups) = effective_groups else {
+        // Unrestricted caller: all providers eligible
         return true;
     };
-    let effective_groups: BTreeSet<_> = canonicalize_groups(effective_groups).into_iter().collect();
+    let effective_groups = canonicalize_groups(effective_groups);
 
+    if effective_groups.is_empty() {
+        // effective_groups == []: only public providers eligible
+        return channel_groups.is_empty();
+    }
+
+    // effective_groups is non-empty: public providers are NOT eligible
+    if channel_groups.is_empty() {
+        return false;
+    }
+
+    let effective_set: BTreeSet<_> = effective_groups.into_iter().collect();
     channel_groups
         .into_iter()
-        .any(|group| effective_groups.contains(&group))
+        .any(|group| effective_set.contains(&group))
 }
 
 /// Input for updating an existing API key
@@ -498,11 +509,21 @@ mod tests {
 
     #[test]
     fn channel_group_eligibility_respects_public_and_unrestricted_semantics() {
+        // Unrestricted (None): all providers eligible
         assert!(is_channel_group_eligible(&["team-a".to_string()], &None));
+        assert!(is_channel_group_eligible(&[], &None));
+
+        // effective_groups == []: only public providers eligible
         assert!(is_channel_group_eligible(&[], &Some(Vec::new())));
         assert!(!is_channel_group_eligible(
             &["team-a".to_string()],
             &Some(Vec::new())
+        ));
+
+        // effective_groups non-empty: public providers excluded, matching groups eligible
+        assert!(!is_channel_group_eligible(
+            &[],
+            &Some(vec!["team-a".to_string()])
         ));
         assert!(is_channel_group_eligible(
             &["TEAM-A".to_string()],

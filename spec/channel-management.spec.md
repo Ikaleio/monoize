@@ -55,7 +55,7 @@ Channel-level passive breaker override fields MAY be present:
 
 Provider group routing semantics:
 
-- `provider.groups = []` means the provider is public (all channels accessible to any group scope).
+- `provider.groups = []` means the provider is public (accessible to unrestricted callers and callers with `effective_groups == []`, but NOT accessible to callers with non-empty `effective_groups`).
 - On create/update, the server MUST canonicalize `groups` by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
 - If a stored provider row has `groups` absent, null, empty string, or serialized empty array, read APIs and routing MUST treat it as `[]` for backward compatibility.
 

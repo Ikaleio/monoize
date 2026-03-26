@@ -141,7 +141,7 @@ RRP-1. `effective_groups` is the request-scoped group filter produced by `api-ke
 
 RRP-2. If `effective_groups == null`, the request is unrestricted by group filtering and may use all enabled providers, subject to the other routing rules.
 
-RRP-3. If `effective_groups != null`, the request is restricted to providers whose `groups` match. Public providers (groups=[]) remain eligible. Non-public providers are eligible only when `intersection(provider.groups, effective_groups)` is non-empty.
+RRP-3. If `effective_groups != null`, the request is restricted to providers whose `groups` match. When `effective_groups` is non-empty, public providers (groups=[]) are NOT eligible — only providers whose `groups` explicitly overlap with `effective_groups` are eligible. When `effective_groups` is empty (`[]`), only public providers (groups=[]) are eligible.
 
 RRP-4. If `effective_groups == []`, only public providers are group-eligible.
 
