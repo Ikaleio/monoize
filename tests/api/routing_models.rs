@@ -110,6 +110,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
             provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("override-threshold-ch".to_string()),
                 name: "override-threshold-ch".to_string(),
@@ -117,7 +118,6 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: Some(1),
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -134,6 +134,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-10),
         })
@@ -195,6 +196,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
         provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
         models,
         api_type_overrides: Vec::new(),
+        groups: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-original-model-match-ch1".to_string()),
             name: "mono-transform-original-model-match-ch1".to_string(),
@@ -202,7 +204,6 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
-            groups: Vec::new(),
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -228,6 +229,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
         active_probe_success_threshold_override: None,
         active_probe_model_override: None,
         request_timeout_ms_override: None,
+        extra_fields_whitelist: None,
         enabled: true,
         priority: Some(-1),
     };

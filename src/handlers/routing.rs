@@ -204,10 +204,12 @@ pub(super) async fn collect_provider_attempts(
             return;
         }
     }
+    if !crate::users::is_channel_group_eligible(&provider.groups, effective_groups) {
+        return;
+    }
     let channels = filter_eligible_channels(
         state,
         &provider.channels,
-        effective_groups,
         provider.circuit_breaker_enabled,
         provider
             .per_model_circuit_break
@@ -276,6 +278,15 @@ pub(super) async fn collect_provider_attempts(
             per_model_circuit_break: provider.per_model_circuit_break,
             provider_attempt_limit,
             request_timeout_ms,
+            extra_fields_whitelist: merge_extra_fields_whitelist(
+                &runtime.extra_fields_whitelist,
+                &provider.extra_fields_whitelist,
+                crate::monoize_routing::resolve_effective_api_type(
+                    &provider.api_type_overrides,
+                    provider.provider_type,
+                    &upstream_model,
+                ),
+            ),
         });
     }
 }
@@ -296,7 +307,6 @@ pub(super) fn resolve_upstream_model(
 pub(super) async fn filter_eligible_channels(
     state: &AppState,
     channels: &[crate::monoize_routing::MonoizeChannel],
-    effective_groups: &Option<Vec<String>>,
     circuit_breaker_enabled: bool,
     model: Option<&str>,
 ) -> Vec<crate::monoize_routing::MonoizeChannel> {
@@ -305,9 +315,6 @@ pub(super) async fn filter_eligible_channels(
     let mut out = Vec::new();
     for channel in channels {
         if !channel.enabled || channel.weight <= 0 {
-            continue;
-        }
-        if !crate::users::is_channel_group_eligible(&channel.groups, effective_groups) {
             continue;
         }
         if !circuit_breaker_enabled {
@@ -607,4 +614,26 @@ pub(super) fn error_to_sse_stream(
     }
     events.push(Event::default().data("[DONE]"));
     futures_util::stream::iter(events.into_iter().map(Ok))
+}
+
+fn merge_extra_fields_whitelist(
+    global: &std::collections::HashMap<String, Vec<String>>,
+    provider_override: &Option<Vec<String>>,
+    effective_type: crate::monoize_routing::MonoizeProviderType,
+) -> Option<Vec<String>> {
+    let global_for_type = global.get(effective_type.as_str());
+    match (global_for_type, provider_override) {
+        (None, None) => None,
+        (Some(g), None) => Some(g.clone()),
+        (None, Some(p)) => Some(p.clone()),
+        (Some(g), Some(p)) => {
+            let mut merged = g.clone();
+            for field in p {
+                if !merged.contains(field) {
+                    merged.push(field.clone());
+                }
+            }
+            Some(merged)
+        }
+    }
 }

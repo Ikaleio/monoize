@@ -30,6 +30,7 @@ pub struct UpdateSettingsRequest {
     pub monoize_passive_failure_rate_threshold: Option<f64>,
     pub monoize_passive_rate_limit_cooldown_seconds: Option<u64>,
     pub monoize_request_timeout_ms: Option<u64>,
+    pub monoize_extra_fields_whitelist: Option<std::collections::HashMap<String, Vec<String>>>,
 }
 
 pub async fn get_settings(
@@ -128,6 +129,9 @@ pub async fn update_settings(
     if let Some(v) = body.monoize_request_timeout_ms {
         settings.monoize_request_timeout_ms = v.max(1);
     }
+    if let Some(v) = body.monoize_extra_fields_whitelist {
+        settings.monoize_extra_fields_whitelist = v;
+    }
 
     settings_store
         .update_all(&settings)
@@ -151,6 +155,7 @@ pub async fn update_settings(
         rt.active_interval_seconds = updated.monoize_active_probe_interval_seconds.max(1);
         rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
         rt.active_probe_model = updated.monoize_active_probe_model.clone();
+        rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
     }
 
     Ok(Json(updated))

@@ -15,7 +15,7 @@
 
 DG-1. The response `groups` array MUST be derived from the union of values stored in:
 
-- `monoize_channels.groups`
+- `monoize_providers.groups`
 - `users.allowed_groups`
 - `api_keys.allowed_groups`
 

@@ -1957,6 +1957,7 @@ async fn create_test_provider(
             provider_type,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: None,
                 name: format!("{name}-channel"),
@@ -1964,7 +1965,6 @@ async fn create_test_provider(
                 api_key: Some(api_key.to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1981,6 +1981,7 @@ async fn create_test_provider(
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: None,
         })
@@ -2012,6 +2013,32 @@ async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&s
     }
 }
 
+async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
+    let test_fields = vec![
+        "emit_usage".to_string(),
+        "extra_echo".to_string(),
+        "force_upstream_delay_ms".to_string(),
+        "force_upstream_error_code".to_string(),
+        "force_upstream_error_message".to_string(),
+        "force_upstream_error_status".to_string(),
+        "message_phase".to_string(),
+        "omit_reasoning_source".to_string(),
+        "reasoning_source_override".to_string(),
+        "require_assistant_output_content_types".to_string(),
+        "require_reasoning_input_summary".to_string(),
+        "stream_mode".to_string(),
+    ];
+
+    let mut runtime = state.monoize_runtime.write().await;
+    runtime.extra_fields_whitelist = HashMap::from([
+        ("responses".to_string(), test_fields.clone()),
+        ("chat_completion".to_string(), test_fields.clone()),
+        ("messages".to_string(), test_fields.clone()),
+        ("gemini".to_string(), test_fields.clone()),
+        ("grok".to_string(), test_fields),
+    ]);
+}
+
 async fn setup_with_unknown_fields() -> TestContext {
     let (upstream_addr, captured_headers) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
@@ -2025,6 +2052,7 @@ async fn setup_with_unknown_fields() -> TestContext {
     })
     .await
     .expect("load state");
+    configure_test_extra_fields_whitelist(&state).await;
 
     let user = state
         .user_store

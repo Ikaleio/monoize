@@ -254,7 +254,11 @@
 		"removeSuffix": "Remove",
 		"effortValues": "Valid: none, minimum, low, medium, high, xhigh, max",
 		"failedLoad": "Failed to load settings",
-		"failedSave": "Failed to save settings"
+		"failedSave": "Failed to save settings",
+		"extraFieldsWhitelist": "Extra Fields Whitelist",
+		"extraFieldsWhitelistDescription": "Additional fields allowed to pass through to each upstream API type, extending the built-in defaults.",
+		"extraFieldsWhitelistPlaceholder": "field1, field2, ...",
+		"extraFieldsWhitelistHelp": "Comma-separated field names per provider type. Leave empty to use built-in defaults only."
 	},
 	"providers": {
 		"title": "Providers",
@@ -348,6 +352,9 @@
 		"passiveRateLimitCooldownSecondsOverride": "Channel 429 Cooldown Override (seconds)",
 		"requestTimeoutMsOverride": "Provider Request Timeout Override (ms)",
 		"requestTimeoutMsOverrideDescription": "Override the global request timeout for this provider. Leave empty to use global setting.",
+		"extraFieldsWhitelist": "Extra Fields Whitelist Override",
+		"extraFieldsWhitelistPlaceholder": "e.g. custom_field, another_field",
+		"extraFieldsWhitelistDescription": "Additional fields to allow for this provider. Use * to pass all fields. Leave empty to inherit global/default.",
 		"same": "same",
 		"failureCount": "Failure Count",
 		"providerEnabled": "Provider Enabled",

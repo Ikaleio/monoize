@@ -31,6 +31,7 @@ import { findFirstInvalidTransformRule } from '@/components/transforms/transform
 import { ModelPickerDialog } from './ModelPickerDialog'
 import {
 	ApiTypeOverridesSection,
+	ChannelGroupsInput,
 	ChannelsSection,
 	ModelsSection,
 	ProbeSettingsSection,
@@ -63,7 +64,7 @@ function cloneModelRow(row: ModelRow): ModelRow {
 }
 
 function cloneChannelRow(row: ChannelRow): ChannelRow {
-	return { ...row, groups: [...row.groups] }
+	return { ...row }
 }
 
 function hasModelNameConflict(
@@ -520,7 +521,6 @@ export function ProviderDialog({
 			api_key: row.api_key.trim() || undefined,
 			weight: Number(row.weight),
 			enabled: row.enabled,
-			groups: row.groups.map(group => group.trim()).filter(Boolean),
 			passive_failure_count_threshold_override:
 				row.passive_failure_count_threshold_override.trim() ?
 					Number(row.passive_failure_count_threshold_override)
@@ -662,6 +662,10 @@ export function ProviderDialog({
 					form.active_probe_model_override.trim()
 				: null,
 			request_timeout_ms_override: requestTimeoutMsOverride,
+			extra_fields_whitelist: form.extra_fields_whitelist.trim()
+				? form.extra_fields_whitelist.split(',').map(s => s.trim()).filter(Boolean)
+				: null,
+			groups: form.groups.map(group => group.trim()).filter(Boolean),
 			enabled: form.enabled,
 			priority: form.priority
 		}
@@ -719,16 +723,27 @@ export function ProviderDialog({
 						</div>
 					: 	<div className='space-y-6'>
 							<div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
-								<ProviderBasicsSection
-									form={form}
-									isEdit={isEdit}
+							<ProviderBasicsSection
+								form={form}
+								isEdit={isEdit}
+								t={t}
+								onFormChange={applyFormUpdate}
+							/>
+							<div className='md:col-span-2'>
+								<ChannelGroupsInput
+									value={form.groups}
+									suggestions={dashboardGroups}
+									suggestionsLoading={isDashboardGroupsLoading}
 									t={t}
-									onFormChange={applyFormUpdate}
+									onChange={groups =>
+										applyFormUpdate(prev => ({ ...prev, groups }))
+									}
 								/>
-								<ProbeSettingsSection
-									form={form}
-									t={t}
-									globalDefaults={probeGlobalDefaults}
+							</div>
+							<ProbeSettingsSection
+								form={form}
+								t={t}
+								globalDefaults={probeGlobalDefaults}
 									onFormChange={applyFormUpdate}
 								/>
 								<TimeoutEnabledSection
@@ -894,8 +909,6 @@ export function ProviderDialog({
 				isEdit={isEdit}
 				canDelete={editingChannelIndex !== null}
 				globalDefaults={channelGlobalDefaults}
-				groupSuggestions={dashboardGroups}
-				groupSuggestionsLoading={isDashboardGroupsLoading}
 				onOpenChange={value => {
 					if (!value) {
 						closeChannelDialog()

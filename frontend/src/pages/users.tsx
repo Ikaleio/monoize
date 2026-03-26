@@ -658,7 +658,22 @@ export function UsersPage() {
                           {user.email && <AvatarImage src={getGravatarUrl(user.email, 64) ?? undefined} alt={user.username} />}
                           <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
                         </Avatar>
-                        <span className="font-medium">{user.username}</span>
+                        <div className="flex flex-col gap-1">
+                          <span className="font-medium">{user.username}</span>
+                          {user.allowed_groups.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {user.allowed_groups.map((group) => (
+                                <Badge
+                                  key={group}
+                                  variant="outline"
+                                  className="px-1.5 py-0 font-mono text-xs"
+                                >
+                                  {group}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="p-4 align-middle">

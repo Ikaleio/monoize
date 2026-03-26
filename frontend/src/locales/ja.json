@@ -254,7 +254,11 @@
 		"removeSuffix": "削除",
 		"effortValues": "有効値: none, minimum, low, medium, high, xhigh, max",
 		"failedLoad": "設定の読み込みに失敗しました",
-		"failedSave": "設定の保存に失敗しました"
+		"failedSave": "設定の保存に失敗しました",
+		"extraFieldsWhitelist": "追加フィールドホワイトリスト",
+		"extraFieldsWhitelistDescription": "各上流APIタイプに透過を許可する追加フィールドを設定します。組み込みデフォルトを拡張します。",
+		"extraFieldsWhitelistPlaceholder": "field1, field2, ...",
+		"extraFieldsWhitelistHelp": "上流タイプごとのカンマ区切りフィールド名。空欄の場合は組み込みデフォルトのみ使用します。"
 	},
 	"providers": {
 		"title": "プロバイダー",
@@ -348,6 +352,9 @@
 		"passiveRateLimitCooldownSecondsOverride": "Channel 429 クールダウン上書き（秒）",
 		"requestTimeoutMsOverride": "プロバイダー リクエストタイムアウト上書き（ミリ秒）",
 		"requestTimeoutMsOverrideDescription": "このプロバイダーのグローバルリクエストタイムアウトを上書きします。空欄の場合はグローバル設定を使用します。",
+		"extraFieldsWhitelist": "追加フィールドホワイトリスト上書き",
+		"extraFieldsWhitelistPlaceholder": "例: custom_field, another_field",
+		"extraFieldsWhitelistDescription": "このプロバイダーで許可する追加フィールド。* で全フィールドを透過。空欄の場合はグローバル/デフォルト設定を継承します。",
 		"same": "同一",
 		"failureCount": "失敗回数",
 		"providerEnabled": "プロバイダー有効",

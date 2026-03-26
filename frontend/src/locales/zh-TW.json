@@ -254,7 +254,11 @@
 		"removeSuffix": "移除",
 		"effortValues": "有效值：none, minimum, low, medium, high, xhigh, max",
 		"failedLoad": "載入設定失敗",
-		"failedSave": "儲存設定失敗"
+		"failedSave": "儲存設定失敗",
+		"extraFieldsWhitelist": "額外欄位白名單",
+		"extraFieldsWhitelistDescription": "設定允許透傳到每種上游 API 類型的額外欄位，擴展內建預設值。",
+		"extraFieldsWhitelistPlaceholder": "field1, field2, ...",
+		"extraFieldsWhitelistHelp": "每種上游類型以逗號分隔的欄位名稱。留空則僅使用內建預設值。"
 	},
 	"providers": {
 		"title": "服務供應商",
@@ -348,6 +352,9 @@
 		"passiveRateLimitCooldownSecondsOverride": "Channel 429 冷卻覆蓋（秒）",
 		"requestTimeoutMsOverride": "供應商請求逾時覆蓋（毫秒）",
 		"requestTimeoutMsOverrideDescription": "覆蓋此供應商的全域請求逾時。留空則使用全域設定。",
+		"extraFieldsWhitelist": "額外欄位白名單覆寫",
+		"extraFieldsWhitelistPlaceholder": "例如：custom_field, another_field",
+		"extraFieldsWhitelistDescription": "為此供應商允許的額外欄位。使用 * 透傳所有欄位。留空則繼承全域/預設設定。",
 		"same": "相同",
 		"failureCount": "失敗次數",
 		"providerEnabled": "供應商已啟用",

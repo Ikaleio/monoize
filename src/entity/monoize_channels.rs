@@ -22,8 +22,6 @@ pub struct Model {
     pub passive_rate_limit_cooldown_seconds_override: Option<i64>,
     pub request_timeout_ms_override: Option<i64>,
     #[sea_orm(column_type = "Text")]
-    pub groups: String,
-    #[sea_orm(column_type = "Text")]
     pub created_at: String,
     #[sea_orm(column_type = "Text")]
     pub updated_at: String,

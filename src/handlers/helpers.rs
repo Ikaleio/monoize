@@ -518,6 +518,119 @@ pub(super) fn model_glob_match(pattern: &str, model: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Default upstream extra_body field whitelists per provider type.
+///
+/// Fields that the URP request decoder already extracts into typed struct
+/// fields (model, stream, temperature, etc.) are NOT in extra_body at all;
+/// these lists cover only the keys that remain in `UrpRequest.extra_body`
+/// and are safe to forward to the given upstream API.
+const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
+    "frequency_penalty",
+    "logit_bias",
+    "logprobs",
+    "top_logprobs",
+    "max_completion_tokens",
+    "max_tokens",
+    "metadata",
+    "presence_penalty",
+    "seed",
+    "stop",
+    "stream_options",
+    "parallel_tool_calls",
+    "debug",
+    "image_config",
+    "modalities",
+    "cache_control",
+    "top_k",
+    "top_a",
+    "min_p",
+    "repetition_penalty",
+    "prediction",
+    "route",
+    "structured_outputs",
+    "verbosity",
+    // OpenRouter / third-party extension fields
+    "models",
+    "provider",
+    "plugins",
+    "session_id",
+    "trace",
+];
+
+const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
+    "background",
+    "context_management",
+    "conversation",
+    "include",
+    "instructions",
+    "metadata",
+    "max_tool_calls",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "prompt",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "service_tier",
+    "store",
+    "text",
+    "top_logprobs",
+    "truncation",
+];
+
+const EXTRA_WHITELIST_ANTHROPIC: &[&str] = &[
+    "max_tokens",
+    "metadata",
+    "output_config",
+    "service_tier",
+    "stop_sequences",
+    "top_k",
+    "inference_geo",
+];
+
+const EXTRA_WHITELIST_GEMINI: &[&str] = &[
+    "generationConfig",
+    "safetySettings",
+    "cachedContent",
+    "labels",
+];
+
+fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static str] {
+    match provider_type {
+        ProviderType::ChatCompletion => EXTRA_WHITELIST_CHAT_COMPLETION,
+        ProviderType::Responses => EXTRA_WHITELIST_RESPONSES,
+        ProviderType::Grok => EXTRA_WHITELIST_RESPONSES,
+        ProviderType::Messages => EXTRA_WHITELIST_ANTHROPIC,
+        ProviderType::Gemini => EXTRA_WHITELIST_GEMINI,
+        ProviderType::Group => &[],
+    }
+}
+
+/// Filter `req.extra_body` to only contain fields allowed by the upstream
+/// provider type's whitelist, optionally extended by a provider-level override.
+///
+/// If `provider_override` contains `"*"`, all fields pass through unfiltered.
+pub(super) fn filter_extra_body_for_provider(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+    provider_override: &Option<Vec<String>>,
+) {
+    if let Some(overrides) = provider_override {
+        if overrides.iter().any(|s| s == "*") {
+            return;
+        }
+    }
+
+    let defaults = default_extra_whitelist(provider_type);
+    let override_set: HashSet<&str> = provider_override
+        .as_ref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
+    req.extra_body
+        .retain(|k, _| defaults.contains(&k.as_str()) || override_set.contains(k.as_str()));
+}
+
 pub(super) fn ensure_stream_usage_requested(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,

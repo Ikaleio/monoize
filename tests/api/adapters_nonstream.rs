@@ -613,6 +613,7 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-markdown-images-ch1".to_string()),
                 name: "mono-transform-markdown-images-ch1".to_string(),
@@ -620,7 +621,6 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -652,6 +652,7 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-1),
         })

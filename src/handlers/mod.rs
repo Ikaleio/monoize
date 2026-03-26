@@ -557,6 +557,7 @@ struct MonoizeAttempt {
     per_model_circuit_break: bool,
     provider_attempt_limit: Option<usize>,
     request_timeout_ms: u64,
+    extra_fields_whitelist: Option<Vec<String>>,
 }
 
 async fn maybe_sleep_before_channel_retry(attempt: &MonoizeAttempt) {

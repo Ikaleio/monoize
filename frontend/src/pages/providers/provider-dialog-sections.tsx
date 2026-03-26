@@ -504,6 +504,23 @@ export function TimeoutEnabledSection({
 					{t('providers.requestTimeoutMsOverrideDescription')}
 				</p>
 			</div>
+			<div className='space-y-2'>
+				<Label>{t('providers.extraFieldsWhitelist')}</Label>
+				<Input
+					placeholder={t('providers.extraFieldsWhitelistPlaceholder')}
+					value={form.extra_fields_whitelist}
+					onChange={e =>
+						onFormChange(prev => ({
+							...prev,
+							extra_fields_whitelist: e.target.value
+						}))
+					}
+					className='font-mono text-sm'
+				/>
+				<p className='text-xs text-muted-foreground'>
+					{t('providers.extraFieldsWhitelistDescription')}
+				</p>
+			</div>
 			<div className='flex items-center gap-2 pt-7'>
 				<Switch
 					checked={form.enabled}

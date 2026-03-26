@@ -688,6 +688,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
         models,
         api_type_overrides: Vec::new(),
+        groups: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-strip-ch1".to_string()),
             name: "mono-transform-strip-ch1".to_string(),
@@ -695,7 +696,6 @@ async fn responses_streaming_applies_response_transform_from_provider() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
-            groups: Vec::new(),
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -718,6 +718,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         active_probe_success_threshold_override: None,
         active_probe_model_override: None,
         request_timeout_ms_override: None,
+        extra_fields_whitelist: None,
         enabled: true,
         priority: Some(-1),
     };
@@ -771,6 +772,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
         models,
         api_type_overrides: Vec::new(),
+        groups: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-sse-split-ch1".to_string()),
             name: "mono-transform-sse-split-ch1".to_string(),
@@ -778,7 +780,6 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
             api_key: Some("upstream-key".to_string()),
             weight: 1,
             enabled: true,
-            groups: Vec::new(),
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -801,6 +802,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         active_probe_success_threshold_override: None,
         active_probe_model_override: None,
         request_timeout_ms_override: None,
+        extra_fields_whitelist: None,
         enabled: true,
         priority: Some(-1),
     };
@@ -881,6 +883,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-ch1".to_string()),
                 name: "mono-transform-summary-ch1".to_string(),
@@ -888,7 +891,6 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -911,6 +913,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-1),
         })
@@ -963,6 +966,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-streaming-markdown-images-ch1".to_string()),
                 name: "mono-transform-streaming-markdown-images-ch1".to_string(),
@@ -970,7 +974,6 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1002,6 +1005,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-1),
         })

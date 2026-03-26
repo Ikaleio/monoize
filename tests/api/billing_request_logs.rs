@@ -803,6 +803,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("alias-route-ch".to_string()),
                 name: "alias-route-ch".to_string(),
@@ -810,7 +811,6 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -827,6 +827,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-50),
         })
@@ -941,6 +942,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("alias-fallback-ch".to_string()),
                 name: "alias-fallback-ch".to_string(),
@@ -948,7 +950,6 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -965,6 +966,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-50),
         })
@@ -1079,6 +1081,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("suffix-pricing-ch".to_string()),
                 name: "suffix-pricing-ch".to_string(),
@@ -1086,7 +1089,6 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1103,6 +1105,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-50),
         })

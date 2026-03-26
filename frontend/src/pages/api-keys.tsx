@@ -769,6 +769,19 @@ export function ApiKeysPage() {
                           </Badge>
                         )}
                       </div>
+                      {key.allowed_groups && key.allowed_groups.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {key.allowed_groups.map((group) => (
+                            <Badge
+                              key={group}
+                              variant="secondary"
+                              className="px-1.5 py-0 font-mono text-xs"
+                            >
+                              {group}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="p-4 align-middle">
                       <div className="flex items-center gap-1">

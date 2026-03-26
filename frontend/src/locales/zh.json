@@ -254,7 +254,11 @@
 		"removeSuffix": "移除",
 		"effortValues": "有效值: none, minimum, low, medium, high, xhigh, max",
 		"failedLoad": "加载设置失败",
-		"failedSave": "保存设置失败"
+		"failedSave": "保存设置失败",
+		"extraFieldsWhitelist": "额外字段白名单",
+		"extraFieldsWhitelistDescription": "配置允许透传到每种上游 API 类型的额外字段，扩展内置默认值。",
+		"extraFieldsWhitelistPlaceholder": "field1, field2, ...",
+		"extraFieldsWhitelistHelp": "每种上游类型的逗号分隔字段名。留空则仅使用内置默认值。"
 	},
 	"providers": {
 		"title": "服务提供者",
@@ -348,6 +352,9 @@
 		"passiveRateLimitCooldownSecondsOverride": "通道 429 冷却覆盖（秒）",
 		"requestTimeoutMsOverride": "提供者请求超时覆盖（毫秒）",
 		"requestTimeoutMsOverrideDescription": "覆盖此提供者的全局请求超时。留空则使用全局设置。",
+		"extraFieldsWhitelist": "额外字段白名单覆写",
+		"extraFieldsWhitelistPlaceholder": "例如：custom_field, another_field",
+		"extraFieldsWhitelistDescription": "为此 Provider 允许的额外字段。使用 * 透传所有字段。留空则继承全局/默认设置。",
 		"same": "相同",
 		"failureCount": "失败次数",
 		"providerEnabled": "提供者已启用",

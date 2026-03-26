@@ -22,7 +22,6 @@ export type ChannelRow = {
 	api_key: string
 	weight: string
 	enabled: boolean
-	groups: string[]
 	passive_failure_count_threshold_override: string
 	passive_cooldown_seconds_override: string
 	passive_window_seconds_override: string
@@ -44,6 +43,8 @@ export type ProviderForm = {
 	active_probe_success_threshold_override: number | null
 	active_probe_model_override: string | null
 	request_timeout_ms_override: string
+	extra_fields_whitelist: string
+	groups: string[]
 	priority?: number
 	models: ModelRow[]
 	channels: ChannelRow[]
@@ -108,6 +109,8 @@ export function emptyForm(): ProviderForm {
 		active_probe_success_threshold_override: null,
 		active_probe_model_override: null,
 		request_timeout_ms_override: '',
+		extra_fields_whitelist: '',
+		groups: [],
 		priority: undefined,
 		models: [],
 		channels: [],
@@ -132,7 +135,6 @@ export function emptyChannelRow(): ChannelRow {
 		api_key: '',
 		weight: '1',
 		enabled: true,
-		groups: [],
 		passive_failure_count_threshold_override: '',
 		passive_cooldown_seconds_override: '',
 		passive_window_seconds_override: '',
@@ -162,6 +164,9 @@ export function fromProvider(provider: Provider): ProviderForm {
 			provider.request_timeout_ms_override != null ?
 				String(provider.request_timeout_ms_override)
 			:	'',
+		extra_fields_whitelist:
+			provider.extra_fields_whitelist?.join(', ') ?? '',
+		groups: provider.groups ?? [],
 		priority: provider.priority,
 		models: Object.entries(provider.models).map(([model, entry]) => ({
 			model,
@@ -175,7 +180,6 @@ export function fromProvider(provider: Provider): ProviderForm {
 			api_key: '',
 			weight: String(channel.weight),
 			enabled: channel.enabled,
-			groups: channel.groups ?? [],
 			passive_failure_count_threshold_override:
 				channel.passive_failure_count_threshold_override != null ?
 					String(channel.passive_failure_count_threshold_override)

@@ -26,6 +26,8 @@ pub struct SystemSettings {
     pub monoize_passive_failure_rate_threshold: f64,
     pub monoize_passive_rate_limit_cooldown_seconds: u64,
     pub monoize_request_timeout_ms: u64,
+    #[serde(default)]
+    pub monoize_extra_fields_whitelist: HashMap<String, Vec<String>>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -98,6 +100,7 @@ impl Default for SystemSettings {
             monoize_passive_failure_rate_threshold: 0.6,
             monoize_passive_rate_limit_cooldown_seconds: 15,
             monoize_request_timeout_ms: 30000,
+            monoize_extra_fields_whitelist: HashMap::new(),
             updated_at: Utc::now(),
         }
     }
@@ -200,6 +203,12 @@ impl SettingsStore {
         self.set_if_not_exists(
             "monoize_request_timeout_ms",
             &defaults.monoize_request_timeout_ms.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_extra_fields_whitelist",
+            &serde_json::to_string(&defaults.monoize_extra_fields_whitelist)
+                .unwrap_or_else(|_| "{}".to_string()),
         )
         .await?;
         Ok(())
@@ -349,6 +358,11 @@ impl SettingsStore {
                 "monoize_request_timeout_ms" => {
                     settings.monoize_request_timeout_ms = row.value.parse().unwrap_or(30000);
                 }
+                "monoize_extra_fields_whitelist" => {
+                    if let Ok(map) = serde_json::from_str(&row.value) {
+                        settings.monoize_extra_fields_whitelist = map;
+                    }
+                }
                 _ => {}
             }
         }
@@ -437,6 +451,12 @@ impl SettingsStore {
         self.set(
             "monoize_request_timeout_ms",
             &settings.monoize_request_timeout_ms.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_extra_fields_whitelist",
+            &serde_json::to_string(&settings.monoize_extra_fields_whitelist)
+                .unwrap_or_else(|_| "{}".to_string()),
         )
         .await?;
         Ok(())

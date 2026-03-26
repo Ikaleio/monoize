@@ -25,27 +25,31 @@ R-ORD-2. For each provider, static filtering MUST be applied in this order:
 1. `provider.enabled == true`
 2. `provider.models` contains requested model
 3. if `max_multiplier` exists, `provider.models[model].multiplier <= max_multiplier`
+4. provider is group-eligible under R-GRP-1
 
 R-ORD-3. If any rule in R-ORD-2 fails, router MUST continue to next provider.
 
-## 3. Channel Availability and Retry
+## 3. Provider Group Eligibility
 
-R-CH-0. For routing eligibility, `channel.groups` MUST be treated as the channel's canonical string-array label set. `channel.groups = []` means the channel is public. If a stored channel row has `groups` absent, null, empty string, or serialized empty array, routing MUST treat it as `[]` for backward compatibility.
+R-GRP-0. For routing eligibility, `provider.groups` MUST be treated as the provider's canonical string-array label set. `provider.groups = []` means the provider is public. If a stored provider row has `groups` absent, null, empty string, or serialized empty array, routing MUST treat it as `[]` for backward compatibility.
 
-R-CH-0a. Public channels are always group-eligible.
+R-GRP-0a. Public providers are always group-eligible.
+
+R-GRP-1. A provider is group-eligible if and only if:
+
+- `effective_groups == null` (unrestricted access), OR
+- `provider.groups == []` (public provider), OR
+- `intersection(provider.groups, effective_groups)` is non-empty
+
+R-GRP-1a. If `effective_groups == []`, only public providers satisfy the group rule.
+
+## 4. Channel Availability and Retry
 
 R-CH-1. Candidate channels are channels with:
 
 - `enabled == true`
 - `weight > 0`
-- group-eligible under R-CH-1a or R-CH-1b
 - runtime health state is healthy or probing-eligible for the requested model (respecting per-model health keying when `per_model_circuit_break == true`)
-
-R-CH-1a. If `effective_groups == null`, group filtering MUST NOT exclude any channel.
-
-R-CH-1b. If `effective_groups != null`, a channel is group-eligible if and only if `channel.groups == []` or `intersection(channel.groups, effective_groups)` is non-empty.
-
-R-CH-1c. If `effective_groups == []`, only public channels satisfy the group rule in R-CH-1b.
 
 R-CH-2. If no candidate channels exist, router MUST continue to next provider.
 
@@ -70,7 +74,7 @@ R-CH-10. If provider attempts are exhausted, router MUST continue to next provid
 
 R-CH-11. If all providers are exhausted, router MUST return `502 upstream_error`.
 
-R-CH-12. If `provider.circuit_breaker_enabled == false`, routing MUST ignore runtime health state for that provider and retryable failures MUST NOT trip passive circuit breaking. The group rule in R-CH-1 still applies.
+R-CH-12. If `provider.circuit_breaker_enabled == false`, routing MUST ignore runtime health state for that provider and retryable failures MUST NOT trip passive circuit breaking.
 
 ## 4. Model Rewriting
 

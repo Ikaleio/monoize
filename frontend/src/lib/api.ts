@@ -107,6 +107,7 @@ export interface SystemSettings {
   monoize_passive_window_seconds: number;
   monoize_passive_rate_limit_cooldown_seconds: number;
   monoize_request_timeout_ms: number;
+  monoize_extra_fields_whitelist: Record<string, string[]>;
   updated_at: string;
 }
 
@@ -164,7 +165,6 @@ export interface MonoizeChannel {
   base_url: string;
   weight: number;
   enabled: boolean;
-  groups: string[];
   passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
@@ -198,6 +198,8 @@ export interface Provider {
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
+  extra_fields_whitelist?: string[] | null;
+  groups: string[];
   enabled: boolean;
   priority: number;
   created_at: string;
@@ -212,7 +214,6 @@ export interface CreateMonoizeChannelInput {
   api_key?: string;
   weight?: number;
   enabled?: boolean;
-  groups: string[];
   passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
@@ -236,6 +237,8 @@ export interface CreateProviderInput {
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
+  extra_fields_whitelist?: string[] | null;
+  groups?: string[];
   enabled?: boolean;
   priority?: number;
 }
@@ -257,6 +260,8 @@ export interface UpdateProviderInput {
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
+  extra_fields_whitelist?: string[] | null;
+  groups?: string[];
   enabled?: boolean;
   priority?: number;
 }

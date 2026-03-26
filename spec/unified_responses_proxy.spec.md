@@ -454,6 +454,26 @@ XF5d. Monoize usage extension field registry:
     - `rejected_prediction_output_tokens` inside `output_tokens_details` / `completion_tokens_details`
 - These names are Monoize-defined extensions, not claims about native upstream contracts. If an upstream provider later adopts one of these names with incompatible semantics, Monoize MUST treat that as a spec-level conflict requiring explicit review.
 
+### 7.7.1 Extra field upstream whitelist
+
+XF6. When constructing an upstream request body from a URP request, Monoize MUST filter `extra` keys against a per-provider-type whitelist before inserting them into the upstream request body. Keys not present in the effective whitelist MUST be dropped from the upstream request body.
+
+XF6a. Default whitelists per provider type:
+
+- `chat_completion`: `frequency_penalty`, `logit_bias`, `logprobs`, `top_logprobs`, `max_completion_tokens`, `max_tokens`, `metadata`, `presence_penalty`, `seed`, `stop`, `stream_options`, `parallel_tool_calls`, `debug`, `image_config`, `modalities`, `cache_control`, `top_k`, `top_a`, `min_p`, `repetition_penalty`, `prediction`, `route`, `structured_outputs`, `verbosity`, `models`, `provider`, `plugins`, `session_id`, `trace`.
+- `responses`: `background`, `context_management`, `conversation`, `include`, `instructions`, `metadata`, `max_tool_calls`, `parallel_tool_calls`, `previous_response_id`, `prompt`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `service_tier`, `store`, `text`, `top_logprobs`, `truncation`.
+- `grok`: same as `responses`.
+- `messages`: `max_tokens`, `metadata`, `output_config`, `service_tier`, `stop_sequences`, `top_k`, `inference_geo`.
+- `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`.
+
+XF6b. Each dashboard-managed provider MAY carry an optional `extra_fields_whitelist` override (JSON array of strings, stored in the `monoize_providers` table). When present, the effective whitelist is the union of the default whitelist and the override list. When absent (NULL), only the default whitelist applies.
+
+XF6c. If `extra_fields_whitelist` contains the single entry `"*"`, Monoize MUST skip whitelist filtering entirely for that provider, forwarding all `extra` keys unconditionally (equivalent to the pre-whitelist behavior).
+
+XF6d. Whitelist filtering applies only to top-level `UrpRequest.extra` keys. Content-block-level `extra_body` (XF4), item-level `extra_body` (XF4a), and usage-level `extra_body` (XF5) are NOT subject to this whitelist.
+
+XF6e. Whitelist filtering MUST occur after request-phase transforms and before upstream request encoding. The filter runs inside `encode_request_for_provider`, immediately before dispatching to the provider-specific encoder.
+
 ### 7.2 Provider adapter: `type=responses`
 
 PR1. Monoize MUST call the upstream path `POST /v1/responses`.

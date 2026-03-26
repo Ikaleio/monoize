@@ -57,7 +57,7 @@ pub(super) async fn execute_nonstream_typed(
             )
             .await?;
 
-            let upstream_body = encode_request_for_provider(&req_attempt, &attempt)?;
+            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(
                 attempt.provider_type,
@@ -246,16 +246,18 @@ pub(super) async fn forward_nonstream_typed(
 
 #[allow(clippy::result_large_err)]
 pub(super) fn encode_request_for_provider(
-    req: &urp::UrpRequest,
+    req: &mut urp::UrpRequest,
     attempt: &MonoizeAttempt,
 ) -> AppResult<Value> {
+    filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
+    let model = req.model.clone();
     let value = match attempt.provider_type {
         ProviderType::Responses | ProviderType::Grok => {
-            urp::encode::openai_responses::encode_request(req, &req.model)
+            urp::encode::openai_responses::encode_request(req, &model)
         }
-        ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request(req, &req.model),
-        ProviderType::Messages => urp::encode::anthropic::encode_request(req, &req.model),
-        ProviderType::Gemini => urp::encode::gemini::encode_request(req, &req.model),
+        ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request(req, &model),
+        ProviderType::Messages => urp::encode::anthropic::encode_request(req, &model),
+        ProviderType::Gemini => urp::encode::gemini::encode_request(req, &model),
         ProviderType::Group => {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,

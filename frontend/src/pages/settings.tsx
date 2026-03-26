@@ -522,6 +522,56 @@ export function SettingsPage() {
             </CardContent>
           </Card>
         </StaggerItem>
+
+        <StaggerItem>
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("settings.extraFieldsWhitelist")}</CardTitle>
+              <CardDescription>{t("settings.extraFieldsWhitelistDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(["chat_completion", "responses", "grok", "messages", "gemini"] as const).map((providerType) => (
+                <div key={providerType} className="space-y-1">
+                  <Label className="font-mono text-xs">{providerType}</Label>
+                  <Input
+                    value={(currentSettings.monoize_extra_fields_whitelist?.[providerType] ?? []).join(", ")}
+                    onChange={(e) => {
+                      const fields = e.target.value
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                      handleChange({
+                        monoize_extra_fields_whitelist: {
+                          ...currentSettings.monoize_extra_fields_whitelist,
+                          [providerType]: fields.length > 0 ? fields : undefined!,
+                        },
+                      });
+                    }}
+                    onBlur={(e) => {
+                      const raw = currentSettings.monoize_extra_fields_whitelist ?? {};
+                      const fields = e.target.value
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                      const next = { ...raw };
+                      if (fields.length > 0) {
+                        next[providerType] = fields;
+                      } else {
+                        delete next[providerType];
+                      }
+                      handleChange({ monoize_extra_fields_whitelist: next });
+                    }}
+                    placeholder={t("settings.extraFieldsWhitelistPlaceholder")}
+                    className="font-mono text-sm transition-all focus:scale-[1.01]"
+                  />
+                </div>
+              ))}
+              <p className="text-sm text-muted-foreground">
+                {t("settings.extraFieldsWhitelistHelp")}
+              </p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
       </StaggerList>
     </PageWrapper>
   );

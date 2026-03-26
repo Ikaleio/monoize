@@ -25,6 +25,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub active_probe_model_override: Option<String>,
     pub request_timeout_ms_override: Option<i64>,
+    #[sea_orm(column_type = "Text")]
+    pub extra_fields_whitelist: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub groups: String,
     pub enabled: i32,
     pub priority: i32,
     #[sea_orm(column_type = "Text")]

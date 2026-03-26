@@ -3,8 +3,7 @@ use super::api_keys::{
     canonicalize_dashboard_api_key_allowed_groups,
 };
 use super::providers::{
-    build_models_list_url, canonicalize_dashboard_channel_groups, provider_has_billable_pricing,
-    provider_pricing_model,
+    build_models_list_url, provider_has_billable_pricing, provider_pricing_model,
 };
 use super::users::{
     CreateUserRequest, UpdateUserRequest, canonicalize_dashboard_user_allowed_groups,
@@ -13,8 +12,8 @@ use crate::dashboard_handlers::auth::UserResponse;
 use crate::db::DbPool;
 use crate::migration::Migrator;
 use crate::monoize_routing::{
-    CreateMonoizeProviderInput, MonoizeChannel, MonoizeModelEntry, MonoizeRoutingStore,
-    UpdateMonoizeProviderInput,
+    CreateMonoizeProviderInput, MonoizeChannel, MonoizeModelEntry, MonoizeProvider,
+    MonoizeProviderType, MonoizeRoutingStore, UpdateMonoizeProviderInput,
 };
 use crate::providers::ProviderStore;
 use crate::users::{
@@ -106,8 +105,8 @@ fn provider_has_billable_pricing_strips_reasoning_suffix_before_lookup() {
 }
 
 #[test]
-fn dashboard_create_provider_channel_groups_default_to_public_and_canonicalize() {
-    let mut body: CreateMonoizeProviderInput = serde_json::from_value(json!({
+fn dashboard_create_provider_groups_default_to_public() {
+    let body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
         "provider_type": "responses",
         "models": {
@@ -125,25 +124,18 @@ fn dashboard_create_provider_channel_groups_default_to_public_and_canonicalize()
             {
                 "name": "restricted",
                 "base_url": "https://example.com/restricted",
-                "api_key": "secret",
-                "groups": [" Beta ", "alpha", "ALPHA", ""]
+                "api_key": "secret"
             }
         ]
     }))
     .expect("payload deserializes");
 
-    canonicalize_dashboard_channel_groups(&mut body.channels);
-
-    assert!(body.channels[0].groups.is_empty());
-    assert_eq!(
-        body.channels[1].groups,
-        vec!["alpha".to_string(), "beta".to_string()]
-    );
+    assert!(body.groups.is_empty());
 }
 
 #[test]
-fn dashboard_update_provider_channel_groups_default_to_public_on_full_replacement() {
-    let mut body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
+fn dashboard_update_provider_groups_are_partial() {
+    let body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
         "channels": [
             {
                 "id": "mono_ch_existing",
@@ -154,14 +146,11 @@ fn dashboard_update_provider_channel_groups_default_to_public_on_full_replacemen
     }))
     .expect("payload deserializes");
 
-    let channels = body.channels.as_mut().expect("channels present");
-    canonicalize_dashboard_channel_groups(channels);
-
-    assert!(channels[0].groups.is_empty());
+    assert!(body.groups.is_none());
 }
 
 #[test]
-fn dashboard_provider_channel_response_includes_groups_but_hides_api_key() {
+fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
     let channel = MonoizeChannel {
         id: "mono_ch_123".to_string(),
         name: "primary".to_string(),
@@ -169,7 +158,6 @@ fn dashboard_provider_channel_response_includes_groups_but_hides_api_key() {
         api_key: "secret".to_string(),
         weight: 1,
         enabled: true,
-        groups: vec!["alpha".to_string(), "beta".to_string()],
         passive_failure_count_threshold_override: None,
         passive_cooldown_seconds_override: None,
         passive_window_seconds_override: None,
@@ -179,16 +167,47 @@ fn dashboard_provider_channel_response_includes_groups_but_hides_api_key() {
         _health_status: None,
     };
 
-    let value = serde_json::to_value(&channel).expect("channel serializes");
-    let object = value.as_object().expect("channel object");
+    let provider = MonoizeProvider {
+        id: "mono_provider_123".to_string(),
+        name: "provider".to_string(),
+        provider_type: MonoizeProviderType::Responses,
+        models: HashMap::new(),
+        channels: vec![channel],
+        max_retries: -1,
+        channel_max_retries: 0,
+        channel_retry_interval_ms: 0,
+        circuit_breaker_enabled: true,
+        per_model_circuit_break: false,
+        transforms: Vec::new(),
+        api_type_overrides: Vec::new(),
+        active_probe_enabled_override: None,
+        active_probe_interval_seconds_override: None,
+        active_probe_success_threshold_override: None,
+        active_probe_model_override: None,
+        request_timeout_ms_override: None,
+        extra_fields_whitelist: None,
+        groups: vec!["alpha".to_string(), "beta".to_string()],
+        enabled: true,
+        priority: 0,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    let value = serde_json::to_value(&provider).expect("provider serializes");
+    let object = value.as_object().expect("provider object");
+    let channels = object
+        .get("channels")
+        .and_then(|value| value.as_array())
+        .expect("channels array");
+    let channel_object = channels[0].as_object().expect("channel object");
 
     assert_eq!(object.get("groups"), Some(&json!(["alpha", "beta"])));
-    assert!(!object.contains_key("api_key"));
+    assert!(!channel_object.contains_key("api_key"));
+    assert!(!channel_object.contains_key("groups"));
 }
 
 #[tokio::test]
-async fn dashboard_provider_channel_groups_round_trip_through_store_and_reset_to_public_when_omitted()
- {
+async fn dashboard_provider_groups_round_trip_through_store_and_update_preserves_or_clears_them() {
     let db = DbPool::connect("sqlite::memory:")
         .await
         .expect("db connects");
@@ -199,9 +218,10 @@ async fn dashboard_provider_channel_groups_round_trip_through_store_and_reset_to
 
     let store = MonoizeRoutingStore::new(db).await.expect("store creates");
 
-    let mut create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
+    let create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
         "provider_type": "responses",
+        "groups": [" Beta ", "alpha", "ALPHA", ""],
         "models": {
             "gpt-5": {
                 "redirect": null,
@@ -212,13 +232,11 @@ async fn dashboard_provider_channel_groups_round_trip_through_store_and_reset_to
             {
                 "name": "primary",
                 "base_url": "https://example.com",
-                "api_key": "secret",
-                "groups": [" Beta ", "alpha", "ALPHA", ""]
+                "api_key": "secret"
             }
         ]
     }))
     .expect("create payload deserializes");
-    canonicalize_dashboard_channel_groups(&mut create_body.channels);
 
     let created = store
         .create_provider(create_body)
@@ -227,12 +245,12 @@ async fn dashboard_provider_channel_groups_round_trip_through_store_and_reset_to
     let channel_id = created.channels[0].id.clone();
 
     assert_eq!(
-        created.channels[0].groups,
+        created.groups,
         vec!["alpha".to_string(), "beta".to_string()]
     );
     assert_eq!(created.channels[0].api_key, "secret");
 
-    let mut update_body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
+    let update_body: UpdateMonoizeProviderInput = serde_json::from_value(json!({
         "channels": [
             {
                 "id": channel_id,
@@ -243,15 +261,30 @@ async fn dashboard_provider_channel_groups_round_trip_through_store_and_reset_to
         ]
     }))
     .expect("update payload deserializes");
-    canonicalize_dashboard_channel_groups(update_body.channels.as_mut().expect("channels present"));
 
     let updated = store
         .update_provider(&created.id, update_body)
         .await
         .expect("provider updated");
 
-    assert!(updated.channels[0].groups.is_empty());
+    assert_eq!(
+        updated.groups,
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
     assert_eq!(updated.channels[0].api_key, "secret");
+
+    let cleared = store
+        .update_provider(
+            &created.id,
+            serde_json::from_value(json!({
+                "groups": []
+            }))
+            .expect("clear payload deserializes"),
+        )
+        .await
+        .expect("provider groups cleared");
+
+    assert!(cleared.groups.is_empty());
 }
 
 #[test]

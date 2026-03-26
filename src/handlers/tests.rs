@@ -56,13 +56,15 @@ fn build_test_urp_request(model: &str) -> urp::UrpRequest {
 
 async fn seed_group_routing_provider(
     state: &AppState,
+    name: &str,
     circuit_breaker_enabled: bool,
+    groups: Vec<String>,
     channels: Vec<CreateMonoizeChannelInput>,
 ) {
     state
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
-            name: "OpenAI".to_string(),
+            name: name.to_string(),
             provider_type: MonoizeProviderType::Responses,
             max_retries: -1,
             channel_max_retries: 0,
@@ -76,6 +78,7 @@ async fn seed_group_routing_provider(
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(0),
             models: std::collections::HashMap::from([(
@@ -85,6 +88,7 @@ async fn seed_group_routing_provider(
                     multiplier: 1.0,
                 },
             )]),
+            groups,
             channels,
         })
         .await
@@ -335,6 +339,8 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            groups: Vec::new(),
             enabled: true,
             priority: Some(0),
             models: std::collections::HashMap::from([(
@@ -351,7 +357,6 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 weight: 1,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -400,6 +405,8 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            groups: Vec::new(),
             enabled: true,
             priority: Some(0),
             models: std::collections::HashMap::from([(
@@ -416,7 +423,6 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 weight: 1,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -459,7 +465,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
 }
 
 #[tokio::test]
-async fn build_monoize_attempts_filters_channels_by_effective_groups_before_health_logic() {
+async fn build_monoize_attempts_filters_providers_by_effective_groups_before_health_logic() {
     let runtime = RuntimeConfig {
         listen: "127.0.0.1:0".to_string(),
         metrics_path: "/metrics".to_string(),
@@ -469,48 +475,59 @@ async fn build_monoize_attempts_filters_channels_by_effective_groups_before_heal
 
     seed_group_routing_provider(
         &state,
+        "public-provider",
         false,
-        vec![
-            CreateMonoizeChannelInput {
-                id: Some("public".to_string()),
-                name: "public".to_string(),
-                base_url: "https://public.example.com".to_string(),
-                api_key: Some("secret".to_string()),
-                enabled: true,
-                weight: 1,
-                groups: Vec::new(),
-                passive_failure_count_threshold_override: None,
-                passive_cooldown_seconds_override: None,
-                passive_window_seconds_override: None,
-                passive_rate_limit_cooldown_seconds_override: None,
-            },
-            CreateMonoizeChannelInput {
-                id: Some("team-a".to_string()),
-                name: "team-a".to_string(),
-                base_url: "https://team-a.example.com".to_string(),
-                api_key: Some("secret".to_string()),
-                enabled: true,
-                weight: 1,
-                groups: vec!["team-a".to_string()],
-                passive_failure_count_threshold_override: None,
-                passive_cooldown_seconds_override: None,
-                passive_window_seconds_override: None,
-                passive_rate_limit_cooldown_seconds_override: None,
-            },
-            CreateMonoizeChannelInput {
-                id: Some("team-b".to_string()),
-                name: "team-b".to_string(),
-                base_url: "https://team-b.example.com".to_string(),
-                api_key: Some("secret".to_string()),
-                enabled: true,
-                weight: 1,
-                groups: vec!["team-b".to_string()],
-                passive_failure_count_threshold_override: None,
-                passive_cooldown_seconds_override: None,
-                passive_window_seconds_override: None,
-                passive_rate_limit_cooldown_seconds_override: None,
-            },
-        ],
+        Vec::new(),
+        vec![CreateMonoizeChannelInput {
+            id: Some("public".to_string()),
+            name: "public".to_string(),
+            base_url: "https://public.example.com".to_string(),
+            api_key: Some("secret".to_string()),
+            enabled: true,
+            weight: 1,
+            passive_failure_count_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
+        }],
+    )
+    .await;
+    seed_group_routing_provider(
+        &state,
+        "team-a-provider",
+        false,
+        vec!["team-a".to_string()],
+        vec![CreateMonoizeChannelInput {
+            id: Some("team-a".to_string()),
+            name: "team-a".to_string(),
+            base_url: "https://team-a.example.com".to_string(),
+            api_key: Some("secret".to_string()),
+            enabled: true,
+            weight: 1,
+            passive_failure_count_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
+        }],
+    )
+    .await;
+    seed_group_routing_provider(
+        &state,
+        "team-b-provider",
+        false,
+        vec!["team-b".to_string()],
+        vec![CreateMonoizeChannelInput {
+            id: Some("team-b".to_string()),
+            name: "team-b".to_string(),
+            base_url: "https://team-b.example.com".to_string(),
+            api_key: Some("secret".to_string()),
+            enabled: true,
+            weight: 1,
+            passive_failure_count_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
+        }],
     )
     .await;
     seed_model_pricing(&state, GROUP_ROUTING_MODEL).await;
@@ -555,7 +572,9 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
 
     seed_group_routing_provider(
         &state,
+        "team-a-provider",
         true,
+        vec!["team-a".to_string()],
         vec![CreateMonoizeChannelInput {
             id: Some("team-a".to_string()),
             name: "team-a".to_string(),
@@ -563,7 +582,6 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             api_key: Some("secret".to_string()),
             enabled: true,
             weight: 1,
-            groups: vec!["team-a".to_string()],
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,

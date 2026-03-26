@@ -774,6 +774,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-chat-ch1".to_string()),
                 name: "mono-transform-summary-chat-ch1".to_string(),
@@ -781,7 +782,6 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -804,6 +804,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-1),
         })
@@ -865,6 +866,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-chat-encrypted-ch1".to_string()),
                 name: "mono-transform-summary-chat-encrypted-ch1".to_string(),
@@ -872,7 +874,6 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -895,6 +896,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-1),
         })

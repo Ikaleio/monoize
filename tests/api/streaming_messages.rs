@@ -508,6 +508,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
             provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
+            groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-messages-ch1".to_string()),
                 name: "mono-transform-summary-messages-ch1".to_string(),
@@ -515,7 +516,6 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
-                groups: Vec::new(),
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -538,6 +538,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
             active_probe_success_threshold_override: None,
             active_probe_model_override: None,
             request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
             enabled: true,
             priority: Some(-1),
         })

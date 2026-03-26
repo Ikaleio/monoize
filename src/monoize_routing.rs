@@ -75,8 +75,6 @@ pub struct MonoizeChannel {
     pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default)]
-    pub groups: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,6 +112,10 @@ pub struct MonoizeProvider {
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
     pub request_timeout_ms_override: Option<u64>,
+    #[serde(default)]
+    pub extra_fields_whitelist: Option<Vec<String>>,
+    #[serde(default)]
+    pub groups: Vec<String>,
     pub enabled: bool,
     pub priority: i32,
     pub created_at: DateTime<Utc>,
@@ -131,8 +133,6 @@ pub struct CreateMonoizeChannelInput {
     pub weight: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default)]
-    pub groups: Vec<String>,
     #[serde(default)]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(default)]
@@ -168,6 +168,10 @@ pub struct CreateMonoizeProviderInput {
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
     pub request_timeout_ms_override: Option<u64>,
+    #[serde(default)]
+    pub extra_fields_whitelist: Option<Vec<String>>,
+    #[serde(default)]
+    pub groups: Vec<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub priority: Option<i32>,
@@ -191,6 +195,8 @@ pub struct UpdateMonoizeProviderInput {
     pub active_probe_success_threshold_override: Option<Option<u32>>,
     pub active_probe_model_override: Option<Option<String>>,
     pub request_timeout_ms_override: Option<Option<u64>>,
+    pub extra_fields_whitelist: Option<Option<Vec<String>>>,
+    pub groups: Option<Vec<String>>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
 }
@@ -212,6 +218,7 @@ pub struct MonoizeRuntimeConfig {
     pub active_success_threshold: u32,
     pub active_method: String,
     pub active_probe_model: Option<String>,
+    pub extra_fields_whitelist: HashMap<String, Vec<String>>,
 }
 
 impl Default for MonoizeRuntimeConfig {
@@ -227,6 +234,7 @@ impl Default for MonoizeRuntimeConfig {
             active_success_threshold: 1,
             active_method: "completion".to_string(),
             active_probe_model: None,
+            extra_fields_whitelist: HashMap::new(),
         }
     }
 }
@@ -289,11 +297,11 @@ fn default_channel_weight() -> i32 {
     1
 }
 
-fn parse_channel_groups_json(raw: &str) -> Vec<String> {
+fn parse_provider_groups_json(raw: &str) -> Vec<String> {
     parse_groups_json(raw)
 }
 
-fn serialize_channel_groups_json(groups: &[String]) -> Result<String, String> {
+fn serialize_provider_groups_json(groups: &[String]) -> Result<String, String> {
     serde_json::to_string(&canonicalize_groups(groups)).map_err(|e| e.to_string())
 }
 
@@ -334,7 +342,7 @@ impl MonoizeRoutingStore {
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
                           active_probe_success_threshold_override, active_probe_model_override,
-                          request_timeout_ms_override,
+                          request_timeout_ms_override, extra_fields_whitelist, groups,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    ORDER BY priority ASC, created_at ASC"#,
@@ -350,11 +358,11 @@ impl MonoizeRoutingStore {
         Ok(providers)
     }
 
-    pub async fn list_all_channel_groups_json(&self) -> Result<Vec<String>, String> {
+    pub async fn list_all_provider_groups_json(&self) -> Result<Vec<String>, String> {
         let rows = self
             .db
             .read()
-            .query_all(self.db.stmt("SELECT groups FROM monoize_channels", vec![]))
+            .query_all(self.db.stmt("SELECT groups FROM monoize_providers", vec![]))
             .await
             .map_err(|e| e.to_string())?;
 
@@ -373,7 +381,7 @@ impl MonoizeRoutingStore {
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
                           active_probe_success_threshold_override, active_probe_model_override,
-                          request_timeout_ms_override,
+                          request_timeout_ms_override, extra_fields_whitelist, groups,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    WHERE id = $1"#,
@@ -441,6 +449,11 @@ impl MonoizeRoutingStore {
             serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?;
         let api_type_overrides_json =
             serde_json::to_string(&input.api_type_overrides).map_err(|e| e.to_string())?;
+        let groups_json = serialize_provider_groups_json(&input.groups)?;
+        let extra_fields_whitelist_json: Option<String> = input
+            .extra_fields_whitelist
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
 
         self.db
             .write()
@@ -452,9 +465,9 @@ impl MonoizeRoutingStore {
                         per_model_circuit_break, transforms, api_type_overrides,
                         active_probe_enabled_override, active_probe_interval_seconds_override,
                         active_probe_success_threshold_override, active_probe_model_override,
-                        request_timeout_ms_override,
+                        request_timeout_ms_override, extra_fields_whitelist, groups,
                         enabled, priority, created_at, updated_at
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)"#,
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
                 vec![
                         id.clone().into(),
                         input.name.clone().into(),
@@ -475,6 +488,8 @@ impl MonoizeRoutingStore {
                         ),
                         input.active_probe_model_override.clone().into(),
                         opt_u64_to_value(input.request_timeout_ms_override),
+                        extra_fields_whitelist_json.into(),
+                        groups_json.into(),
                         SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
                         SeaValue::Int(Some(priority)),
                         now.to_rfc3339().into(),
@@ -559,6 +574,10 @@ impl MonoizeRoutingStore {
         let request_timeout_ms_override = input
             .request_timeout_ms_override
             .unwrap_or(existing.request_timeout_ms_override);
+        let extra_fields_whitelist = input
+            .extra_fields_whitelist
+            .unwrap_or(existing.extra_fields_whitelist.clone());
+        let groups = canonicalize_groups(input.groups.as_deref().unwrap_or(&existing.groups));
         let enabled = input.enabled.unwrap_or(existing.enabled);
         let priority = input.priority.unwrap_or(existing.priority);
 
@@ -567,6 +586,10 @@ impl MonoizeRoutingStore {
         let transforms_json = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
         let api_type_overrides_json =
             serde_json::to_string(&api_type_overrides).map_err(|e| e.to_string())?;
+        let groups_json = serialize_provider_groups_json(&groups)?;
+        let extra_fields_whitelist_json: Option<String> = extra_fields_whitelist
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
 
         self.db
             .write()
@@ -584,8 +607,10 @@ impl MonoizeRoutingStore {
                        active_probe_success_threshold_override = $12,
                        active_probe_model_override = $13,
                        request_timeout_ms_override = $14,
-                       enabled = $15, priority = $16, updated_at = $17
-                   WHERE id = $18"#,
+                       extra_fields_whitelist = $15,
+                       groups = $16,
+                       enabled = $17, priority = $18, updated_at = $19
+                   WHERE id = $20"#,
                 vec![
                     name.into(),
                     provider_type.as_str().into(),
@@ -601,6 +626,8 @@ impl MonoizeRoutingStore {
                     opt_u64_to_value(active_probe_success_threshold_override.map(|v| v as u64)),
                     active_probe_model_override.into(),
                     opt_u64_to_value(request_timeout_ms_override),
+                    extra_fields_whitelist_json.into(),
+                    groups_json.into(),
                     SeaValue::Int(Some(if enabled { 1 } else { 0 })),
                     SeaValue::Int(Some(priority)),
                     now.to_rfc3339().into(),
@@ -806,7 +833,6 @@ impl MonoizeRoutingStore {
                     })?,
             };
             let existing = existing_channels.get(&id);
-            let groups_json = serialize_channel_groups_json(&input.groups)?;
             let passive_failure_count_threshold_override = input
                 .passive_failure_count_threshold_override
                 .or_else(|| existing.and_then(|c| c.passive_failure_count_threshold_override));
@@ -826,11 +852,11 @@ impl MonoizeRoutingStore {
                 .write().await
                 .execute(self.db.stmt(
                     r#"INSERT INTO monoize_channels
-                       (id, provider_id, name, base_url, api_key, weight, enabled, groups,
-                         passive_failure_count_threshold_override, passive_cooldown_seconds_override,
-                         passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override,
-                         created_at, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
+                       (id, provider_id, name, base_url, api_key, weight, enabled,
+                          passive_failure_count_threshold_override, passive_cooldown_seconds_override,
+                          passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override,
+                          created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
                     vec![
                         id.into(),
                         provider_id.into(),
@@ -839,7 +865,6 @@ impl MonoizeRoutingStore {
                         api_key.into(),
                         SeaValue::Int(Some(input.weight)),
                         SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
-                        groups_json.into(),
                         opt_u64_to_value(
                             passive_failure_count_threshold_override.map(|v| v as u64),
                         ),
@@ -898,8 +923,7 @@ impl MonoizeRoutingStore {
                           passive_failure_count_threshold_override,
                           passive_cooldown_seconds_override,
                           passive_window_seconds_override,
-                          passive_rate_limit_cooldown_seconds_override,
-                          groups
+                          passive_rate_limit_cooldown_seconds_override
                    FROM monoize_channels
                    WHERE provider_id = $1
                    ORDER BY created_at ASC"#,
@@ -910,9 +934,6 @@ impl MonoizeRoutingStore {
 
         let mut channels = Vec::new();
         for cr in &channel_rows {
-            let groups_raw: String = cr
-                .try_get("", "groups")
-                .unwrap_or_else(|_| "[]".to_string());
             channels.push(MonoizeChannel {
                 id: cr.try_get("", "id").map_err(|e| e.to_string())?,
                 name: cr.try_get("", "name").map_err(|e| e.to_string())?,
@@ -923,7 +944,6 @@ impl MonoizeRoutingStore {
                     .try_get::<i32>("", "enabled")
                     .map_err(|e| e.to_string())?
                     == 1,
-                groups: parse_channel_groups_json(&groups_raw),
                 passive_failure_count_threshold_override: cr
                     .try_get::<Option<i64>>("", "passive_failure_count_threshold_override")
                     .map_err(|e| e.to_string())?
@@ -980,6 +1000,14 @@ impl MonoizeRoutingStore {
             .try_get::<Option<i64>>("", "request_timeout_ms_override")
             .map_err(|e| format!("provider {id} invalid request_timeout_ms_override: {e}"))?
             .map(|v| v as u64);
+        let extra_fields_whitelist: Option<Vec<String>> = row
+            .try_get::<Option<String>>("", "extra_fields_whitelist")
+            .unwrap_or(None)
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        let groups_raw: String = row
+            .try_get("", "groups")
+            .unwrap_or_else(|_| "[]".to_string());
+        let groups = parse_provider_groups_json(&groups_raw);
 
         let created_at_str: String = row.try_get("", "created_at").map_err(|e| e.to_string())?;
         let updated_at_str: String = row.try_get("", "updated_at").map_err(|e| e.to_string())?;
@@ -1012,6 +1040,8 @@ impl MonoizeRoutingStore {
             active_probe_success_threshold_override,
             active_probe_model_override,
             request_timeout_ms_override,
+            extra_fields_whitelist,
+            groups,
             enabled: row
                 .try_get::<i32>("", "enabled")
                 .map_err(|e| e.to_string())?
@@ -1411,11 +1441,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_channel_groups_json_is_backward_compatible_for_empty_and_malformed_values() {
-        assert!(parse_channel_groups_json("").is_empty());
-        assert!(parse_channel_groups_json("not-json").is_empty());
+    fn parse_provider_groups_json_is_backward_compatible_for_empty_and_malformed_values() {
+        assert!(parse_provider_groups_json("").is_empty());
+        assert!(parse_provider_groups_json("not-json").is_empty());
         assert_eq!(
-            parse_channel_groups_json(r#"[" Beta ","alpha","ALPHA",""]"#),
+            parse_provider_groups_json(r#"[" Beta ","alpha","ALPHA",""]"#),
             vec!["alpha".to_string(), "beta".to_string()]
         );
     }

@@ -28,9 +28,9 @@ pub async fn list_dashboard_groups(
 ) -> AppResult<Json<DashboardGroupsResponse>> {
     get_current_user(&headers, &state).await?;
 
-    let channel_groups = state
+    let provider_groups = state
         .monoize_store
-        .list_all_channel_groups_json()
+        .list_all_provider_groups_json()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
     let user_groups = state
@@ -45,7 +45,7 @@ pub async fn list_dashboard_groups(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     let groups = aggregate_group_labels(
-        channel_groups
+        provider_groups
             .into_iter()
             .chain(user_groups)
             .chain(api_key_groups),
@@ -150,6 +150,7 @@ mod tests {
                         multiplier: 1.0,
                     },
                 )]),
+                groups: vec!["beta".to_string(), " delta ".to_string()],
                 channels: vec![crate::monoize_routing::CreateMonoizeChannelInput {
                     id: None,
                     name: "ch".to_string(),
@@ -157,7 +158,6 @@ mod tests {
                     api_key: Some("secret".to_string()),
                     weight: 1,
                     enabled: true,
-                    groups: vec!["beta".to_string(), " delta ".to_string()],
                     passive_failure_count_threshold_override: None,
                     passive_window_seconds_override: None,
                     passive_cooldown_seconds_override: None,
@@ -170,6 +170,7 @@ mod tests {
                 active_probe_success_threshold_override: None,
                 active_probe_model_override: None,
                 request_timeout_ms_override: None,
+                extra_fields_whitelist: None,
             })
             .await
             .expect("provider created");
@@ -198,20 +199,20 @@ mod tests {
             .expect("override api key groups");
         state
             .monoize_store
-            .list_all_channel_groups_json()
+            .list_all_provider_groups_json()
             .await
-            .expect("channel groups query works");
+            .expect("provider groups query works");
         state
             .user_store
             .db
             .write()
             .await
             .execute(state.user_store.db.stmt(
-                "UPDATE monoize_channels SET groups = $1",
+                "UPDATE monoize_providers SET groups = $1",
                 vec![r#"["beta"," delta ","BETA"]"#.into()],
             ))
             .await
-            .expect("override channel groups");
+            .expect("override provider groups");
 
         let mut headers = HeaderMap::new();
         headers.insert(

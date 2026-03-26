@@ -218,6 +218,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         .max(1);
     monoize_runtime.active_probe_model = settings_snapshot.monoize_active_probe_model.clone();
     monoize_runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
+    monoize_runtime.extra_fields_whitelist =
+        settings_snapshot.monoize_extra_fields_whitelist.clone();
     let channel_health = Arc::new(Mutex::new(HashMap::new()));
     let transform_registry = Arc::new(crate::transforms::registry());
     let image_transform_cache = Arc::new(ImageTransformCache::from_env().await.map_err(|err| {
