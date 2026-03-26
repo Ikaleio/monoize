@@ -1,5 +1,6 @@
 mod billing;
 pub(crate) mod helpers;
+pub(crate) mod image_api;
 mod nonstream;
 mod request_logging;
 pub(crate) mod routing;

@@ -864,6 +864,14 @@ fn build_root_api_router(metrics_path: &str) -> Router<AppState> {
         )
         .route("/v1/embeddings", post(crate::handlers::create_embeddings))
         .route("/v1/messages", post(crate::handlers::create_messages))
+        .route(
+            "/v1/images/generations",
+            post(crate::handlers::image_api::create_image_generation),
+        )
+        .route(
+            "/v1/images/edits",
+            post(crate::handlers::image_api::create_image_edit),
+        )
         .route(metrics_path, get(crate::handlers::metrics))
         .route(
             "/presets/providers",
