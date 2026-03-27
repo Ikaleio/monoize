@@ -304,7 +304,7 @@ async fn models_list_respects_api_key_model_limits() {
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string(), "grok-4".to_string()],
                 ip_whitelist: Vec::new(),
-                group: "default".to_string(),
+
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
@@ -358,7 +358,7 @@ async fn models_list_model_limits_disabled_shows_all() {
                 model_limits_enabled: false,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: Vec::new(),
-                group: "default".to_string(),
+
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
@@ -415,7 +415,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
-                group: "default".to_string(),
+
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],

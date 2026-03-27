@@ -274,7 +274,7 @@ export function ApiKeysPage() {
   const [newKeyModelLimitsEnabled, setNewKeyModelLimitsEnabled] = useState(false);
   const [newKeyModelLimits, setNewKeyModelLimits] = useState("");
   const [newKeyIpWhitelist, setNewKeyIpWhitelist] = useState("");
-  const [newKeyGroup, setNewKeyGroup] = useState("default");
+
   const [newKeyAllowedGroups, setNewKeyAllowedGroups] = useState<string[]>([]);
   const [newKeyMaxMultiplier, setNewKeyMaxMultiplier] = useState("");
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
@@ -292,7 +292,7 @@ export function ApiKeysPage() {
     setNewKeyModelLimitsEnabled(false);
     setNewKeyModelLimits("");
     setNewKeyIpWhitelist("");
-    setNewKeyGroup("default");
+
     setNewKeyAllowedGroups([]);
     setNewKeyMaxMultiplier("");
     setNewKeyTransforms([]);
@@ -319,7 +319,6 @@ export function ApiKeysPage() {
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
-        group: newKeyGroup || "default",
         allowed_groups: dedupeAllowedGroups(newKeyAllowedGroups),
         max_multiplier: newKeyMaxMultiplier ? parseFloat(newKeyMaxMultiplier) : undefined,
         transforms: newKeyTransforms,
@@ -359,7 +358,6 @@ export function ApiKeysPage() {
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
-        group: newKeyGroup || "default",
         allowed_groups: dedupeAllowedGroups(newKeyAllowedGroups),
         max_multiplier: newKeyMaxMultiplier ? parseFloat(newKeyMaxMultiplier) : undefined,
         transforms: newKeyTransforms,
@@ -452,7 +450,6 @@ export function ApiKeysPage() {
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
-    setNewKeyGroup(key.group);
     setNewKeyAllowedGroups(key.allowed_groups ?? []);
     setNewKeyMaxMultiplier(key.max_multiplier != null ? String(key.max_multiplier) : "");
     setNewKeyTransforms(key.transforms ?? []);
@@ -545,15 +542,6 @@ export function ApiKeysPage() {
                     value={newKeyExpires}
                     onChange={(e) => setNewKeyExpires(e.target.value)}
                     placeholder="30"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="group">{t("apiKeys.group")}</Label>
-                  <Input
-                    id="group"
-                    value={newKeyGroup}
-                    onChange={(e) => setNewKeyGroup(e.target.value)}
-                    placeholder="default"
                   />
                 </div>
                 <AllowedGroupsInput
@@ -788,11 +776,6 @@ export function ApiKeysPage() {
                     <td className="p-4 align-middle font-medium whitespace-nowrap">
                       <div className="min-w-max">
                         {key.name}
-                        {key.group !== "default" && (
-                          <Badge variant="outline" className="ml-2 whitespace-nowrap text-xs">
-                            {key.group}
-                          </Badge>
-                        )}
                       </div>
                       {key.allowed_groups && key.allowed_groups.length > 0 && (
                         <div className="mt-1 min-w-max">
@@ -921,14 +904,6 @@ export function ApiKeysPage() {
                 id="editName"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="editGroup">{t("apiKeys.group")}</Label>
-              <Input
-                id="editGroup"
-                value={newKeyGroup}
-                onChange={(e) => setNewKeyGroup(e.target.value)}
               />
             </div>
             <AllowedGroupsInput

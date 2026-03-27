@@ -23,8 +23,6 @@ pub struct CreateApiKeyRequest {
     pub model_limits: Vec<String>,
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
-    #[serde(default = "default_group")]
-    pub group: String,
     #[serde(default)]
     pub allowed_groups: Vec<String>,
     #[serde(default)]
@@ -35,10 +33,6 @@ pub struct CreateApiKeyRequest {
 
 fn default_quota_unlimited() -> bool {
     true
-}
-
-fn default_group() -> String {
-    "default".to_string()
 }
 
 pub(super) fn canonicalize_dashboard_api_key_allowed_groups(groups: &mut Vec<String>) {
@@ -60,7 +54,6 @@ pub struct ApiKeyResponse {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub group: String,
     pub allowed_groups: Vec<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
@@ -79,7 +72,6 @@ pub struct ApiKeyCreatedResponse {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub group: String,
     pub allowed_groups: Vec<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
@@ -94,7 +86,6 @@ pub struct UpdateApiKeyRequest {
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
-    pub group: Option<String>,
     pub allowed_groups: Option<Vec<String>>,
     pub max_multiplier: Option<f64>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
@@ -135,7 +126,6 @@ pub async fn list_my_api_keys(
             model_limits_enabled: k.model_limits_enabled,
             model_limits: k.model_limits,
             ip_whitelist: k.ip_whitelist,
-            group: k.group,
             allowed_groups: k.allowed_groups,
             max_multiplier: k.max_multiplier,
             transforms: k.transforms,
@@ -186,7 +176,6 @@ pub async fn create_api_key(
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
-        group: body.group,
         allowed_groups: body.allowed_groups,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
@@ -217,7 +206,6 @@ pub async fn create_api_key(
             model_limits_enabled: api_key.model_limits_enabled,
             model_limits: api_key.model_limits,
             ip_whitelist: api_key.ip_whitelist,
-            group: api_key.group,
             allowed_groups: api_key.allowed_groups,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
@@ -295,7 +283,6 @@ pub async fn get_api_key(
         model_limits_enabled: api_key.model_limits_enabled,
         model_limits: api_key.model_limits,
         ip_whitelist: api_key.ip_whitelist,
-        group: api_key.group,
         allowed_groups: api_key.allowed_groups,
         max_multiplier: api_key.max_multiplier,
         transforms: api_key.transforms,
@@ -337,7 +324,6 @@ pub async fn update_api_key(
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
-        group: body.group,
         allowed_groups: body.allowed_groups,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
@@ -369,7 +355,6 @@ pub async fn update_api_key(
         model_limits_enabled: updated_key.model_limits_enabled,
         model_limits: updated_key.model_limits,
         ip_whitelist: updated_key.ip_whitelist,
-        group: updated_key.group,
         allowed_groups: updated_key.allowed_groups,
         max_multiplier: updated_key.max_multiplier,
         transforms: updated_key.transforms,

@@ -496,7 +496,6 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
 
     let mut create_body: CreateApiKeyRequest = serde_json::from_value(json!({
         "name": "dashboard key",
-        "group": "legacy-group",
         "allowed_groups": [" Beta ", "alpha", "ALPHA", ""]
     }))
     .expect("create payload deserializes");
@@ -513,7 +512,6 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 model_limits_enabled: create_body.model_limits_enabled,
                 model_limits: create_body.model_limits,
                 ip_whitelist: create_body.ip_whitelist,
-                group: create_body.group,
                 allowed_groups: create_body.allowed_groups,
                 max_multiplier: create_body.max_multiplier,
                 transforms: create_body.transforms,
@@ -527,7 +525,6 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         created.allowed_groups,
         vec!["alpha".to_string(), "beta".to_string()]
     );
-    assert_eq!(created.group, "legacy-group");
 
     let created_value = serde_json::to_value(ApiKeyCreatedResponse {
         id: created.id.clone(),
@@ -541,7 +538,6 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         model_limits_enabled: created.model_limits_enabled,
         model_limits: created.model_limits.clone(),
         ip_whitelist: created.ip_whitelist.clone(),
-        group: created.group.clone(),
         allowed_groups: created.allowed_groups.clone(),
         max_multiplier: created.max_multiplier,
         transforms: created.transforms.clone(),
@@ -551,7 +547,6 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         created_value.get("allowed_groups"),
         Some(&json!(["alpha", "beta"]))
     );
-    assert_eq!(created_value.get("group"), Some(&json!("legacy-group")));
 
     let mut update_body: UpdateApiKeyRequest = serde_json::from_value(json!({
         "allowed_groups": [" Beta ", ""]
@@ -575,7 +570,6 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                group: None,
                 allowed_groups: update_body.allowed_groups,
                 max_multiplier: None,
                 transforms: None,
@@ -587,7 +581,6 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         .expect("api key updated");
 
     assert_eq!(updated.allowed_groups, vec!["beta".to_string()]);
-    assert_eq!(updated.group, "legacy-group");
 
     let fetched = store
         .get_api_key_by_id(&updated.id)
@@ -619,14 +612,12 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         model_limits_enabled: fetched.model_limits_enabled,
         model_limits: fetched.model_limits,
         ip_whitelist: fetched.ip_whitelist,
-        group: fetched.group,
         allowed_groups: fetched.allowed_groups,
         max_multiplier: fetched.max_multiplier,
         transforms: fetched.transforms,
     })
     .expect("response serializes");
     assert_eq!(response_value.get("allowed_groups"), Some(&json!(["beta"])));
-    assert_eq!(response_value.get("group"), Some(&json!("legacy-group")));
 }
 
 #[tokio::test]
@@ -670,7 +661,6 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 model_limits_enabled: invalid_create_body.model_limits_enabled,
                 model_limits: invalid_create_body.model_limits,
                 ip_whitelist: invalid_create_body.ip_whitelist,
-                group: invalid_create_body.group,
                 allowed_groups: invalid_create_body.allowed_groups,
                 max_multiplier: invalid_create_body.max_multiplier,
                 transforms: invalid_create_body.transforms,
@@ -693,7 +683,6 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
-                group: "default".to_string(),
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
@@ -725,7 +714,6 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                group: None,
                 allowed_groups: invalid_update_body.allowed_groups,
                 max_multiplier: None,
                 transforms: None,
@@ -753,7 +741,6 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
-                group: "default".to_string(),
                 allowed_groups: vec![" Beta ".to_string()],
                 max_multiplier: None,
                 transforms: Vec::new(),

@@ -357,6 +357,8 @@ FL36. In the request-id status indicator, status-color mapping MUST be:
 
 FL37. The logs page MUST auto-refresh the newest page periodically so that terminal rows and aggregate totals refresh without manual reload. While an SSE connection is active, in-progress requests SHOULD first appear as SSE-delivered `pending` rows and later transition to terminal state by replacement. *(See FL49: when SSE is connected, SSE is the primary real-time mechanism; polling becomes fallback only.)*
 
+FL37a. When SWR revalidation replaces `loadedLogs` with server-fetched data (initial load, focus revalidation, reconnect revalidation, resync, or polling), the frontend MUST preserve any SSE-delivered `pending` rows that are not yet represented in the server response. Specifically: rows with `status = "pending"` whose `id` is absent from the server data AND whose `request_id` (when non-null) is absent from the server data MUST be re-prepended to the merged result. This prevents SSE-only pending items (which are never persisted to the database per RL1a-1) from being silently dropped by SWR cache replacement.
+
 FL38. While any tooltip-detail overlay in the request-logs table is open (request-id, model, token, channel, duration, input/output, cost):
 
 - The periodic auto-refresh poll defined in FL37 MUST be paused (`isPaused` returns `true`).

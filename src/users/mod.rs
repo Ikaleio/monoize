@@ -147,9 +147,6 @@ pub struct ApiKey {
     /// List of allowed IP addresses/CIDRs (empty = any IP)
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
-    /// Token group identifier for rate limiting/policies
-    #[serde(default)]
-    pub group: String,
     #[serde(default)]
     pub allowed_groups: Vec<String>,
     /// Maximum accepted multiplier for routing
@@ -174,8 +171,6 @@ pub struct CreateApiKeyInput {
     pub model_limits: Vec<String>,
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
-    #[serde(default = "default_group")]
-    pub group: String,
     #[serde(default)]
     pub allowed_groups: Vec<String>,
     #[serde(default)]
@@ -186,10 +181,6 @@ pub struct CreateApiKeyInput {
 
 fn default_quota_unlimited() -> bool {
     true
-}
-
-fn default_group() -> String {
-    "default".to_string()
 }
 
 pub fn canonicalize_groups(groups: &[String]) -> Vec<String> {
@@ -281,7 +272,6 @@ pub struct UpdateApiKeyInput {
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
-    pub group: Option<String>,
     pub allowed_groups: Option<Vec<String>>,
     pub max_multiplier: Option<f64>,
     pub transforms: Option<Vec<TransformRuleConfig>>,

@@ -52,7 +52,6 @@ export interface ApiKey {
   model_limits_enabled: boolean;
   model_limits: string[];
   ip_whitelist: string[];
-  group: string;
   allowed_groups: string[];
   max_multiplier?: number;
   transforms: TransformRuleConfig[];
@@ -68,7 +67,6 @@ export interface CreateApiKeyInput {
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
-  group?: string;
   allowed_groups?: string[];
   max_multiplier?: number;
   transforms?: TransformRuleConfig[];
@@ -82,7 +80,6 @@ export interface UpdateApiKeyInput {
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
-  group?: string;
   allowed_groups?: string[];
   max_multiplier?: number;
   transforms?: TransformRuleConfig[];

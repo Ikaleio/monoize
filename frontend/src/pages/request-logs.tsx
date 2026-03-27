@@ -166,6 +166,27 @@ export function RequestLogsPage() {
 		[activeFilters]
 	)
 
+	/**
+	 * Re-prepend SSE-only pending items that the server response doesn't know about.
+	 * Pending items are never persisted to the DB (RL1a-1), so SWR responses will
+	 * never contain them. Without this, every SWR revalidation silently drops them.
+	 */
+	const preservePendingItems = useCallback(
+		(prev: RequestLog[], serverData: RequestLog[]): RequestLog[] => {
+			const serverRequestIds = new Set(serverData.map(log => log.request_id).filter(Boolean))
+			const serverIds = new Set(serverData.map(log => log.id))
+			const pendingItems = prev.filter(
+				log =>
+					log.status === 'pending' &&
+					!serverIds.has(log.id) &&
+					(!log.request_id || !serverRequestIds.has(log.request_id))
+			)
+			if (pendingItems.length === 0) return serverData
+			return [...pendingItems, ...serverData]
+		},
+		[]
+	)
+
 	const prependSSELogs = useCallback(
 		(logs: RequestLog[]) => {
 			if (logs.length === 0) return
@@ -260,7 +281,7 @@ export function RequestLogsPage() {
 		setTotalCharge(pageData.total_charge_nano_usd)
 		setLoadedLogs(prev => {
 			if (requestOffset === 0) {
-				return pageData.data
+				return preservePendingItems(prev, pageData.data)
 			}
 
 			const existingIds = new Set(prev.map(log => log.id))
@@ -269,7 +290,7 @@ export function RequestLogsPage() {
 			return [...prev, ...appended]
 		})
 		pendingPageDataRef.current = null
-	}, [pageData, requestOffset])
+	}, [pageData, requestOffset, preservePendingItems])
 
 	useEffect(() => {
 		if (!newestPageData) return
@@ -283,7 +304,7 @@ export function RequestLogsPage() {
 		setTotalCharge(newestPageData.total_charge_nano_usd)
 		setLoadedLogs(prev => {
 			if (prev.length === 0 || requestOffset === 0) {
-				return newestPageData.data
+				return preservePendingItems(prev, newestPageData.data)
 			}
 
 			const newestIds = new Set(newestPageData.data.map(log => log.id))
@@ -292,7 +313,7 @@ export function RequestLogsPage() {
 			return merged.slice(0, newestPageData.total)
 		})
 		pendingNewestDataRef.current = null
-	}, [newestPageData, requestOffset])
+	}, [newestPageData, requestOffset, preservePendingItems])
 
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
@@ -307,7 +328,7 @@ export function RequestLogsPage() {
 			setTotalCharge(bufferedNewest.total_charge_nano_usd)
 			setLoadedLogs(prev => {
 				if (prev.length === 0 || requestOffset === 0) {
-					return bufferedNewest.data
+					return preservePendingItems(prev, bufferedNewest.data)
 				}
 				const newestIds = new Set(bufferedNewest.data.map(log => log.id))
 				const tail = prev.filter(log => !newestIds.has(log.id))
@@ -322,7 +343,7 @@ export function RequestLogsPage() {
 			setTotalCharge(bufferedPage.total_charge_nano_usd)
 			setLoadedLogs(prev => {
 				if (requestOffset === 0) {
-					return bufferedPage.data
+					return preservePendingItems(prev, bufferedPage.data)
 				}
 				const existingIds = new Set(prev.map(log => log.id))
 				const appended = bufferedPage.data.filter(log => !existingIds.has(log.id))

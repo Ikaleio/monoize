@@ -555,7 +555,6 @@ impl UserStore {
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
-                group: "default".to_string(),
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
@@ -613,7 +612,7 @@ impl UserStore {
                     model_limits_json.into(),
                     ip_whitelist_json.into(),
                     allowed_groups_json.into(),
-                    input.group.clone().into(),
+                    "default".into(),
                     input.max_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
                     serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?.into(),
                 ],
@@ -637,7 +636,6 @@ impl UserStore {
             model_limits_enabled: input.model_limits_enabled,
             model_limits: input.model_limits,
             ip_whitelist: input.ip_whitelist,
-            group: input.group,
             allowed_groups,
             max_multiplier: input.max_multiplier,
             transforms: input.transforms,
@@ -860,9 +858,6 @@ impl UserStore {
                 .unwrap_or_else(|_| "[]".to_string()),
         );
 
-        let group: String = row
-            .try_get("", "token_group")
-            .unwrap_or_else(|_| "default".to_string());
         let max_multiplier: Option<f64> = row.try_get("", "max_multiplier").unwrap_or(None);
         let transforms_str: String = row
             .try_get("", "transforms")
@@ -901,7 +896,6 @@ impl UserStore {
             model_limits_enabled: model_limits_enabled == 1,
             model_limits,
             ip_whitelist,
-            group,
             allowed_groups,
             max_multiplier,
             transforms,
@@ -976,11 +970,6 @@ impl UserStore {
                     .map_err(|e| e.to_string())?
                     .into(),
             );
-            idx += 1;
-        }
-        if let Some(group) = &input.group {
-            set_clauses.push(format!("token_group = ${idx}"));
-            values.push(group.clone().into());
             idx += 1;
         }
         if input.allowed_groups.is_some() {

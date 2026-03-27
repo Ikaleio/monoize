@@ -121,7 +121,6 @@ mod tests {
                     model_limits_enabled: false,
                     model_limits: Vec::new(),
                     ip_whitelist: Vec::new(),
-                    group: "default".to_string(),
                     allowed_groups: vec!["gamma".to_string(), "Beta".to_string()],
                     max_multiplier: None,
                     transforms: Vec::new(),

@@ -391,7 +391,7 @@ async fn quota_exhausted_returns_429() {
                 model_limits_enabled: false,
                 model_limits: vec![],
                 ip_whitelist: Vec::new(),
-                group: "default".to_string(),
+
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
@@ -440,7 +440,7 @@ async fn ip_whitelist_blocks_non_whitelisted() {
                 model_limits_enabled: false,
                 model_limits: vec![],
                 ip_whitelist: vec!["192.168.1.1".to_string()],
-                group: "default".to_string(),
+
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
