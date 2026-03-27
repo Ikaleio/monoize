@@ -34,6 +34,15 @@ pub fn value_to_u64(value: &Value) -> Option<u64> {
     }
 }
 
+fn normalize_tool_parameters(params: Option<Value>) -> Option<Value> {
+    let mut v = params?;
+    if let Some(obj) = v.as_object_mut() {
+        obj.entry("type".to_string())
+            .or_insert_with(|| Value::String("object".to_string()));
+    }
+    Some(v)
+}
+
 pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
     let obj = raw.as_object()?;
     let tool_type = obj
@@ -63,7 +72,7 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                         .get("description")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string()),
-                    parameters: function_obj.get("parameters").cloned(),
+                    parameters: normalize_tool_parameters(function_obj.get("parameters").cloned()),
                     strict: function_obj.get("strict").and_then(|v| v.as_bool()),
                     extra_body: fn_extra,
                 }),
@@ -80,10 +89,11 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
                     .get("description")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                parameters: obj
-                    .get("parameters")
-                    .cloned()
-                    .or_else(|| obj.get("input_schema").cloned()),
+                parameters: normalize_tool_parameters(
+                    obj.get("parameters")
+                        .cloned()
+                        .or_else(|| obj.get("input_schema").cloned()),
+                ),
                 strict: obj.get("strict").and_then(|v| v.as_bool()),
                 extra_body: HashMap::new(),
             }),
