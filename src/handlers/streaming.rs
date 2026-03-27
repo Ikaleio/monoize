@@ -75,7 +75,6 @@ pub(super) async fn forward_stream_typed(
                 &transform_match_model,
             )
             .await?;
-            ensure_stream_usage_requested(&mut req_attempt, attempt.provider_type);
 
             if requires_buffered_stream {
                 let mut nonstream_req = req_attempt.clone();

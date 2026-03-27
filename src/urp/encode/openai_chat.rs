@@ -7,7 +7,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 struct PendingChatMessage {
@@ -247,6 +247,21 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
 
     merge_extra(obj, &req.extra_body);
+
+    // Unconditionally request usage from upstream to prevent billing leaks.
+    // For streaming, this populates the final chunk with token counts;
+    // for non-streaming, OpenAI ignores it harmlessly.
+    match obj.get_mut("stream_options") {
+        Some(Value::Object(so)) => {
+            so.entry("include_usage".to_string())
+                .or_insert(Value::Bool(true));
+        }
+        Some(_) => {}
+        None => {
+            obj.insert("stream_options".to_string(), json!({"include_usage": true}));
+        }
+    }
+
     body
 }
 
@@ -840,16 +855,12 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 4);
         assert_eq!(output.accepted_prediction_tokens, 5);
         assert_eq!(output.rejected_prediction_tokens, 6);
-        assert!(
-            !decoded_usage
-                .extra_body
-                .contains_key("prompt_tokens_details")
-        );
-        assert!(
-            !decoded_usage
-                .extra_body
-                .contains_key("completion_tokens_details")
-        );
+        assert!(!decoded_usage
+            .extra_body
+            .contains_key("prompt_tokens_details"));
+        assert!(!decoded_usage
+            .extra_body
+            .contains_key("completion_tokens_details"));
         assert_eq!(
             decoded_usage.extra_body.get("provider_specific"),
             Some(&json!(true))
