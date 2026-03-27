@@ -3,9 +3,9 @@ use crate::urp::decode::{
     parse_tool_call_part_from_obj, parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
+    greedy::{Action, GreedyMerger},
     FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
     ToolResultContent, UrpRequest, UrpResponse, Usage,
-    greedy::{Action, GreedyMerger},
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};

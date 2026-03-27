@@ -3,7 +3,7 @@ use crate::urp::{
     AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Item, Part, Role,
     ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut contents = Vec::new();
@@ -489,11 +489,9 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 5);
         assert_eq!(output.accepted_prediction_tokens, 6);
         assert_eq!(output.rejected_prediction_tokens, 7);
-        assert!(
-            !decoded_usage
-                .extra_body
-                .contains_key("cachedContentTokenCount")
-        );
+        assert!(!decoded_usage
+            .extra_body
+            .contains_key("cachedContentTokenCount"));
         assert!(!decoded_usage.extra_body.contains_key("thoughtsTokenCount"));
         assert_eq!(
             decoded_usage.extra_body.get("providerCounter"),

@@ -6,7 +6,7 @@ use crate::urp::{
     FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
     ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -1152,16 +1152,12 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 5);
         assert_eq!(output.accepted_prediction_tokens, 6);
         assert_eq!(output.rejected_prediction_tokens, 7);
-        assert!(
-            !decoded_usage
-                .extra_body
-                .contains_key("input_tokens_details")
-        );
-        assert!(
-            !decoded_usage
-                .extra_body
-                .contains_key("output_tokens_details")
-        );
+        assert!(!decoded_usage
+            .extra_body
+            .contains_key("input_tokens_details"));
+        assert!(!decoded_usage
+            .extra_body
+            .contains_key("output_tokens_details"));
         assert_eq!(
             decoded_usage.extra_body.get("upstream_counter"),
             Some(&json!(42))
