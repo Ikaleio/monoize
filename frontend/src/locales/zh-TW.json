@@ -330,8 +330,6 @@
 		"probeOverrideTitle": "主動探測",
 		"probeOverrideDescription": "Provider 層級探測設定會覆蓋全域健康監測設定。留空代表繼承全域設定。",
 		"probeEnabledOverride": "主動探測覆蓋",
-		"probeEnabledInheritedHelp": "目前使用全域主動探測設定。",
-		"probeEnabledOverrideHelp": "目前已為此 Provider 單獨覆蓋主動探測設定。",
 		"probeModelOverride": "探測模型覆蓋",
 		"probeModelOverridePlaceholder": "留空 = 繼承全域/第一個模型",
 		"probeIntervalOverride": "探測間隔覆蓋（秒）",

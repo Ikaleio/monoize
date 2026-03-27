@@ -352,8 +352,6 @@ export function ProbeSettingsSection({
 }: ProbeSettingsSectionProps) {
 	const inheritGlobal = t('providers.inheritGlobal')
 	const globalProbeEnabled = globalDefaults?.active_probe_enabled ?? true
-	const effectiveProbeEnabled =
-		form.active_probe_enabled_override ?? globalProbeEnabled
 	const inheritedProbeLabel = `${inheritGlobal} (${globalProbeEnabled ? t('common.enabled') : t('common.disabled')})`
 	const probeModelPlaceholder =
 		globalDefaults?.active_probe_model?.trim() ?
@@ -366,49 +364,25 @@ export function ProbeSettingsSection({
 			<div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
 				<div className='space-y-2'>
 					<Label>{t('providers.probeEnabledOverride')}</Label>
-					<div className='rounded-md border px-3 py-2 space-y-2'>
-						<div className='flex items-center justify-between gap-3'>
-							<div className='space-y-0.5'>
-								<div className='text-sm'>
-									{form.active_probe_enabled_override === null ?
-										inheritedProbeLabel
-									: effectiveProbeEnabled ?
-										t('common.enabled')
-									: 	t('common.disabled')}
-								</div>
-								<p className='text-xs text-muted-foreground'>
-									{form.active_probe_enabled_override === null ?
-										t('providers.probeEnabledInheritedHelp')
-									: 	t('providers.probeEnabledOverrideHelp')}
-								</p>
-							</div>
-							<Switch
-								checked={effectiveProbeEnabled}
-								onCheckedChange={checked =>
-									onFormChange(prev => ({
-										...prev,
-										active_probe_enabled_override: checked
-									}))
-								}
-							/>
-						</div>
-						{form.active_probe_enabled_override !== null && (
-							<Button
-								type='button'
-								variant='ghost'
-								size='sm'
-								className='px-0 h-auto text-xs text-muted-foreground hover:text-foreground'
-								onClick={() =>
-									onFormChange(prev => ({
-										...prev,
-										active_probe_enabled_override: null
-									}))
-								}
-							>
-								{inheritedProbeLabel}
-							</Button>
-						)}
-					</div>
+					<Select
+						value={form.active_probe_enabled_override === null ? 'inherit' : form.active_probe_enabled_override ? 'enabled' : 'disabled'}
+						onValueChange={value =>
+							onFormChange(prev => ({
+								...prev,
+								active_probe_enabled_override:
+									value === 'inherit' ? null : value === 'enabled'
+							}))
+						}
+					>
+						<SelectTrigger>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value='inherit'>{inheritedProbeLabel}</SelectItem>
+							<SelectItem value='enabled'>{t('common.enabled')}</SelectItem>
+							<SelectItem value='disabled'>{t('common.disabled')}</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 				<div className='space-y-2'>
 					<Label>{t('providers.probeModelOverride')}</Label>

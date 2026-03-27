@@ -272,4 +272,4 @@ UI-3. Provider editor MUST include:
 
 UI-4. Override fields (provider-level probe overrides, channel-level breaker overrides, timeout override) MUST display the effective global default value as placeholder text when the override is not set. Leaving a field empty MUST mean "inherit from global settings".
 
-UI-5. Nullable boolean overrides MAY use a switch plus a separate reset-to-inherit affordance instead of a three-value selector. When inherited, the UI MUST display the effective global boolean value.
+UI-5. Nullable boolean overrides MUST use a three-value selector (inherit / enabled / disabled). When "inherit" is selected, the selector label MUST include the effective global boolean value (e.g. "Inherit Global (Enabled)").

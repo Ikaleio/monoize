@@ -330,8 +330,6 @@
 		"probeOverrideTitle": "Active Probe",
 		"probeOverrideDescription": "Provider-level probe settings override global health monitoring settings. Empty values inherit global settings.",
 		"probeEnabledOverride": "Active Probe Override",
-		"probeEnabledInheritedHelp": "Using the global Active Probe setting for this provider.",
-		"probeEnabledOverrideHelp": "This provider now overrides the global Active Probe setting.",
 		"probeModelOverride": "Probe Model Override",
 		"probeModelOverridePlaceholder": "empty = inherit global/first model",
 		"probeIntervalOverride": "Probe Interval Override (seconds)",

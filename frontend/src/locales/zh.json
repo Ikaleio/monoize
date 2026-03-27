@@ -330,8 +330,6 @@
 		"probeOverrideTitle": "主动探测",
 		"probeOverrideDescription": "Provider 级探测配置会覆盖全局健康监测配置。留空表示继承全局配置。",
 		"probeEnabledOverride": "主动探测覆盖",
-		"probeEnabledInheritedHelp": "当前使用全局主动探测设置。",
-		"probeEnabledOverrideHelp": "当前已为该 Provider 单独覆盖主动探测设置。",
 		"probeModelOverride": "探测模型覆盖",
 		"probeModelOverridePlaceholder": "留空 = 继承全局/第一个模型",
 		"probeIntervalOverride": "探测间隔覆盖（秒）",

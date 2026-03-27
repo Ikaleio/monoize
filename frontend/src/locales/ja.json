@@ -330,8 +330,6 @@
 		"probeOverrideTitle": "アクティブプローブ",
 		"probeOverrideDescription": "プロバイダー単位のプローブ設定はグローバルなヘルス監視設定を上書きします。空値はグローバル設定を継承します。",
 		"probeEnabledOverride": "アクティブプローブ上書き",
-		"probeEnabledInheritedHelp": "現在はグローバルのアクティブプローブ設定を使用しています。",
-		"probeEnabledOverrideHelp": "この Provider ではアクティブプローブ設定を個別に上書きしています。",
 		"probeModelOverride": "プローブモデル上書き",
 		"probeModelOverridePlaceholder": "空欄 = グローバル/先頭モデルを継承",
 		"probeIntervalOverride": "プローブ間隔上書き（秒）",
