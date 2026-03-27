@@ -160,6 +160,7 @@
 		"active": "活跃",
 		"apiKeyCreated": "API 密钥已创建",
 		"confirmDelete": "确定要删除此 API 密钥吗？",
+		"confirmDeleteTitle": "删除 API 密钥",
 		"failedLoad": "加载 API 密钥失败",
 		"failedCreate": "创建 API 密钥失败",
 		"failedDelete": "删除 API 密钥失败",

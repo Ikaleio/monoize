@@ -160,6 +160,7 @@
 		"active": "Active",
 		"apiKeyCreated": "API Key Created",
 		"confirmDelete": "Are you sure you want to delete this API key?",
+		"confirmDeleteTitle": "Delete API Key",
 		"failedLoad": "Failed to load API keys",
 		"failedCreate": "Failed to create API key",
 		"failedDelete": "Failed to delete API key",

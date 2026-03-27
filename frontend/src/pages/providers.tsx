@@ -4,6 +4,16 @@ import useSWR from 'swr'
 import { Plus, Server } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle
+} from '@/components/ui/alert-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -33,6 +43,7 @@ export function ProvidersPage() {
 		settings?.reasoning_suffix_map ?? DEFAULT_REASONING_SUFFIX_MAP
 	const [createOpen, setCreateOpen] = useState(false)
 	const [editProvider, setEditProvider] = useState<Provider | null>(null)
+	const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null)
 	const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null)
 
 	const applyReorder = async (orderedIds: string[]) => {
@@ -71,11 +82,18 @@ export function ProvidersPage() {
 	}
 
 	const handleDelete = async (provider: Provider) => {
+		setDeleteTarget(provider)
+	}
+
+	const confirmDelete = async () => {
+		if (!deleteTarget) return
 		try {
-			await deleteProviderOptimistic(provider.id, providers)
+			await deleteProviderOptimistic(deleteTarget.id, providers)
 			toast.success(t('providers.deleteSuccess'))
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : t('common.error'))
+		} finally {
+			setDeleteTarget(null)
 		}
 	}
 
@@ -208,6 +226,26 @@ export function ProvidersPage() {
 				reasoningSuffixMap={reasoningSuffixMap}
 				settings={settings}
 			/>
+
+			<AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open) setDeleteTarget(null) }}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>{t('providers.deleteConfirm')}</AlertDialogTitle>
+						<AlertDialogDescription>
+							{t('providers.deleteConfirmDesc', { id: deleteTarget?.name })}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+						<AlertDialogAction
+							className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+							onClick={confirmDelete}
+						>
+							{t('common.delete')}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</PageWrapper>
 	)
 }

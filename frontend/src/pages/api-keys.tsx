@@ -19,6 +19,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { TableVirtuoso } from "react-virtuoso";
 import {
   Tooltip,
@@ -253,6 +263,8 @@ export function ApiKeysPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editKey, setEditKey] = useState<ApiKey | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
 
   // Create form state
   const [newKeyName, setNewKeyName] = useState("");
@@ -368,22 +380,31 @@ export function ApiKeysPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm(t("apiKeys.confirmDelete"))) return;
+    setDeleteTargetId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTargetId) return;
     try {
       await deleteApiKeyOptimistic(
-        id,
+        deleteTargetId,
         keys,
         (error) => console.error(t("apiKeys.failedDelete"), error)
       );
-      setSelectedKeys(prev => prev.filter(k => k !== id));
+      setSelectedKeys(prev => prev.filter(k => k !== deleteTargetId));
     } catch (error) {
-      logHandledOptimisticError("delete api key", error, { id });
+      logHandledOptimisticError("delete api key", error, { id: deleteTargetId });
+    } finally {
+      setDeleteTargetId(null);
     }
   };
 
   const handleBatchDelete = async () => {
     if (selectedKeys.length === 0) return;
-    if (!confirm(t("apiKeys.confirmBatchDelete", { count: selectedKeys.length }))) return;
+    setBatchDeleteOpen(true);
+  };
+
+  const confirmBatchDelete = async () => {
     try {
       await batchDeleteApiKeysOptimistic(
         selectedKeys,
@@ -396,6 +417,8 @@ export function ApiKeysPage() {
         count: selectedKeys.length,
         ids: selectedKeys,
       });
+    } finally {
+      setBatchDeleteOpen(false);
     }
   };
 
@@ -997,6 +1020,46 @@ export function ApiKeysPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTargetId} onOpenChange={(open) => { if (!open) setDeleteTargetId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("apiKeys.confirmDeleteTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("apiKeys.confirmDelete")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={batchDeleteOpen} onOpenChange={(open) => { if (!open) setBatchDeleteOpen(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("apiKeys.confirmBatchDelete", { count: selectedKeys.length })}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("apiKeys.confirmBatchDeleteDesc", { count: selectedKeys.length })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmBatchDelete}
+            >
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </PageWrapper>
   );
 }

@@ -160,6 +160,7 @@
 		"active": "啟用中",
 		"apiKeyCreated": "API 金鑰已建立",
 		"confirmDelete": "確定要刪除此 API 金鑰嗎？",
+		"confirmDeleteTitle": "刪除 API 金鑰",
 		"failedLoad": "載入 API 金鑰失敗",
 		"failedCreate": "建立 API 金鑰失敗",
 		"failedDelete": "刪除 API 金鑰失敗",

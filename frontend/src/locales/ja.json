@@ -160,6 +160,7 @@
 		"active": "アクティブ",
 		"apiKeyCreated": "API キーが作成されました",
 		"confirmDelete": "この API キーを削除してもよろしいですか？",
+		"confirmDeleteTitle": "API キーを削除",
 		"failedLoad": "API キーの読み込みに失敗しました",
 		"failedCreate": "API キーの作成に失敗しました",
 		"failedDelete": "API キーの削除に失敗しました",
