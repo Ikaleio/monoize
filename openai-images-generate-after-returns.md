@@ -1,0 +1,646 @@
+- generic [ref=e1]:
+  - link "Skip to content" [ref=e2] [cursor=pointer]:
+    - /url: "#_top"
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - banner [ref=e5]:
+        - generic [ref=e6]:
+          - link "OpenAI Developers" [ref=e7] [cursor=pointer]:
+            - /url: /
+            - img "OpenAI Developers" [ref=e8]
+          - navigation [ref=e9]:
+            - link "Home" [ref=e11] [cursor=pointer]:
+              - /url: /
+            - link "API" [ref=e13] [cursor=pointer]:
+              - /url: /api
+              - text: API
+              - img [ref=e14]
+            - link "Codex" [ref=e17] [cursor=pointer]:
+              - /url: /codex
+            - link "ChatGPT" [ref=e19] [cursor=pointer]:
+              - /url: /chatgpt
+              - text: ChatGPT
+              - img [ref=e20]
+            - link "Resources" [ref=e23] [cursor=pointer]:
+              - /url: /learn
+              - text: Resources
+              - img [ref=e24]
+          - generic [ref=e26]:
+            - button "Start searching" [ref=e27] [cursor=pointer]:
+              - generic [ref=e28]: Start searching
+              - img [ref=e29]
+            - link "API Dashboard" [ref=e34] [cursor=pointer]:
+              - /url: https://platform.openai.com/login
+              - generic [ref=e35]:
+                - generic [ref=e36]: API Dashboard
+                - img [ref=e37]
+            - button "Toggle light and dark theme" [ref=e39] [cursor=pointer]:
+              - img [ref=e40]
+    - navigation "Main" [ref=e42]:
+      - list [ref=e45]:
+        - listitem [ref=e46]:
+          - generic [ref=e47]:
+            - generic [ref=e49]: API Reference
+            - list [ref=e50]:
+              - listitem [ref=e51]:
+                - link "Introduction" [ref=e52] [cursor=pointer]:
+                  - /url: /api/reference/overview
+              - listitem [ref=e53]:
+                - link "Authentication" [ref=e54] [cursor=pointer]:
+                  - /url: /api/reference/overview#authentication
+              - listitem [ref=e55]:
+                - link "Debugging requests" [ref=e56] [cursor=pointer]:
+                  - /url: /api/reference/overview#debugging-requests
+              - listitem [ref=e57]:
+                - link "Backwards compatibility" [ref=e58] [cursor=pointer]:
+                  - /url: /api/reference/overview#backwards-compatibility
+        - listitem [ref=e59]:
+          - generic [ref=e60]:
+            - generic [ref=e62]: Responses API
+            - list [ref=e63]:
+              - listitem [ref=e64]:
+                - link "Overview" [ref=e65] [cursor=pointer]:
+                  - /url: /api/reference/responses/overview
+              - listitem [ref=e66]:
+                - group [ref=e67]:
+                  - generic "Responses" [ref=e68] [cursor=pointer]:
+                    - generic [ref=e69]: Responses
+              - listitem [ref=e70]:
+                - group [ref=e71]:
+                  - generic "Conversations" [ref=e72] [cursor=pointer]:
+                    - generic [ref=e73]: Conversations
+              - listitem [ref=e74]:
+                - link "Streaming events" [ref=e75] [cursor=pointer]:
+                  - /url: /api/reference/resources/responses/streaming-events
+        - listitem [ref=e76]:
+          - generic [ref=e77]:
+            - generic [ref=e79]: Webhooks
+            - list [ref=e80]:
+              - listitem [ref=e81]:
+                - link "Events" [ref=e82] [cursor=pointer]:
+                  - /url: /api/reference/resources/webhooks
+        - listitem [ref=e83]:
+          - generic [ref=e84]:
+            - generic [ref=e86]: Platform APIs
+            - list [ref=e87]:
+              - listitem [ref=e88]:
+                - group [ref=e89]:
+                  - generic "Audio" [ref=e90] [cursor=pointer]:
+                    - generic [ref=e91]: Audio
+              - listitem [ref=e92]:
+                - group [ref=e93]:
+                  - generic "Videos" [ref=e94] [cursor=pointer]:
+                    - generic [ref=e95]: Videos
+              - listitem [ref=e96]:
+                - group [ref=e97]:
+                  - generic "Images" [ref=e98] [cursor=pointer]:
+                    - generic [ref=e99]: Images
+                  - list [ref=e100]:
+                    - listitem [ref=e101]:
+                      - link "POST Generate an Image" [ref=e102] [cursor=pointer]:
+                        - /url: /api/reference/resources/images/methods/generate
+                        - img "POST" [ref=e104]
+                        - text: Generate an Image
+                    - listitem [ref=e107]:
+                      - link "POST Edit an Image" [ref=e108] [cursor=pointer]:
+                        - /url: /api/reference/resources/images/methods/edit
+                        - img "POST" [ref=e110]
+                        - text: Edit an Image
+                    - listitem [ref=e113]:
+                      - link "POST Create Variation" [ref=e114] [cursor=pointer]:
+                        - /url: /api/reference/resources/images/methods/create_variation
+                        - img "POST" [ref=e116]
+                        - text: Create Variation
+                    - listitem [ref=e119]:
+                      - link "Image generation streaming events" [ref=e120] [cursor=pointer]:
+                        - /url: /api/reference/resources/images/generation-streaming-events
+                    - listitem [ref=e121]:
+                      - link "Image edit streaming events" [ref=e122] [cursor=pointer]:
+                        - /url: /api/reference/resources/images/edit-streaming-events
+              - listitem [ref=e123]:
+                - group [ref=e124]:
+                  - generic "Embeddings" [ref=e125] [cursor=pointer]:
+                    - generic [ref=e126]: Embeddings
+              - listitem [ref=e127]:
+                - group [ref=e128]:
+                  - generic "Evals" [ref=e129] [cursor=pointer]:
+                    - generic [ref=e130]: Evals
+              - listitem [ref=e131]:
+                - group [ref=e132]:
+                  - generic "Fine Tuning" [ref=e133] [cursor=pointer]:
+                    - generic [ref=e134]: Fine Tuning
+              - listitem [ref=e135]:
+                - group [ref=e136]:
+                  - generic "Batches" [ref=e137] [cursor=pointer]:
+                    - generic [ref=e138]: Batches
+              - listitem [ref=e139]:
+                - group [ref=e140]:
+                  - generic "Files" [ref=e141] [cursor=pointer]:
+                    - generic [ref=e142]: Files
+              - listitem [ref=e143]:
+                - group [ref=e144]:
+                  - generic "Uploads" [ref=e145] [cursor=pointer]:
+                    - generic [ref=e146]: Uploads
+              - listitem [ref=e147]:
+                - group [ref=e148]:
+                  - generic "Models" [ref=e149] [cursor=pointer]:
+                    - generic [ref=e150]: Models
+              - listitem [ref=e151]:
+                - group [ref=e152]:
+                  - generic "Moderations" [ref=e153] [cursor=pointer]:
+                    - generic [ref=e154]: Moderations
+        - listitem [ref=e155]:
+          - generic [ref=e156]:
+            - generic [ref=e158]: Vector Stores
+            - list [ref=e159]:
+              - listitem [ref=e160]:
+                - group [ref=e161]:
+                  - generic "Vector Stores" [ref=e162] [cursor=pointer]:
+                    - generic [ref=e163]: Vector Stores
+              - listitem [ref=e164]:
+                - group [ref=e165]:
+                  - generic "Files" [ref=e166] [cursor=pointer]:
+                    - generic [ref=e167]: Files
+              - listitem [ref=e168]:
+                - group [ref=e169]:
+                  - generic "File Batches" [ref=e170] [cursor=pointer]:
+                    - generic [ref=e171]: File Batches
+        - listitem [ref=e172]:
+          - generic [ref=e173]:
+            - generic [ref=e175]: ChatKit
+            - list [ref=e176]:
+              - listitem [ref=e177]:
+                - group [ref=e178]:
+                  - generic "Sessions" [ref=e179] [cursor=pointer]:
+                    - generic [ref=e180]: Sessions
+              - listitem [ref=e181]:
+                - group [ref=e182]:
+                  - generic "Threads" [ref=e183] [cursor=pointer]:
+                    - generic [ref=e184]: Threads
+        - listitem [ref=e185]:
+          - generic [ref=e186]:
+            - generic [ref=e188]: Containers
+            - list [ref=e189]:
+              - listitem [ref=e190]:
+                - group [ref=e191]:
+                  - generic "Containers" [ref=e192] [cursor=pointer]:
+                    - generic [ref=e193]: Containers
+              - listitem [ref=e194]:
+                - group [ref=e195]:
+                  - generic "Files" [ref=e196] [cursor=pointer]:
+                    - generic [ref=e197]: Files
+        - listitem [ref=e198]:
+          - generic [ref=e199]:
+            - generic [ref=e201]: Skills
+            - list [ref=e202]:
+              - listitem [ref=e203]:
+                - group [ref=e204]:
+                  - generic "Skills" [ref=e205] [cursor=pointer]:
+                    - generic [ref=e206]: Skills
+        - listitem [ref=e207]:
+          - generic [ref=e208]:
+            - generic [ref=e210]: Realtime
+            - list [ref=e211]:
+              - listitem [ref=e212]:
+                - group [ref=e213]:
+                  - generic "Client Secrets" [ref=e214] [cursor=pointer]:
+                    - generic [ref=e215]: Client Secrets
+              - listitem [ref=e216]:
+                - group [ref=e217]:
+                  - generic "Calls" [ref=e218] [cursor=pointer]:
+                    - generic [ref=e219]: Calls
+              - listitem [ref=e220]:
+                - link "Client events" [ref=e221] [cursor=pointer]:
+                  - /url: /api/reference/resources/realtime/client-events
+              - listitem [ref=e222]:
+                - link "Server events" [ref=e223] [cursor=pointer]:
+                  - /url: /api/reference/resources/realtime/server-events
+        - listitem [ref=e224]:
+          - generic [ref=e225]:
+            - generic [ref=e227]: Administration
+            - list [ref=e228]:
+              - listitem [ref=e229]:
+                - link "Overview" [ref=e230] [cursor=pointer]:
+                  - /url: /api/reference/administration/overview
+              - listitem [ref=e231]:
+                - group [ref=e232]:
+                  - generic "Organization" [ref=e233] [cursor=pointer]:
+                    - generic [ref=e234]: Organization
+              - listitem [ref=e235]:
+                - group [ref=e236]:
+                  - generic "Projects" [ref=e237] [cursor=pointer]:
+                    - generic [ref=e238]: Projects
+        - listitem [ref=e239]:
+          - generic [ref=e240]:
+            - generic [ref=e242]: Chat Completions
+            - list [ref=e243]:
+              - listitem [ref=e244]:
+                - group [ref=e245]:
+                  - generic "Chat Completions" [ref=e246] [cursor=pointer]:
+                    - generic [ref=e247]: Chat Completions
+        - listitem [ref=e248]:
+          - generic [ref=e249]:
+            - generic [ref=e251]: Legacy
+            - list [ref=e252]:
+              - listitem [ref=e253]:
+                - group [ref=e254]:
+                  - generic "Realtime Beta" [ref=e255] [cursor=pointer]:
+                    - generic [ref=e256]: Realtime Beta
+              - listitem [ref=e257]:
+                - group [ref=e258]:
+                  - generic "Assistants" [ref=e259] [cursor=pointer]:
+                    - generic [ref=e260]: Assistants
+              - listitem [ref=e261]:
+                - group [ref=e262]:
+                  - generic "Completions" [ref=e263] [cursor=pointer]:
+                    - generic [ref=e264]: Completions
+              - listitem [ref=e265]:
+                - group [ref=e266]:
+                  - generic "Completions" [ref=e267] [cursor=pointer]:
+                    - generic [ref=e268]: Completions
+    - main [ref=e269]:
+      - generic [ref=e273]:
+        - generic [ref=e274]:
+          - generic [ref=e275]:
+            - link "API Reference" [ref=e277] [cursor=pointer]:
+              - /url: /api/reference
+            - img [ref=e278]
+            - link "Images" [ref=e281] [cursor=pointer]:
+              - /url: /api/reference/resources/images
+          - generic [ref=e282]:
+            - button "Select primary option" [ref=e283] [cursor=pointer]:
+              - img [ref=e284]
+              - generic [ref=e287]: Copy Markdown
+            - button "Select an option" [ref=e288] [cursor=pointer]:
+              - img [ref=e289]
+        - generic [active] [ref=e292]:
+          - generic [ref=e293]:
+            - heading "Create image" [level=1] [ref=e294]
+            - generic [ref=e295]:
+              - generic [ref=e296]:
+                - img [ref=e297]
+                - generic [ref=e300]: POST
+              - generic [ref=e301]: /images/generations
+          - generic [ref=e302]:
+            - generic [ref=e303]:
+              - paragraph [ref=e306]:
+                - text: Creates an image given a prompt.
+                - link "Learn more" [ref=e307] [cursor=pointer]:
+                  - /url: /docs/guides/images
+                - text: .
+              - generic [ref=e308]:
+                - generic [ref=e309]:
+                  - heading "Body Parameters JSON Expand" [level=5] [ref=e310]:
+                    - generic [ref=e311]:
+                      - text: Body Parameters
+                      - generic [ref=e312]:
+                        - img [ref=e313]
+                        - generic [ref=e316]: JSON
+                    - generic [ref=e318] [cursor=pointer]: Expand
+                  - generic [ref=e320]:
+                    - generic [ref=e322]:
+                      - generic [ref=e323]:
+                        - generic [ref=e324]: prompt
+                        - text: ":"
+                        - generic [ref=e325]: string
+                      - paragraph [ref=e328]:
+                        - text: A text description of the desired image(s). The maximum length is 32000 characters for the GPT image models, 1000 characters for
+                        - code [ref=e329]: dall-e-2
+                        - text: and 4000 characters for
+                        - code [ref=e330]: dall-e-3
+                        - text: .
+                    - group [ref=e332]:
+                      - 'generic "background: optional \"transparent\" or \"opaque\" or \"auto\" Allows to set transparency for the background of the generated image(s). This parameter is only supported for the GPT image models. Must be one of transparent, opaque or auto (default value). When auto is used, the model will automatically determine the best background for the image. If transparent, the output format needs to support transparency, so it should be set to either png (default value) or webp." [ref=e333] [cursor=pointer]':
+                        - generic [ref=e336]:
+                          - generic [ref=e337]:
+                            - generic [ref=e338]: background
+                            - text: ": optional"
+                            - generic [ref=e341]:
+                              - generic [ref=e342]: "\"transparent\""
+                              - generic [ref=e343]: or
+                              - generic [ref=e344]: "\"opaque\""
+                              - generic [ref=e345]: or
+                              - generic [ref=e346]: "\"auto\""
+                          - generic [ref=e348]:
+                            - paragraph [ref=e349]:
+                              - text: Allows to set transparency for the background of the generated image(s). This parameter is only supported for the GPT image models. Must be one of
+                              - code [ref=e350]: transparent
+                              - text: ","
+                              - code [ref=e351]: opaque
+                              - text: or
+                              - code [ref=e352]: auto
+                              - text: (default value). When
+                              - code [ref=e353]: auto
+                              - text: is used, the model will automatically determine the best background for the image.
+                            - paragraph [ref=e354]:
+                              - text: If
+                              - code [ref=e355]: transparent
+                              - text: ", the output format needs to support transparency, so it should be set to either"
+                              - code [ref=e356]: png
+                              - text: (default value) or
+                              - code [ref=e357]: webp
+                              - text: .
+                    - group [ref=e359]:
+                      - 'generic "model: optional string or ImageModel The model to use for image generation. One of dall-e-2, dall-e-3, or a GPT image model (gpt-image-1, gpt-image-1-mini, gpt-image-1.5). Defaults to dall-e-2 unless a parameter specific to the GPT image models is used." [ref=e360] [cursor=pointer]':
+                        - generic [ref=e363]:
+                          - generic [ref=e364]:
+                            - generic [ref=e365]: model
+                            - text: ": optional"
+                            - generic [ref=e368]:
+                              - generic [ref=e369]: string
+                              - generic [ref=e370]: or
+                              - link "ImageModel" [ref=e373]:
+                                - /url: /api/reference/resources/images#(resource)%20images%20%3E%20(model)%20image_model%20%3E%20(schema)
+                          - paragraph [ref=e376]:
+                            - text: The model to use for image generation. One of
+                            - code [ref=e377]: dall-e-2
+                            - text: ","
+                            - code [ref=e378]: dall-e-3
+                            - text: ", or a GPT image model ("
+                            - code [ref=e379]: gpt-image-1
+                            - text: ","
+                            - code [ref=e380]: gpt-image-1-mini
+                            - text: ","
+                            - code [ref=e381]: gpt-image-1.5
+                            - text: ). Defaults to
+                            - code [ref=e382]: dall-e-2
+                            - text: unless a parameter specific to the GPT image models is used.
+                    - group [ref=e384]:
+                      - 'generic "moderation: optional \"low\" or \"auto\" Control the content-moderation level for images generated by the GPT image models. Must be either low for less restrictive filtering or auto (default value)." [ref=e385] [cursor=pointer]':
+                        - generic [ref=e388]:
+                          - generic [ref=e389]:
+                            - generic [ref=e390]: moderation
+                            - text: ": optional"
+                            - generic [ref=e393]:
+                              - generic [ref=e394]: "\"low\""
+                              - generic [ref=e395]: or
+                              - generic [ref=e396]: "\"auto\""
+                          - paragraph [ref=e399]:
+                            - text: Control the content-moderation level for images generated by the GPT image models. Must be either
+                            - code [ref=e400]: low
+                            - text: for less restrictive filtering or
+                            - code [ref=e401]: auto
+                            - text: (default value).
+                    - generic [ref=e403]:
+                      - generic [ref=e404]:
+                        - generic [ref=e405]: "n"
+                        - text: ": optional"
+                        - generic [ref=e406]: number
+                      - paragraph [ref=e409]:
+                        - text: The number of images to generate. Must be between 1 and 10. For
+                        - code [ref=e410]: dall-e-3
+                        - text: ", only"
+                        - code [ref=e411]: n=1
+                        - text: is supported.
+                      - generic [ref=e413]:
+                        - generic [ref=e414]: minimum:1,
+                        - generic [ref=e415]: maximum:10
+                    - generic [ref=e417]:
+                      - generic [ref=e418]:
+                        - generic [ref=e419]: output_compression
+                        - text: ": optional"
+                        - generic [ref=e420]: number
+                      - paragraph [ref=e423]:
+                        - text: The compression level (0-100%) for the generated images. This parameter is only supported for the GPT image models with the
+                        - code [ref=e424]: webp
+                        - text: or
+                        - code [ref=e425]: jpeg
+                        - text: output formats, and defaults to 100.
+                    - group [ref=e427]:
+                      - 'generic "output_format: optional \"png\" or \"jpeg\" or \"webp\" The format in which the generated images are returned. This parameter is only supported for the GPT image models. Must be one of png, jpeg, or webp." [ref=e428] [cursor=pointer]':
+                        - generic [ref=e431]:
+                          - generic [ref=e432]:
+                            - generic [ref=e433]: output_format
+                            - text: ": optional"
+                            - generic [ref=e436]:
+                              - generic [ref=e437]: "\"png\""
+                              - generic [ref=e438]: or
+                              - generic [ref=e439]: "\"jpeg\""
+                              - generic [ref=e440]: or
+                              - generic [ref=e441]: "\"webp\""
+                          - paragraph [ref=e444]:
+                            - text: The format in which the generated images are returned. This parameter is only supported for the GPT image models. Must be one of
+                            - code [ref=e445]: png
+                            - text: ","
+                            - code [ref=e446]: jpeg
+                            - text: ", or"
+                            - code [ref=e447]: webp
+                            - text: .
+                    - generic [ref=e449]:
+                      - generic [ref=e450]:
+                        - generic [ref=e451]: partial_images
+                        - text: ": optional"
+                        - generic [ref=e452]: number
+                      - generic [ref=e454]:
+                        - paragraph [ref=e455]: The number of partial images to generate. This parameter is used for streaming responses that return partial images. Value must be between 0 and 3. When set to 0, the response will be a single image sent in one streaming event.
+                        - paragraph [ref=e456]: Note that the final image may be sent before the full number of partial images are generated if the full image is generated more quickly.
+                      - generic [ref=e458]:
+                        - generic [ref=e459]: maximum:3,
+                        - generic [ref=e460]: minimum:0
+                    - group [ref=e462]:
+                      - 'generic "quality: optional \"standard\" or \"hd\" or \"low\" or 3 more The quality of the image that will be generated. auto (default value) will automatically select the best quality for the given model. high, medium and low are supported for the GPT image models. hd and standard are supported for dall-e-3. standard is the only option for dall-e-2." [ref=e463] [cursor=pointer]':
+                        - generic [ref=e466]:
+                          - generic [ref=e467]:
+                            - generic [ref=e468]: quality
+                            - text: ": optional"
+                            - generic [ref=e471]:
+                              - generic [ref=e472]: "\"standard\""
+                              - generic [ref=e473]: or
+                              - generic [ref=e474]: "\"hd\""
+                              - generic [ref=e475]: or
+                              - generic [ref=e476]: "\"low\""
+                              - generic [ref=e477]: or
+                              - generic [ref=e478]: 3 more
+                          - generic [ref=e480]:
+                            - paragraph [ref=e481]: The quality of the image that will be generated.
+                            - list [ref=e482]:
+                              - listitem [ref=e483]:
+                                - code [ref=e484]: auto
+                                - text: (default value) will automatically select the best quality for the given model.
+                              - listitem [ref=e485]:
+                                - code [ref=e486]: high
+                                - text: ","
+                                - code [ref=e487]: medium
+                                - text: and
+                                - code [ref=e488]: low
+                                - text: are supported for the GPT image models.
+                              - listitem [ref=e489]:
+                                - code [ref=e490]: hd
+                                - text: and
+                                - code [ref=e491]: standard
+                                - text: are supported for
+                                - code [ref=e492]: dall-e-3
+                                - text: .
+                              - listitem [ref=e493]:
+                                - code [ref=e494]: standard
+                                - text: is the only option for
+                                - code [ref=e495]: dall-e-2
+                                - text: .
+                    - group [ref=e497]:
+                      - 'generic "response_format: optional \"url\" or \"b64_json\" The format in which generated images with dall-e-2 and dall-e-3 are returned. Must be one of url or b64_json. URLs are only valid for 60 minutes after the image has been generated. This parameter isn''t supported for the GPT image models, which always return base64-encoded images." [ref=e498] [cursor=pointer]':
+                        - generic [ref=e501]:
+                          - generic [ref=e502]:
+                            - generic [ref=e503]: response_format
+                            - text: ": optional"
+                            - generic [ref=e506]:
+                              - generic [ref=e507]: "\"url\""
+                              - generic [ref=e508]: or
+                              - generic [ref=e509]: "\"b64_json\""
+                          - paragraph [ref=e512]:
+                            - text: The format in which generated images with
+                            - code [ref=e513]: dall-e-2
+                            - text: and
+                            - code [ref=e514]: dall-e-3
+                            - text: are returned. Must be one of
+                            - code [ref=e515]: url
+                            - text: or
+                            - code [ref=e516]: b64_json
+                            - text: . URLs are only valid for 60 minutes after the image has been generated. This parameter isn't supported for the GPT image models, which always return base64-encoded images.
+                    - group [ref=e518]:
+                      - 'generic "size: optional \"auto\" or \"1024x1024\" or \"1536x1024\" or 5 more The size of the generated images. Must be one of 1024x1024, 1536x1024 (landscape), 1024x1536 (portrait), or auto (default value) for the GPT image models, one of 256x256, 512x512, or 1024x1024 for dall-e-2, and one of 1024x1024, 1792x1024, or 1024x1792 for dall-e-3." [ref=e519] [cursor=pointer]':
+                        - generic [ref=e522]:
+                          - generic [ref=e523]:
+                            - generic [ref=e524]: size
+                            - text: ": optional"
+                            - generic [ref=e527]:
+                              - generic [ref=e528]: "\"auto\""
+                              - generic [ref=e529]: or
+                              - generic [ref=e530]: "\"1024x1024\""
+                              - generic [ref=e531]: or
+                              - generic [ref=e532]: "\"1536x1024\""
+                              - generic [ref=e533]: or
+                              - generic [ref=e534]: 5 more
+                          - paragraph [ref=e537]:
+                            - text: The size of the generated images. Must be one of
+                            - code [ref=e538]: 1024x1024
+                            - text: ","
+                            - code [ref=e539]: 1536x1024
+                            - text: (landscape),
+                            - code [ref=e540]: 1024x1536
+                            - text: (portrait), or
+                            - code [ref=e541]: auto
+                            - text: (default value) for the GPT image models, one of
+                            - code [ref=e542]: 256x256
+                            - text: ","
+                            - code [ref=e543]: 512x512
+                            - text: ", or"
+                            - code [ref=e544]: 1024x1024
+                            - text: for
+                            - code [ref=e545]: dall-e-2
+                            - text: ", and one of"
+                            - code [ref=e546]: 1024x1024
+                            - text: ","
+                            - code [ref=e547]: 1792x1024
+                            - text: ", or"
+                            - code [ref=e548]: 1024x1792
+                            - text: for
+                            - code [ref=e549]: dall-e-3
+                            - text: .
+                    - generic [ref=e551]:
+                      - generic [ref=e552]:
+                        - generic [ref=e553]: stream
+                        - text: ": optional"
+                        - generic [ref=e554]: boolean
+                      - paragraph [ref=e557]:
+                        - text: Generate the image in streaming mode. Defaults to
+                        - code [ref=e558]: "false"
+                        - text: . See the
+                        - link "Image generation guide" [ref=e559] [cursor=pointer]:
+                          - /url: /docs/guides/image-generation
+                        - text: for more information. This parameter is only supported for the GPT image models.
+                    - group [ref=e561]:
+                      - 'generic "style: optional \"vivid\" or \"natural\" The style of the generated images. This parameter is only supported for dall-e-3. Must be one of vivid or natural. Vivid causes the model to lean towards generating hyper-real and dramatic images. Natural causes the model to produce more natural, less hyper-real looking images." [ref=e562] [cursor=pointer]':
+                        - generic [ref=e565]:
+                          - generic [ref=e566]:
+                            - generic [ref=e567]: style
+                            - text: ": optional"
+                            - generic [ref=e570]:
+                              - generic [ref=e571]: "\"vivid\""
+                              - generic [ref=e572]: or
+                              - generic [ref=e573]: "\"natural\""
+                          - paragraph [ref=e576]:
+                            - text: The style of the generated images. This parameter is only supported for
+                            - code [ref=e577]: dall-e-3
+                            - text: . Must be one of
+                            - code [ref=e578]: vivid
+                            - text: or
+                            - code [ref=e579]: natural
+                            - text: . Vivid causes the model to lean towards generating hyper-real and dramatic images. Natural causes the model to produce more natural, less hyper-real looking images.
+                    - generic [ref=e581]:
+                      - generic [ref=e582]:
+                        - generic [ref=e583]: user
+                        - text: ": optional"
+                        - generic [ref=e584]: string
+                      - paragraph [ref=e587]:
+                        - text: A unique identifier representing your end-user, which can help OpenAI to monitor and detect abuse.
+                        - link "Learn more" [ref=e588] [cursor=pointer]:
+                          - /url: /docs/guides/safety-best-practices#end-user-ids
+                        - text: .
+                - generic [ref=e589]:
+                  - heading "Returns Expand" [level=5] [ref=e590]:
+                    - text: Returns
+                    - generic [ref=e592] [cursor=pointer]: Expand
+                  - group [ref=e596]:
+                    - 'generic "ImagesResponse = object { created, background, data, 4 more } The response from the image generation endpoint." [ref=e597] [cursor=pointer]':
+                      - generic [ref=e600]:
+                        - generic [ref=e601]:
+                          - text: ImagesResponse =
+                          - generic [ref=e602]:
+                            - text: object
+                            - generic [ref=e603]:
+                              - text: "{"
+                              - generic [ref=e604]:
+                                - generic [ref=e605]: created
+                                - text: ","
+                                - generic [ref=e606]: background
+                                - text: ","
+                                - generic [ref=e607]: data
+                                - text: ","
+                                - generic [ref=e608]: 4 more
+                              - text: "}"
+                        - paragraph [ref=e611]: The response from the image generation endpoint.
+            - generic [ref=e613]:
+              - generic [ref=e614]:
+                - generic [ref=e615] [cursor=pointer]: Generate image
+                - generic [ref=e616] [cursor=pointer]: Streaming
+              - generic [ref=e619]:
+                - generic [ref=e621]:
+                  - generic [ref=e622]:
+                    - generic [ref=e623]:
+                      - img "POST" [ref=e625]
+                      - heading "Create image" [level=3] [ref=e628]
+                    - button "Select an option" [ref=e631] [cursor=pointer]:
+                      - generic [ref=e632]:
+                        - img [ref=e634]
+                        - generic [ref=e643]: HTTP
+                      - img [ref=e645]
+                    - button [ref=e648] [cursor=pointer]:
+                      - img [ref=e649]
+                  - code [ref=e654]:
+                    - generic [ref=e655]: curl https://api.openai.com/v1/images/generations \
+                    - generic [ref=e656]: "-H \"Content-Type: application/json\" \\"
+                    - generic [ref=e657]: "-H \"Authorization: Bearer $OPENAI_API_KEY\" \\"
+                    - generic [ref=e658]: "-d '{"
+                    - generic [ref=e659]: "\"model\": \"gpt-image-1.5\","
+                    - generic [ref=e660]: "\"prompt\": \"A cute baby sea otter\","
+                    - generic [ref=e661]: "\"n\": 1,"
+                    - generic [ref=e662]: "\"size\": \"1024x1024\""
+                    - generic [ref=e663]: "}'"
+                - code [ref=e670]:
+                  - generic [ref=e671]: "{"
+                  - generic [ref=e672]: "\"created\": 1713833628,"
+                  - generic [ref=e673]: "\"data\": ["
+                  - generic [ref=e674]: "{"
+                  - generic [ref=e675]: "\"b64_json\": \"...\""
+                  - generic [ref=e676]: "}"
+                  - generic [ref=e677]: "],"
+                  - generic [ref=e678]: "\"usage\": {"
+                  - generic [ref=e679]: "\"total_tokens\": 100,"
+                  - generic [ref=e680]: "\"input_tokens\": 50,"
+                  - generic [ref=e681]: "\"output_tokens\": 50,"
+                  - generic [ref=e682]: "\"input_tokens_details\": {"
+                  - generic [ref=e683]: "\"text_tokens\": 10,"
+                  - generic [ref=e684]: "\"image_tokens\": 40"
+                  - generic [ref=e685]: "}"
+                  - generic [ref=e686]: "}"
+                  - generic [ref=e687]: "}"

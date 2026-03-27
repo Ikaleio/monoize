@@ -25,8 +25,10 @@ pub mod reasoning_effort_to_model_suffix;
 pub mod reasoning_summary_to_raw_cot;
 pub mod reasoning_to_think_xml;
 pub mod remove_field;
+pub mod resolve_image_urls;
 pub mod set_field;
 pub mod split_sse_frames;
+pub mod strip_orphaned_tool_use;
 pub mod strip_reasoning;
 pub mod system_to_developer_role;
 pub mod think_xml_to_reasoning;
@@ -100,6 +102,7 @@ impl TransformState for NoState {
 #[derive(Clone)]
 pub struct TransformRuntimeContext {
     pub image_transform_cache: Arc<crate::image_transform_cache::ImageTransformCache>,
+    pub http_client: reqwest::Client,
 }
 
 #[async_trait]
@@ -157,6 +160,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(set_field::SetFieldTransform),
         Box::new(split_sse_frames::SplitSseFramesTransform),
         Box::new(strip_reasoning::StripReasoningTransform),
+        Box::new(strip_orphaned_tool_use::StripOrphanedToolUseTransform),
         Box::new(system_to_developer_role::SystemToDeveloperRoleTransform),
         Box::new(think_xml_to_reasoning::ThinkXmlToReasoningTransform),
         Box::new(assistant_markdown_images_to_output::AssistantMarkdownImagesToOutputTransform),
@@ -165,6 +169,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(auto_cache_tool_use::AutoCacheToolUseTransform),
         Box::new(auto_cache_user_id::AutoCacheUserIdTransform),
         Box::new(compress_user_message_images::CompressUserMessageImagesTransform),
+        Box::new(resolve_image_urls::ResolveImageUrlsTransform),
     ]
 }
 

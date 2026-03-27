@@ -700,13 +700,14 @@ export function ApiKeysPage() {
               </div>
             ) : (
               <TableVirtuoso
-                style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
+                style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "auto" }}
                 data={keys}
                 components={{
                   Table: (props) => (
                     <table
                       {...props}
                       className="w-full caption-bottom text-sm"
+                      style={{ minWidth: "72rem" }}
                     />
                   ),
                   TableHead: (props) => (
@@ -724,31 +725,31 @@ export function ApiKeysPage() {
                 }}
                 fixedHeaderContent={() => (
                   <tr className="border-b bg-background">
-                    <th className="h-10 px-4 align-middle font-medium text-muted-foreground w-[50px]">
+                    <th className="h-10 w-[50px] px-4 align-middle font-medium text-muted-foreground whitespace-nowrap">
                       <Checkbox
                         checked={selectedKeys.length === keys.length && keys.length > 0}
                         onCheckedChange={toggleSelectAll}
                       />
                     </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("common.name")}
                     </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("apiKeys.keyPrefix")}
                     </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("apiKeys.quota")}
                     </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("apiKeys.restrictions")}
                     </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("apiKeys.expires")}
                     </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("common.status")}
                     </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[100px]">
+                    <th className="h-10 w-[100px] px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("common.actions")}
                     </th>
                   </tr>
@@ -761,24 +762,24 @@ export function ApiKeysPage() {
                         onCheckedChange={() => toggleSelectKey(key.id)}
                       />
                     </td>
-                    <td className="p-4 align-middle font-medium">
-                      <div>
+                    <td className="p-4 align-middle font-medium whitespace-nowrap">
+                      <div className="min-w-max">
                         {key.name}
                         {key.group !== "default" && (
-                          <Badge variant="outline" className="ml-2 text-xs">
+                          <Badge variant="outline" className="ml-2 whitespace-nowrap text-xs">
                             {key.group}
                           </Badge>
                         )}
                       </div>
                       {key.allowed_groups && key.allowed_groups.length > 0 && (
-                        <div className="mt-1">
+                        <div className="mt-1 min-w-max">
                           <GroupsBadge groups={key.allowed_groups} variant="secondary" />
                         </div>
                       )}
                     </td>
-                    <td className="p-4 align-middle">
-                      <div className="flex items-center gap-1">
-                        <code className="rounded bg-muted px-2 py-0.5 text-sm">
+                    <td className="p-4 align-middle whitespace-nowrap">
+                      <div className="flex min-w-max items-center gap-1">
+                        <code className="rounded bg-muted px-2 py-0.5 text-sm whitespace-nowrap">
                           {key.key ? `${key.key.slice(0, 12)}...` : `${key.key_prefix}...`}
                         </code>
                         {key.key && (
@@ -797,16 +798,16 @@ export function ApiKeysPage() {
                         )}
                       </div>
                     </td>
-                    <td className="p-4 align-middle">
+                    <td className="p-4 align-middle whitespace-nowrap">
                       {key.quota_unlimited ? (
-                        <Badge variant="secondary">{t("apiKeys.unlimited")}</Badge>
+                        <Badge variant="secondary" className="whitespace-nowrap">{t("apiKeys.unlimited")}</Badge>
                       ) : (
                         <span>{key.quota_remaining?.toLocaleString() ?? 0}</span>
                       )}
                     </td>
-                    <td className="p-4 align-middle">
+                    <td className="p-4 align-middle whitespace-nowrap">
                       <TooltipProvider>
-                        <div className="flex gap-1">
+                        <div className="flex min-w-max gap-1">
                           {key.model_limits_enabled && key.model_limits.length > 0 && (
                             <Tooltip>
                               <TooltipTrigger>
@@ -830,7 +831,7 @@ export function ApiKeysPage() {
                           {key.max_multiplier != null && (
                             <Tooltip>
                               <TooltipTrigger>
-                                <Badge variant="outline" className="text-xs px-1.5">
+                                <Badge variant="outline" className="px-1.5 text-xs whitespace-nowrap">
                                   ≤{key.max_multiplier}x
                                 </Badge>
                               </TooltipTrigger>
@@ -845,10 +846,10 @@ export function ApiKeysPage() {
                         </div>
                       </TooltipProvider>
                     </td>
-                    <td className="p-4 align-middle">
+                    <td className="p-4 align-middle whitespace-nowrap">
                       {key.expires_at ? formatDate(key.expires_at) : t("common.never")}
                     </td>
-                    <td className="p-4 align-middle">
+                    <td className="p-4 align-middle whitespace-nowrap">
                       <Switch
                         checked={key.enabled}
                         onCheckedChange={() => handleToggleEnabled(key)}

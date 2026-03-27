@@ -230,6 +230,7 @@ pub(super) async fn apply_transform_rules_request(
     })?;
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
+        http_client: state.http.clone(),
     };
     transforms::apply_transforms(
         transforms::UrpData::Request(req),
@@ -269,6 +270,7 @@ pub(super) async fn apply_transform_rules_response(
     })?;
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
+        http_client: state.http.clone(),
     };
     transforms::apply_transforms(
         transforms::UrpData::Response(resp),
@@ -318,6 +320,7 @@ pub(super) async fn transform_urp_stream(
         )?;
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
+        http_client: state.http.clone(),
     };
 
     while let Some(event) = rx.recv().await {

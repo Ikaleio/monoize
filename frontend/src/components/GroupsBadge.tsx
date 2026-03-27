@@ -23,7 +23,7 @@ export function GroupsBadge({
 
 	if (groups.length === 1) {
 		return (
-			<Badge variant={variant} className={cn('font-mono text-xs', className)}>
+			<Badge variant={variant} className={cn('w-fit whitespace-nowrap font-mono text-xs', className)}>
 				{groups[0]}
 			</Badge>
 		)
@@ -33,10 +33,10 @@ export function GroupsBadge({
 		<TooltipProvider>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<span className='inline-flex'>
+					<span className='inline-flex w-fit whitespace-nowrap'>
 						<Badge
 							variant={variant}
-							className={cn('gap-1 font-mono text-xs', className)}
+							className={cn('w-fit gap-1 whitespace-nowrap font-mono text-xs', className)}
 						>
 							<Layers className='h-3 w-3' />
 							{groups.length} groups

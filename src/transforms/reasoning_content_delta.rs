@@ -184,6 +184,7 @@ mod tests {
         .expect("cache");
         TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
+            http_client: reqwest::Client::new(),
         }
     }
 

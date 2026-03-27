@@ -218,7 +218,7 @@ export function DashboardPage() {
     revalidateOnMount: isAdmin,
   });
   const { data: requestLogsResponse, isLoading: logsLoading } = useRequestLogs(400, 0);
-  const { data: analytics, isLoading: analyticsLoading } = useDashboardAnalytics();
+  const { data: analytics, isLoading: analyticsLoading } = useDashboardAnalytics(8, 720);
   const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
 
   const rawLogs = requestLogsResponse?.data ?? [];
@@ -226,25 +226,25 @@ export function DashboardPage() {
 
   const perfStats = useMemo(() => {
     let successCount = 0;
-    let durationSum = 0;
-    let durationCount = 0;
+    let ttfbSum = 0;
+    let ttfbCount = 0;
 
     for (const log of rawLogs) {
       if (log.status === "success") successCount++;
-      if (log.timing?.duration_ms != null && log.timing.duration_ms > 0) {
-        durationSum += log.timing.duration_ms;
-        durationCount++;
+      if (log.timing?.ttfb_ms != null && log.timing.ttfb_ms > 0) {
+        ttfbSum += log.timing.ttfb_ms;
+        ttfbCount++;
       }
     }
 
     const successRate = rawLogs.length > 0
       ? Math.round((successCount / rawLogs.length) * 100)
       : 0;
-    const avgLatency = durationCount > 0
-      ? Math.round(durationSum / durationCount)
+    const avgTtfb = ttfbCount > 0
+      ? Math.round(ttfbSum / ttfbCount)
       : 0;
 
-    return { successRate, avgLatency };
+    return { successRate, avgTtfb };
   }, [rawLogs]);
 
   const loading = statsLoading
@@ -285,7 +285,7 @@ export function DashboardPage() {
         metrics: [
           {
             key: "totalRequests",
-            label: tt("dashboard.cards.totalRequests", "Total Requests"),
+            label: tt("dashboard.cards.totalRequests", "30d Requests"),
             value: formatNumber(analytics?.total_calls ?? totalRequests),
           },
           {
@@ -301,7 +301,7 @@ export function DashboardPage() {
         metrics: [
           {
             key: "totalSpend",
-            label: tt("dashboard.cards.totalSpend", "Total Spend"),
+            label: tt("dashboard.cards.totalSpend", "30d Spend"),
             value: formatMoney(nanoUsdToUsd(analytics?.total_cost_nano_usd)),
           },
           {
@@ -316,9 +316,9 @@ export function DashboardPage() {
         title: tt("dashboard.cards.performance", "Performance Metrics"),
         metrics: [
           {
-            key: "avgLatency",
-            label: tt("dashboard.cards.avgLatency", "Average Latency"),
-            value: `${formatNumber(perfStats.avgLatency)} ms`,
+            key: "avgTtfb",
+            label: tt("dashboard.cards.avgTtfb", "Average TTFB"),
+            value: `${formatNumber(perfStats.avgTtfb)} ms`,
           },
           {
             key: "successRate",

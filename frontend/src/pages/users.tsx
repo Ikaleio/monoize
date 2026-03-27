@@ -615,14 +615,14 @@ export function UsersPage() {
           </CardHeader>
           <CardContent>
             <TableVirtuoso
-              style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
+              style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "auto" }}
               data={users}
               components={{
                 Table: (props) => (
                   <table
                     {...props}
                     className="w-full caption-bottom text-sm"
-                    style={{ minWidth: "56rem" }}
+                    style={{ minWidth: "64rem" }}
                   />
                 ),
                 TableHead: (props) => (
@@ -640,7 +640,7 @@ export function UsersPage() {
               }}
               fixedHeaderContent={() => (
                 <tr className="border-b bg-background">
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground min-w-[14rem]">
                     {t("users.user")}
                   </th>
                   <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[8.5rem] whitespace-nowrap">
@@ -667,16 +667,16 @@ export function UsersPage() {
                 const RoleIcon = roleIcons[user.role];
                 return (
                   <>
-                    <td className="p-4 align-middle">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-8 w-8">
+                    <td className="p-4 align-middle whitespace-nowrap">
+                      <div className="flex min-w-max items-center gap-2">
+                        <Avatar className="h-8 w-8 shrink-0">
                           {user.email && <AvatarImage src={getGravatarUrl(user.email, 64) ?? undefined} alt={user.username} />}
                           <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
                         </Avatar>
-                        <div className="flex flex-col gap-1">
+                        <div className="flex min-w-max flex-col gap-1">
                           <span className="font-medium">{user.username}</span>
                           {user.allowed_groups.length > 0 && (
-                            <GroupsBadge groups={user.allowed_groups} />
+                            <GroupsBadge groups={user.allowed_groups} className="whitespace-nowrap" />
                           )}
                         </div>
                       </div>

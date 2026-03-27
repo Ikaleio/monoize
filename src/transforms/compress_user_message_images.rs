@@ -389,6 +389,7 @@ mod tests {
         .expect("cache");
         let context = TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
+            http_client: reqwest::Client::new(),
         };
         let input_png = build_png_data_url_source();
         let mut req = UrpRequest {
@@ -473,6 +474,7 @@ mod tests {
         .expect("cache");
         let context = TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
+            http_client: reqwest::Client::new(),
         };
         let input_png = build_png_data_url_source();
         let input_data_url = format!("data:image/png;base64,{input_png}");

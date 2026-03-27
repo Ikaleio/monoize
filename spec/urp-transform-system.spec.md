@@ -113,6 +113,7 @@ TF-7. Built-ins that MUST exist:
 - `auto_cache_system`
 - `auto_cache_tool_use`
 - `compress_user_message_images`
+- `resolve_image_urls`
 - `plaintext_reasoning_to_summary`
 - `reasoning_summary_to_raw_cot`
 - `reasoning_content_delta`
@@ -190,7 +191,39 @@ CUMI-7. Failure handling:
 2. Unsupported or undecodable image payloads MUST leave the original part unchanged.
 3. Cache write failures or cache cleanup failures MUST NOT mutate the request incorrectly; if compression succeeds but cache persistence fails, the runtime MAY still use the in-memory transformed payload for the current request.
 
-### 4.4 `split_sse_frames`
+### 4.4 `resolve_image_urls`
+
+RIU-1. Phase: `request` only.
+
+RIU-2. Config MAY contain:
+- `timeout_seconds` (integer, optional): HTTP request timeout per image fetch. Defaults to `30`.
+- `max_bytes` (integer, optional): maximum response body size in bytes. If exceeded, the URL is left unchanged. Defaults to `20971520` (20 MiB).
+- `roles` (string array, optional): message roles whose `Part::Image` URL parts should be resolved. If absent, all roles (`user`, `assistant`, `system`, `developer`) are eligible.
+
+RIU-3. Input eligibility:
+1. The transform MUST inspect messages whose role is in the configured `roles` set.
+2. Within those messages, the transform MUST inspect `Part::Image` parts whose `source` is `ImageSource::Url` and whose `url` does NOT start with `data:`.
+3. `ImageSource::Base64` parts MUST be left unchanged.
+4. `ImageSource::Url` parts whose `url` starts with `data:` MUST be left unchanged (these are inline data URLs, not remote resources).
+
+RIU-4. Fetch behavior:
+1. For each eligible URL part, the transform MUST issue an HTTP GET request using the shared `reqwest::Client` from `TransformRuntimeContext`.
+2. The request MUST use the configured `timeout_seconds` as the per-request timeout.
+3. If the HTTP response status is not 2xx, the transform MUST log a warning and leave the original URL part unchanged.
+4. If the response body exceeds `max_bytes`, the transform MUST log a warning and leave the original URL part unchanged.
+5. The media type MUST be determined from the `Content-Type` response header. If absent, the transform MUST infer from the URL file extension. If inference fails, `application/octet-stream` MUST be used.
+
+RIU-5. Replacement:
+1. On successful fetch, the transform MUST replace the `ImageSource::Url` with `ImageSource::Base64 { media_type, data }` where `data` is the standard base64 encoding of the fetched bytes.
+
+RIU-6. Concurrency:
+1. Multiple URL fetches within a single request MUST be issued concurrently (not sequentially).
+
+RIU-7. Failure isolation:
+1. A failed fetch for one image MUST NOT prevent other images in the same request from being resolved.
+2. A failed fetch MUST leave the original `ImageSource::Url` unchanged.
+
+### 4.5 `split_sse_frames`
 
 SSF-1. Phase: `response` only.
 
