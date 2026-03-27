@@ -602,7 +602,6 @@ fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static st
     match provider_type {
         ProviderType::ChatCompletion => EXTRA_WHITELIST_CHAT_COMPLETION,
         ProviderType::Responses => EXTRA_WHITELIST_RESPONSES,
-        ProviderType::Grok => EXTRA_WHITELIST_RESPONSES,
         ProviderType::Messages => EXTRA_WHITELIST_ANTHROPIC,
         ProviderType::Gemini => EXTRA_WHITELIST_GEMINI,
         ProviderType::Group => &[],
@@ -634,26 +633,7 @@ pub(super) fn filter_extra_body_for_provider(
         .retain(|k, _| defaults.contains(&k.as_str()) || override_set.contains(k.as_str()));
 }
 
-pub(super) fn ensure_stream_usage_requested(
-    req: &mut urp::UrpRequest,
-    provider_type: ProviderType,
-) {
-    if req.stream != Some(true) || provider_type != ProviderType::ChatCompletion {
-        return;
-    }
-    match req.extra_body.get_mut("stream_options") {
-        Some(Value::Object(stream_options)) => {
-            stream_options
-                .entry("include_usage".to_string())
-                .or_insert(Value::Bool(true));
-        }
-        Some(_) => {}
-        None => {
-            req.extra_body
-                .insert("stream_options".to_string(), json!({"include_usage": true}));
-        }
-    }
-}
+
 
 #[cfg(test)]
 mod tests {

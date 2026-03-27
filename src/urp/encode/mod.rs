@@ -1,11 +1,10 @@
 pub mod anthropic;
 pub mod gemini;
-pub mod grok;
 pub mod openai_chat;
 pub mod openai_responses;
 
 use crate::urp::{InputDetails, OutputDetails, Part, Role, ToolChoice, Usage};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {

@@ -22,7 +22,6 @@ pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
         ProviderType::ChatCompletion => "/v1/chat/completions",
         ProviderType::Messages => "/v1/messages",
         ProviderType::Gemini => "/v1beta/models",
-        ProviderType::Grok => "/v1/responses",
         ProviderType::Group => "/v1/responses",
     }
 }

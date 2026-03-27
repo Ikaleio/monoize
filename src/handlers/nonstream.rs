@@ -252,7 +252,7 @@ pub(super) fn encode_request_for_provider(
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
     let model = req.model.clone();
     let value = match attempt.provider_type {
-        ProviderType::Responses | ProviderType::Grok => {
+        ProviderType::Responses => {
             urp::encode::openai_responses::encode_request(req, &model)
         }
         ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request(req, &model),
@@ -275,7 +275,7 @@ pub(super) fn decode_response_from_provider(
     value: &Value,
 ) -> AppResult<urp::UrpResponse> {
     let decoded = match provider_type {
-        ProviderType::Responses | ProviderType::Grok => {
+        ProviderType::Responses => {
             urp::decode::openai_responses::decode_response(value)
         }
         ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),

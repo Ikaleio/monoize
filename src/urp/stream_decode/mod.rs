@@ -20,7 +20,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> AppResult<()> {
     match provider_type {
-        ProviderType::Responses | ProviderType::Grok => {
+        ProviderType::Responses => {
             openai_responses::stream_responses_to_urp_events(
                 urp,
                 upstream_resp,

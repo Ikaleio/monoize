@@ -15,7 +15,6 @@ pub enum MonoizeProviderType {
     ChatCompletion,
     Messages,
     Gemini,
-    Grok,
 }
 
 impl MonoizeProviderType {
@@ -26,7 +25,6 @@ impl MonoizeProviderType {
             "chat_completion" => Some(Self::ChatCompletion),
             "messages" => Some(Self::Messages),
             "gemini" => Some(Self::Gemini),
-            "grok" => Some(Self::Grok),
             _ => None,
         }
     }
@@ -37,7 +35,6 @@ impl MonoizeProviderType {
             Self::ChatCompletion => "chat_completion",
             Self::Messages => "messages",
             Self::Gemini => "gemini",
-            Self::Grok => "grok",
         }
     }
 
@@ -47,7 +44,6 @@ impl MonoizeProviderType {
             Self::ChatCompletion => crate::config::ProviderType::ChatCompletion,
             Self::Messages => crate::config::ProviderType::Messages,
             Self::Gemini => crate::config::ProviderType::Gemini,
-            Self::Grok => crate::config::ProviderType::Grok,
         }
     }
 }
@@ -1303,15 +1299,6 @@ fn build_probe_request(
             });
             (url, body, &[][..], true)
         }
-        MonoizeProviderType::Grok => {
-            let url = format!("{base}/v1/responses");
-            let body = serde_json::json!({
-                "model": model,
-                "max_output_tokens": 16,
-                "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
-            });
-            (url, body, &[][..], false)
-        }
     }
 }
 
@@ -1406,14 +1393,6 @@ mod tests {
             Some(16)
         );
         assert!(gem_body.get("contents").is_some());
-
-        let (grok_url, grok_body, grok_headers, grok_google_auth) =
-            build_probe_request("https://up.example", "grok-4", MonoizeProviderType::Grok);
-        assert_eq!(grok_url, "https://up.example/v1/responses");
-        assert!(!grok_google_auth);
-        assert!(grok_headers.is_empty());
-        assert_eq!(grok_body["max_output_tokens"].as_u64(), Some(16));
-        assert!(grok_body.get("input").is_some());
     }
 
     #[test]

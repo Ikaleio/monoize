@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { Anthropic, Google, OpenAI, XAI } from '@lobehub/icons'
+import { Anthropic, Google, OpenAI } from '@lobehub/icons'
 import { Badge } from '@/components/ui/badge'
 import type {
 	ApiTypeOverride,
@@ -71,8 +71,7 @@ export const PROVIDER_TYPE_CONFIG: Record<
 		label: 'Gemini',
 		path: '/v1beta/models/{model}:generateContent',
 		icon: Google
-	},
-	grok: { label: 'Responses (Grok)', path: '/v1/responses', icon: XAI }
+	}
 }
 
 export const PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT = 40

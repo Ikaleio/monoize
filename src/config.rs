@@ -25,7 +25,6 @@ pub enum ProviderType {
     ChatCompletion,
     Messages,
     Gemini,
-    Grok,
     Group,
 }
 

@@ -26,7 +26,7 @@ Most AI proxy solutions are Node/Python wrappers that glue APIs together. Monoiz
 ### API Gateway
 
 - **Multi-format ingress** — Accept requests via OpenAI Chat Completions (`/v1/chat/completions`), OpenAI Responses (`/v1/responses`), Anthropic Messages (`/v1/messages`), or Embeddings (`/v1/embeddings`)
-- **Provider-native egress** — Route to `responses`, `chat_completion`, `messages`, `gemini`, or `grok` upstream types with full format conversion
+- **Provider-native egress** — Route to `responses`, `chat_completion`, `messages`, or `gemini` upstream types with full format conversion
 - **Waterfall routing** — Ordered provider evaluation with weighted channel selection, automatic fail-forward, and configurable retry policies
 - **Health checks** — Passive failure tracking with cooldown + active probing to recover unhealthy channels
 - **Unknown field preservation** — Forward provider-specific parameters (e.g. `logprobs`, `top_k`) without explicit support

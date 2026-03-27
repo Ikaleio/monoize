@@ -174,7 +174,7 @@ export interface MonoizeChannel {
   _health_status?: "healthy" | "probing" | "unhealthy";
 }
 
-export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini" | "grok";
+export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini";
 
 export interface ApiTypeOverride {
   pattern: string;

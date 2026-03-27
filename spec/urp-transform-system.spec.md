@@ -39,7 +39,7 @@ DEC-5. Reasoning fields from upstream/downstream wire formats MUST decode into `
 
 ENC-1. Upstream request construction MUST encode from URP only; transforms MUST NOT access raw wire payloads.
 
-ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`, `grok`. The `grok` provider type MUST reuse the same request and response adapter logic as `responses`.
+ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`.
 
 ENC-3. History encoding rule:
 - if a single `Part::Reasoning` carries both opaque reasoning payload (`encrypted`) and plaintext fields (`content` and/or `summary`), adapters MAY omit the plaintext fields only when the target wire format requires opaque reasoning exclusivity for that same reasoning part.

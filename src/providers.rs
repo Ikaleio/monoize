@@ -11,7 +11,6 @@ pub enum ProviderType {
     ChatCompletion,
     Messages,
     Gemini,
-    Grok,
     Group,
 }
 
@@ -23,7 +22,6 @@ impl ProviderType {
             "chat_completion" => Some(Self::ChatCompletion),
             "messages" => Some(Self::Messages),
             "gemini" => Some(Self::Gemini),
-            "grok" => Some(Self::Grok),
             "group" => Some(Self::Group),
             _ => None,
         }
@@ -35,7 +33,6 @@ impl ProviderType {
             Self::ChatCompletion => "chat_completion",
             Self::Messages => "messages",
             Self::Gemini => "gemini",
-            Self::Grok => "grok",
             Self::Group => "group",
         }
     }

@@ -20,7 +20,7 @@
 - **Downstream:** The client calling Monoize.
 - **Upstream:** A provider endpoint Monoize calls.
 - **Provider:** A configured upstream channel.
-- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, `grok`, or `group`.
+- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, or `group`.
 - **URP-Proto request:** A Responses-create-compatible JSON request (Monoize internal).
 - **URP-Proto response:** A Responses-compatible JSON response object (Monoize internal).
 - **Item:** The fundamental unit in URP-Proto `input` and `output` sequences. An `Item` is one of two variants:
@@ -144,7 +144,7 @@ FP5b. The pass-through streaming decoder entrypoint MUST be `stream_upstream_to_
 
 FP5c. `stream_upstream_to_urp_events` MUST dispatch by `provider_type` to exactly these decoder families:
 
-- `responses` and `grok` → Responses-event decoder;
+- `responses` → Responses-event decoder;
 - `chat_completion` → Chat Completions decoder;
 - `messages` → Anthropic Messages decoder;
 - `gemini` → Gemini decoder.
@@ -462,7 +462,6 @@ XF6a. Default whitelists per provider type:
 
 - `chat_completion`: `frequency_penalty`, `logit_bias`, `logprobs`, `top_logprobs`, `max_completion_tokens`, `max_tokens`, `metadata`, `presence_penalty`, `seed`, `stop`, `stream_options`, `parallel_tool_calls`, `debug`, `image_config`, `modalities`, `cache_control`, `top_k`, `top_a`, `min_p`, `repetition_penalty`, `prediction`, `route`, `structured_outputs`, `verbosity`, `models`, `provider`, `plugins`, `session_id`, `trace`.
 - `responses`: `background`, `context_management`, `conversation`, `include`, `instructions`, `metadata`, `max_tool_calls`, `parallel_tool_calls`, `previous_response_id`, `prompt`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `service_tier`, `store`, `text`, `top_logprobs`, `truncation`.
-- `grok`: same as `responses`.
 - `messages`: `max_tokens`, `metadata`, `output_config`, `service_tier`, `stop_sequences`, `top_k`, `inference_geo`.
 - `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`.
 
@@ -561,7 +560,7 @@ PR6c. Final Responses-stream object synthesis:
 - When Monoize emits downstream `response.completed` from `ResponseDone.outputs`, the `response.output` array MUST be encoded with the same Responses encoder logic used for non-streaming responses so that top-level `reasoning`, `message`, and `function_call` items remain in canonical Responses output positions rather than being nested inside `message.content[]`.
 - If Monoize synthesizes missing assistant text stream events because upstream omitted text deltas, it MUST synthesize one URP text stream segment per recovered text-bearing `ResponseDone.outputs` item in output order. Each synthesized segment MUST preserve that text part's `phase` metadata and MUST allocate a fresh URP `part_index` from the decoder's synthetic part-index namespace instead of reusing an `item_index` value.
 
-PR6a. For streaming translation from upstream `type=responses` (or `type=grok`, which uses Responses event shape) to downstream `POST /v1/chat/completions` or `POST /v1/messages`, Monoize MUST support completion-only fallback:
+PR6a. For streaming translation from upstream `type=responses` to downstream `POST /v1/chat/completions` or `POST /v1/messages`, Monoize MUST support completion-only fallback:
 
 - If upstream sends `response.completed` with `output[]` items and Monoize has not emitted a given output class from earlier granular events, Monoize MUST synthesize the missing downstream stream items from `response.completed.output[]`.
 - Output classes are:
@@ -684,7 +683,7 @@ PC8. Reasoning (non-stream and stream):
 - Monoize MUST store parsed reasoning in URP-Proto as a `type="reasoning"` output item (§7.1.2).
 - Backward compatibility: if `reasoning` / `reasoning_details` are absent, Monoize MUST still accept legacy `reasoning_content` / `reasoning_opaque` from upstream chat outputs.
 
-PC9. For upstream `type=chat_completion` requests with `stream=true`, Monoize MUST request in-stream usage by setting `stream_options.include_usage = true` when the request does not already include `stream_options.include_usage`.
+PC9. For ALL upstream `type=chat_completion` requests (regardless of `stream` value), the Chat Completion encoder MUST unconditionally set `stream_options.include_usage = true` when the outbound request body does not already include `stream_options.include_usage`. This ensures usage data is always returned by the upstream provider, preventing billing leaks.
 
 ### 7.4 Provider adapter: `type=messages`
 
@@ -806,30 +805,6 @@ PG6. Monoize MUST map Gemini usage metadata to URP usage fields using:
 - `rejectedPredictionOutputTokenCount -> output_details.rejected_prediction_tokens` when present.
 
 PG7. Monoize MUST preserve unknown Gemini request/response fields in URP `extra_body` according to §3 and §7.7.
-
-### 7.6 Provider adapter: `type=grok`
-
-PX1. Monoize MUST call xAI Grok native Responses endpoint:
-
-- `POST /v1/responses`
-
-PX2. Monoize MUST encode URP requests to xAI Responses request fields (`model`, `input`, `tools`, `tool_choice`, `stream`, `parallel_tool_calls`, and optional provider-specific extras).
-
-PX3. Monoize MUST decode xAI Responses output union items into URP output parts, including:
-
-- message text;
-- function/tool calls;
-- reasoning items;
-- encrypted reasoning content when available.
-
-PX4. Monoize MUST support xAI function-call lifecycle fields:
-
-- tool call item type `function_call` with `call_id`, `name`, and `arguments`;
-- tool result input item type `function_call_output` with `call_id` and `output`.
-
-PX5. Monoize MUST map xAI usage fields to URP usage fields, including reasoning and cached token counters when available.
-
-PX6. Monoize MUST preserve unknown xAI request/response fields in URP `extra_body` according to §3 and §7.7.
 
 ### 7.7 Downstream adapter: `POST /v1/chat/completions`
 

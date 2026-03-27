@@ -530,7 +530,7 @@ export function SettingsPage() {
               <CardDescription>{t("settings.extraFieldsWhitelistDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(["chat_completion", "responses", "grok", "messages", "gemini"] as const).map((providerType) => (
+              {(["chat_completion", "responses", "messages", "gemini"] as const).map((providerType) => (
                 <div key={providerType} className="space-y-1">
                   <Label className="font-mono text-xs">{providerType}</Label>
                   <Input

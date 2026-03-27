@@ -2035,7 +2035,6 @@ async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
         ("chat_completion".to_string(), test_fields.clone()),
         ("messages".to_string(), test_fields.clone()),
         ("gemini".to_string(), test_fields.clone()),
-        ("grok".to_string(), test_fields),
     ]);
 }
 
@@ -2124,7 +2123,7 @@ async fn setup_with_unknown_fields() -> TestContext {
     create_test_provider(
         &state,
         "up-grok",
-        monoize::monoize_routing::MonoizeProviderType::Grok,
+        monoize::monoize_routing::MonoizeProviderType::Responses,
         "grok-4",
         &base_url,
         "upstream-key-grok",
