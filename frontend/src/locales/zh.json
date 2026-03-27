@@ -199,6 +199,9 @@
 		"unlimited": "无限制",
 		"unlimitedQuota": "无限配额",
 		"enableModelLimits": "启用模型限制",
+		"modelRedirects": "模型重定向",
+		"modelRedirectsEmpty": "未配置模型重定向",
+		"modelRedirectsHelp": "正则表达式匹配模型名称，首次匹配生效。例如：.*opus.* → gpt-5.4",
 		"ipHelp": "逗号分隔的 IP 地址或 CIDR 范围列表",
 		"maxMultiplier": "最大计费倍率",
 		"maxMultiplierHelp": "限制使用此密钥的请求的最大计费倍率。通过 header 指定的倍率不能超过此值。留空表示不限制。"

@@ -2,7 +2,7 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
 use crate::transforms::TransformRuleConfig;
-use crate::users::{CreateApiKeyInput, UpdateApiKeyInput, canonicalize_groups};
+use crate::users::{CreateApiKeyInput, ModelRedirectRule, UpdateApiKeyInput, canonicalize_groups};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -29,6 +29,8 @@ pub struct CreateApiKeyRequest {
     pub max_multiplier: Option<f64>,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
+    #[serde(default)]
+    pub model_redirects: Vec<ModelRedirectRule>,
 }
 
 fn default_quota_unlimited() -> bool {
@@ -57,6 +59,7 @@ pub struct ApiKeyResponse {
     pub allowed_groups: Vec<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
+    pub model_redirects: Vec<ModelRedirectRule>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +78,7 @@ pub struct ApiKeyCreatedResponse {
     pub allowed_groups: Vec<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
+    pub model_redirects: Vec<ModelRedirectRule>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +93,7 @@ pub struct UpdateApiKeyRequest {
     pub allowed_groups: Option<Vec<String>>,
     pub max_multiplier: Option<f64>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
+    pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub expires_at: Option<String>,
 }
 
@@ -129,6 +134,7 @@ pub async fn list_my_api_keys(
             allowed_groups: k.allowed_groups,
             max_multiplier: k.max_multiplier,
             transforms: k.transforms,
+            model_redirects: k.model_redirects,
         })
         .collect();
 
@@ -179,6 +185,7 @@ pub async fn create_api_key(
         allowed_groups: body.allowed_groups,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
+        model_redirects: body.model_redirects,
     };
 
     let is_admin = user.role.can_manage_system();
@@ -209,6 +216,7 @@ pub async fn create_api_key(
             allowed_groups: api_key.allowed_groups,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
+            model_redirects: api_key.model_redirects,
         }),
     ))
 }
@@ -286,6 +294,7 @@ pub async fn get_api_key(
         allowed_groups: api_key.allowed_groups,
         max_multiplier: api_key.max_multiplier,
         transforms: api_key.transforms,
+        model_redirects: api_key.model_redirects,
     }))
 }
 
@@ -327,6 +336,7 @@ pub async fn update_api_key(
         allowed_groups: body.allowed_groups,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
+        model_redirects: body.model_redirects,
         expires_at: body.expires_at,
     };
 
@@ -358,6 +368,7 @@ pub async fn update_api_key(
         allowed_groups: updated_key.allowed_groups,
         max_multiplier: updated_key.max_multiplier,
         transforms: updated_key.transforms,
+        model_redirects: updated_key.model_redirects,
     }))
 }
 

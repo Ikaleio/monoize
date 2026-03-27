@@ -1,8 +1,8 @@
 use super::utils::parse_nano_usd;
 use super::{
-    ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput, RESERVED_INTERNAL_USER_PREFIX,
-    Session, UpdateApiKeyInput, User, UserBalance, UserRole, UserStore, canonicalize_groups,
-    parse_groups_json,
+    ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput, ModelRedirectRule,
+    RESERVED_INTERNAL_USER_PREFIX, Session, UpdateApiKeyInput, User, UserBalance, UserRole,
+    UserStore, canonicalize_groups, parse_groups_json, validate_model_redirects,
 };
 use crate::transforms::TransformRuleConfig;
 use argon2::{
@@ -558,6 +558,7 @@ impl UserStore {
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
+                model_redirects: Vec::new(),
             },
             false,
         )
@@ -571,6 +572,7 @@ impl UserStore {
         is_admin: bool,
     ) -> Result<(ApiKey, String), String> {
         validate_api_key_transforms(&input.transforms, is_admin)?;
+        validate_model_redirects(&input.model_redirects)?;
         let user_allowed_groups = self
             .get_user_by_id(user_id)
             .await?
@@ -592,11 +594,13 @@ impl UserStore {
         let ip_whitelist_json =
             serde_json::to_string(&input.ip_whitelist).map_err(|e| e.to_string())?;
         let allowed_groups_json = serialize_allowed_groups_json(&allowed_groups)?;
+        let model_redirects_json =
+            serde_json::to_string(&input.model_redirects).map_err(|e| e.to_string())?;
 
         self.db.write().await
             .execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16, $17)"#,
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)"#,
                 vec![
                     id.clone().into(),
                     user_id.into(),
@@ -615,6 +619,7 @@ impl UserStore {
                     "default".into(),
                     input.max_multiplier.map(|v| SeaValue::Double(Some(v))).unwrap_or(SeaValue::Double(None)),
                     serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?.into(),
+                    model_redirects_json.into(),
                 ],
             ))
             .await
@@ -639,6 +644,7 @@ impl UserStore {
             allowed_groups,
             max_multiplier: input.max_multiplier,
             transforms: input.transforms,
+            model_redirects: input.model_redirects,
         };
 
         Ok((api_key, key))
@@ -647,7 +653,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms FROM api_keys WHERE key_prefix = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -663,7 +669,7 @@ impl UserStore {
     pub async fn list_user_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
                 vec![user_id.into()],
             ))
             .await
@@ -862,6 +868,9 @@ impl UserStore {
         let transforms_str: String = row
             .try_get("", "transforms")
             .unwrap_or_else(|_| "[]".to_string());
+        let model_redirects_str: String = row
+            .try_get("", "model_redirects")
+            .unwrap_or_else(|_| "[]".to_string());
         let user_id: String = row.try_get("", "user_id").map_err(|e| e.to_string())?;
         let is_admin = self
             .get_user_by_id(&user_id)
@@ -871,6 +880,8 @@ impl UserStore {
             serde_json::from_str(&transforms_str).unwrap_or_default(),
             is_admin,
         );
+        let model_redirects: Vec<ModelRedirectRule> =
+            serde_json::from_str(&model_redirects_str).unwrap_or_default();
 
         Ok(ApiKey {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -899,6 +910,7 @@ impl UserStore {
             allowed_groups,
             max_multiplier,
             transforms,
+            model_redirects,
         })
     }
 
@@ -911,6 +923,9 @@ impl UserStore {
     ) -> Result<ApiKey, String> {
         if let Some(transforms) = &input.transforms {
             validate_api_key_transforms(transforms, is_admin)?;
+        }
+        if let Some(model_redirects) = &input.model_redirects {
+            validate_model_redirects(model_redirects)?;
         }
         let existing_key = self
             .get_api_key_by_id(key_id)
@@ -991,6 +1006,15 @@ impl UserStore {
             );
             idx += 1;
         }
+        if let Some(model_redirects) = &input.model_redirects {
+            set_clauses.push(format!("model_redirects = ${idx}"));
+            values.push(
+                serde_json::to_string(model_redirects)
+                    .map_err(|e| e.to_string())?
+                    .into(),
+            );
+            idx += 1;
+        }
         if let Some(expires_at) = &input.expires_at {
             set_clauses.push(format!("expires_at = ${idx}"));
             values.push(expires_at.clone().into());
@@ -1033,7 +1057,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms FROM api_keys WHERE id = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE id = $1",
                 vec![id.into()],
             ))
             .await

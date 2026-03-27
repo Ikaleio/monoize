@@ -37,6 +37,8 @@ pub struct Model {
     pub max_multiplier: Option<f64>,
     #[sea_orm(column_type = "Text")]
     pub transforms: String,
+    #[sea_orm(column_type = "Text")]
+    pub model_redirects: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

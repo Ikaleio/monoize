@@ -17,9 +17,9 @@ use crate::monoize_routing::{
 };
 use crate::providers::ProviderStore;
 use crate::users::{
-    CreateApiKeyInput, RequestLogApiKey, RequestLogBilling, RequestLogChannel, RequestLogError,
-    RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens, RequestLogUser,
-    UpdateApiKeyInput, User, UserRole, UserStore,
+    CreateApiKeyInput, ModelRedirectRule, RequestLogApiKey, RequestLogBilling, RequestLogChannel,
+    RequestLogError, RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens,
+    RequestLogUser, UpdateApiKeyInput, User, UserRole, UserStore,
 };
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
@@ -515,6 +515,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 allowed_groups: create_body.allowed_groups,
                 max_multiplier: create_body.max_multiplier,
                 transforms: create_body.transforms,
+                model_redirects: create_body.model_redirects,
             },
             false,
         )
@@ -541,6 +542,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         allowed_groups: created.allowed_groups.clone(),
         max_multiplier: created.max_multiplier,
         transforms: created.transforms.clone(),
+        model_redirects: created.model_redirects.clone(),
     })
     .expect("created response serializes");
     assert_eq!(
@@ -573,6 +575,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 allowed_groups: update_body.allowed_groups,
                 max_multiplier: None,
                 transforms: None,
+                model_redirects: None,
                 expires_at: None,
             },
             false,
@@ -615,6 +618,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         allowed_groups: fetched.allowed_groups,
         max_multiplier: fetched.max_multiplier,
         transforms: fetched.transforms,
+        model_redirects: fetched.model_redirects,
     })
     .expect("response serializes");
     assert_eq!(response_value.get("allowed_groups"), Some(&json!(["beta"])));
@@ -664,6 +668,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 allowed_groups: invalid_create_body.allowed_groups,
                 max_multiplier: invalid_create_body.max_multiplier,
                 transforms: invalid_create_body.transforms,
+                model_redirects: invalid_create_body.model_redirects,
             },
             false,
         )
@@ -686,6 +691,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
+                model_redirects: Vec::new(),
             },
             false,
         )
@@ -717,6 +723,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 allowed_groups: invalid_update_body.allowed_groups,
                 max_multiplier: None,
                 transforms: None,
+                model_redirects: None,
                 expires_at: None,
             },
             false,
@@ -744,12 +751,120 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 allowed_groups: vec![" Beta ".to_string()],
                 max_multiplier: None,
                 transforms: Vec::new(),
+                model_redirects: Vec::new(),
             },
             false,
         )
         .await
         .expect("unrestricted user may create scoped key");
     assert_eq!(unrestricted_key.0.allowed_groups, vec!["beta".to_string()]);
+}
+
+#[tokio::test]
+async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let (log_tx, _) = tokio::sync::broadcast::channel(1);
+    let store = UserStore::new(db, log_tx).await.expect("store creates");
+
+    let user = store
+        .create_user("redirect-user", "password123", UserRole::User, &[])
+        .await
+        .expect("user created");
+
+    let create_body: CreateApiKeyRequest = serde_json::from_value(json!({
+        "name": "redirect key",
+        "model_redirects": [
+            { "pattern": ".*opus.*", "replace": "gpt-5.4" },
+            { "pattern": ".*haiku.*", "replace": "gpt-5.4-mini" }
+        ]
+    }))
+    .expect("create payload deserializes");
+
+    let (created, _) = store
+        .create_api_key_extended(
+            &user.id,
+            CreateApiKeyInput {
+                name: create_body.name,
+                expires_in_days: create_body.expires_in_days,
+                quota: create_body.quota,
+                quota_unlimited: create_body.quota_unlimited,
+                model_limits_enabled: create_body.model_limits_enabled,
+                model_limits: create_body.model_limits,
+                ip_whitelist: create_body.ip_whitelist,
+                allowed_groups: create_body.allowed_groups,
+                max_multiplier: create_body.max_multiplier,
+                transforms: create_body.transforms,
+                model_redirects: create_body.model_redirects,
+            },
+            false,
+        )
+        .await
+        .expect("api key created");
+
+    assert_eq!(created.model_redirects.len(), 2);
+    assert_eq!(created.model_redirects[0].pattern, ".*opus.*");
+    assert_eq!(created.model_redirects[0].replace, "gpt-5.4");
+
+    let updated = store
+        .update_api_key(
+            &created.id,
+            UpdateApiKeyInput {
+                name: None,
+                enabled: None,
+                quota: None,
+                quota_unlimited: None,
+                model_limits_enabled: None,
+                model_limits: None,
+                ip_whitelist: None,
+                allowed_groups: None,
+                max_multiplier: None,
+                transforms: None,
+                model_redirects: Some(vec![ModelRedirectRule {
+                    pattern: ".*sonnet.*".to_string(),
+                    replace: "gpt-5.4".to_string(),
+                }]),
+                expires_at: None,
+            },
+            false,
+        )
+        .await
+        .expect("api key updated");
+
+    assert_eq!(updated.model_redirects.len(), 1);
+    assert_eq!(updated.model_redirects[0].pattern, ".*sonnet.*");
+
+    let invalid_create = store
+        .create_api_key_extended(
+            &user.id,
+            CreateApiKeyInput {
+                name: "invalid redirect key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: false,
+                model_limits: Vec::new(),
+                ip_whitelist: Vec::new(),
+                allowed_groups: Vec::new(),
+                max_multiplier: None,
+                transforms: Vec::new(),
+                model_redirects: vec![ModelRedirectRule {
+                    pattern: "(".to_string(),
+                    replace: "gpt-5.4".to_string(),
+                }],
+            },
+            false,
+        )
+        .await
+        .expect_err("invalid regex should be rejected");
+
+    assert!(invalid_create.starts_with("invalid model redirect pattern:"));
 }
 
 #[test]

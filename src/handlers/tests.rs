@@ -8,6 +8,7 @@ use crate::monoize_routing::{
 };
 use crate::settings::normalize_pricing_model_key;
 use crate::urp;
+use crate::users::ModelRedirectRule;
 use axum::http::StatusCode;
 use std::collections::{BTreeSet, HashMap};
 
@@ -21,6 +22,7 @@ fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {
         api_key_id: None,
         max_multiplier: None,
         transforms: Vec::new(),
+        model_redirects: Vec::new(),
         effective_groups,
         model_limits_enabled: false,
         model_limits: Vec::new(),
@@ -51,6 +53,13 @@ fn build_test_urp_request(model: &str) -> urp::UrpRequest {
         response_format: None,
         user: None,
         extra_body: HashMap::new(),
+    }
+}
+
+fn build_model_redirect_rule(pattern: &str, replace: &str) -> ModelRedirectRule {
+    ModelRedirectRule {
+        pattern: pattern.to_string(),
+        replace: replace.to_string(),
     }
 }
 
@@ -551,10 +560,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         attempt_channel_ids(&unrestricted),
         BTreeSet::from(["public", "team-a", "team-b"])
     );
-    assert_eq!(
-        attempt_channel_ids(&team_a),
-        BTreeSet::from(["team-a"])
-    );
+    assert_eq!(attempt_channel_ids(&team_a), BTreeSet::from(["team-a"]));
     assert_eq!(
         attempt_channel_ids(&public_only),
         BTreeSet::from(["public"])
@@ -607,4 +613,29 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         err.message,
         format!("No available upstream provider for model: {GROUP_ROUTING_MODEL}")
     );
+}
+
+#[test]
+fn apply_model_redirects_to_model_uses_first_match_wins() {
+    let mut model = "claude-opus-4-6-20250610".to_string();
+    apply_model_redirects_to_model(
+        &mut model,
+        &[
+            build_model_redirect_rule(".*opus.*", "gpt-5.4"),
+            build_model_redirect_rule("claude-.*", "gpt-5.4-mini"),
+        ],
+    );
+
+    assert_eq!(model, "gpt-5.4");
+}
+
+#[test]
+fn apply_model_redirects_to_model_leaves_unmatched_model_unchanged() {
+    let mut model = "gpt-5-mini".to_string();
+    apply_model_redirects_to_model(
+        &mut model,
+        &[build_model_redirect_rule(".*opus.*", "gpt-5.4")],
+    );
+
+    assert_eq!(model, "gpt-5-mini");
 }

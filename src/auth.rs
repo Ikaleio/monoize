@@ -11,6 +11,7 @@ pub struct AuthResult {
     pub api_key_id: Option<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
+    pub model_redirects: Vec<crate::users::ModelRedirectRule>,
     pub effective_groups: Option<Vec<String>>,
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
@@ -54,6 +55,7 @@ impl AuthState {
                             api_key_id: Some(api_key.id),
                             max_multiplier: api_key.max_multiplier,
                             transforms: api_key.transforms,
+                            model_redirects: api_key.model_redirects,
                             effective_groups,
                             model_limits_enabled: api_key.model_limits_enabled,
                             model_limits: api_key.model_limits,
@@ -115,6 +117,7 @@ mod tests {
                     allowed_groups: Vec::new(),
                     max_multiplier: None,
                     transforms: Vec::new(),
+                    model_redirects: Vec::new(),
                 },
                 false,
             )
@@ -157,6 +160,7 @@ mod tests {
                     allowed_groups: vec![" TEAM-B ".to_string()],
                     max_multiplier: None,
                     transforms: Vec::new(),
+                    model_redirects: Vec::new(),
                 },
                 false,
             )
@@ -201,6 +205,7 @@ mod tests {
                     allowed_groups: vec!["team-a".to_string()],
                     max_multiplier: None,
                     transforms: Vec::new(),
+                    model_redirects: Vec::new(),
                 },
                 false,
             )

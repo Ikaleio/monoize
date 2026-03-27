@@ -54,6 +54,21 @@ fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> 
     ))
 }
 
+fn apply_model_redirects_to_model(model: &mut String, rules: &[crate::users::ModelRedirectRule]) {
+    for rule in rules {
+        if let Ok(re) = regex::Regex::new(&format!("^(?:{})$", rule.pattern)) {
+            if re.is_match(model) {
+                *model = rule.replace.clone();
+                return;
+            }
+        }
+    }
+}
+
+fn apply_model_redirects(req: &mut urp::UrpRequest, auth: &crate::auth::AuthResult) {
+    apply_model_redirects_to_model(&mut req.model, &auth.model_redirects);
+}
+
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     state.metrics.render()
 }
@@ -106,6 +121,7 @@ pub async fn create_response(
     req.extra_body.remove("previous_response_id");
     req.extra_body.remove("store");
     req.extra_body.remove("conversation");
+    apply_model_redirects(&mut req, &auth);
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
@@ -163,7 +179,8 @@ pub async fn create_chat_completions(
     ensure_balance_before_forward(&state, &auth).await?;
     ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
-    let req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
+    let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
+    apply_model_redirects(&mut req, &auth);
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
@@ -207,7 +224,8 @@ pub async fn create_messages(
     ensure_balance_before_forward(&state, &auth).await?;
     ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
-    let req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
+    let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
+    apply_model_redirects(&mut req, &auth);
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
@@ -259,12 +277,13 @@ pub async fn create_embeddings(
         )
     })?;
 
-    let logical_model = obj
+    let mut logical_model = obj
         .get("model")
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing model"))?
         .to_string();
+    apply_model_redirects_to_model(&mut logical_model, &auth.model_redirects);
     ensure_model_allowed(&auth, &logical_model)?;
 
     let input = obj.get("input").ok_or_else(|| {

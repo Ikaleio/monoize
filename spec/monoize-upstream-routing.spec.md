@@ -203,7 +203,7 @@ HSK-1. When `provider.per_model_circuit_break == false` (default), health state 
 
 HSK-1a. When `provider.circuit_breaker_enabled == false`, health state MAY still exist in memory from prior configuration, but routing MUST ignore it and passive updates MUST NOT create new unhealthy state for that provider.
 
-HSK-2. When `provider.per_model_circuit_break == true`, health state MUST be keyed by `(channel_id, logical_model)` where `logical_model` is the pre-redirect requested model. A circuit break for model A on channel X MUST NOT affect model B on the same channel.
+HSK-2. When `provider.per_model_circuit_break == true`, health state MUST be keyed by `(channel_id, logical_model)` where `logical_model` is the request model after any API-key pre-redirect rules have been applied and before provider-model redirect is resolved. A circuit break for model A on channel X MUST NOT affect model B on the same channel.
 
 HSK-3. Eligibility filtering (RTA-3) MUST use the appropriate health key when determining whether a channel is healthy for a given request model.
 

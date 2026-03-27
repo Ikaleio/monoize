@@ -124,6 +124,7 @@ mod tests {
                     allowed_groups: vec!["gamma".to_string(), "Beta".to_string()],
                     max_multiplier: None,
                     transforms: Vec::new(),
+                    model_redirects: Vec::new(),
                 },
                 false,
             )

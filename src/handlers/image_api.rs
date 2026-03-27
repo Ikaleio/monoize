@@ -33,18 +33,14 @@ pub async fn create_image_generation(
         })?
         .to_string();
 
-    let model = obj
+    let mut model = obj
         .get("model")
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "missing model",
-            )
-        })?
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing model"))?
         .to_string();
+
+    apply_model_redirects_to_model(&mut model, &auth.model_redirects);
 
     let n = parse_n_field(obj.get("n"))?;
 
@@ -171,13 +167,11 @@ pub async fn create_image_edit(
         )
     })?;
 
-    let model = model.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
-        AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "missing model",
-        )
+    let mut model = model.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+        AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "missing model")
     })?;
+
+    apply_model_redirects_to_model(&mut model, &auth.model_redirects);
 
     let (image_media_type, image_b64) = image_data.ok_or_else(|| {
         AppError::new(
@@ -265,17 +259,24 @@ pub async fn create_image_edit(
     assemble_image_response(results)
 }
 
-
 fn parse_n_field(value: Option<&Value>) -> AppResult<usize> {
     let Some(v) = value else {
         return Ok(1);
     };
     let n = match v {
         Value::Number(num) => num.as_u64().ok_or_else(|| {
-            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "n must be a positive integer")
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "n must be a positive integer",
+            )
         })? as usize,
         Value::String(s) => s.parse::<usize>().map_err(|_| {
-            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", "n must be a positive integer")
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "n must be a positive integer",
+            )
         })?,
         _ => {
             return Err(AppError::new(
@@ -393,13 +394,9 @@ async fn fan_out_subrequests(
             user: None,
             extra_body: extra_body.clone(),
         };
-        let rid = request_id.clone().map(|id| {
-            if n > 1 {
-                format!("{id}:img:{i}")
-            } else {
-                id
-            }
-        });
+        let rid = request_id
+            .clone()
+            .map(|id| if n > 1 { format!("{id}:img:{i}") } else { id });
         let rip = request_ip.clone();
 
         join_set.spawn(async move {
@@ -515,18 +512,14 @@ fn assemble_image_response(
                     agg.output_tokens += usage.output_tokens;
                     if let Some(details) = &usage.input_details {
                         if let Some(modality) = &details.modality_breakdown {
-                            agg.input_text_tokens +=
-                                modality.text_tokens.unwrap_or(0);
-                            agg.input_image_tokens +=
-                                modality.image_tokens.unwrap_or(0);
+                            agg.input_text_tokens += modality.text_tokens.unwrap_or(0);
+                            agg.input_image_tokens += modality.image_tokens.unwrap_or(0);
                         }
                     }
                     if let Some(details) = &usage.output_details {
                         if let Some(modality) = &details.modality_breakdown {
-                            agg.output_text_tokens +=
-                                modality.text_tokens.unwrap_or(0);
-                            agg.output_image_tokens +=
-                                modality.image_tokens.unwrap_or(0);
+                            agg.output_text_tokens += modality.text_tokens.unwrap_or(0);
+                            agg.output_image_tokens += modality.image_tokens.unwrap_or(0);
                         }
                     }
                 }

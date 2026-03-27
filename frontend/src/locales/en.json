@@ -199,6 +199,9 @@
 		"unlimited": "Unlimited",
 		"unlimitedQuota": "Unlimited Quota",
 		"enableModelLimits": "Enable Model Limits",
+		"modelRedirects": "Model Redirects",
+		"modelRedirectsEmpty": "No model redirects configured",
+		"modelRedirectsHelp": "Regex patterns matched against model names. First match wins. Example: .*opus.* → gpt-5.4",
 		"ipHelp": "Comma-separated list of IP addresses or CIDR ranges",
 		"maxMultiplier": "Max Billing Multiplier",
 		"maxMultiplierHelp": "Limits the maximum billing multiplier for requests using this key. Header-specified multiplier cannot exceed this value. Leave empty for no limit."

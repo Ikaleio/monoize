@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, X } from "lucide-react";
+import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, ArrowRightLeft, X } from "lucide-react";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,7 +45,7 @@ import {
   useDashboardGroups,
   useTransformRegistry,
 } from "@/lib/swr";
-import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
+import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, ModelRedirectRule, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
 import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
@@ -250,6 +250,73 @@ function AllowedGroupsInput({
   );
 }
 
+interface ModelRedirectsEditorProps {
+  value: ModelRedirectRule[];
+  onChange: (next: ModelRedirectRule[]) => void;
+}
+
+function ModelRedirectsEditor({ value, onChange }: ModelRedirectsEditorProps) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <ArrowRightLeft className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">{t("apiKeys.modelRedirects")}</h3>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => onChange([...value, { pattern: "", replace: "" }])}
+        >
+          <Plus className="mr-1 h-3 w-3" />
+          {t("common.add")}
+        </Button>
+      </div>
+      {value.length === 0 && (
+        <p className="text-sm text-muted-foreground">{t("apiKeys.modelRedirectsEmpty")}</p>
+      )}
+      {value.map((rule, idx) => (
+        <div key={idx} className="flex items-center gap-2">
+          <Input
+            value={rule.pattern}
+            onChange={(e) => {
+              const updated = [...value];
+              updated[idx] = { ...updated[idx], pattern: e.target.value };
+              onChange(updated);
+            }}
+            placeholder=".*opus.*"
+            className="flex-1 font-mono text-sm"
+          />
+          <span className="shrink-0 text-sm text-muted-foreground">→</span>
+          <Input
+            value={rule.replace}
+            onChange={(e) => {
+              const updated = [...value];
+              updated[idx] = { ...updated[idx], replace: e.target.value };
+              onChange(updated);
+            }}
+            placeholder="gpt-5.4"
+            className="flex-1 font-mono text-sm"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={() => onChange(value.filter((_, i) => i !== idx))}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+      <p className="text-xs text-muted-foreground">{t("apiKeys.modelRedirectsHelp")}</p>
+    </div>
+  );
+}
+
 export function ApiKeysPage() {
   const { t } = useTranslation();
   const { user: currentUser } = useAuth();
@@ -278,6 +345,7 @@ export function ApiKeysPage() {
   const [newKeyAllowedGroups, setNewKeyAllowedGroups] = useState<string[]>([]);
   const [newKeyMaxMultiplier, setNewKeyMaxMultiplier] = useState("");
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
+  const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
 
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -296,6 +364,7 @@ export function ApiKeysPage() {
     setNewKeyAllowedGroups([]);
     setNewKeyMaxMultiplier("");
     setNewKeyTransforms([]);
+    setNewKeyModelRedirects([]);
   };
 
   const handleCreate = async () => {
@@ -322,6 +391,7 @@ export function ApiKeysPage() {
         allowed_groups: dedupeAllowedGroups(newKeyAllowedGroups),
         max_multiplier: newKeyMaxMultiplier ? parseFloat(newKeyMaxMultiplier) : undefined,
         transforms: newKeyTransforms,
+        model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
       };
       const key = await createApiKeyOptimistic(
         input,
@@ -361,6 +431,7 @@ export function ApiKeysPage() {
         allowed_groups: dedupeAllowedGroups(newKeyAllowedGroups),
         max_multiplier: newKeyMaxMultiplier ? parseFloat(newKeyMaxMultiplier) : undefined,
         transforms: newKeyTransforms,
+        model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
       };
       await updateApiKeyOptimistic(
         editKey.id,
@@ -453,6 +524,7 @@ export function ApiKeysPage() {
     setNewKeyAllowedGroups(key.allowed_groups ?? []);
     setNewKeyMaxMultiplier(key.max_multiplier != null ? String(key.max_multiplier) : "");
     setNewKeyTransforms(key.transforms ?? []);
+    setNewKeyModelRedirects(key.model_redirects ?? []);
   };
 
   const toggleSelectKey = (id: string) => {
@@ -627,6 +699,10 @@ export function ApiKeysPage() {
                     onChange={setNewKeyTransforms}
                   />
                 </div>
+                <ModelRedirectsEditor
+                  value={newKeyModelRedirects}
+                  onChange={setNewKeyModelRedirects}
+                />
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => { setCreateOpen(false); resetCreateForm(); }}>
@@ -984,6 +1060,10 @@ export function ApiKeysPage() {
                 onChange={setNewKeyTransforms}
               />
             </div>
+            <ModelRedirectsEditor
+              value={newKeyModelRedirects}
+              onChange={setNewKeyModelRedirects}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setEditKey(null); resetCreateForm(); }}>

@@ -38,6 +38,11 @@ export interface TransformRegistryItem {
   config_schema: Record<string, unknown>;
 }
 
+export interface ModelRedirectRule {
+  pattern: string;
+  replace: string;
+}
+
 export interface ApiKey {
   id: string;
   name: string;
@@ -55,6 +60,7 @@ export interface ApiKey {
   allowed_groups: string[];
   max_multiplier?: number;
   transforms: TransformRuleConfig[];
+  model_redirects: ModelRedirectRule[];
 }
 
 export type ApiKeyCreated = ApiKey;
@@ -70,6 +76,7 @@ export interface CreateApiKeyInput {
   allowed_groups?: string[];
   max_multiplier?: number;
   transforms?: TransformRuleConfig[];
+  model_redirects?: ModelRedirectRule[];
 }
 
 export interface UpdateApiKeyInput {
@@ -84,6 +91,7 @@ export interface UpdateApiKeyInput {
   max_multiplier?: number;
   transforms?: TransformRuleConfig[];
   expires_at?: string;
+  model_redirects?: ModelRedirectRule[];
 }
 
 export interface SystemSettings {

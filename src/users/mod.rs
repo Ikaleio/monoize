@@ -117,6 +117,12 @@ pub struct Session {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRedirectRule {
+    pub pattern: String,
+    pub replace: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: String,
     pub user_id: String,
@@ -155,6 +161,8 @@ pub struct ApiKey {
     /// Ordered transform rules applied for this API key
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
+    #[serde(default)]
+    pub model_redirects: Vec<ModelRedirectRule>,
 }
 
 /// Input for creating a new API key with extended fields
@@ -177,10 +185,31 @@ pub struct CreateApiKeyInput {
     pub max_multiplier: Option<f64>,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
+    #[serde(default)]
+    pub model_redirects: Vec<ModelRedirectRule>,
 }
 
 fn default_quota_unlimited() -> bool {
     true
+}
+
+pub fn validate_model_redirects(rules: &[ModelRedirectRule]) -> Result<(), String> {
+    if rules.len() > 32 {
+        return Err("too many model redirect rules (max 32)".to_string());
+    }
+
+    for rule in rules {
+        if rule.pattern.trim().is_empty() {
+            return Err("model redirect pattern must not be empty".to_string());
+        }
+        if rule.replace.trim().is_empty() {
+            return Err("model redirect replace must not be empty".to_string());
+        }
+        regex::Regex::new(&rule.pattern)
+            .map_err(|e| format!("invalid model redirect pattern: {e}"))?;
+    }
+
+    Ok(())
 }
 
 pub fn canonicalize_groups(groups: &[String]) -> Vec<String> {
@@ -275,6 +304,7 @@ pub struct UpdateApiKeyInput {
     pub allowed_groups: Option<Vec<String>>,
     pub max_multiplier: Option<f64>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
+    pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub expires_at: Option<String>, // RFC3339 format or null
 }
 
@@ -444,7 +474,8 @@ pub use utils::{format_nano_to_usd, parse_nano_usd, parse_usd_to_nano};
 #[cfg(test)]
 mod tests {
     use super::{
-        canonicalize_groups, compute_effective_groups, is_channel_group_eligible, parse_groups_json,
+        ModelRedirectRule, canonicalize_groups, compute_effective_groups,
+        is_channel_group_eligible, parse_groups_json, validate_model_redirects,
     };
 
     #[test]
@@ -523,5 +554,59 @@ mod tests {
             &["team-a".to_string()],
             &Some(vec!["team-b".to_string()])
         ));
+    }
+
+    #[test]
+    fn validate_model_redirects_rejects_invalid_rules() {
+        let too_many = (0..33)
+            .map(|idx| ModelRedirectRule {
+                pattern: format!("model-{idx}"),
+                replace: "gpt-5.4".to_string(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            validate_model_redirects(&too_many).unwrap_err(),
+            "too many model redirect rules (max 32)"
+        );
+
+        assert_eq!(
+            validate_model_redirects(&[ModelRedirectRule {
+                pattern: "   ".to_string(),
+                replace: "gpt-5.4".to_string(),
+            }])
+            .unwrap_err(),
+            "model redirect pattern must not be empty"
+        );
+
+        assert_eq!(
+            validate_model_redirects(&[ModelRedirectRule {
+                pattern: ".*opus.*".to_string(),
+                replace: "   ".to_string(),
+            }])
+            .unwrap_err(),
+            "model redirect replace must not be empty"
+        );
+
+        let err = validate_model_redirects(&[ModelRedirectRule {
+            pattern: "(".to_string(),
+            replace: "gpt-5.4".to_string(),
+        }])
+        .unwrap_err();
+        assert!(err.starts_with("invalid model redirect pattern:"));
+    }
+
+    #[test]
+    fn validate_model_redirects_accepts_valid_rules() {
+        validate_model_redirects(&[
+            ModelRedirectRule {
+                pattern: ".*opus.*".to_string(),
+                replace: "gpt-5.4".to_string(),
+            },
+            ModelRedirectRule {
+                pattern: ".*haiku.*".to_string(),
+                replace: "gpt-5.4-mini".to_string(),
+            },
+        ])
+        .expect("valid redirects should pass");
     }
 }

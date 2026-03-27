@@ -395,6 +395,7 @@ async fn quota_exhausted_returns_429() {
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
+                model_redirects: Vec::new(),
             },
             false,
         )
@@ -444,6 +445,7 @@ async fn ip_whitelist_blocks_non_whitelisted() {
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
+                model_redirects: Vec::new(),
             },
             false,
         )

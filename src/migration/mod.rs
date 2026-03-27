@@ -15,6 +15,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260323_000007_channel_group_system::Migration),
             Box::new(m20260326_000008_provider_extra_fields_whitelist::Migration),
             Box::new(m20260326_000009_move_groups_to_providers::Migration),
+            Box::new(m20260327_000010_api_key_model_redirects::Migration),
         ]
     }
 }
@@ -28,3 +29,4 @@ mod m20260322_000006_provider_retry_interval_and_breaker_toggle;
 mod m20260323_000007_channel_group_system;
 mod m20260326_000008_provider_extra_fields_whitelist;
 mod m20260326_000009_move_groups_to_providers;
+mod m20260327_000010_api_key_model_redirects;

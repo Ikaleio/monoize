@@ -308,6 +308,7 @@ async fn models_list_respects_api_key_model_limits() {
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
+                model_redirects: Vec::new(),
             },
             false,
         )
@@ -362,6 +363,7 @@ async fn models_list_model_limits_disabled_shows_all() {
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
+                model_redirects: Vec::new(),
             },
             false,
         )
@@ -419,6 +421,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
                 allowed_groups: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
+                model_redirects: Vec::new(),
             },
             false,
         )
@@ -444,6 +447,122 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["error"]["code"].as_str(), Some("model_not_allowed"));
+}
+
+#[tokio::test]
+async fn forwarding_applies_api_key_model_redirects_before_model_limits_and_routing() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (_, token) = ctx
+        .state
+        .user_store
+        .create_api_key_extended(
+            &user.id,
+            monoize::users::CreateApiKeyInput {
+                name: "redirected-forward-key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: true,
+                model_limits: vec!["gpt-5-mini".to_string()],
+                ip_whitelist: vec![],
+                allowed_groups: Vec::new(),
+                max_multiplier: None,
+                transforms: vec![],
+                model_redirects: vec![monoize::users::ModelRedirectRule {
+                    pattern: ".*opus.*".to_string(),
+                    replace: "gpt-5-mini".to_string(),
+                }],
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            json!({
+                "model": "claude-opus-4-6-20250610",
+                "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["model"].as_str(), Some("gpt-5-mini"));
+}
+
+#[tokio::test]
+async fn image_generation_applies_api_key_model_redirects_before_model_limits() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (_, token) = ctx
+        .state
+        .user_store
+        .create_api_key_extended(
+            &user.id,
+            monoize::users::CreateApiKeyInput {
+                name: "redirected-image-key".to_string(),
+                expires_in_days: None,
+                quota: None,
+                quota_unlimited: true,
+                model_limits_enabled: true,
+                model_limits: vec!["gpt-5-mini".to_string()],
+                ip_whitelist: vec![],
+                allowed_groups: Vec::new(),
+                max_multiplier: None,
+                transforms: vec![],
+                model_redirects: vec![monoize::users::ModelRedirectRule {
+                    pattern: ".*opus.*".to_string(),
+                    replace: "gpt-5-mini".to_string(),
+                }],
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/images/generations")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            json!({
+                "model": "claude-opus-4-6-20250610",
+                "prompt": "draw a cat"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("upstream_error"));
 }
 
 #[tokio::test]
