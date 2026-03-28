@@ -325,6 +325,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut output_indices: HashMap<u32, usize> = HashMap::new();
     let mut part_states: HashMap<u32, StreamedPartState> = HashMap::new();
     let mut pending_assistant_items: HashMap<u32, PendingResponsesAssistantItem> = HashMap::new();
+    let mut flushed_output_indices: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -414,6 +416,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             .is_some_and(|a| a.zone == ResponsesOutputZone::Message);
                         if entering_reasoning && leaving_message {
                             if let Some(active) = pending_item.active_output.take() {
+                                flushed_output_indices.insert(active.output_index);
                                 flush_stream_output(
                                     tx.clone(),
                                     &mut seq,
@@ -502,7 +505,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 part_index, delta, ..
             } => match delta {
                 PartDelta::Text { ref content } => {
-                    let part_state =
+                    let mut part_state =
                         part_states
                             .get(&part_index)
                             .cloned()
@@ -515,6 +518,69 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 call_id: None,
                                 name: None,
                             });
+
+                    if flushed_output_indices.contains(&part_state.output_index) {
+                        if let Some(pending_item) =
+                            pending_assistant_items.get_mut(&part_state.item_index)
+                        {
+                            let output_index = next_output_index;
+                            next_output_index += 1;
+                            let item = stream_output_item_start_stub(
+                                ResponsesOutputZone::Message,
+                                pending_item.role,
+                                &pending_item.item_extra_body,
+                                &PartHeader::Text,
+                                &HashMap::new(),
+                            );
+                            let new_output = ActiveResponsesOutputItem {
+                                zone: ResponsesOutputZone::Message,
+                                output_index,
+                                item_id: item
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                item,
+                                next_content_index: 1,
+                                summary_part_added_sent: false,
+                            };
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.output_item.added",
+                                json!({
+                                    "output_index": new_output.output_index,
+                                    "item": new_output.item.clone(),
+                                }),
+                            )
+                            .await?;
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.content_part.added",
+                                json!({
+                                    "output_index": new_output.output_index,
+                                    "content_index": 0,
+                                    "item_id": new_output.item_id,
+                                    "part": json!({"type": "output_text", "text": "", "annotations": []}),
+                                }),
+                            )
+                            .await?;
+
+                            part_state.output_index = new_output.output_index;
+                            part_state.item_id = new_output.item_id.clone();
+                            part_state.content_index = Some(0);
+                            part_states.insert(part_index, part_state.clone());
+
+                            stage_active_stream_output(
+                                &mut pending_item.active_output,
+                                &mut pending_item.staged_outputs,
+                            );
+                            pending_item.active_output = Some(new_output);
+                            pending_item.streamed_any_output = true;
+                        }
+                    }
+
                     if let Some(active_output) = pending_assistant_items
                         .get_mut(&part_state.item_index)
                         .and_then(|pending| stream_output_mut(pending, part_state.output_index))
@@ -1382,14 +1448,44 @@ fn response_envelope_payload(
     status: &str,
     output: Value,
 ) -> Value {
+    let completed_at = if status == "completed" {
+        Value::Number(serde_json::Number::from(created_at))
+    } else {
+        Value::Null
+    };
     json!({
         "response": {
             "id": id,
             "object": "response",
             "created_at": created_at,
+            "completed_at": completed_at,
             "model": model,
             "status": status,
             "output": output,
+            "incomplete_details": null,
+            "previous_response_id": null,
+            "instructions": null,
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "truncation": "auto",
+            "parallel_tool_calls": true,
+            "text": { "format": { "type": "text" } },
+            "top_p": 1.0,
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_logprobs": 0,
+            "temperature": 1.0,
+            "reasoning": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "store": false,
+            "background": false,
+            "service_tier": "auto",
+            "metadata": {},
+            "safety_identifier": null,
+            "prompt_cache_key": null,
+            "usage": null,
         }
     })
 }

@@ -62,6 +62,11 @@ fn flush_pending_message_item(
     let mut obj = Map::new();
     obj.insert("type".to_string(), Value::String("message".to_string()));
     obj.insert(
+        "id".to_string(),
+        Value::String(format!("msg_{}", uuid::Uuid::new_v4().simple())),
+    );
+    obj.insert("status".to_string(), Value::String("completed".to_string()));
+    obj.insert(
         "role".to_string(),
         Value::String(role_to_str(pending_item.role).to_string()),
     );
@@ -120,6 +125,12 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
                 ),
             );
             obj.insert("text".to_string(), Value::String(content.clone()));
+            if output_text_type {
+                obj.entry("annotations".to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                obj.entry("logprobs".to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+            }
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }
@@ -170,18 +181,21 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
                 Value::String(format!("rs_{}", uuid::Uuid::new_v4().simple())),
             );
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
-            obj.insert("status".to_string(), Value::String("completed".to_string()));
-            if let Some(summary) = summary.as_ref() {
-                obj.insert(
-                    "summary".to_string(),
-                    Value::Array(vec![json!({ "type": "summary_text", "text": summary })]),
-                );
-            }
+            let summary_arr = if let Some(summary) = summary.as_ref() {
+                vec![json!({ "type": "summary_text", "text": summary })]
+            } else {
+                Vec::new()
+            };
+            obj.insert("summary".to_string(), Value::Array(summary_arr));
             if let Some(content) = content {
                 obj.insert("text".to_string(), Value::String(content.clone()));
             }
             if let Some(encrypted) = encrypted {
-                obj.insert("encrypted_content".to_string(), encrypted.clone());
+                let enc_str = match encrypted {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                obj.insert("encrypted_content".to_string(), Value::String(enc_str));
             }
             if let Some(source) = source {
                 obj.insert("source".to_string(), Value::String(source.clone()));
@@ -200,7 +214,10 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     if obj.get("type").and_then(Value::as_str) != Some("reasoning") {
         return;
     }
-    let summary_present = obj.get("summary").is_some();
+    let summary_present = obj
+        .get("summary")
+        .and_then(Value::as_array)
+        .is_some_and(|arr| !arr.is_empty());
     let text_value = obj.remove("text");
     obj.remove("source");
     if !summary_present {
@@ -243,6 +260,11 @@ fn encode_tool_call_item(part: &Part) -> Option<Value> {
                 "type".to_string(),
                 Value::String("function_call".to_string()),
             );
+            obj.insert(
+                "id".to_string(),
+                Value::String(format!("fc_{}", uuid::Uuid::new_v4().simple())),
+            );
+            obj.insert("status".to_string(), Value::String("completed".to_string()));
             obj.insert("call_id".to_string(), Value::String(call_id.clone()));
             obj.insert("name".to_string(), Value::String(name.clone()));
             obj.insert("arguments".to_string(), Value::String(arguments.clone()));
@@ -391,13 +413,45 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         }
     }
 
+    let created_at = chrono::Utc::now().timestamp();
+    let status = finish_reason_to_status(resp.finish_reason);
+    let completed_at = if status == "completed" {
+        Value::Number(serde_json::Number::from(created_at))
+    } else {
+        Value::Null
+    };
+
     let mut body = json!({
         "id": resp.id,
         "object": "response",
-        "created_at": chrono::Utc::now().timestamp(),
+        "created_at": created_at,
+        "completed_at": completed_at,
         "model": logical_model,
-        "status": finish_reason_to_status(resp.finish_reason),
-        "output": output
+        "status": status,
+        "output": output,
+        "incomplete_details": null,
+        "previous_response_id": null,
+        "instructions": null,
+        "error": null,
+        "tools": [],
+        "tool_choice": "auto",
+        "truncation": "auto",
+        "parallel_tool_calls": true,
+        "text": { "format": { "type": "text" } },
+        "top_p": 1.0,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "top_logprobs": 0,
+        "temperature": 1.0,
+        "reasoning": null,
+        "max_output_tokens": null,
+        "max_tool_calls": null,
+        "store": false,
+        "background": false,
+        "service_tier": "auto",
+        "metadata": {},
+        "safety_identifier": null,
+        "prompt_cache_key": null
     });
 
     if let Some(usage) = &resp.usage {
@@ -1191,6 +1245,13 @@ mod tests {
         };
 
         let encoded = encode_response(&response, "gpt-5.4");
+        let reasoning_item = encoded["output"]
+            .as_array()
+            .and_then(|items| items.first())
+            .expect("reasoning output item");
+        assert!(reasoning_item.get("status").is_none());
+        assert_eq!(reasoning_item["encrypted_content"].as_str(), Some("sig_1"));
+
         let decoded = decode_responses::decode_response(&encoded).expect("decode response");
         let Item::Message { parts, .. } = &decoded.outputs[0] else {
             panic!("expected assistant output");
@@ -1233,7 +1294,10 @@ mod tests {
             .as_array()
             .and_then(|items| items.first())
             .expect("reasoning output item");
-        assert!(reasoning_item.get("summary").is_none());
+        assert_eq!(
+            reasoning_item["summary"].as_array().map(|a| a.len()),
+            Some(0)
+        );
 
         let decoded = decode_responses::decode_response(&encoded).expect("decode response");
         let Item::Message { parts, .. } = &decoded.outputs[0] else {
