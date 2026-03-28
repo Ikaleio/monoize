@@ -407,10 +407,27 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         });
 
                     if needs_new_output {
-                        stage_active_stream_output(
-                            &mut pending_item.active_output,
-                            &mut pending_item.staged_outputs,
-                        );
+                        let entering_reasoning = zone == ResponsesOutputZone::Reasoning;
+                        let leaving_message = pending_item
+                            .active_output
+                            .as_ref()
+                            .is_some_and(|a| a.zone == ResponsesOutputZone::Message);
+                        if entering_reasoning && leaving_message {
+                            if let Some(active) = pending_item.active_output.take() {
+                                flush_stream_output(
+                                    tx.clone(),
+                                    &mut seq,
+                                    active,
+                                    sse_max_frame_length,
+                                )
+                                .await?;
+                            }
+                        } else {
+                            stage_active_stream_output(
+                                &mut pending_item.active_output,
+                                &mut pending_item.staged_outputs,
+                            );
+                        }
                     }
 
                     let active_output = pending_item.active_output.get_or_insert_with(|| {

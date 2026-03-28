@@ -115,7 +115,6 @@ pub async fn create_response(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     // S2/S3: stateful fields must not be forwarded upstream
@@ -178,7 +177,6 @@ pub async fn create_chat_completions(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     apply_model_redirects(&mut req, &auth);
@@ -223,7 +221,6 @@ pub async fn create_messages(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    ensure_quota_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     apply_model_redirects(&mut req, &auth);
@@ -268,7 +265,6 @@ pub async fn create_embeddings(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    ensure_quota_before_forward(&state, &auth).await?;
 
     let obj = body.as_object().ok_or_else(|| {
         AppError::new(
@@ -724,6 +720,31 @@ async fn ensure_balance_before_forward(
     state: &AppState,
     auth: &crate::auth::AuthResult,
 ) -> AppResult<()> {
+    if auth.sub_account_enabled {
+        let Some(api_key_id) = auth.api_key_id.as_deref() else {
+            return Ok(());
+        };
+        return match state.user_store.ensure_sub_account_can_spend(api_key_id).await {
+            Ok(()) => Ok(()),
+            Err(err) => match err.kind {
+                BillingErrorKind::InsufficientBalance => Err(AppError::new(
+                    StatusCode::PAYMENT_REQUIRED,
+                    "insufficient_balance",
+                    "insufficient balance",
+                )),
+                BillingErrorKind::NotFound => Err(AppError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "unauthorized",
+                    "api key not found",
+                )),
+                _ => Err(AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    err.message,
+                )),
+            },
+        };
+    }
     let Some(user_id) = auth.user_id.as_deref() else {
         return Ok(());
     };
@@ -747,25 +768,6 @@ async fn ensure_balance_before_forward(
             )),
         },
     }
-}
-
-async fn ensure_quota_before_forward(
-    _state: &AppState,
-    auth: &crate::auth::AuthResult,
-) -> AppResult<()> {
-    if auth.quota_unlimited {
-        return Ok(());
-    }
-    if let Some(remaining) = auth.quota_remaining {
-        if remaining <= 0 {
-            return Err(AppError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "quota_exceeded",
-                "API key quota exhausted",
-            ));
-        }
-    }
-    Ok(())
 }
 
 #[allow(clippy::result_large_err)]
