@@ -781,4 +781,67 @@ mod tests {
             } if content == "full reasoning" && sig == "sig_1"
         ));
     }
+
+    #[test]
+    fn encode_request_strips_orphaned_tool_use_via_shared_pre_encode() {
+        use crate::handlers::strip_orphaned_tool_calls;
+        use crate::urp::ToolResultContent;
+
+        let mut req = UrpRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            inputs: vec![
+                Item::text(Role::User, "list files"),
+                Item::Message {
+                    role: Role::Assistant,
+                    parts: vec![
+                        Part::ToolCall {
+                            call_id: "answered".to_string(),
+                            name: "bash".to_string(),
+                            arguments: r#"{"command":"ls"}"#.to_string(),
+                            extra_body: empty_map(),
+                        },
+                        Part::ToolCall {
+                            call_id: "orphan".to_string(),
+                            name: "bash".to_string(),
+                            arguments: r#"{"command":"cat x"}"#.to_string(),
+                            extra_body: empty_map(),
+                        },
+                    ],
+                    extra_body: empty_map(),
+                },
+                Item::ToolResult {
+                    call_id: "answered".to_string(),
+                    is_error: false,
+                    content: vec![ToolResultContent::Text {
+                        text: "file1.txt".to_string(),
+                    }],
+                    extra_body: empty_map(),
+                },
+                Item::text(Role::User, "thanks"),
+            ],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: Some(256),
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        strip_orphaned_tool_calls(&mut req);
+        let encoded = encode_request(&req, "claude-sonnet-4-6");
+        let messages = encoded["messages"].as_array().expect("messages array");
+
+        let assistant_msg = &messages[1];
+        let assistant_content = assistant_msg["content"].as_array().expect("content array");
+        assert_eq!(
+            assistant_content.len(),
+            1,
+            "orphaned tool_use should be stripped"
+        );
+        assert_eq!(assistant_content[0]["id"], json!("answered"));
+    }
 }

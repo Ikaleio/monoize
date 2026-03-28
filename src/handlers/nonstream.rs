@@ -1,4 +1,26 @@
 use super::*;
+use std::collections::HashSet;
+
+pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
+    let answered: HashSet<String> = req
+        .inputs
+        .iter()
+        .filter_map(|item| match item {
+            urp::Item::ToolResult { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    for item in req.inputs.iter_mut() {
+        if let urp::Item::Message { parts, .. } = item {
+            parts.retain(|part| match part {
+                urp::Part::ToolCall { call_id, .. } => answered.contains(call_id),
+                _ => true,
+            });
+        }
+    }
+    req.inputs
+        .retain(|item| !matches!(item, urp::Item::Message { parts, .. } if parts.is_empty()));
+}
 
 pub(super) async fn execute_nonstream_typed(
     state: &AppState,
@@ -250,6 +272,7 @@ pub(super) fn encode_request_for_provider(
     attempt: &MonoizeAttempt,
 ) -> AppResult<Value> {
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
+    strip_orphaned_tool_calls(req);
     let model = req.model.clone();
     let value = match attempt.provider_type {
         ProviderType::Responses => {

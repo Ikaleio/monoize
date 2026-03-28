@@ -165,7 +165,12 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
             extra_body,
         } => {
             let mut obj = Map::new();
+            obj.insert(
+                "id".to_string(),
+                Value::String(format!("rs_{}", uuid::Uuid::new_v4().simple())),
+            );
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
+            obj.insert("status".to_string(), Value::String("completed".to_string()));
             if let Some(summary) = summary.as_ref() {
                 obj.insert(
                     "summary".to_string(),

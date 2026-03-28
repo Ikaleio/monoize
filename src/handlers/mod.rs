@@ -2,6 +2,7 @@ mod billing;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
 mod nonstream;
+pub(crate) use nonstream::strip_orphaned_tool_calls;
 mod request_logging;
 pub(crate) mod routing;
 mod streaming;
