@@ -23,7 +23,8 @@
 		"saved": "已儲存！",
 		"saveChanges": "儲存變更",
 		"creating": "建立中...",
-		"deleting": "刪除中..."
+		"deleting": "刪除中...",
+		"add": "新增"
 	},
 	"auth": {
 		"signIn": "登入",

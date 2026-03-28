@@ -23,7 +23,8 @@
 		"saved": "保存しました！",
 		"saveChanges": "変更を保存",
 		"creating": "作成中...",
-		"deleting": "削除中..."
+		"deleting": "削除中...",
+		"add": "追加"
 	},
 	"auth": {
 		"signIn": "ログイン",

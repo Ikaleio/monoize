@@ -23,7 +23,8 @@
 		"saved": "已保存！",
 		"saveChanges": "保存更改",
 		"creating": "创建中...",
-		"deleting": "删除中..."
+		"deleting": "删除中...",
+		"add": "添加"
 	},
 	"auth": {
 		"signIn": "登录",

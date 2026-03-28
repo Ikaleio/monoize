@@ -23,7 +23,8 @@
 		"saved": "Saved!",
 		"saveChanges": "Save Changes",
 		"creating": "Creating...",
-		"deleting": "Deleting..."
+		"deleting": "Deleting...",
+		"add": "Add"
 	},
 	"auth": {
 		"signIn": "Sign In",
