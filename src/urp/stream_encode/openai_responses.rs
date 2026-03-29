@@ -328,6 +328,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut pending_assistant_items: HashMap<u32, PendingResponsesAssistantItem> = HashMap::new();
     let mut flushed_output_indices: std::collections::HashSet<usize> =
         std::collections::HashSet::new();
+    let mut completed_output_items: Vec<(usize, Value)> = Vec::new();
+    let mut had_early_flush = false;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -418,13 +420,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         if entering_reasoning && leaving_message {
                             if let Some(active) = pending_item.active_output.take() {
                                 flushed_output_indices.insert(active.output_index);
-                                flush_stream_output(
+                                had_early_flush = true;
+                                let flushed = flush_stream_output(
                                     tx.clone(),
                                     &mut seq,
                                     active,
                                     sse_max_frame_length,
                                 )
                                 .await?;
+                                completed_output_items.push(flushed);
                             }
                         } else {
                             stage_active_stream_output(
@@ -831,8 +835,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     take_stream_output(pending, part_state.output_index)
                                 })
                         {
-                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
+                            let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
                                 .await?;
+                            completed_output_items.push(flushed);
                         }
                     } else if part_state.zone == ResponsesOutputZone::FunctionCall {
                         if let Part::ToolCall { arguments, .. } = &part {
@@ -856,8 +861,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 take_stream_output(pending, part_state.output_index)
                             })
                         {
-                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
+                            let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
                                 .await?;
+                            completed_output_items.push(flushed);
                         }
                     } else if part_state.zone == ResponsesOutputZone::Reasoning {
                         if let Part::Reasoning {
@@ -924,8 +930,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 take_stream_output(pending, part_state.output_index)
                             })
                         {
-                            flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
+                            let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
                                 .await?;
+                            completed_output_items.push(flushed);
                         }
                     }
                 }
@@ -937,13 +944,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     if pending_item.active_output.is_some()
                         || !pending_item.staged_outputs.is_empty()
                     {
-                        flush_pending_stream_outputs(
+                        let flushed = flush_pending_stream_outputs(
                             tx.clone(),
                             &mut seq,
                             &mut pending_item,
                             sse_max_frame_length,
                         )
                         .await?;
+                        completed_output_items.extend(flushed);
                     } else if !pending_item.streamed_any_output {
                         for encoded_item in encode_stream_output_item(&item) {
                             let output_index = next_output_index;
@@ -972,6 +980,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 }),
                             )
                             .await?;
+                            completed_output_items.push((output_index, done_item.clone()));
                         }
                     }
                 } else {
@@ -999,6 +1008,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         }),
                     )
                     .await?;
+                    completed_output_items.push((output_index, done_item.clone()));
                 }
             }
             UrpStreamEvent::ResponseDone {
@@ -1020,6 +1030,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 );
                 if let Some(created) = created {
                     response["created_at"] = json!(created);
+                }
+                if had_early_flush && !completed_output_items.is_empty() {
+                    completed_output_items.sort_by_key(|(idx, _)| *idx);
+                    response["output"] = Value::Array(
+                        completed_output_items
+                            .iter()
+                            .map(|(_, item)| item.clone())
+                            .collect(),
+                    );
                 }
                 let completed_response =
                     sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length);
@@ -1416,20 +1435,22 @@ async fn flush_stream_output(
     seq: &mut u64,
     active_output: ActiveResponsesOutputItem,
     sse_max_frame_length: Option<usize>,
-) -> AppResult<()> {
+) -> AppResult<(usize, Value)> {
     let completed_item = complete_stream_output_item(active_output.item);
     let done_item =
         sanitize_responses_output_item_for_frame_limit(&completed_item, sse_max_frame_length);
+    let output_index = active_output.output_index;
     send_responses_event(
         &tx,
         seq,
         "response.output_item.done",
         json!({
-            "output_index": active_output.output_index,
+            "output_index": output_index,
             "item": done_item,
         }),
     )
-    .await
+    .await?;
+    Ok((output_index, done_item.clone()))
 }
 
 async fn flush_pending_stream_outputs(
@@ -1437,14 +1458,15 @@ async fn flush_pending_stream_outputs(
     seq: &mut u64,
     pending_item: &mut PendingResponsesAssistantItem,
     sse_max_frame_length: Option<usize>,
-) -> AppResult<()> {
+) -> AppResult<Vec<(usize, Value)>> {
+    let mut items = Vec::new();
     while let Some(output) = pending_item.staged_outputs.pop() {
-        flush_stream_output(tx.clone(), seq, output, sse_max_frame_length).await?;
+        items.push(flush_stream_output(tx.clone(), seq, output, sse_max_frame_length).await?);
     }
     if let Some(output) = pending_item.active_output.take() {
-        flush_stream_output(tx, seq, output, sse_max_frame_length).await?;
+        items.push(flush_stream_output(tx, seq, output, sse_max_frame_length).await?);
     }
-    Ok(())
+    Ok(items)
 }
 
 fn response_envelope_payload(
