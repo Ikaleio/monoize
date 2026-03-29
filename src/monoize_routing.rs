@@ -205,6 +205,7 @@ pub struct ReorderProvidersInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonoizeRuntimeConfig {
     pub request_timeout_ms: u64,
+    pub enable_estimated_billing: bool,
     pub passive_failure_count_threshold: u32,
     pub passive_cooldown_seconds: u64,
     pub passive_window_seconds: u64,
@@ -221,6 +222,7 @@ impl Default for MonoizeRuntimeConfig {
     fn default() -> Self {
         Self {
             request_timeout_ms: 30_000,
+            enable_estimated_billing: true,
             passive_failure_count_threshold: 3,
             passive_cooldown_seconds: 60,
             passive_window_seconds: 30,

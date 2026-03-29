@@ -25,6 +25,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Once, OnceLock};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -218,6 +219,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         .max(1);
     monoize_runtime.active_probe_model = settings_snapshot.monoize_active_probe_model.clone();
     monoize_runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
+    monoize_runtime.enable_estimated_billing =
+        settings_snapshot.monoize_enable_estimated_billing;
     monoize_runtime.extra_fields_whitelist =
         settings_snapshot.monoize_extra_fields_whitelist.clone();
     let channel_health = Arc::new(Mutex::new(HashMap::new()));
@@ -854,7 +857,7 @@ pub fn build_app(state: AppState) -> Router {
         ))
 }
 
-fn build_root_api_router(metrics_path: &str) -> Router<AppState> {
+fn build_v1_router() -> Router<AppState> {
     Router::new()
         .route("/v1/models", get(crate::handlers::list_models))
         .route("/v1/responses", post(crate::handlers::create_response))
@@ -872,6 +875,11 @@ fn build_root_api_router(metrics_path: &str) -> Router<AppState> {
             "/v1/images/edits",
             post(crate::handlers::image_api::create_image_edit),
         )
+        .layer(CorsLayer::very_permissive())
+}
+
+fn build_root_api_router(metrics_path: &str) -> Router<AppState> {
+    build_v1_router()
         .route(metrics_path, get(crate::handlers::metrics))
         .route(
             "/presets/providers",
@@ -945,6 +953,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/tokens/{key_id}",
             axum::routing::delete(crate::dashboard_handlers::delete_api_key),
+        )
+        .route(
+            "/dashboard/tokens/{key_id}/transfer",
+            post(crate::dashboard_handlers::transfer_to_sub_account),
         )
         .route(
             "/dashboard/settings",

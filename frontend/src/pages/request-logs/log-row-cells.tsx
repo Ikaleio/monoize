@@ -85,6 +85,7 @@ export function LogRowCells({
 	const billingInput = asObject(billingSnapshot?.input)
 	const billingOutput = asObject(billingSnapshot?.output)
 	const multiplier = readNumber(billingSnapshot?.provider_multiplier)
+	const isEstimatedBilling = billingSnapshot?.estimated === true
 
 	const formatTokenCount = (value: number | null | undefined) =>
 		value == null ? '-' : new Intl.NumberFormat('en-US').format(value)
@@ -652,11 +653,16 @@ export function LogRowCells({
 											</span>
 										</div>
 									)}
-									{!billingSnapshot && (
-										<div className='text-muted-foreground'>
-											{t('requestLogs.detailsUnavailable')}
-										</div>
-									)}
+								{!billingSnapshot && (
+									<div className='text-muted-foreground'>
+										{t('requestLogs.detailsUnavailable')}
+									</div>
+								)}
+								{isEstimatedBilling && (
+									<div className='text-amber-500 text-xs flex items-center gap-1'>
+										⚡ {t('requestLogs.estimatedBilling')}
+									</div>
+								)}
 									<div className='border-t border-muted pt-2 mt-2'>
 										<div className='flex items-center justify-between gap-3'>
 											<span className='text-xs text-muted-foreground'>
