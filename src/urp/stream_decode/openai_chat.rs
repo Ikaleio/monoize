@@ -897,16 +897,6 @@ fn sorted_parts(
 ) -> Vec<(u32, Part)> {
     let mut parts = Vec::new();
 
-    if let Some(part_index) = text_part_index {
-        parts.push((
-            part_index,
-            Part::Text {
-                content: output_text.to_string(),
-                extra_body: HashMap::new(),
-            },
-        ));
-    }
-
     if let Some(part_index) = reasoning_part_index {
         parts.push((
             part_index,
@@ -916,6 +906,16 @@ fn sorted_parts(
                     .then(|| Value::String(reasoning_sig.to_string())),
                 summary: (!reasoning_summary.is_empty()).then(|| reasoning_summary.to_string()),
                 source: reasoning_source.map(|source| source.to_string()),
+                extra_body: HashMap::new(),
+            },
+        ));
+    }
+
+    if let Some(part_index) = text_part_index {
+        parts.push((
+            part_index,
+            Part::Text {
+                content: output_text.to_string(),
                 extra_body: HashMap::new(),
             },
         ));
@@ -939,7 +939,6 @@ fn sorted_parts(
         ));
     }
 
-    parts.sort_by_key(|(part_index, _)| *part_index);
     parts
 }
 
