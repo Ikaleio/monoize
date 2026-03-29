@@ -35,8 +35,18 @@ pub(crate) async fn stream_gemini_to_urp_events(
     let mut started_reasoning_part = false;
     let mut finish_reason: Option<FinishReason> = None;
 
+    let idle_timeout = std::time::Duration::from_secs(120);
     let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = stream.next().await {
+    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "upstream_idle_timeout",
+                "upstream stream idle for 120s without data",
+            )
+        })?
+    {
         let ev = ev.map_err(|err| {
             AppError::new(
                 StatusCode::BAD_GATEWAY,

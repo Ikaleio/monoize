@@ -55,8 +55,18 @@ pub(crate) async fn stream_chat_to_urp_events(
     let mut tool_part_index_by_call_id: HashMap<String, u32> = HashMap::new();
     let mut finish_reason = None;
 
+    let idle_timeout = std::time::Duration::from_secs(120);
     let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = stream.next().await {
+    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "upstream_idle_timeout",
+                "upstream stream idle for 120s without data",
+            )
+        })?
+    {
         let ev = ev.map_err(|err| {
             AppError::new(
                 StatusCode::BAD_GATEWAY,
@@ -341,6 +351,15 @@ pub(crate) async fn stream_chat_to_urp_events(
     }
 
     let usage = latest_stream_usage_snapshot(&runtime_metrics).await;
+    {
+        let total_output_chars =
+            (output_text.len() + reasoning_text.len() + reasoning_summary.len()) as u64;
+        crate::handlers::usage::increment_estimated_output_tokens(
+            &runtime_metrics,
+            total_output_chars,
+        )
+        .await;
+    }
     let item = build_assistant_item(
         assistant_message_phase,
         text_part_index,

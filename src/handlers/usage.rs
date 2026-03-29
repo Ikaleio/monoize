@@ -63,6 +63,17 @@ pub(crate) async fn record_stream_done_sentinel(
     guard.terminal.saw_done_sentinel = true;
 }
 
+pub(crate) async fn increment_estimated_output_tokens(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    chars: u64,
+) {
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    let mut guard = runtime_metrics.lock().await;
+    guard.estimated_output_tokens += (chars + 3) / 4;
+}
+
 pub(crate) async fn record_stream_terminal_event(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     event: &str,

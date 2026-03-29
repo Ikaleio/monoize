@@ -683,6 +683,7 @@ pub(crate) struct StreamRuntimeMetrics {
     ttfb_ms: Option<u64>,
     usage: Option<urp::Usage>,
     terminal: StreamTerminalDiagnostics,
+    pub(crate) estimated_output_tokens: u64,
 }
 
 async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::auth::AuthResult> {

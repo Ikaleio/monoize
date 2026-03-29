@@ -41,8 +41,18 @@ pub(crate) async fn stream_messages_to_urp_events(
     let mut part_order: Vec<u32> = Vec::new();
     let mut item_started = false;
 
+    let idle_timeout = std::time::Duration::from_secs(120);
     let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(ev) = stream.next().await {
+    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
+        .await
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "upstream_idle_timeout",
+                "upstream stream idle for 120s without data",
+            )
+        })?
+    {
         let ev = ev.map_err(|err| {
             AppError::new(
                 StatusCode::BAD_GATEWAY,
@@ -303,6 +313,24 @@ pub(crate) async fn stream_messages_to_urp_events(
                     .iter()
                     .filter_map(|index| finished_parts.get(index).cloned())
                     .collect::<Vec<_>>();
+                {
+                    let total_chars: u64 = parts
+                        .iter()
+                        .map(|p| match p {
+                            crate::urp::Part::Text { content, .. } => content.len() as u64,
+                            crate::urp::Part::Reasoning { content, summary, .. } => {
+                                content.as_ref().map_or(0, |c| c.len() as u64)
+                                    + summary.as_ref().map_or(0, |s| s.len() as u64)
+                            }
+                            _ => 0,
+                        })
+                        .sum();
+                    crate::handlers::usage::increment_estimated_output_tokens(
+                        &runtime_metrics,
+                        total_chars,
+                    )
+                    .await;
+                }
                 let item = Item::Message {
                     role: Role::Assistant,
                     parts,

@@ -263,7 +263,7 @@ pub(super) async fn forward_stream_typed(
                 &attempt.api_key,
                 &path,
                 &upstream_body,
-                attempt.request_timeout_ms,
+                attempt.request_timeout_ms.saturating_mul(10).max(600_000),
                 provider_extra_headers(attempt.provider_type),
             )
             .await;
@@ -288,6 +288,7 @@ pub(super) async fn forward_stream_typed(
                         ttfb_ms: None,
                         usage: None,
                         terminal: StreamTerminalDiagnostics::default(),
+                        estimated_output_tokens: 0,
                     }));
                     let metrics_for_stream = runtime_metrics.clone();
                     let state_for_log = state.clone();
@@ -382,7 +383,25 @@ pub(super) async fn forward_stream_typed(
 
                         let (ttfb_ms, usage, terminal_diagnostics) = {
                             let guard = runtime_metrics.lock().await;
-                            (guard.ttfb_ms, guard.usage.clone(), guard.terminal.clone())
+                            let usage = guard.usage.clone().or_else(|| {
+                                let est = guard.estimated_output_tokens;
+                                if est > 0 {
+                                    tracing::warn!(
+                                        estimated_output_tokens = est,
+                                        "upstream stream ended without usage; billing from estimate"
+                                    );
+                                    Some(urp::Usage {
+                                        input_tokens: 0,
+                                        output_tokens: est,
+                                        input_details: None,
+                                        output_details: None,
+                                        extra_body: std::collections::HashMap::new(),
+                                    })
+                                } else {
+                                    None
+                                }
+                            });
+                            (guard.ttfb_ms, usage, guard.terminal.clone())
                         };
 
                         let charge = match usage.as_ref() {
