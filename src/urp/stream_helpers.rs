@@ -682,7 +682,7 @@ pub(crate) fn responses_text_delta_payload(
     }
     obj.insert("output_index".to_string(), Value::from(output_index));
     obj.insert("content_index".to_string(), Value::from(content_index));
-    obj.insert("logprobs".to_string(), Value::Null);
+    obj.insert("logprobs".to_string(), json!([]));
     insert_phase_if_present(&mut obj, phase);
     Value::Object(obj)
 }

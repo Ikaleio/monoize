@@ -239,7 +239,7 @@ pub(crate) async fn emit_synthetic_responses_stream(
                         "output_index": output_index,
                         "content_index": 0,
                         "item_id": item.get("id").cloned().unwrap_or(Value::Null),
-                        "part": { "type": "output_text", "text": "", "annotations": [] },
+                                    "part": { "type": "output_text", "text": "", "annotations": [], "logprobs": [] },
                     }),
                 )
                 .await?;
@@ -279,6 +279,7 @@ pub(crate) async fn emit_synthetic_responses_stream(
                             "type": "output_text",
                             "text": text,
                             "annotations": [],
+                            "logprobs": [],
                         },
                     }),
                 )
@@ -562,7 +563,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     "output_index": new_output.output_index,
                                     "content_index": 0,
                                     "item_id": new_output.item_id,
-                                    "part": json!({"type": "output_text", "text": "", "annotations": []}),
+                                    "part": json!({"type": "output_text", "text": "", "annotations": [], "logprobs": []}),
                                 }),
                             )
                             .await?;
@@ -1134,6 +1135,7 @@ fn stream_output_item_start_stub(
                 json!(format!("rs_{}", uuid::Uuid::new_v4())),
             );
             obj.insert("status".to_string(), json!("in_progress"));
+            obj.insert("summary".to_string(), json!([]));
             if let PartHeader::ProviderItem { body, .. } = header {
                 merge_json_extra_value(&mut obj, body);
             }
@@ -1708,7 +1710,7 @@ fn encode_function_call_output_item(part: &Part) -> Option<Value> {
 
 fn encode_part_start_header(header: &PartHeader) -> Value {
     match header {
-        PartHeader::Text => json!({ "type": "output_text", "text": "", "annotations": [] }),
+        PartHeader::Text => json!({ "type": "output_text", "text": "", "annotations": [], "logprobs": [] }),
         PartHeader::Reasoning => json!({ "type": "reasoning", "text": "" }),
         PartHeader::Refusal => json!({ "type": "refusal", "refusal": "" }),
         PartHeader::ToolCall { call_id, name } => json!({
@@ -1760,6 +1762,10 @@ fn encode_part_value(part: &Part) -> Value {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("output_text"));
             obj.insert("text".to_string(), json!(content));
+            obj.entry("annotations".to_string())
+                .or_insert_with(|| json!([]));
+            obj.entry("logprobs".to_string())
+                .or_insert_with(|| json!([]));
             merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }

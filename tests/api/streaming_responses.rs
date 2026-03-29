@@ -222,7 +222,7 @@ async fn responses_streaming_reencodes_greedy_merged_items_with_canonical_sse_bo
     assert!(text.contains("\"type\":\"function_call\""));
     assert!(text.contains("\"phase\":\"analysis\""));
     assert!(text.contains("event: response.content_part.added"));
-    assert!(text.contains("\"part\":{\"annotations\":[],\"text\":\"\",\"type\":\"output_text\"}"));
+    assert!(text.contains("\"part\":{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"}"));
     assert!(!text.contains("\"part\":{\"text\":\"\",\"type\":\"reasoning\"}"));
     assert!(!text.contains("event: response.content_part.added\ndata: {\"content_index\":2"));
 }
@@ -268,7 +268,7 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
         text_delta.1["item_id"].as_str().is_some(),
         "text delta must include item_id"
     );
-    assert_eq!(text_delta.1["logprobs"], Value::Null);
+    assert_eq!(text_delta.1["logprobs"], json!([]));
 
     let reasoning_summary_delta = frames
         .iter()
