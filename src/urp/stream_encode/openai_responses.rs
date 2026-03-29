@@ -1136,6 +1136,10 @@ fn stream_output_item_start_stub(
             );
             obj.insert("status".to_string(), json!("in_progress"));
             obj.insert("summary".to_string(), json!([]));
+            obj.insert(
+                "started_at".to_string(),
+                json!(chrono::Utc::now().timestamp()),
+            );
             if let PartHeader::ProviderItem { body, .. } = header {
                 merge_json_extra_value(&mut obj, body);
             }

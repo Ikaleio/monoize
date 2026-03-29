@@ -181,6 +181,10 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
                 Value::String(format!("rs_{}", uuid::Uuid::new_v4().simple())),
             );
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
+            obj.insert(
+                "started_at".to_string(),
+                Value::Number(serde_json::Number::from(chrono::Utc::now().timestamp())),
+            );
             let summary_arr = if let Some(summary) = summary.as_ref() {
                 vec![json!({ "type": "summary_text", "text": summary })]
             } else {
