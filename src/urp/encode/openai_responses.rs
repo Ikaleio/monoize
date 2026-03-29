@@ -224,6 +224,7 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
         .is_some_and(|arr| !arr.is_empty());
     let text_value = obj.remove("text");
     obj.remove("source");
+    obj.remove("started_at");
     if !summary_present {
         let summary = text_value
             .and_then(|value| value.as_str().map(|text| text.to_string()))
