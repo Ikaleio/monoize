@@ -1149,10 +1149,12 @@ fn stream_output_item_start_stub(
         ResponsesOutputZone::Reasoning => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("reasoning"));
-            obj.insert(
-                "id".to_string(),
-                json!(format!("rs_{}", uuid::Uuid::new_v4())),
-            );
+            let id = part_extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
             obj.insert("status".to_string(), json!("in_progress"));
             obj.insert("summary".to_string(), json!([]));
             obj.insert(

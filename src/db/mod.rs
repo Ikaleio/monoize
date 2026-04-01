@@ -1,11 +1,12 @@
-use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbBackend, DbErr, Statement, Value};
+use sea_orm::{
+    ConnectOptions, Database, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, Statement,
+    TransactionTrait, Value,
+};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-/// Serializes write access for SQLite backends. For PostgreSQL the guard is a
-/// no-op — PostgreSQL handles write concurrency natively via MVCC.
 pub struct WriteGuard<'a> {
     conn: &'a DatabaseConnection,
     _guard: Option<tokio::sync::MutexGuard<'a, ()>>,
@@ -15,6 +16,35 @@ impl Deref for WriteGuard<'_> {
     type Target = DatabaseConnection;
     fn deref(&self) -> &Self::Target {
         self.conn
+    }
+}
+
+pub struct WriteTransaction {
+    txn: Option<DatabaseTransaction>,
+    #[allow(dead_code)]
+    _guard: Option<Box<tokio::sync::OwnedMutexGuard<()>>>,
+}
+
+impl WriteTransaction {
+    pub async fn commit(mut self) -> Result<(), DbErr> {
+        if let Some(txn) = self.txn.take() {
+            txn.commit().await?;
+        }
+        Ok(())
+    }
+
+    pub async fn rollback(mut self) -> Result<(), DbErr> {
+        if let Some(txn) = self.txn.take() {
+            txn.rollback().await?;
+        }
+        Ok(())
+    }
+}
+
+impl Deref for WriteTransaction {
+    type Target = DatabaseTransaction;
+    fn deref(&self) -> &Self::Target {
+        self.txn.as_ref().expect("transaction already consumed")
     }
 }
 
@@ -178,6 +208,20 @@ impl DbPool {
     /// Check if this is a PostgreSQL backend.
     pub fn is_postgres(&self) -> bool {
         self.backend == DbBackend::Postgres
+    }
+
+    /// Acquire write connection and begin an explicit transaction.
+    pub async fn begin_write(&self) -> Result<WriteTransaction, DbErr> {
+        let guard = if self.backend == DbBackend::Sqlite {
+            Some(Box::new(self.write_lock.clone().lock_owned().await))
+        } else {
+            None
+        };
+        let txn = self.write_conn.begin().await?;
+        Ok(WriteTransaction {
+            txn: Some(txn),
+            _guard: guard,
+        })
     }
 
     /// Create a Statement with automatic placeholder conversion.

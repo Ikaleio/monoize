@@ -629,6 +629,10 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                         .and_then(|v| v.as_str())
                         .filter(|format| !format.is_empty())
                         .map(|format| format.to_string());
+                    let detail_id = detail_obj
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     if let Some(data) = detail_obj.get("data") {
                         if !matches!(data, Value::Null) {
                             if let Some(s) = data.as_str() {
@@ -637,6 +641,11 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                                 }
                             }
                             merge_reasoning_part(parts, None, Some(data.clone()), None, source);
+                            if let Some(id) = detail_id {
+                                if let Some(Part::Reasoning { extra_body, .. }) = parts.last_mut() {
+                                    extra_body.insert("id".to_string(), Value::String(id));
+                                }
+                            }
                             saw_encrypted = true;
                         }
                     }

@@ -176,10 +176,12 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
             extra_body,
         } => {
             let mut obj = Map::new();
-            obj.insert(
-                "id".to_string(),
-                Value::String(format!("rs_{}", uuid::Uuid::new_v4().simple())),
-            );
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4().simple()));
+            obj.insert("id".to_string(), Value::String(id));
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
             obj.insert(
                 "started_at".to_string(),

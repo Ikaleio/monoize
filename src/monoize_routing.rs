@@ -589,10 +589,9 @@ impl MonoizeRoutingStore {
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
 
-        self.db
-            .write()
-            .await
-            .execute(self.db.stmt(
+        let txn = self.db.begin_write().await.map_err(|e| e.to_string())?;
+
+        txn.execute(self.db.stmt(
                 r#"UPDATE monoize_providers
                    SET name = $1, provider_type = $2, max_retries = $3,
                        channel_max_retries = $4,
@@ -636,11 +635,13 @@ impl MonoizeRoutingStore {
             .map_err(|e| e.to_string())?;
 
         if let Some(models) = &input.models {
-            self.replace_models(id, models).await?;
+            self.replace_models_on(&*txn, id, models).await?;
         }
         if let Some(channels) = &input.channels {
-            self.replace_channels(id, channels).await?;
+            self.replace_channels_on(&*txn, id, channels).await?;
         }
+
+        txn.commit().await.map_err(|e| e.to_string())?;
 
         self.get_provider(id)
             .await?
@@ -713,10 +714,17 @@ impl MonoizeRoutingStore {
         provider_id: &str,
         models: &HashMap<String, MonoizeModelEntry>,
     ) -> Result<(), String> {
-        self.db
-            .write()
-            .await
-            .execute(self.db.stmt(
+        let w = self.db.write().await;
+        self.replace_models_on(&*w, provider_id, models).await
+    }
+
+    async fn replace_models_on(
+        &self,
+        conn: &impl ConnectionTrait,
+        provider_id: &str,
+        models: &HashMap<String, MonoizeModelEntry>,
+    ) -> Result<(), String> {
+        conn.execute(self.db.stmt(
                 "DELETE FROM monoize_provider_models WHERE provider_id = $1",
                 vec![provider_id.into()],
             ))
@@ -724,10 +732,7 @@ impl MonoizeRoutingStore {
             .map_err(|e| e.to_string())?;
 
         for (model_name, entry) in models {
-            self.db
-                .write()
-                .await
-                .execute(self.db.stmt(
+            conn.execute(self.db.stmt(
                     r#"INSERT INTO monoize_provider_models
                        (id, provider_id, model_name, redirect, multiplier, created_at)
                        VALUES ($1, $2, $3, $4, $5, $6)"#,
@@ -751,9 +756,17 @@ impl MonoizeRoutingStore {
         provider_id: &str,
         channels: &[CreateMonoizeChannelInput],
     ) -> Result<(), String> {
-        let existing_rows = self
-            .db
-            .read()
+        let w = self.db.write().await;
+        self.replace_channels_on(&*w, provider_id, channels).await
+    }
+
+    async fn replace_channels_on(
+        &self,
+        conn: &impl ConnectionTrait,
+        provider_id: &str,
+        channels: &[CreateMonoizeChannelInput],
+    ) -> Result<(), String> {
+        let existing_rows = conn
             .query_all(self.db.stmt(
                 "SELECT id, api_key,
                         passive_failure_count_threshold_override,
@@ -802,10 +815,7 @@ impl MonoizeRoutingStore {
             );
         }
 
-        self.db
-            .write()
-            .await
-            .execute(self.db.stmt(
+        conn.execute(self.db.stmt(
                 "DELETE FROM monoize_channels WHERE provider_id = $1",
                 vec![provider_id.into()],
             ))
@@ -846,9 +856,7 @@ impl MonoizeRoutingStore {
 
             let now_str = Utc::now().to_rfc3339();
 
-            self.db
-                .write().await
-                .execute(self.db.stmt(
+            conn.execute(self.db.stmt(
                     r#"INSERT INTO monoize_channels
                        (id, provider_id, name, base_url, api_key, weight, enabled,
                           passive_failure_count_threshold_override, passive_cooldown_seconds_override,
