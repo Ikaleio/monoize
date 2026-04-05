@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail, X } from "lucide-react";
+import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail, X, PlusCircle } from "lucide-react";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +38,40 @@ import type { User } from "@/lib/api";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { getGravatarUrl } from "@/lib/utils";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+
+const NANO_PER_USD = 1_000_000_000n;
+
+function parseUsdToNanoBigInt(usd: string): bigint | null {
+  const trimmed = usd.trim();
+  if (!trimmed || trimmed === "-") return null;
+
+  const negative = trimmed.startsWith("-");
+  const abs = negative ? trimmed.slice(1) : trimmed;
+  const parts = abs.split(".");
+  if (parts.length > 2) return null;
+
+  const intPart = parts[0] || "0";
+  let fracPart = parts[1] || "";
+  if (fracPart.length > 9) fracPart = fracPart.slice(0, 9);
+  fracPart = fracPart.padEnd(9, "0");
+
+  try {
+    const nano = BigInt(intPart) * NANO_PER_USD + BigInt(fracPart);
+    return negative ? -nano : nano;
+  } catch {
+    return null;
+  }
+}
+
+function nanoToUsdString(nano: bigint): string {
+  const negative = nano < 0n;
+  const abs = negative ? -nano : nano;
+  const intPart = abs / NANO_PER_USD;
+  const fracPart = abs % NANO_PER_USD;
+  const fracStr = fracPart.toString().padStart(9, "0").replace(/0+$/, "");
+  const result = fracStr ? `${intPart}.${fracStr}` : `${intPart}`;
+  return negative ? `-${result}` : result;
+}
 
 const roleIcons = {
   super_admin: ShieldCheck,
@@ -234,6 +269,8 @@ export function UsersPage() {
     email: "",
     allowedGroups: [] as string[],
   });
+  const [balanceMode, setBalanceMode] = useState<"set" | "add">("set");
+  const [balanceAddAmount, setBalanceAddAmount] = useState("");
   const [saving, setSaving] = useState(false);
 
   const handleCreate = async () => {
@@ -275,6 +312,7 @@ export function UsersPage() {
         password?: string;
         role?: User["role"];
         balance_usd?: string;
+        balance_nano_usd?: string;
         balance_unlimited?: boolean;
         email?: string | null;
         allowed_groups?: string[];
@@ -288,7 +326,13 @@ export function UsersPage() {
       if (formData.role !== editUser.role) {
         updates.role = formData.role as User["role"];
       }
-      if (formData.balanceUsd !== editUser.balance_usd) {
+      if (balanceMode === "add") {
+        const addNano = parseUsdToNanoBigInt(balanceAddAmount);
+        if (addNano !== null && addNano !== 0n) {
+          const newNano = BigInt(editUser.balance_nano_usd) + addNano;
+          updates.balance_nano_usd = newNano.toString();
+        }
+      } else if (formData.balanceUsd !== editUser.balance_usd) {
         updates.balance_usd = formData.balanceUsd.trim();
       }
       if (formData.balanceUnlimited !== editUser.balance_unlimited) {
@@ -310,6 +354,8 @@ export function UsersPage() {
         (error) => console.error(t("users.failedUpdate"), error)
       );
       setEditUser(null);
+      setBalanceMode("set");
+      setBalanceAddAmount("");
       setFormData({
         username: "",
         password: "",
@@ -354,6 +400,8 @@ export function UsersPage() {
 
   const openEdit = (user: User) => {
     setEditUser(user);
+    setBalanceMode("set");
+    setBalanceAddAmount("");
     setFormData({
       username: user.username,
       password: "",
@@ -570,12 +618,54 @@ export function UsersPage() {
                 />
                 {currentUser?.role && (
                   <div className="space-y-2">
-                    <Label>Balance (USD)</Label>
-                    <Input
-                      value={formData.balanceUsd}
-                      onChange={(e) => setFormData({ ...formData, balanceUsd: e.target.value })}
-                      placeholder="0"
-                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <Label>{t("users.balance")}</Label>
+                      <Tabs
+                        value={balanceMode}
+                        onValueChange={(v) => {
+                          setBalanceMode(v as "set" | "add");
+                          setBalanceAddAmount("");
+                        }}
+                      >
+                        <TabsList className="h-7">
+                          <TabsTrigger value="set" className="px-2.5 py-0.5 text-xs">
+                            {t("users.balanceSet")}
+                          </TabsTrigger>
+                          <TabsTrigger value="add" className="px-2.5 py-0.5 text-xs">
+                            <PlusCircle className="mr-1 h-3 w-3" />
+                            {t("users.balanceAdd")}
+                          </TabsTrigger>
+                        </TabsList>
+                      </Tabs>
+                    </div>
+                    {balanceMode === "set" ? (
+                      <Input
+                        value={formData.balanceUsd}
+                        onChange={(e) => setFormData({ ...formData, balanceUsd: e.target.value })}
+                        placeholder="0"
+                      />
+                    ) : (
+                      <>
+                        <Input
+                          value={balanceAddAmount}
+                          onChange={(e) => setBalanceAddAmount(e.target.value)}
+                          placeholder={t("users.balanceAddPlaceholder")}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {t("users.balanceCurrentHint", { amount: editUser?.balance_usd ?? "0" })}
+                          {balanceAddAmount.trim() && parseUsdToNanoBigInt(balanceAddAmount) !== null && editUser && (
+                            <>
+                              {" → "}
+                              <span className="font-medium text-foreground">
+                                ${nanoToUsdString(
+                                  BigInt(editUser.balance_nano_usd) + (parseUsdToNanoBigInt(balanceAddAmount) ?? 0n)
+                                )}
+                              </span>
+                            </>
+                          )}
+                        </p>
+                      </>
+                    )}
                     <div className="flex items-center gap-2">
                       <Switch
                         checked={formData.balanceUnlimited}
@@ -583,7 +673,7 @@ export function UsersPage() {
                           setFormData({ ...formData, balanceUnlimited: checked })
                         }
                       />
-                      <span className="text-sm text-muted-foreground">Unlimited</span>
+                      <span className="text-sm text-muted-foreground">{t("users.unlimited")}</span>
                     </div>
                   </div>
                 )}

@@ -142,7 +142,13 @@
 		"failedLoad": "ユーザーの読み込みに失敗しました",
 		"failedCreate": "ユーザーの作成に失敗しました",
 		"failedUpdate": "ユーザーの更新に失敗しました",
-		"failedDelete": "ユーザーの削除に失敗しました"
+		"failedDelete": "ユーザーの削除に失敗しました",
+		"balance": "残高 (USD)",
+		"balanceSet": "設定",
+		"balanceAdd": "追加",
+		"balanceAddPlaceholder": "追加する金額（例: 10.50）",
+		"balanceCurrentHint": "現在: ${{amount}}",
+		"unlimited": "無制限"
 	},
 	"apiKeys": {
 		"title": "トークン管理",

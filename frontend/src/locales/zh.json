@@ -142,7 +142,13 @@
 		"failedLoad": "加载用户失败",
 		"failedCreate": "创建用户失败",
 		"failedUpdate": "更新用户失败",
-		"failedDelete": "删除用户失败"
+		"failedDelete": "删除用户失败",
+		"balance": "余额 (USD)",
+		"balanceSet": "设置",
+		"balanceAdd": "增加",
+		"balanceAddPlaceholder": "增加金额（如 10.50）",
+		"balanceCurrentHint": "当前：${{amount}}",
+		"unlimited": "无限"
 	},
 	"apiKeys": {
 		"title": "令牌管理",

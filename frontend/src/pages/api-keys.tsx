@@ -46,6 +46,7 @@ import {
   useTransformRegistry,
 } from "@/lib/swr";
 import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, ModelRedirectRule, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
+import { api as apiClient } from "@/lib/api";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
 import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
@@ -336,8 +337,10 @@ export function ApiKeysPage() {
   // Create form state
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpires, setNewKeyExpires] = useState("");
-  const [newKeyQuota, setNewKeyQuota] = useState("");
-  const [newKeyQuotaUnlimited, setNewKeyQuotaUnlimited] = useState(true);
+  const [newKeySubAccountEnabled, setNewKeySubAccountEnabled] = useState(false);
+  const [transferDialogKey, setTransferDialogKey] = useState<ApiKey | null>(null);
+  const [transferAmount, setTransferAmount] = useState("");
+  const [transferring, setTransferring] = useState(false);
   const [newKeyModelLimitsEnabled, setNewKeyModelLimitsEnabled] = useState(false);
   const [newKeyModelLimits, setNewKeyModelLimits] = useState("");
   const [newKeyIpWhitelist, setNewKeyIpWhitelist] = useState("");
@@ -355,8 +358,7 @@ export function ApiKeysPage() {
   const resetCreateForm = () => {
     setNewKeyName("");
     setNewKeyExpires("");
-    setNewKeyQuota("");
-    setNewKeyQuotaUnlimited(true);
+    setNewKeySubAccountEnabled(false);
     setNewKeyModelLimitsEnabled(false);
     setNewKeyModelLimits("");
     setNewKeyIpWhitelist("");
@@ -383,8 +385,7 @@ export function ApiKeysPage() {
       const input: CreateApiKeyInput = {
         name: newKeyName.trim(),
         expires_in_days: newKeyExpires ? parseInt(newKeyExpires) : undefined,
-        quota: newKeyQuota ? parseInt(newKeyQuota) : undefined,
-        quota_unlimited: newKeyQuotaUnlimited,
+        sub_account_enabled: newKeySubAccountEnabled,
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
@@ -423,8 +424,7 @@ export function ApiKeysPage() {
     try {
       const input: UpdateApiKeyInput = {
         name: newKeyName.trim() || undefined,
-        quota: newKeyQuota ? parseInt(newKeyQuota) : undefined,
-        quota_unlimited: newKeyQuotaUnlimited,
+        sub_account_enabled: newKeySubAccountEnabled,
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
@@ -516,8 +516,7 @@ export function ApiKeysPage() {
   const openEditDialog = (key: ApiKey) => {
     setEditKey(key);
     setNewKeyName(key.name);
-    setNewKeyQuota(key.quota_remaining?.toString() || "");
-    setNewKeyQuotaUnlimited(key.quota_unlimited);
+    setNewKeySubAccountEnabled(key.sub_account_enabled);
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
@@ -626,25 +625,12 @@ export function ApiKeysPage() {
                 />
                 <div className="flex items-center space-x-2">
                   <Switch
-                    id="quotaUnlimited"
-                    checked={newKeyQuotaUnlimited}
-                    onCheckedChange={setNewKeyQuotaUnlimited}
+                    id="subAccountEnabled"
+                    checked={newKeySubAccountEnabled}
+                    onCheckedChange={setNewKeySubAccountEnabled}
                   />
-                  <Label htmlFor="quotaUnlimited">{t("apiKeys.unlimitedQuota")}</Label>
+                  <Label htmlFor="subAccountEnabled">{t("apiKeys.subAccountEnabled")}</Label>
                 </div>
-                {!newKeyQuotaUnlimited && (
-                  <div className="space-y-2">
-                    <Label htmlFor="quota">{t("apiKeys.quotaRemaining")}</Label>
-                    <Input
-                      id="quota"
-                      type="number"
-                      min="0"
-                      value={newKeyQuota}
-                      onChange={(e) => setNewKeyQuota(e.target.value)}
-                      placeholder="1000"
-                    />
-                  </div>
-                )}
                 <div className="flex items-center space-x-2">
                   <Switch
                     id="modelLimitsEnabled"
@@ -825,7 +811,7 @@ export function ApiKeysPage() {
                       {t("apiKeys.keyPrefix")}
                     </th>
                     <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
-                      {t("apiKeys.quota")}
+                      {t("apiKeys.balance")}
                     </th>
                     <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
                       {t("apiKeys.restrictions")}
@@ -881,10 +867,10 @@ export function ApiKeysPage() {
                       </div>
                     </td>
                     <td className="p-4 align-middle whitespace-nowrap">
-                      {key.quota_unlimited ? (
-                        <Badge variant="secondary" className="whitespace-nowrap">{t("apiKeys.unlimited")}</Badge>
+                      {key.sub_account_enabled ? (
+                        <span className="font-mono text-sm">${key.sub_account_balance_usd}</span>
                       ) : (
-                        <span>{key.quota_remaining?.toLocaleString() ?? 0}</span>
+                        <Badge variant="secondary" className="whitespace-nowrap">{t("apiKeys.inheritsUser")}</Badge>
                       )}
                     </td>
                     <td className="p-4 align-middle whitespace-nowrap">
@@ -939,6 +925,18 @@ export function ApiKeysPage() {
                     </td>
                     <td className="p-4 align-middle">
                       <div className="flex gap-1">
+                        {key.sub_account_enabled && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setTransferDialogKey(key);
+                              setTransferAmount("");
+                            }}
+                          >
+                            <ArrowRightLeft className="h-4 w-4" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -992,24 +990,12 @@ export function ApiKeysPage() {
             />
             <div className="flex items-center space-x-2">
               <Switch
-                id="editQuotaUnlimited"
-                checked={newKeyQuotaUnlimited}
-                onCheckedChange={setNewKeyQuotaUnlimited}
+                id="editSubAccountEnabled"
+                checked={newKeySubAccountEnabled}
+                onCheckedChange={setNewKeySubAccountEnabled}
               />
-              <Label htmlFor="editQuotaUnlimited">{t("apiKeys.unlimitedQuota")}</Label>
+              <Label htmlFor="editSubAccountEnabled">{t("apiKeys.subAccountEnabled")}</Label>
             </div>
-            {!newKeyQuotaUnlimited && (
-              <div className="space-y-2">
-                <Label htmlFor="editQuota">{t("apiKeys.quotaRemaining")}</Label>
-                <Input
-                  id="editQuota"
-                  type="number"
-                  min="0"
-                  value={newKeyQuota}
-                  onChange={(e) => setNewKeyQuota(e.target.value)}
-                />
-              </div>
-            )}
             <div className="flex items-center space-x-2">
               <Switch
                 id="editModelLimitsEnabled"
@@ -1115,6 +1101,57 @@ export function ApiKeysPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!transferDialogKey} onOpenChange={(open) => { if (!open) setTransferDialogKey(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("apiKeys.transferTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("apiKeys.transferDescription", { name: transferDialogKey?.name })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>{t("apiKeys.currentBalance")}</Label>
+              <p className="text-sm font-mono">${transferDialogKey?.sub_account_balance_usd}</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="transferAmount">{t("apiKeys.transferAmount")}</Label>
+              <Input
+                id="transferAmount"
+                type="text"
+                value={transferAmount}
+                onChange={(e) => setTransferAmount(e.target.value)}
+                placeholder="1.00"
+              />
+              <p className="text-sm text-muted-foreground">{t("apiKeys.transferAmountHelp")}</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransferDialogKey(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              disabled={!transferAmount || transferring}
+              onClick={async () => {
+                if (!transferDialogKey || !transferAmount) return;
+                setTransferring(true);
+                try {
+                  await apiClient.transferToSubAccount(transferDialogKey.id, { amount_usd: transferAmount });
+                  toast.success(t("apiKeys.transferSuccess"));
+                  setTransferDialogKey(null);
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : t("apiKeys.transferFailed"));
+                } finally {
+                  setTransferring(false);
+                }
+              }}
+            >
+              {t("apiKeys.transfer")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PageWrapper>
   );
 }

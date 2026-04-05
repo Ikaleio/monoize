@@ -142,7 +142,13 @@
 		"failedLoad": "載入使用者失敗",
 		"failedCreate": "建立使用者失敗",
 		"failedUpdate": "更新使用者失敗",
-		"failedDelete": "刪除使用者失敗"
+		"failedDelete": "刪除使用者失敗",
+		"balance": "餘額 (USD)",
+		"balanceSet": "設定",
+		"balanceAdd": "增加",
+		"balanceAddPlaceholder": "增加金額（如 10.50）",
+		"balanceCurrentHint": "目前：${{amount}}",
+		"unlimited": "無限"
 	},
 	"apiKeys": {
 		"title": "Token 管理",

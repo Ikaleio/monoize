@@ -142,7 +142,13 @@
 		"failedLoad": "Failed to load users",
 		"failedCreate": "Failed to create user",
 		"failedUpdate": "Failed to update user",
-		"failedDelete": "Failed to delete user"
+		"failedDelete": "Failed to delete user",
+		"balance": "Balance (USD)",
+		"balanceSet": "Set",
+		"balanceAdd": "Add",
+		"balanceAddPlaceholder": "Amount to add (e.g. 10.50)",
+		"balanceCurrentHint": "Current: ${{amount}}",
+		"unlimited": "Unlimited"
 	},
 	"apiKeys": {
 		"title": "Token Management",

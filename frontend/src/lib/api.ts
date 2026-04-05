@@ -52,8 +52,9 @@ export interface ApiKey {
   expires_at?: string;
   last_used_at?: string;
   enabled: boolean;
-  quota_remaining?: number;
-  quota_unlimited: boolean;
+  sub_account_enabled: boolean;
+  sub_account_balance_nano_usd: string;
+  sub_account_balance_usd: string;
   model_limits_enabled: boolean;
   model_limits: string[];
   ip_whitelist: string[];
@@ -68,8 +69,7 @@ export type ApiKeyCreated = ApiKey;
 export interface CreateApiKeyInput {
   name: string;
   expires_in_days?: number;
-  quota?: number;
-  quota_unlimited?: boolean;
+  sub_account_enabled?: boolean;
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
@@ -82,8 +82,7 @@ export interface CreateApiKeyInput {
 export interface UpdateApiKeyInput {
   name?: string;
   enabled?: boolean;
-  quota?: number;
-  quota_unlimited?: boolean;
+  sub_account_enabled?: boolean;
   model_limits_enabled?: boolean;
   model_limits?: string[];
   ip_whitelist?: string[];
@@ -179,7 +178,7 @@ export interface MonoizeChannel {
   _health_status?: "healthy" | "probing" | "unhealthy";
 }
 
-export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini";
+export type ProviderType = "responses" | "chat_completion" | "messages" | "gemini" | "openai_image";
 
 export interface ApiTypeOverride {
   pattern: string;
@@ -576,6 +575,13 @@ class ApiClient {
     return this.request("/tokens/batch-delete", {
       method: "POST",
       body: JSON.stringify({ ids }),
+    });
+  }
+
+  async transferToSubAccount(keyId: string, input: { amount_nano_usd?: string; amount_usd?: string }): Promise<{ success: boolean; api_key_balance_nano_usd: string; user_balance_nano_usd: string }> {
+    return this.request(`/tokens/${keyId}/transfer`, {
+      method: "POST",
+      body: JSON.stringify(input),
     });
   }
 
