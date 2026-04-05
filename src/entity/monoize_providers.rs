@@ -1,5 +1,5 @@
-use sea_orm::DeriveRelation;
 use sea_orm::entity::prelude::*;
+use sea_orm::DeriveRelation;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "monoize_providers")]
@@ -27,6 +27,7 @@ pub struct Model {
     pub request_timeout_ms_override: Option<i64>,
     #[sea_orm(column_type = "Text")]
     pub extra_fields_whitelist: Option<String>,
+    pub strip_cross_protocol_nested_extra: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub groups: String,
     pub enabled: i32,

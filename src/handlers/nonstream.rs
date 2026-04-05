@@ -27,6 +27,7 @@ pub(super) async fn execute_nonstream_typed(
     auth: &crate::auth::AuthResult,
     mut req: urp::UrpRequest,
     max_multiplier: Option<f64>,
+    downstream: DownstreamProtocol,
     request_id: Option<String>,
     request_ip: Option<String>,
 ) -> AppResult<(urp::UrpResponse, String)> {
@@ -79,7 +80,7 @@ pub(super) async fn execute_nonstream_typed(
             )
             .await?;
 
-            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
+            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(
                 attempt.provider_type,
@@ -120,7 +121,8 @@ pub(super) async fn execute_nonstream_typed(
                     )
                     .await;
                     mark_channel_success(state, &attempt).await;
-                    let mut resp = decode_response_from_provider(attempt.provider_type, &value)?;
+                    let mut resp =
+                        decode_response_from_provider(attempt.provider_type, &value, &req_attempt.model)?;
                     apply_transform_rules_response(
                         state,
                         &mut resp,
@@ -130,6 +132,11 @@ pub(super) async fn execute_nonstream_typed(
                     .await?;
                     apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
                         .await?;
+                    if attempt.provider_type == ProviderType::OpenaiImage
+                        && !matches!(downstream, DownstreamProtocol::Responses)
+                    {
+                        convert_assistant_images_to_markdown(&mut resp);
+                    }
                     let charge =
                         maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;
                     spawn_request_log(
@@ -257,8 +264,16 @@ pub(super) async fn forward_nonstream_typed(
     request_id: Option<String>,
     request_ip: Option<String>,
 ) -> AppResult<Value> {
-    let (resp, logical_model) =
-        execute_nonstream_typed(state, auth, req, max_multiplier, request_id, request_ip).await?;
+    let (resp, logical_model) = execute_nonstream_typed(
+        state,
+        auth,
+        req,
+        max_multiplier,
+        downstream,
+        request_id,
+        request_ip,
+    )
+    .await?;
     Ok(encode_response_for_downstream(
         downstream,
         &resp,
@@ -270,8 +285,14 @@ pub(super) async fn forward_nonstream_typed(
 pub(super) fn encode_request_for_provider(
     req: &mut urp::UrpRequest,
     attempt: &MonoizeAttempt,
+    downstream: DownstreamProtocol,
 ) -> AppResult<Value> {
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
+    if attempt.strip_cross_protocol_nested_extra
+        && !downstream.is_same_family(attempt.provider_type)
+    {
+        urp::strip_nested_extra_body(&mut req.inputs);
+    }
     strip_orphaned_tool_calls(req);
     let model = req.model.clone();
     let value = match attempt.provider_type {
@@ -281,6 +302,7 @@ pub(super) fn encode_request_for_provider(
         ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request(req, &model),
         ProviderType::Messages => urp::encode::anthropic::encode_request(req, &model),
         ProviderType::Gemini => urp::encode::gemini::encode_request(req, &model),
+        ProviderType::OpenaiImage => urp::encode::openai_image::encode_request(req, &model),
         ProviderType::Group => {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -296,6 +318,7 @@ pub(super) fn encode_request_for_provider(
 pub(super) fn decode_response_from_provider(
     provider_type: ProviderType,
     value: &Value,
+    model: &str,
 ) -> AppResult<urp::UrpResponse> {
     let decoded = match provider_type {
         ProviderType::Responses => {
@@ -304,6 +327,7 @@ pub(super) fn decode_response_from_provider(
         ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),
         ProviderType::Messages => urp::decode::anthropic::decode_response(value),
         ProviderType::Gemini => urp::decode::gemini::decode_response(value),
+        ProviderType::OpenaiImage => urp::decode::openai_image::decode_response(value, model),
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
     };
     decoded.map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))

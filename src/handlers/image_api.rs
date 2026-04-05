@@ -10,7 +10,6 @@ pub async fn create_image_generation(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    ensure_quota_before_forward(&state, &auth).await?;
 
     let obj = body.as_object().ok_or_else(|| {
         AppError::new(
@@ -92,7 +91,6 @@ pub async fn create_image_edit(
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     ensure_balance_before_forward(&state, &auth).await?;
-    ensure_quota_before_forward(&state, &auth).await?;
 
     let mut prompt: Option<String> = None;
     let mut model: Option<String> = None;
@@ -400,7 +398,7 @@ async fn fan_out_subrequests(
         let rip = request_ip.clone();
 
         join_set.spawn(async move {
-            execute_nonstream_typed(&state, &auth, req, max_multiplier, rid, rip).await
+            execute_nonstream_typed(&state, &auth, req, max_multiplier, super::DownstreamProtocol::Responses, rid, rip).await
         });
     }
 

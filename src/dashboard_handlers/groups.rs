@@ -116,8 +116,7 @@ mod tests {
                 crate::users::CreateApiKeyInput {
                     name: "reader key".to_string(),
                     expires_in_days: None,
-                    quota: None,
-                    quota_unlimited: true,
+                    sub_account_enabled: false,
                     model_limits_enabled: false,
                     model_limits: Vec::new(),
                     ip_whitelist: Vec::new(),
@@ -171,6 +170,7 @@ mod tests {
                 active_probe_model_override: None,
                 request_timeout_ms_override: None,
                 extra_fields_whitelist: None,
+                    strip_cross_protocol_nested_extra: None,
             })
             .await
             .expect("provider created");

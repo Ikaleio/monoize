@@ -2,6 +2,7 @@ mod billing;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
 mod nonstream;
+#[cfg(test)]
 pub(crate) use nonstream::strip_orphaned_tool_calls;
 mod request_logging;
 pub(crate) mod routing;
@@ -575,6 +576,7 @@ struct MonoizeAttempt {
     provider_attempt_limit: Option<usize>,
     request_timeout_ms: u64,
     extra_fields_whitelist: Option<Vec<String>>,
+    strip_cross_protocol_nested_extra: bool,
 }
 
 async fn maybe_sleep_before_channel_retry(attempt: &MonoizeAttempt) {
@@ -668,6 +670,17 @@ pub(crate) enum DownstreamProtocol {
     Responses,
     ChatCompletions,
     AnthropicMessages,
+}
+
+impl DownstreamProtocol {
+    pub(crate) fn is_same_family(self, upstream: ProviderType) -> bool {
+        matches!(
+            (self, upstream),
+            (Self::Responses, ProviderType::Responses)
+                | (Self::ChatCompletions, ProviderType::ChatCompletion)
+                | (Self::AnthropicMessages, ProviderType::Messages)
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize)]

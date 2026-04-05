@@ -500,3 +500,30 @@ pub fn output_items(outputs: &[Item]) -> impl Iterator<Item = &Item> {
 pub fn output_items_mut(outputs: &mut [Item]) -> impl Iterator<Item = &mut Item> {
     outputs.iter_mut()
 }
+
+pub fn strip_nested_extra_body(inputs: &mut [Item]) {
+    for item in inputs.iter_mut() {
+        match item {
+            Item::Message {
+                extra_body, parts, ..
+            } => {
+                extra_body.clear();
+                for part in parts.iter_mut() {
+                    match part {
+                        Part::Text { extra_body, .. }
+                        | Part::Image { extra_body, .. }
+                        | Part::Audio { extra_body, .. }
+                        | Part::File { extra_body, .. }
+                        | Part::Reasoning { extra_body, .. }
+                        | Part::ToolCall { extra_body, .. }
+                        | Part::Refusal { extra_body, .. }
+                        | Part::ProviderItem { extra_body, .. } => extra_body.clear(),
+                    }
+                }
+            }
+            Item::ToolResult { extra_body, .. } => {
+                extra_body.clear();
+            }
+        }
+    }
+}

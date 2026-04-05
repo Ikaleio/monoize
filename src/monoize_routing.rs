@@ -15,6 +15,7 @@ pub enum MonoizeProviderType {
     ChatCompletion,
     Messages,
     Gemini,
+    OpenaiImage,
 }
 
 impl MonoizeProviderType {
@@ -25,6 +26,7 @@ impl MonoizeProviderType {
             "chat_completion" => Some(Self::ChatCompletion),
             "messages" => Some(Self::Messages),
             "gemini" => Some(Self::Gemini),
+            "openai_image" => Some(Self::OpenaiImage),
             _ => None,
         }
     }
@@ -35,6 +37,7 @@ impl MonoizeProviderType {
             Self::ChatCompletion => "chat_completion",
             Self::Messages => "messages",
             Self::Gemini => "gemini",
+            Self::OpenaiImage => "openai_image",
         }
     }
 
@@ -44,6 +47,7 @@ impl MonoizeProviderType {
             Self::ChatCompletion => crate::config::ProviderType::ChatCompletion,
             Self::Messages => crate::config::ProviderType::Messages,
             Self::Gemini => crate::config::ProviderType::Gemini,
+            Self::OpenaiImage => crate::config::ProviderType::OpenaiImage,
         }
     }
 }
@@ -111,6 +115,8 @@ pub struct MonoizeProvider {
     #[serde(default)]
     pub extra_fields_whitelist: Option<Vec<String>>,
     #[serde(default)]
+    pub strip_cross_protocol_nested_extra: Option<bool>,
+    #[serde(default)]
     pub groups: Vec<String>,
     pub enabled: bool,
     pub priority: i32,
@@ -167,6 +173,8 @@ pub struct CreateMonoizeProviderInput {
     #[serde(default)]
     pub extra_fields_whitelist: Option<Vec<String>>,
     #[serde(default)]
+    pub strip_cross_protocol_nested_extra: Option<bool>,
+    #[serde(default)]
     pub groups: Vec<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
@@ -192,6 +200,7 @@ pub struct UpdateMonoizeProviderInput {
     pub active_probe_model_override: Option<Option<String>>,
     pub request_timeout_ms_override: Option<Option<u64>>,
     pub extra_fields_whitelist: Option<Option<Vec<String>>>,
+    pub strip_cross_protocol_nested_extra: Option<Option<bool>>,
     pub groups: Option<Vec<String>>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
@@ -216,6 +225,7 @@ pub struct MonoizeRuntimeConfig {
     pub active_method: String,
     pub active_probe_model: Option<String>,
     pub extra_fields_whitelist: HashMap<String, Vec<String>>,
+    pub strip_cross_protocol_nested_extra: bool,
 }
 
 impl Default for MonoizeRuntimeConfig {
@@ -233,6 +243,7 @@ impl Default for MonoizeRuntimeConfig {
             active_method: "completion".to_string(),
             active_probe_model: None,
             extra_fields_whitelist: HashMap::new(),
+            strip_cross_protocol_nested_extra: true,
         }
     }
 }
@@ -452,6 +463,7 @@ impl MonoizeRoutingStore {
             .extra_fields_whitelist
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
+        let strip_cross_proto = input.strip_cross_protocol_nested_extra;
 
         self.db
             .write()
@@ -463,9 +475,10 @@ impl MonoizeRoutingStore {
                         per_model_circuit_break, transforms, api_type_overrides,
                         active_probe_enabled_override, active_probe_interval_seconds_override,
                         active_probe_success_threshold_override, active_probe_model_override,
-                        request_timeout_ms_override, extra_fields_whitelist, groups,
+                        request_timeout_ms_override, extra_fields_whitelist,
+                        strip_cross_protocol_nested_extra, groups,
                         enabled, priority, created_at, updated_at
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)"#,
                 vec![
                         id.clone().into(),
                         input.name.clone().into(),
@@ -487,6 +500,7 @@ impl MonoizeRoutingStore {
                         input.active_probe_model_override.clone().into(),
                         opt_u64_to_value(input.request_timeout_ms_override),
                         extra_fields_whitelist_json.into(),
+                        opt_bool_to_value(strip_cross_proto),
                         groups_json.into(),
                         SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
                         SeaValue::Int(Some(priority)),
@@ -575,6 +589,9 @@ impl MonoizeRoutingStore {
         let extra_fields_whitelist = input
             .extra_fields_whitelist
             .unwrap_or(existing.extra_fields_whitelist.clone());
+        let strip_cross_protocol_nested_extra = input
+            .strip_cross_protocol_nested_extra
+            .unwrap_or(existing.strip_cross_protocol_nested_extra);
         let groups = canonicalize_groups(input.groups.as_deref().unwrap_or(&existing.groups));
         let enabled = input.enabled.unwrap_or(existing.enabled);
         let priority = input.priority.unwrap_or(existing.priority);
@@ -605,9 +622,10 @@ impl MonoizeRoutingStore {
                        active_probe_model_override = $13,
                        request_timeout_ms_override = $14,
                        extra_fields_whitelist = $15,
-                       groups = $16,
-                       enabled = $17, priority = $18, updated_at = $19
-                   WHERE id = $20"#,
+                       strip_cross_protocol_nested_extra = $16,
+                       groups = $17,
+                       enabled = $18, priority = $19, updated_at = $20
+                   WHERE id = $21"#,
                 vec![
                     name.into(),
                     provider_type.as_str().into(),
@@ -624,6 +642,7 @@ impl MonoizeRoutingStore {
                     active_probe_model_override.into(),
                     opt_u64_to_value(request_timeout_ms_override),
                     extra_fields_whitelist_json.into(),
+                    opt_bool_to_value(strip_cross_protocol_nested_extra),
                     groups_json.into(),
                     SeaValue::Int(Some(if enabled { 1 } else { 0 })),
                     SeaValue::Int(Some(priority)),
@@ -1010,6 +1029,10 @@ impl MonoizeRoutingStore {
             .try_get::<Option<String>>("", "extra_fields_whitelist")
             .unwrap_or(None)
             .and_then(|raw| serde_json::from_str(&raw).ok());
+        let strip_cross_protocol_nested_extra: Option<bool> = row
+            .try_get::<Option<i32>>("", "strip_cross_protocol_nested_extra")
+            .unwrap_or(None)
+            .map(|v| v != 0);
         let groups_raw: String = row
             .try_get("", "groups")
             .unwrap_or_else(|_| "[]".to_string());
@@ -1047,6 +1070,7 @@ impl MonoizeRoutingStore {
             active_probe_model_override,
             request_timeout_ms_override,
             extra_fields_whitelist,
+            strip_cross_protocol_nested_extra,
             groups,
             enabled: row
                 .try_get::<i32>("", "enabled")
@@ -1309,6 +1333,16 @@ fn build_probe_request(
             });
             (url, body, &[][..], true)
         }
+        MonoizeProviderType::OpenaiImage => {
+            let url = format!("{base}/v1/images/generations");
+            let body = serde_json::json!({
+                "model": model,
+                "prompt": "test",
+                "size": "1024x1024",
+                "n": 1,
+            });
+            (url, body, &[][..], false)
+        }
     }
 }
 
@@ -1403,6 +1437,19 @@ mod tests {
             Some(16)
         );
         assert!(gem_body.get("contents").is_some());
+
+        let (img_url, img_body, img_headers, img_google_auth) = build_probe_request(
+            "https://up.example",
+            "gpt-image-1",
+            MonoizeProviderType::OpenaiImage,
+        );
+        assert_eq!(img_url, "https://up.example/v1/images/generations");
+        assert!(!img_google_auth);
+        assert!(img_headers.is_empty());
+        assert_eq!(img_body["model"].as_str(), Some("gpt-image-1"));
+        assert_eq!(img_body["prompt"].as_str(), Some("test"));
+        assert_eq!(img_body["size"].as_str(), Some("1024x1024"));
+        assert_eq!(img_body["n"].as_u64(), Some(1));
     }
 
     #[test]
