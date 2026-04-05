@@ -57,7 +57,8 @@ pub(super) async fn forward_stream_typed(
             &auth.transforms,
             &logical_model,
             downstream,
-        ) || attempt.provider_type == ProviderType::OpenaiImage;
+        ) || attempt.provider_type == ProviderType::OpenaiImage
+            || attempt.provider_type == ProviderType::Replicate;
         let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
 
         for channel_attempt in 0..max_channel_attempts {

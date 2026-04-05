@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod gemini;
 pub mod openai_chat;
 pub mod openai_responses;
+pub mod replicate;
 
 use crate::config::ProviderType;
 use crate::error::{AppError, AppResult};
@@ -59,11 +60,16 @@ pub(crate) async fn stream_upstream_to_urp_events(
             "provider_type_not_supported",
             "openai_image does not support streaming",
         )),
-        ProviderType::Replicate => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "provider_type_not_supported",
-            "replicate uses dedicated handler, not URP streaming",
-        )),
+        ProviderType::Replicate => {
+            replicate::stream_replicate_to_urp_events(
+                urp,
+                upstream_resp,
+                tx,
+                started_at,
+                runtime_metrics,
+            )
+            .await
+        }
         ProviderType::Group => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "provider_type_not_supported",

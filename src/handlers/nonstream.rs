@@ -303,13 +303,7 @@ pub(super) fn encode_request_for_provider(
         ProviderType::Messages => urp::encode::anthropic::encode_request(req, &model),
         ProviderType::Gemini => urp::encode::gemini::encode_request(req, &model),
         ProviderType::OpenaiImage => urp::encode::openai_image::encode_request(req, &model),
-        ProviderType::Replicate => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "provider_type_not_supported",
-                "replicate uses dedicated handler, not URP pipeline",
-            ));
-        }
+        ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model),
         ProviderType::Group => {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -335,7 +329,7 @@ pub(super) fn decode_response_from_provider(
         ProviderType::Messages => urp::decode::anthropic::decode_response(value),
         ProviderType::Gemini => urp::decode::gemini::decode_response(value),
         ProviderType::OpenaiImage => urp::decode::openai_image::decode_response(value, model),
-        ProviderType::Replicate => Err("provider_type replicate uses dedicated handler".to_string()),
+        ProviderType::Replicate => urp::decode::replicate::decode_response(value),
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
     };
     decoded.map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))

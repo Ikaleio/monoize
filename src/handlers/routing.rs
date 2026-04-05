@@ -42,6 +42,16 @@ pub(super) fn upstream_path_for_model(
                 format!("/v1beta/models/{model}:generateContent")
             }
         }
+        ProviderType::Replicate => {
+            let model = model.trim();
+            if let Some(stripped) = model.strip_prefix("deployment:") {
+                format!("/v1/deployments/{stripped}/predictions")
+            } else if model.contains(':') {
+                "/v1/predictions".to_string()
+            } else {
+                format!("/v1/models/{model}/predictions")
+            }
+        }
         _ => upstream_path(provider_type).to_string(),
     }
 }
@@ -433,7 +443,7 @@ pub(super) fn provider_extra_headers(
 ) -> &'static [(&'static str, &'static str)] {
     match provider_type {
         ProviderType::Messages => &[("anthropic-version", "2023-06-01")],
-        ProviderType::Replicate => &[],
+        ProviderType::Replicate => &[("prefer", "wait=60")],
         _ => &[],
     }
 }

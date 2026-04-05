@@ -3,6 +3,7 @@ pub mod gemini;
 pub mod openai_chat;
 pub mod openai_image;
 pub mod openai_responses;
+pub mod replicate;
 
 use crate::urp::{InputDetails, OutputDetails, Part, Role, ToolChoice, Usage};
 use serde_json::{json, Map, Value};
