@@ -279,21 +279,19 @@ pub(crate) fn chat_delta_path_reasoning_summary(value: &mut Value, content: &str
 }
 
 pub(crate) fn chat_delta_path_reasoning_encrypted(value: &mut Value, content: &str) {
-    if let Some(delta) = value
+    if let Some(detail) = value
         .get_mut("choices")
         .and_then(Value::as_array_mut)
         .and_then(|arr| arr.first_mut())
         .and_then(Value::as_object_mut)
         .and_then(|choice| choice.get_mut("delta"))
         .and_then(Value::as_object_mut)
+        .and_then(|delta| delta.get_mut("reasoning_details"))
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
     {
-        delta.insert(
-            "reasoning_details".to_string(),
-            Value::Array(vec![reasoning_encrypted_detail_value(
-                Value::String(content.to_string()),
-                None,
-            )]),
-        );
+        detail.insert("data".to_string(), Value::String(content.to_string()));
     }
 }
 
@@ -632,9 +630,17 @@ pub(crate) fn chat_reasoning_delta_from_summary(summary: &str, format: Option<&s
     })
 }
 
-pub(crate) fn chat_reasoning_delta_from_encrypted(signature: &str, format: Option<&str>) -> Value {
+pub(crate) fn chat_reasoning_delta_from_encrypted(
+    signature: &str,
+    format: Option<&str>,
+    id: Option<&str>,
+) -> Value {
+    let mut detail = reasoning_encrypted_detail_value(Value::String(signature.to_string()), format);
+    if let Some(id) = id {
+        detail["id"] = Value::String(id.to_string());
+    }
     json!({
-        "reasoning_details": [reasoning_encrypted_detail_value(Value::String(signature.to_string()), format)]
+        "reasoning_details": [detail]
     })
 }
 

@@ -450,10 +450,10 @@ fn map_responses_event_to_urp_events_with_state(
             extra_body: delta_extra_body_with_phase(data_val, message_phases_by_output_index),
         }],
         "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
-            let reasoning_source = data_val
+            let (reasoning_source, reasoning_item_id) = data_val
                 .get("output_index")
                 .and_then(|v| v.as_u64())
-                .and_then(|output_index| {
+                .map(|output_index| {
                     let output_state = index_state
                         .output_state_by_index
                         .entry(output_index)
@@ -467,9 +467,13 @@ fn map_responses_event_to_urp_events_with_state(
                     } else {
                         output_state.reasoning_text_delta_seen = true;
                     }
-                    output_state.reasoning_source.clone()
-                });
-            let extra_body = split_known_fields(
+                    (
+                        output_state.reasoning_source.clone(),
+                        output_state.item_id.clone(),
+                    )
+                })
+                .unwrap_or_default();
+            let mut extra_body = split_known_fields(
                 data_val.clone(),
                 &[
                     "delta",
@@ -480,6 +484,12 @@ fn map_responses_event_to_urp_events_with_state(
                     "summary_index",
                 ],
             );
+            if let Some(id) = reasoning_item_id {
+                extra_body.insert(
+                    "reasoning_item_id".to_string(),
+                    Value::String(id),
+                );
+            }
             vec![UrpStreamEvent::Delta {
                 part_index: urp_part_index_from_delta(&data_val, index_state),
                 delta: PartDelta::Reasoning {
@@ -646,6 +656,7 @@ struct OutputItemStreamState {
     merged_item_index: Option<u32>,
     standalone_item_index: Option<u32>,
     item_type: Option<String>,
+    item_id: Option<String>,
     role: Option<Role>,
     item_extra_body: HashMap<String, Value>,
     fed_to_merger: bool,
@@ -773,6 +784,9 @@ fn map_output_item_added(
         output_state.role = Some(role);
         output_state.item_extra_body = item_extra_body.clone();
         if item_type == "reasoning" {
+            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                output_state.item_id = Some(id.to_string());
+            }
             merge_reasoning_source(
                 &mut output_state.reasoning_source,
                 reasoning_source_from_value(item),
@@ -999,6 +1013,16 @@ fn map_output_item_done(
                 .get(&output_index)
                 .map(|state| state.reasoning_summary_delta_seen)
                 .unwrap_or(false);
+            let reasoning_item_id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    index_state
+                        .output_state_by_index
+                        .get(&output_index)
+                        .and_then(|state| state.item_id.clone())
+                });
             if let Part::Reasoning {
                 content,
                 encrypted,
@@ -1022,6 +1046,13 @@ fn map_output_item_done(
                         .is_some_and(|summary| !summary.is_empty())
                     || fallback_encrypted.is_some()
                 {
+                    let mut delta_extra = HashMap::new();
+                    if let Some(id) = &reasoning_item_id {
+                        delta_extra.insert(
+                            "reasoning_item_id".to_string(),
+                            Value::String(id.clone()),
+                        );
+                    }
                     events.push(UrpStreamEvent::Delta {
                         part_index,
                         delta: PartDelta::Reasoning {
@@ -1031,7 +1062,7 @@ fn map_output_item_done(
                             source: source.clone(),
                         },
                         usage: None,
-                        extra_body: HashMap::new(),
+                        extra_body: delta_extra,
                     });
                 }
             }

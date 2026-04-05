@@ -107,12 +107,20 @@ pub(crate) async fn emit_synthetic_chat_stream(
                                     .map(|s| s.to_string())
                                     .unwrap_or_else(|| data.to_string());
                                 if !sig.is_empty() {
+                                    let reasoning_id = extra_body
+                                        .get("id")
+                                        .and_then(Value::as_str)
+                                        .filter(|id| !id.is_empty());
                                     send_chat_chunk_string(
                                         &tx,
                                         &id,
                                         created,
                                         logical_model,
-                                        chat_reasoning_delta_from_encrypted("", format),
+                                        chat_reasoning_delta_from_encrypted(
+                                            "",
+                                            format,
+                                            reasoning_id,
+                                        ),
                                         &sig,
                                         chat_delta_path_reasoning_encrypted,
                                         sse_max_frame_length,
@@ -333,6 +341,10 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             .and_then(Value::as_str)
                             .filter(|format| !format.is_empty())
                     });
+                let reasoning_id = extra_body
+                    .get("reasoning_item_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty());
                 if let Some(signature) = encrypted
                     .as_ref()
                     .and_then(Value::as_str)
@@ -343,7 +355,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         &chat_id,
                         created,
                         logical_model,
-                        chat_reasoning_delta_from_encrypted("", format),
+                        chat_reasoning_delta_from_encrypted("", format, reasoning_id),
                         signature,
                         chat_delta_path_reasoning_encrypted,
                         sse_max_frame_length,
