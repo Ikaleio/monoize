@@ -16,6 +16,7 @@ pub enum MonoizeProviderType {
     Messages,
     Gemini,
     OpenaiImage,
+    Replicate,
 }
 
 impl MonoizeProviderType {
@@ -27,6 +28,7 @@ impl MonoizeProviderType {
             "messages" => Some(Self::Messages),
             "gemini" => Some(Self::Gemini),
             "openai_image" => Some(Self::OpenaiImage),
+            "replicate" => Some(Self::Replicate),
             _ => None,
         }
     }
@@ -38,6 +40,7 @@ impl MonoizeProviderType {
             Self::Messages => "messages",
             Self::Gemini => "gemini",
             Self::OpenaiImage => "openai_image",
+            Self::Replicate => "replicate",
         }
     }
 
@@ -48,6 +51,7 @@ impl MonoizeProviderType {
             Self::Messages => crate::config::ProviderType::Messages,
             Self::Gemini => crate::config::ProviderType::Gemini,
             Self::OpenaiImage => crate::config::ProviderType::OpenaiImage,
+            Self::Replicate => crate::config::ProviderType::Replicate,
         }
     }
 }
@@ -1340,6 +1344,16 @@ fn build_probe_request(
                 "prompt": "test",
                 "size": "1024x1024",
                 "n": 1,
+            });
+            (url, body, &[][..], false)
+        }
+        MonoizeProviderType::Replicate => {
+            // Replicate providers are excluded from active probing; this is a
+            // fallback that should never be reached.
+            let url = format!("{base}/v1/predictions");
+            let body = serde_json::json!({
+                "version": model,
+                "input": {}
             });
             (url, body, &[][..], false)
         }

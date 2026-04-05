@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { Anthropic, Google, OpenAI } from '@lobehub/icons'
+import { Box } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import type {
 	ApiTypeOverride,
@@ -76,6 +77,11 @@ export const PROVIDER_TYPE_CONFIG: Record<
 		label: 'OpenAI Image',
 		path: '/v1/images/generations',
 		icon: OpenAI
+	},
+	replicate: {
+		label: 'Replicate',
+		path: '/v1/replicate/predictions',
+		icon: Box
 	}
 }
 

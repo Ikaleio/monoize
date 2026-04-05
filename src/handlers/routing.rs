@@ -23,6 +23,7 @@ pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
         ProviderType::Messages => "/v1/messages",
         ProviderType::Gemini => "/v1beta/models",
         ProviderType::OpenaiImage => "/v1/images/generations",
+        ProviderType::Replicate => "/v1/predictions",
         ProviderType::Group => "/v1/responses",
     }
 }
@@ -432,6 +433,7 @@ pub(super) fn provider_extra_headers(
 ) -> &'static [(&'static str, &'static str)] {
     match provider_type {
         ProviderType::Messages => &[("anthropic-version", "2023-06-01")],
+        ProviderType::Replicate => &[],
         _ => &[],
     }
 }

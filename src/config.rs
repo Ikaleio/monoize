@@ -26,6 +26,7 @@ pub enum ProviderType {
     Messages,
     Gemini,
     OpenaiImage,
+    Replicate,
     Group,
 }
 

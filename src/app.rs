@@ -261,6 +261,9 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 if !provider.circuit_breaker_enabled {
                     continue;
                 }
+                if provider.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
+                    continue;
+                }
                 let active_enabled = provider
                     .active_probe_enabled_override
                     .unwrap_or(rt_snap.active_enabled);
@@ -876,6 +879,27 @@ fn build_v1_router() -> Router<AppState> {
         .route(
             "/v1/images/edits",
             post(crate::handlers::image_api::create_image_edit),
+        )
+        .route(
+            "/v1/replicate/predictions",
+            get(crate::handlers::replicate_api::list_predictions)
+                .post(crate::handlers::replicate_api::create_prediction),
+        )
+        .route(
+            "/v1/replicate/predictions/{prediction_id}",
+            get(crate::handlers::replicate_api::get_prediction),
+        )
+        .route(
+            "/v1/replicate/predictions/{prediction_id}/cancel",
+            post(crate::handlers::replicate_api::cancel_prediction),
+        )
+        .route(
+            "/v1/replicate/models/{model_owner}/{model_name}/predictions",
+            post(crate::handlers::replicate_api::create_model_prediction),
+        )
+        .route(
+            "/v1/replicate/deployments/{deployment_owner}/{deployment_name}/predictions",
+            post(crate::handlers::replicate_api::create_deployment_prediction),
         )
         .layer(CorsLayer::very_permissive())
 }

@@ -59,6 +59,11 @@ pub(crate) async fn stream_upstream_to_urp_events(
             "provider_type_not_supported",
             "openai_image does not support streaming",
         )),
+        ProviderType::Replicate => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "provider_type_not_supported",
+            "replicate uses dedicated handler, not URP streaming",
+        )),
         ProviderType::Group => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "provider_type_not_supported",

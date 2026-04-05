@@ -4,6 +4,7 @@ pub(crate) mod image_api;
 mod nonstream;
 #[cfg(test)]
 pub(crate) use nonstream::strip_orphaned_tool_calls;
+pub(crate) mod replicate_api;
 mod request_logging;
 pub(crate) mod routing;
 mod streaming;

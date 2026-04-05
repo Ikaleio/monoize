@@ -12,6 +12,7 @@ pub enum ProviderType {
     Messages,
     Gemini,
     OpenaiImage,
+    Replicate,
     Group,
 }
 
@@ -24,6 +25,7 @@ impl ProviderType {
             "messages" => Some(Self::Messages),
             "gemini" => Some(Self::Gemini),
             "openai_image" => Some(Self::OpenaiImage),
+            "replicate" => Some(Self::Replicate),
             "group" => Some(Self::Group),
             _ => None,
         }
@@ -36,6 +38,7 @@ impl ProviderType {
             Self::Messages => "messages",
             Self::Gemini => "gemini",
             Self::OpenaiImage => "openai_image",
+            Self::Replicate => "replicate",
             Self::Group => "group",
         }
     }
