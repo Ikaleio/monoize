@@ -719,6 +719,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         active_probe_model_override: None,
         request_timeout_ms_override: None,
         extra_fields_whitelist: None,
+        strip_cross_protocol_nested_extra: None,
         enabled: true,
         priority: Some(-1),
     };
@@ -803,6 +804,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         active_probe_model_override: None,
         request_timeout_ms_override: None,
         extra_fields_whitelist: None,
+        strip_cross_protocol_nested_extra: None,
         enabled: true,
         priority: Some(-1),
     };
@@ -914,6 +916,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+        strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-1),
         })
@@ -1006,6 +1009,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+        strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-1),
         })

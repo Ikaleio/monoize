@@ -186,6 +186,7 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         active_probe_model_override: None,
         request_timeout_ms_override: None,
         extra_fields_whitelist: None,
+        strip_cross_protocol_nested_extra: None,
         groups: vec!["alpha".to_string(), "beta".to_string()],
         enabled: true,
         priority: 0,
@@ -507,8 +508,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
             CreateApiKeyInput {
                 name: create_body.name,
                 expires_in_days: create_body.expires_in_days,
-                quota: create_body.quota,
-                quota_unlimited: create_body.quota_unlimited,
+                sub_account_enabled: create_body.sub_account_enabled,
                 model_limits_enabled: create_body.model_limits_enabled,
                 model_limits: create_body.model_limits,
                 ip_whitelist: create_body.ip_whitelist,
@@ -527,6 +527,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         vec!["alpha".to_string(), "beta".to_string()]
     );
 
+    let (nano, usd) = super::api_keys::nano_balance_fields(&created.sub_account_balance_nano);
     let created_value = serde_json::to_value(ApiKeyCreatedResponse {
         id: created.id.clone(),
         name: created.name.clone(),
@@ -534,8 +535,9 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         key_prefix: created.key_prefix.clone(),
         created_at: created.created_at.to_rfc3339(),
         expires_at: created.expires_at.map(|date| date.to_rfc3339()),
-        quota_remaining: created.quota_remaining,
-        quota_unlimited: created.quota_unlimited,
+        sub_account_enabled: created.sub_account_enabled,
+        sub_account_balance_nano_usd: nano,
+        sub_account_balance_usd: usd,
         model_limits_enabled: created.model_limits_enabled,
         model_limits: created.model_limits.clone(),
         ip_whitelist: created.ip_whitelist.clone(),
@@ -567,8 +569,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
             UpdateApiKeyInput {
                 name: None,
                 enabled: None,
-                quota: None,
-                quota_unlimited: None,
+                sub_account_enabled: None,
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
@@ -601,6 +602,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         .expect("listed api key exists");
     assert_eq!(listed_key.allowed_groups, vec!["beta".to_string()]);
 
+    let (fnano, fusd) = super::api_keys::nano_balance_fields(&fetched.sub_account_balance_nano);
     let response_value = serde_json::to_value(ApiKeyResponse {
         id: fetched.id,
         name: fetched.name,
@@ -610,8 +612,9 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         expires_at: fetched.expires_at.map(|date| date.to_rfc3339()),
         last_used_at: fetched.last_used_at.map(|date| date.to_rfc3339()),
         enabled: fetched.enabled,
-        quota_remaining: fetched.quota_remaining,
-        quota_unlimited: fetched.quota_unlimited,
+        sub_account_enabled: fetched.sub_account_enabled,
+        sub_account_balance_nano_usd: fnano,
+        sub_account_balance_usd: fusd,
         model_limits_enabled: fetched.model_limits_enabled,
         model_limits: fetched.model_limits,
         ip_whitelist: fetched.ip_whitelist,
@@ -660,8 +663,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
             CreateApiKeyInput {
                 name: invalid_create_body.name,
                 expires_in_days: invalid_create_body.expires_in_days,
-                quota: invalid_create_body.quota,
-                quota_unlimited: invalid_create_body.quota_unlimited,
+                sub_account_enabled: invalid_create_body.sub_account_enabled,
                 model_limits_enabled: invalid_create_body.model_limits_enabled,
                 model_limits: invalid_create_body.model_limits,
                 ip_whitelist: invalid_create_body.ip_whitelist,
@@ -683,8 +685,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
             CreateApiKeyInput {
                 name: "valid key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                sub_account_enabled: false,
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
@@ -715,8 +716,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
             UpdateApiKeyInput {
                 name: None,
                 enabled: None,
-                quota: None,
-                quota_unlimited: None,
+                sub_account_enabled: None,
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
@@ -743,8 +743,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
             CreateApiKeyInput {
                 name: "open key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                sub_account_enabled: false,
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
@@ -793,8 +792,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
             CreateApiKeyInput {
                 name: create_body.name,
                 expires_in_days: create_body.expires_in_days,
-                quota: create_body.quota,
-                quota_unlimited: create_body.quota_unlimited,
+                sub_account_enabled: create_body.sub_account_enabled,
                 model_limits_enabled: create_body.model_limits_enabled,
                 model_limits: create_body.model_limits,
                 ip_whitelist: create_body.ip_whitelist,
@@ -818,8 +816,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
             UpdateApiKeyInput {
                 name: None,
                 enabled: None,
-                quota: None,
-                quota_unlimited: None,
+                sub_account_enabled: None,
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
@@ -846,8 +843,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
             CreateApiKeyInput {
                 name: "invalid redirect key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                sub_account_enabled: false,
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),

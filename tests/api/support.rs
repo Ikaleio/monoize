@@ -1982,6 +1982,7 @@ async fn create_test_provider(
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: None,
         })

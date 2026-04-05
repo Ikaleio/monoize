@@ -653,6 +653,7 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-1),
         })

@@ -27,8 +27,8 @@ fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {
         model_limits_enabled: false,
         model_limits: Vec::new(),
         ip_whitelist: Vec::new(),
-        quota_remaining: None,
-        quota_unlimited: true,
+        sub_account_enabled: false,
+        sub_account_balance_nano: "0".to_string(),
     }
 }
 
@@ -88,6 +88,7 @@ async fn seed_group_routing_provider(
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(0),
             models: std::collections::HashMap::from([(
@@ -349,6 +350,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
@@ -415,6 +417,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
@@ -601,6 +604,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         &build_test_auth(Some(Vec::new())),
         build_test_urp_request(GROUP_ROUTING_MODEL),
         None,
+        DownstreamProtocol::ChatCompletions,
         None,
         None,
     )

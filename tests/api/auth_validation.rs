@@ -369,7 +369,7 @@ async fn embeddings_encoding_format_wrong_type() {
 }
 
 #[tokio::test]
-async fn quota_exhausted_returns_429() {
+async fn sub_account_zero_balance_returns_402() {
     let ctx = setup().await;
     let user = ctx
         .state
@@ -384,10 +384,9 @@ async fn quota_exhausted_returns_429() {
         .create_api_key_extended(
             &user.id,
             monoize::users::CreateApiKeyInput {
-                name: "quota-zero-key".to_string(),
+                name: "sub-account-zero-key".to_string(),
                 expires_in_days: None,
-                quota: Some(0),
-                quota_unlimited: false,
+                sub_account_enabled: true,
                 model_limits_enabled: false,
                 model_limits: vec![],
                 ip_whitelist: Vec::new(),
@@ -400,7 +399,7 @@ async fn quota_exhausted_returns_429() {
             false,
         )
         .await
-        .expect("create quota api key");
+        .expect("create sub-account api key");
 
     let req = Request::builder()
         .method("POST")
@@ -408,14 +407,14 @@ async fn quota_exhausted_returns_429() {
         .header(CONTENT_TYPE, "application/json")
         .header(AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::from(
-            json!({"model":"gpt-5-mini","input":"quota check"}).to_string(),
+            json!({"model":"gpt-5-mini","input":"sub-account check"}).to_string(),
         ))
         .unwrap();
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
-    assert_eq!(v["error"]["code"].as_str(), Some("quota_exceeded"));
+    assert_eq!(v["error"]["code"].as_str(), Some("insufficient_balance"));
 }
 
 #[tokio::test]
@@ -436,8 +435,7 @@ async fn ip_whitelist_blocks_non_whitelisted() {
             monoize::users::CreateApiKeyInput {
                 name: "ip-restricted-key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                sub_account_enabled: false,
                 model_limits_enabled: false,
                 model_limits: vec![],
                 ip_whitelist: vec!["192.168.1.1".to_string()],

@@ -828,6 +828,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-50),
         })
@@ -967,6 +968,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-50),
         })
@@ -1106,6 +1108,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-50),
         })

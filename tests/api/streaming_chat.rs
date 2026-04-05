@@ -805,6 +805,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-1),
         })
@@ -897,6 +898,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-1),
         })

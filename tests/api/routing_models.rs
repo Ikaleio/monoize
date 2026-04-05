@@ -135,6 +135,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-10),
         })
@@ -230,6 +231,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
         active_probe_model_override: None,
         request_timeout_ms_override: None,
         extra_fields_whitelist: None,
+        strip_cross_protocol_nested_extra: None,
         enabled: true,
         priority: Some(-1),
     };
@@ -299,8 +301,7 @@ async fn models_list_respects_api_key_model_limits() {
             monoize::users::CreateApiKeyInput {
                 name: "restricted-key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                    sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string(), "grok-4".to_string()],
                 ip_whitelist: Vec::new(),
@@ -354,8 +355,7 @@ async fn models_list_model_limits_disabled_shows_all() {
             monoize::users::CreateApiKeyInput {
                 name: "disabled-limits-key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                    sub_account_enabled: false,
                 model_limits_enabled: false,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: Vec::new(),
@@ -412,8 +412,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
             monoize::users::CreateApiKeyInput {
                 name: "restricted-forward-key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                    sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
@@ -468,8 +467,7 @@ async fn forwarding_applies_api_key_model_redirects_before_model_limits_and_rout
             monoize::users::CreateApiKeyInput {
                 name: "redirected-forward-key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                    sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
@@ -526,8 +524,7 @@ async fn image_generation_applies_api_key_model_redirects_before_model_limits() 
             monoize::users::CreateApiKeyInput {
                 name: "redirected-image-key".to_string(),
                 expires_in_days: None,
-                quota: None,
-                quota_unlimited: true,
+                    sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
