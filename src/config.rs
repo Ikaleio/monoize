@@ -25,6 +25,7 @@ pub enum ProviderType {
     ChatCompletion,
     Messages,
     Gemini,
+    OpenaiImage,
     Group,
 }
 

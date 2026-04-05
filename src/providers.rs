@@ -11,6 +11,7 @@ pub enum ProviderType {
     ChatCompletion,
     Messages,
     Gemini,
+    OpenaiImage,
     Group,
 }
 
@@ -22,6 +23,7 @@ impl ProviderType {
             "chat_completion" => Some(Self::ChatCompletion),
             "messages" => Some(Self::Messages),
             "gemini" => Some(Self::Gemini),
+            "openai_image" => Some(Self::OpenaiImage),
             "group" => Some(Self::Group),
             _ => None,
         }
@@ -33,6 +35,7 @@ impl ProviderType {
             Self::ChatCompletion => "chat_completion",
             Self::Messages => "messages",
             Self::Gemini => "gemini",
+            Self::OpenaiImage => "openai_image",
             Self::Group => "group",
         }
     }

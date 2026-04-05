@@ -1,5 +1,6 @@
 use super::*;
 use crate::transforms::split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
+use crate::urp::{ImageSource, Item, Part, Role};
 
 #[allow(clippy::result_large_err)]
 pub(super) fn decode_urp_request(
@@ -503,6 +504,45 @@ pub(super) fn requires_buffered_response_stream(
         })
 }
 
+pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) {
+    for item in &mut resp.outputs {
+        let Item::Message { role, parts, .. } = item else {
+            continue;
+        };
+        if *role != Role::Assistant {
+            continue;
+        }
+        let appended: String = parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::Image { source, .. } => Some(match source {
+                    ImageSource::Url { url, .. } => format!("\n\n![image]({url})"),
+                    ImageSource::Base64 { media_type, data } => {
+                        format!("\n\n![image](data:{media_type};base64,{data})")
+                    }
+                }),
+                _ => None,
+            })
+            .collect();
+        if appended.is_empty() {
+            continue;
+        }
+        if let Some(Part::Text { content, .. }) = parts
+            .iter_mut()
+            .rev()
+            .find(|part| matches!(part, Part::Text { .. }))
+        {
+            content.push_str(&appended);
+        } else {
+            parts.push(Part::Text {
+                content: appended,
+                extra_body: std::collections::HashMap::new(),
+            });
+        }
+        parts.retain(|part| !matches!(part, Part::Image { .. }));
+    }
+}
+
 pub(super) fn model_glob_match(pattern: &str, model: &str) -> bool {
     if pattern == "*" {
         return true;
@@ -598,12 +638,26 @@ const EXTRA_WHITELIST_GEMINI: &[&str] = &[
     "labels",
 ];
 
+const EXTRA_WHITELIST_OPENAI_IMAGE: &[&str] = &[
+    "size",
+    "quality",
+    "style",
+    "response_format",
+    "n",
+    "background",
+    "output_format",
+    "output_compression",
+    "moderation",
+    "user",
+];
+
 fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static str] {
     match provider_type {
         ProviderType::ChatCompletion => EXTRA_WHITELIST_CHAT_COMPLETION,
         ProviderType::Responses => EXTRA_WHITELIST_RESPONSES,
         ProviderType::Messages => EXTRA_WHITELIST_ANTHROPIC,
         ProviderType::Gemini => EXTRA_WHITELIST_GEMINI,
+        ProviderType::OpenaiImage => EXTRA_WHITELIST_OPENAI_IMAGE,
         ProviderType::Group => &[],
     }
 }
@@ -672,6 +726,53 @@ mod tests {
             &[],
             "gpt-5-mini",
             DownstreamProtocol::AnthropicMessages,
+        ));
+    }
+
+    #[test]
+    fn converts_assistant_image_parts_to_markdown_and_removes_images() {
+        let mut resp = urp::UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-image-1".to_string(),
+            outputs: vec![urp::Item::Message {
+                role: urp::Role::Assistant,
+                parts: vec![
+                    urp::Part::Text {
+                        content: "Here you go".to_string(),
+                        extra_body: std::collections::HashMap::new(),
+                    },
+                    urp::Part::Image {
+                        source: urp::ImageSource::Base64 {
+                            media_type: "image/png".to_string(),
+                            data: "QUJD".to_string(),
+                        },
+                        extra_body: std::collections::HashMap::new(),
+                    },
+                    urp::Part::Image {
+                        source: urp::ImageSource::Url {
+                            url: "https://example.com/two.png".to_string(),
+                            detail: None,
+                        },
+                        extra_body: std::collections::HashMap::new(),
+                    },
+                ],
+                extra_body: std::collections::HashMap::new(),
+            }],
+            finish_reason: Some(urp::FinishReason::Stop),
+            usage: None,
+            extra_body: std::collections::HashMap::new(),
+        };
+
+        convert_assistant_images_to_markdown(&mut resp);
+
+        let urp::Item::Message { parts, .. } = &resp.outputs[0] else {
+            panic!("expected assistant message");
+        };
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(
+            &parts[0],
+            urp::Part::Text { content, .. }
+            if content == "Here you go\n\n![image](data:image/png;base64,QUJD)\n\n![image](https://example.com/two.png)"
         ));
     }
 }

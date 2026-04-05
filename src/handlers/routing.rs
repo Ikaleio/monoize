@@ -22,6 +22,7 @@ pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
         ProviderType::ChatCompletion => "/v1/chat/completions",
         ProviderType::Messages => "/v1/messages",
         ProviderType::Gemini => "/v1beta/models",
+        ProviderType::OpenaiImage => "/v1/images/generations",
         ProviderType::Group => "/v1/responses",
     }
 }
@@ -286,6 +287,9 @@ pub(super) async fn collect_provider_attempts(
                     &upstream_model,
                 ),
             ),
+            strip_cross_protocol_nested_extra: provider
+                .strip_cross_protocol_nested_extra
+                .unwrap_or(runtime.strip_cross_protocol_nested_extra),
         });
     }
 }

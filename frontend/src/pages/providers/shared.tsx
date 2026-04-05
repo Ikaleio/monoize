@@ -71,6 +71,11 @@ export const PROVIDER_TYPE_CONFIG: Record<
 		label: 'Gemini',
 		path: '/v1beta/models/{model}:generateContent',
 		icon: Google
+	},
+	openai_image: {
+		label: 'OpenAI Image',
+		path: '/v1/images/generations',
+		icon: OpenAI
 	}
 }
 

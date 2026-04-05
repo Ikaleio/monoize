@@ -57,7 +57,7 @@ pub(super) async fn forward_stream_typed(
             &auth.transforms,
             &logical_model,
             downstream,
-        );
+        ) || attempt.provider_type == ProviderType::OpenaiImage;
         let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
 
         for channel_attempt in 0..max_channel_attempts {
@@ -79,7 +79,7 @@ pub(super) async fn forward_stream_typed(
             if requires_buffered_stream {
                 let mut nonstream_req = req_attempt.clone();
                 nonstream_req.stream = Some(false);
-                let upstream_body = encode_request_for_provider(&mut nonstream_req, &attempt)?;
+                let upstream_body = encode_request_for_provider(&mut nonstream_req, &attempt, downstream)?;
                 let provider = build_channel_provider_config(&attempt);
                 let path =
                     upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
@@ -117,8 +117,11 @@ pub(super) async fn forward_stream_typed(
                         )
                         .await;
                         mark_channel_success(&state, &attempt).await;
-                        let mut resp =
-                            decode_response_from_provider(attempt.provider_type, &value)?;
+                        let mut resp = decode_response_from_provider(
+                            attempt.provider_type,
+                            &value,
+                            &nonstream_req.model,
+                        )?;
                         apply_transform_rules_response(
                             &state,
                             &mut resp,
@@ -133,6 +136,11 @@ pub(super) async fn forward_stream_typed(
                             &logical_model,
                         )
                         .await?;
+                        if attempt.provider_type == ProviderType::OpenaiImage
+                            && !matches!(downstream, DownstreamProtocol::Responses)
+                        {
+                            convert_assistant_images_to_markdown(&mut resp);
+                        }
                         let charge =
                             maybe_charge_response(&state, &auth, &attempt, &logical_model, &resp)
                                 .await?;
@@ -244,7 +252,7 @@ pub(super) async fn forward_stream_typed(
                 }
             }
 
-            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
+            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             log_outgoing_request_shape(

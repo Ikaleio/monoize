@@ -74,8 +74,8 @@ A provider record MUST include:
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
 
 Implementation-specific extension:
-- `provider_type: enum("responses","chat_completion","messages","gemini")` MUST be present and determines the default upstream request shape.
-- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
+- `provider_type: enum("responses","chat_completion","messages","gemini","openai_image")` MUST be present and determines the default upstream request shape.
+- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
 
 ### 2.4 API Type Resolution
 

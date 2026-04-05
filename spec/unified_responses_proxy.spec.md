@@ -20,7 +20,7 @@
 - **Downstream:** The client calling Monoize.
 - **Upstream:** A provider endpoint Monoize calls.
 - **Provider:** A configured upstream channel.
-- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, or `group`.
+- **Provider type:** One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `group`.
 - **URP-Proto request:** A Responses-create-compatible JSON request (Monoize internal).
 - **URP-Proto response:** A Responses-compatible JSON response object (Monoize internal).
 - **Item:** The fundamental unit in URP-Proto `input` and `output` sequences. An `Item` is one of two variants:

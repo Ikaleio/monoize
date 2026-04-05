@@ -39,7 +39,7 @@ DEC-5. Reasoning fields from upstream/downstream wire formats MUST decode into `
 
 ENC-1. Upstream request construction MUST encode from URP only; transforms MUST NOT access raw wire payloads.
 
-ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`.
+ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`.
 
 ENC-3. History encoding rule:
 - if a single `Part::Reasoning` carries both opaque reasoning payload (`encrypted`) and plaintext fields (`content` and/or `summary`), adapters MAY omit the plaintext fields only when the target wire format requires opaque reasoning exclusivity for that same reasoning part.
@@ -47,6 +47,14 @@ ENC-3. History encoding rule:
 - otherwise `Part::Reasoning` MAY be encoded when supported by target wire format.
 
 ENC-4. Model rewrite MUST apply provider `models[requested].redirect` when present; otherwise use requested model.
+
+ENC-5. Cross-protocol nested extra_body stripping:
+- Definition: downstream and upstream are "same protocol family" iff: (ChatCompletions, ChatCompletion), (Responses, Responses), (AnthropicMessages, Messages). All other combinations, including any involving Gemini, are cross-protocol.
+- When the downstream protocol family differs from the upstream provider type, the system MUST clear `extra_body` on all `Item` (both `Message` and `ToolResult` variants) and all `Part` variants in `UrpRequest.inputs` before encoding the upstream request. Response `extra_body` fields are never affected.
+- This behavior is controlled by a three-level toggle:
+  1. Global setting `monoize_strip_cross_protocol_nested_extra` (bool, default `true`).
+  2. Provider-level override `strip_cross_protocol_nested_extra` (`Option<bool>`).
+  3. Resolution: provider override wins when present (`Some(true)` → always strip on cross-protocol, `Some(false)` → never strip); `None` inherits the global setting.
 
 ## 3. Streaming Representation
 
@@ -100,6 +108,7 @@ TF-7. Built-ins that MUST exist:
 - `reasoning_effort_to_budget`
 - `reasoning_effort_to_model_suffix`
 - `strip_reasoning`
+- `strip_input_reasoning`
 - `system_to_developer_role`
 - `merge_consecutive_roles`
 - `inject_system_prompt`

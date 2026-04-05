@@ -54,6 +54,11 @@ pub(crate) async fn stream_upstream_to_urp_events(
             gemini::stream_gemini_to_urp_events(urp, upstream_resp, tx, started_at, runtime_metrics)
                 .await
         }
+        ProviderType::OpenaiImage => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "provider_type_not_supported",
+            "openai_image does not support streaming",
+        )),
         ProviderType::Group => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "provider_type_not_supported",

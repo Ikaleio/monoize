@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod gemini;
 pub mod openai_chat;
+pub mod openai_image;
 pub mod openai_responses;
 
 use crate::urp::{InputDetails, OutputDetails, Part, Role, ToolChoice, Usage};
