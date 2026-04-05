@@ -16,6 +16,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260326_000008_provider_extra_fields_whitelist::Migration),
             Box::new(m20260326_000009_move_groups_to_providers::Migration),
             Box::new(m20260327_000010_api_key_model_redirects::Migration),
+            Box::new(m20260328_000011_api_key_sub_account_billing::Migration),
+            Box::new(m20260402_000012_provider_strip_cross_protocol_nested_extra::Migration),
         ]
     }
 }
@@ -30,3 +32,5 @@ mod m20260323_000007_channel_group_system;
 mod m20260326_000008_provider_extra_fields_whitelist;
 mod m20260326_000009_move_groups_to_providers;
 mod m20260327_000010_api_key_model_redirects;
+mod m20260328_000011_api_key_sub_account_billing;
+mod m20260402_000012_provider_strip_cross_protocol_nested_extra;

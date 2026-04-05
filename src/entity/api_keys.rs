@@ -1,5 +1,5 @@
-use sea_orm::DeriveRelation;
 use sea_orm::entity::prelude::*;
+use sea_orm::DeriveRelation;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "api_keys")]
@@ -23,8 +23,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub last_used_at: Option<String>,
     pub enabled: i32,
-    pub quota_remaining: Option<i32>,
-    pub quota_unlimited: i32,
+    pub sub_account_enabled: i32,
+    #[sea_orm(column_type = "Text")]
+    pub sub_account_balance_nano: String,
     pub model_limits_enabled: i32,
     #[sea_orm(column_type = "Text")]
     pub model_limits: String,

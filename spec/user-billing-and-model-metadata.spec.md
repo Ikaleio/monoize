@@ -84,10 +84,12 @@ BE1. Billing applies only when the request is authenticated by database API key 
 
 BE2. Requests authenticated only by static config keys MUST NOT be billed.
 
-BE3. Before upstream forwarding, if `balance_unlimited = false` and `balance_nano_usd <= 0`, server MUST return:
+BE3. Before upstream forwarding, billing eligibility MUST be checked as follows:
 
-- HTTP `402`
-- code `insufficient_balance`
+- If the authenticated API key has `sub_account_enabled = 1`: check `sub_account_balance_nano > 0`. If not, return HTTP `402` with code `insufficient_balance`. The user's balance is NOT checked.
+- Otherwise (API key inherits user balance): if `balance_unlimited = false` and `balance_nano_usd <= 0`, server MUST return HTTP `402` with code `insufficient_balance`.
+
+BE4. The legacy `ensure_quota_before_forward` per-call quota check MUST NOT exist. Sub-account billing replaces it entirely (see `api-key-sub-account-billing.spec.md`).
 
 ## 5. Charge calculation
 
@@ -202,10 +204,10 @@ L2b. Requests that terminate as API errors (`4xx`/`5xx` error response) MUST NOT
 L3. On successful deduction, server MUST append a ledger row with:
 
 - `user_id`
-- `kind = "request_charge"`
+- `kind = "request_charge"` (user balance) or `kind = "api_key_charge"` (sub-account)
 - `delta_nano_usd` (negative value)
 - `balance_after_nano_usd`
-- `meta_json` (at minimum model, provider_id, prompt/completion/reasoning/cached tokens)
+- `meta_json` (at minimum model, provider_id, prompt/completion/reasoning/cached tokens; sub-account charges MUST also include `api_key_id`)
 
 L4. If deduction fails because resulting balance would be negative, server MUST return:
 

@@ -32,6 +32,7 @@ pub struct UpdateSettingsRequest {
     pub monoize_request_timeout_ms: Option<u64>,
     pub monoize_enable_estimated_billing: Option<bool>,
     pub monoize_extra_fields_whitelist: Option<std::collections::HashMap<String, Vec<String>>>,
+    pub monoize_strip_cross_protocol_nested_extra: Option<bool>,
 }
 
 pub async fn get_settings(
@@ -136,6 +137,9 @@ pub async fn update_settings(
     if let Some(v) = body.monoize_extra_fields_whitelist {
         settings.monoize_extra_fields_whitelist = v;
     }
+    if let Some(v) = body.monoize_strip_cross_protocol_nested_extra {
+        settings.monoize_strip_cross_protocol_nested_extra = v;
+    }
 
     settings_store
         .update_all(&settings)
@@ -161,6 +165,8 @@ pub async fn update_settings(
         rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
         rt.active_probe_model = updated.monoize_active_probe_model.clone();
         rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
+        rt.strip_cross_protocol_nested_extra =
+            updated.monoize_strip_cross_protocol_nested_extra;
     }
 
     Ok(Json(updated))

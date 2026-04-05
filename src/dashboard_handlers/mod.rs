@@ -17,8 +17,9 @@ pub use analytics_request_logs::{
 };
 pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,
-    UpdateApiKeyRequest, batch_delete_api_keys, create_api_key, delete_api_key, get_api_key,
-    get_apikey_presets, list_my_api_keys, update_api_key,
+    TransferToSubAccountRequest, UpdateApiKeyRequest, batch_delete_api_keys, create_api_key,
+    delete_api_key, get_api_key, get_apikey_presets, list_my_api_keys,
+    transfer_to_sub_account, update_api_key,
 };
 pub use auth::{
     AuthResponse, LoginRequest, RegisterRequest, UpdateMeRequest, UserResponse, get_me, login,

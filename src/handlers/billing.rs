@@ -400,7 +400,39 @@ pub(super) async fn maybe_charge_usage(
         "cache_creation_tokens": usage.input_details.as_ref().map(|d| d.cache_creation_tokens),
         "reasoning_tokens": usage.reasoning_tokens(),
         "charge_nano_usd": charge_nano.to_string(),
+        "api_key_id": auth.api_key_id,
     });
+
+    if auth.sub_account_enabled {
+        let api_key_id = auth.api_key_id.as_deref().unwrap_or("");
+        match state
+            .user_store
+            .charge_sub_account_balance_nano(api_key_id, user_id, charge_nano, &meta)
+            .await
+        {
+            Ok(()) => return Ok(ChargeComputation {
+                charge_nano_usd: Some(charge_nano),
+                billing_breakdown: Some(billing_breakdown),
+            }),
+            Err(err) => match err.kind {
+                BillingErrorKind::InsufficientBalance => return Err(AppError::new(
+                    StatusCode::PAYMENT_REQUIRED,
+                    "insufficient_balance",
+                    "insufficient balance",
+                )),
+                BillingErrorKind::NotFound => return Err(AppError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "unauthorized",
+                    "api key not found",
+                )),
+                _ => return Err(AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    err.message,
+                )),
+            },
+        }
+    }
 
     match state
         .user_store

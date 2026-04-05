@@ -16,8 +16,8 @@ pub struct AuthResult {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub quota_remaining: Option<i32>,
-    pub quota_unlimited: bool,
+    pub sub_account_enabled: bool,
+    pub sub_account_balance_nano: String,
 }
 
 #[derive(Clone)]
@@ -60,8 +60,8 @@ impl AuthState {
                             model_limits_enabled: api_key.model_limits_enabled,
                             model_limits: api_key.model_limits,
                             ip_whitelist: api_key.ip_whitelist,
-                            quota_remaining: api_key.quota_remaining,
-                            quota_unlimited: api_key.quota_unlimited,
+                            sub_account_enabled: api_key.sub_account_enabled,
+                            sub_account_balance_nano: api_key.sub_account_balance_nano,
                         });
                     }
                     Ok(None) => {}
@@ -109,8 +109,7 @@ mod tests {
                 CreateApiKeyInput {
                     name: "default key".to_string(),
                     expires_in_days: None,
-                    quota: None,
-                    quota_unlimited: true,
+                    sub_account_enabled: false,
                     model_limits_enabled: false,
                     model_limits: Vec::new(),
                     ip_whitelist: Vec::new(),
@@ -152,8 +151,7 @@ mod tests {
                 CreateApiKeyInput {
                     name: "intersection key".to_string(),
                     expires_in_days: None,
-                    quota: None,
-                    quota_unlimited: true,
+                    sub_account_enabled: false,
                     model_limits_enabled: false,
                     model_limits: Vec::new(),
                     ip_whitelist: Vec::new(),
@@ -197,8 +195,7 @@ mod tests {
                 CreateApiKeyInput {
                     name: "disjoint key".to_string(),
                     expires_in_days: None,
-                    quota: None,
-                    quota_unlimited: true,
+                    sub_account_enabled: false,
                     model_limits_enabled: false,
                     model_limits: Vec::new(),
                     ip_whitelist: Vec::new(),

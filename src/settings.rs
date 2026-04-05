@@ -29,6 +29,8 @@ pub struct SystemSettings {
     pub monoize_enable_estimated_billing: bool,
     #[serde(default)]
     pub monoize_extra_fields_whitelist: HashMap<String, Vec<String>>,
+    #[serde(default = "default_true")]
+    pub monoize_strip_cross_protocol_nested_extra: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -71,6 +73,10 @@ pub fn normalize_pricing_model_key(
     trimmed.to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_reasoning_suffix_map() -> HashMap<String, String> {
     let mut m = HashMap::new();
     m.insert("-thinking".to_string(), "high".to_string());
@@ -103,6 +109,7 @@ impl Default for SystemSettings {
             monoize_request_timeout_ms: 30000,
             monoize_enable_estimated_billing: true,
             monoize_extra_fields_whitelist: HashMap::new(),
+            monoize_strip_cross_protocol_nested_extra: true,
             updated_at: Utc::now(),
         }
     }
@@ -216,6 +223,13 @@ impl SettingsStore {
             "monoize_extra_fields_whitelist",
             &serde_json::to_string(&defaults.monoize_extra_fields_whitelist)
                 .unwrap_or_else(|_| "{}".to_string()),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_strip_cross_protocol_nested_extra",
+            &defaults
+                .monoize_strip_cross_protocol_nested_extra
+                .to_string(),
         )
         .await?;
         Ok(())

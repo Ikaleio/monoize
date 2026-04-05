@@ -2,7 +2,7 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
 use crate::transforms::TransformRuleConfig;
-use crate::users::{CreateApiKeyInput, ModelRedirectRule, UpdateApiKeyInput, canonicalize_groups};
+use crate::users::{CreateApiKeyInput, ModelRedirectRule, UpdateApiKeyInput, canonicalize_groups, format_nano_to_usd, parse_nano_usd};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -10,13 +10,17 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub(super) fn nano_balance_fields(nano_str: &str) -> (String, String) {
+    let nano = parse_nano_usd(nano_str).unwrap_or(0);
+    (nano_str.to_string(), format_nano_to_usd(nano))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateApiKeyRequest {
     pub name: String,
     pub expires_in_days: Option<i64>,
-    pub quota: Option<i32>,
-    #[serde(default = "default_quota_unlimited")]
-    pub quota_unlimited: bool,
+    #[serde(default)]
+    pub sub_account_enabled: bool,
     #[serde(default)]
     pub model_limits_enabled: bool,
     #[serde(default)]
@@ -33,10 +37,6 @@ pub struct CreateApiKeyRequest {
     pub model_redirects: Vec<ModelRedirectRule>,
 }
 
-fn default_quota_unlimited() -> bool {
-    true
-}
-
 pub(super) fn canonicalize_dashboard_api_key_allowed_groups(groups: &mut Vec<String>) {
     *groups = canonicalize_groups(groups);
 }
@@ -51,8 +51,9 @@ pub struct ApiKeyResponse {
     pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
     pub enabled: bool,
-    pub quota_remaining: Option<i32>,
-    pub quota_unlimited: bool,
+    pub sub_account_enabled: bool,
+    pub sub_account_balance_nano_usd: String,
+    pub sub_account_balance_usd: String,
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
@@ -70,8 +71,9 @@ pub struct ApiKeyCreatedResponse {
     pub key_prefix: String,
     pub created_at: String,
     pub expires_at: Option<String>,
-    pub quota_remaining: Option<i32>,
-    pub quota_unlimited: bool,
+    pub sub_account_enabled: bool,
+    pub sub_account_balance_nano_usd: String,
+    pub sub_account_balance_usd: String,
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
@@ -85,8 +87,7 @@ pub struct ApiKeyCreatedResponse {
 pub struct UpdateApiKeyRequest {
     pub name: Option<String>,
     pub enabled: Option<bool>,
-    pub quota: Option<i32>,
-    pub quota_unlimited: Option<bool>,
+    pub sub_account_enabled: Option<bool>,
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
@@ -117,24 +118,28 @@ pub async fn list_my_api_keys(
 
     let responses: Vec<ApiKeyResponse> = keys
         .into_iter()
-        .map(|k| ApiKeyResponse {
-            id: k.id,
-            name: k.name,
-            key_prefix: k.key_prefix,
-            key: k.key,
-            created_at: k.created_at.to_rfc3339(),
-            expires_at: k.expires_at.map(|d| d.to_rfc3339()),
-            last_used_at: k.last_used_at.map(|d| d.to_rfc3339()),
-            enabled: k.enabled,
-            quota_remaining: k.quota_remaining,
-            quota_unlimited: k.quota_unlimited,
-            model_limits_enabled: k.model_limits_enabled,
-            model_limits: k.model_limits,
-            ip_whitelist: k.ip_whitelist,
-            allowed_groups: k.allowed_groups,
-            max_multiplier: k.max_multiplier,
-            transforms: k.transforms,
-            model_redirects: k.model_redirects,
+        .map(|k| {
+            let (nano, usd) = nano_balance_fields(&k.sub_account_balance_nano);
+            ApiKeyResponse {
+                id: k.id,
+                name: k.name,
+                key_prefix: k.key_prefix,
+                key: k.key,
+                created_at: k.created_at.to_rfc3339(),
+                expires_at: k.expires_at.map(|d| d.to_rfc3339()),
+                last_used_at: k.last_used_at.map(|d| d.to_rfc3339()),
+                enabled: k.enabled,
+                sub_account_enabled: k.sub_account_enabled,
+                sub_account_balance_nano_usd: nano,
+                sub_account_balance_usd: usd,
+                model_limits_enabled: k.model_limits_enabled,
+                model_limits: k.model_limits,
+                ip_whitelist: k.ip_whitelist,
+                allowed_groups: k.allowed_groups,
+                max_multiplier: k.max_multiplier,
+                transforms: k.transforms,
+                model_redirects: k.model_redirects,
+            }
         })
         .collect();
 
@@ -177,8 +182,7 @@ pub async fn create_api_key(
     let input = CreateApiKeyInput {
         name: body.name,
         expires_in_days: body.expires_in_days,
-        quota: body.quota,
-        quota_unlimited: body.quota_unlimited,
+        sub_account_enabled: body.sub_account_enabled,
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
@@ -199,6 +203,7 @@ pub async fn create_api_key(
         .name_caches
         .api_keys
         .insert(api_key.id.clone(), api_key.name.clone());
+    let (nano, usd) = nano_balance_fields(&api_key.sub_account_balance_nano);
     Ok((
         StatusCode::CREATED,
         Json(ApiKeyCreatedResponse {
@@ -208,8 +213,9 @@ pub async fn create_api_key(
             key_prefix: api_key.key_prefix,
             created_at: api_key.created_at.to_rfc3339(),
             expires_at: api_key.expires_at.map(|d| d.to_rfc3339()),
-            quota_remaining: api_key.quota_remaining,
-            quota_unlimited: api_key.quota_unlimited,
+            sub_account_enabled: api_key.sub_account_enabled,
+            sub_account_balance_nano_usd: nano,
+            sub_account_balance_usd: usd,
             model_limits_enabled: api_key.model_limits_enabled,
             model_limits: api_key.model_limits,
             ip_whitelist: api_key.ip_whitelist,
@@ -277,24 +283,28 @@ pub async fn get_api_key(
         ));
     }
 
-    Ok(Json(ApiKeyResponse {
-        id: api_key.id,
-        name: api_key.name,
-        key_prefix: api_key.key_prefix,
-        key: api_key.key,
-        created_at: api_key.created_at.to_rfc3339(),
-        expires_at: api_key.expires_at.map(|d| d.to_rfc3339()),
-        last_used_at: api_key.last_used_at.map(|d| d.to_rfc3339()),
-        enabled: api_key.enabled,
-        quota_remaining: api_key.quota_remaining,
-        quota_unlimited: api_key.quota_unlimited,
-        model_limits_enabled: api_key.model_limits_enabled,
-        model_limits: api_key.model_limits,
-        ip_whitelist: api_key.ip_whitelist,
-        allowed_groups: api_key.allowed_groups,
-        max_multiplier: api_key.max_multiplier,
-        transforms: api_key.transforms,
-        model_redirects: api_key.model_redirects,
+    Ok(Json({
+        let (nano, usd) = nano_balance_fields(&api_key.sub_account_balance_nano);
+        ApiKeyResponse {
+            id: api_key.id,
+            name: api_key.name,
+            key_prefix: api_key.key_prefix,
+            key: api_key.key,
+            created_at: api_key.created_at.to_rfc3339(),
+            expires_at: api_key.expires_at.map(|d| d.to_rfc3339()),
+            last_used_at: api_key.last_used_at.map(|d| d.to_rfc3339()),
+            enabled: api_key.enabled,
+            sub_account_enabled: api_key.sub_account_enabled,
+            sub_account_balance_nano_usd: nano,
+            sub_account_balance_usd: usd,
+            model_limits_enabled: api_key.model_limits_enabled,
+            model_limits: api_key.model_limits,
+            ip_whitelist: api_key.ip_whitelist,
+            allowed_groups: api_key.allowed_groups,
+            max_multiplier: api_key.max_multiplier,
+            transforms: api_key.transforms,
+            model_redirects: api_key.model_redirects,
+        }
     }))
 }
 
@@ -328,8 +338,7 @@ pub async fn update_api_key(
     let input = UpdateApiKeyInput {
         name: body.name,
         enabled: body.enabled,
-        quota: body.quota,
-        quota_unlimited: body.quota_unlimited,
+        sub_account_enabled: body.sub_account_enabled,
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
@@ -351,6 +360,7 @@ pub async fn update_api_key(
         .name_caches
         .api_keys
         .insert(updated_key.id.clone(), updated_key.name.clone());
+    let (nano, usd) = nano_balance_fields(&updated_key.sub_account_balance_nano);
     Ok(Json(ApiKeyResponse {
         id: updated_key.id,
         name: updated_key.name,
@@ -360,8 +370,9 @@ pub async fn update_api_key(
         expires_at: updated_key.expires_at.map(|d| d.to_rfc3339()),
         last_used_at: updated_key.last_used_at.map(|d| d.to_rfc3339()),
         enabled: updated_key.enabled,
-        quota_remaining: updated_key.quota_remaining,
-        quota_unlimited: updated_key.quota_unlimited,
+        sub_account_enabled: updated_key.sub_account_enabled,
+        sub_account_balance_nano_usd: nano,
+        sub_account_balance_usd: usd,
         model_limits_enabled: updated_key.model_limits_enabled,
         model_limits: updated_key.model_limits,
         ip_whitelist: updated_key.ip_whitelist,
@@ -409,4 +420,76 @@ pub async fn batch_delete_api_keys(
 
 pub async fn get_apikey_presets() -> AppResult<impl IntoResponse> {
     Ok(Json(crate::presets::apikey_presets()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferToSubAccountRequest {
+    pub amount_nano_usd: Option<String>,
+    pub amount_usd: Option<String>,
+}
+
+pub async fn transfer_to_sub_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key_id): Path<String>,
+    Json(body): Json<TransferToSubAccountRequest>,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+
+    let amount_nano = if let Some(nano_str) = &body.amount_nano_usd {
+        parse_nano_usd(nano_str)
+            .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?
+    } else if let Some(usd_str) = &body.amount_usd {
+        crate::users::parse_usd_to_nano(usd_str)
+            .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?
+    } else {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "amount_nano_usd or amount_usd is required",
+        ));
+    };
+
+    if amount_nano <= 0 {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "transfer amount must be positive",
+        ));
+    }
+
+    let is_admin = user.role.can_manage_system();
+    let api_key = state
+        .user_store
+        .get_api_key_by_id(&key_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "API key not found"))?;
+
+    if api_key.user_id != user.id && !is_admin {
+        return Err(AppError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "API key not found",
+        ));
+    }
+
+    let (key_balance, user_balance) = state
+        .user_store
+        .transfer_to_sub_account(&key_id, &api_key.user_id, amount_nano)
+        .await
+        .map_err(|e| match e.kind {
+            crate::users::BillingErrorKind::InsufficientBalance => AppError::new(
+                StatusCode::PAYMENT_REQUIRED,
+                "insufficient_balance",
+                e.message,
+            ),
+            _ => AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.message),
+        })?;
+
+    Ok(Json(json!({
+        "success": true,
+        "api_key_balance_nano_usd": key_balance.to_string(),
+        "user_balance_nano_usd": user_balance.to_string(),
+    })))
 }

@@ -21,8 +21,9 @@ An API key row has:
 - `expires_at: RFC3339 string?`
 - `last_used_at: RFC3339 string?`
 - `enabled: boolean`
-- `quota_remaining: integer?`
-- `quota_unlimited: boolean`
+- `sub_account_enabled: boolean`
+- `sub_account_balance_nano_usd: string`
+- `sub_account_balance_usd: string` (computed)
 - `model_limits_enabled: boolean`
 - `model_limits: string[]`
 - `ip_whitelist: string[]`
@@ -73,8 +74,8 @@ All endpoints in this spec require an authenticated dashboard session.
 - **Request body:** fields:
   - `name: string`
   - `expires_in_days: integer?`
-  - `quota: integer?`
-  - `quota_unlimited: boolean` (default true)
+  - `sub_account_enabled: boolean` (default false)
+  - `sub_account_balance_nano_usd: string` (default `"0"`, admin only for non-zero initial balance)
   - `model_limits_enabled: boolean` (default false)
   - `model_limits: string[]` (default empty)
   - `ip_whitelist: string[]` (default empty)
@@ -99,8 +100,8 @@ TM-CREATE-4. After successful key creation, there is no required cache invalidat
 - **Request body:** partial update with optional fields:
   - `name`
   - `enabled`
-  - `quota`
-  - `quota_unlimited`
+  - `sub_account_enabled`
+  - `sub_account_balance_nano_usd` (admin only)
   - `model_limits_enabled`
   - `model_limits`
   - `ip_whitelist`
@@ -178,6 +179,8 @@ TM-DEL-1. A successful API key delete MUST invalidate in-memory API key cache en
 
 TM-BATCH-1. A successful batch delete MUST invalidate in-memory API key cache entries for all deleted key ids before returning the response.
 
-## 3. Runtime quota cache coherence
+## 3. Runtime sub-account cache coherence
 
-TM-Q1. Any operation that decrements `quota_remaining` for an API key MUST invalidate in-memory API key cache entries for that key id in the same process before returning.
+TM-Q1. Any operation that mutates `sub_account_balance_nano` for an API key MUST invalidate in-memory API key cache entries for that key id in the same process before returning.
+
+TM-Q2. Sub-account billing behavior is defined in `api-key-sub-account-billing.spec.md`.

@@ -223,6 +223,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         settings_snapshot.monoize_enable_estimated_billing;
     monoize_runtime.extra_fields_whitelist =
         settings_snapshot.monoize_extra_fields_whitelist.clone();
+    monoize_runtime.strip_cross_protocol_nested_extra =
+        settings_snapshot.monoize_strip_cross_protocol_nested_extra;
     let channel_health = Arc::new(Mutex::new(HashMap::new()));
     let transform_registry = Arc::new(crate::transforms::registry());
     let image_transform_cache = Arc::new(ImageTransformCache::from_env().await.map_err(|err| {

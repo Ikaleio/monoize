@@ -550,8 +550,7 @@ impl UserStore {
             CreateApiKeyInput {
                 name: name.to_string(),
                 expires_in_days: expires_at.map(|e| (e - Utc::now()).num_days()),
-                quota: None,
-                quota_unlimited: true,
+                sub_account_enabled: false,
                 model_limits_enabled: false,
                 model_limits: Vec::new(),
                 ip_whitelist: Vec::new(),
@@ -599,7 +598,7 @@ impl UserStore {
 
         self.db.write().await
             .execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects)
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)"#,
                 vec![
                     id.clone().into(),
@@ -610,8 +609,8 @@ impl UserStore {
                     key_hash.clone().into(),
                     now.to_rfc3339().into(),
                     expires_at.map(|e| e.to_rfc3339()).into(),
-                    input.quota.map(|v| SeaValue::Int(Some(v))).unwrap_or(SeaValue::Int(None)),
-                    SeaValue::Int(Some(if input.quota_unlimited { 1 } else { 0 })),
+                    SeaValue::Int(Some(if input.sub_account_enabled { 1 } else { 0 })),
+                    "0".into(),
                     SeaValue::Int(Some(if input.model_limits_enabled { 1 } else { 0 })),
                     model_limits_json.into(),
                     ip_whitelist_json.into(),
@@ -636,8 +635,8 @@ impl UserStore {
             expires_at,
             last_used_at: None,
             enabled: true,
-            quota_remaining: input.quota,
-            quota_unlimited: input.quota_unlimited,
+            sub_account_enabled: input.sub_account_enabled,
+            sub_account_balance_nano: "0".to_string(),
             model_limits_enabled: input.model_limits_enabled,
             model_limits: input.model_limits,
             ip_whitelist: input.ip_whitelist,
@@ -653,7 +652,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE key_prefix = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -669,7 +668,7 @@ impl UserStore {
     pub async fn list_user_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
                 vec![user_id.into()],
             ))
             .await
@@ -693,19 +692,6 @@ impl UserStore {
             ))
             .await
             .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    /// Decrement quota_remaining by 1 for non-unlimited API keys.
-    pub async fn decrement_api_key_quota(&self, api_key_id: &str) -> Result<(), String> {
-        self.db.write().await
-            .execute(self.db.stmt(
-                "UPDATE api_keys SET quota_remaining = quota_remaining - 1 WHERE id = $1 AND quota_unlimited = 0 AND quota_remaining IS NOT NULL",
-                vec![api_key_id.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        self.api_key_cache.invalidate_by_key_id(api_key_id);
         Ok(())
     }
 
@@ -846,8 +832,10 @@ impl UserStore {
             .transpose()
             .map_err(|e| e.to_string())?;
 
-        let quota_remaining: Option<i32> = row.try_get("", "quota_remaining").unwrap_or(None);
-        let quota_unlimited: i32 = row.try_get("", "quota_unlimited").unwrap_or(1);
+        let sub_account_enabled: i32 = row.try_get("", "sub_account_enabled").unwrap_or(0);
+        let sub_account_balance_nano: String = row
+            .try_get("", "sub_account_balance_nano")
+            .unwrap_or_else(|_| "0".to_string());
         let model_limits_enabled: i32 = row.try_get("", "model_limits_enabled").unwrap_or(0);
 
         let model_limits_str: String = row
@@ -902,8 +890,8 @@ impl UserStore {
                 .try_get::<i32>("", "enabled")
                 .map_err(|e| e.to_string())?
                 == 1,
-            quota_remaining,
-            quota_unlimited: quota_unlimited == 1,
+            sub_account_enabled: sub_account_enabled == 1,
+            sub_account_balance_nano,
             model_limits_enabled: model_limits_enabled == 1,
             model_limits,
             ip_whitelist,
@@ -950,14 +938,62 @@ impl UserStore {
             values.push(SeaValue::Int(Some(if enabled { 1 } else { 0 })));
             idx += 1;
         }
-        if let Some(quota) = input.quota {
-            set_clauses.push(format!("quota_remaining = ${idx}"));
-            values.push(SeaValue::Int(Some(quota)));
-            idx += 1;
-        }
-        if let Some(quota_unlimited) = input.quota_unlimited {
-            set_clauses.push(format!("quota_unlimited = ${idx}"));
-            values.push(SeaValue::Int(Some(if quota_unlimited { 1 } else { 0 })));
+        if let Some(sub_account_enabled) = input.sub_account_enabled {
+            if !sub_account_enabled && existing_key.sub_account_enabled {
+                let balance = parse_nano_usd(&existing_key.sub_account_balance_nano)
+                    .map_err(|e| format!("invalid sub_account_balance_nano: {e}"))?;
+                if balance > 0 {
+                    let user = self
+                        .get_user_by_id(&existing_key.user_id)
+                        .await?
+                        .ok_or_else(|| "user not found".to_string())?;
+                    if !user.balance_unlimited {
+                        let _write_guard = self.db.write().await;
+                        let tx = _write_guard
+                            .begin()
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        tx.execute(self.db.stmt(
+                            "UPDATE api_keys SET sub_account_balance_nano = '0' WHERE id = $1",
+                            vec![key_id.into()],
+                        ))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        tx.execute(self.db.stmt(
+                            "UPDATE users SET balance_nano_usd = CAST(CAST(balance_nano_usd AS BIGINT) + $1 AS TEXT) WHERE id = $2",
+                            vec![balance.to_string().into(), existing_key.user_id.clone().into()],
+                        ))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        let now = Utc::now().to_rfc3339();
+                        self.insert_billing_ledger_tx(
+                            &tx,
+                            &existing_key.user_id,
+                            "sub_account_refund",
+                            balance,
+                            None,
+                            &serde_json::json!({ "api_key_id": key_id }),
+                            &now,
+                        )
+                        .await
+                        .map_err(|e| e.message)?;
+                        tx.commit().await.map_err(|e| e.to_string())?;
+                        self.balance_cache.invalidate(&existing_key.user_id);
+                    } else {
+                        self.db
+                            .write()
+                            .await
+                            .execute(self.db.stmt(
+                                "UPDATE api_keys SET sub_account_balance_nano = '0' WHERE id = $1",
+                                vec![key_id.into()],
+                            ))
+                            .await
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+            set_clauses.push(format!("sub_account_enabled = ${idx}"));
+            values.push(SeaValue::Int(Some(if sub_account_enabled { 1 } else { 0 })));
             idx += 1;
         }
         if let Some(model_limits_enabled) = input.model_limits_enabled {
@@ -1057,7 +1093,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, quota_remaining, quota_unlimited, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE id = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects FROM api_keys WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -1323,6 +1359,219 @@ impl UserStore {
 
         tx.commit().await.map_err(|e| e.to_string())?;
         self.balance_cache.invalidate(user_id);
+        Ok(())
+    }
+
+    pub async fn charge_sub_account_balance_nano(
+        &self,
+        api_key_id: &str,
+        user_id: &str,
+        amount_nano_usd: i128,
+        meta: &Value,
+    ) -> Result<(), BillingError> {
+        if amount_nano_usd <= 0 {
+            return Ok(());
+        }
+        let _write_guard = self.db.write().await;
+        let tx = _write_guard
+            .begin()
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+
+        let select_sql =
+            "SELECT sub_account_balance_nano FROM api_keys WHERE id = $1";
+        let row = tx
+            .query_one(self.db.stmt(select_sql, vec![api_key_id.into()]))
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        let Some(row) = row else {
+            return Err(BillingError::new(
+                BillingErrorKind::NotFound,
+                "api key not found",
+            ));
+        };
+
+        let balance_raw: String = row
+            .try_get("", "sub_account_balance_nano")
+            .unwrap_or_else(|_| "0".to_string());
+        let balance = parse_nano_usd(&balance_raw)
+            .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
+        let next_balance = balance.checked_sub(amount_nano_usd).ok_or_else(|| {
+            BillingError::new(BillingErrorKind::Overflow, "sub-account balance subtraction overflow")
+        })?;
+        if next_balance < 0 {
+            return Err(BillingError::new(
+                BillingErrorKind::InsufficientBalance,
+                "insufficient balance",
+            ));
+        }
+
+        let now = Utc::now().to_rfc3339();
+        tx.execute(self.db.stmt(
+            "UPDATE api_keys SET sub_account_balance_nano = $1 WHERE id = $2",
+            vec![next_balance.to_string().into(), api_key_id.into()],
+        ))
+        .await
+        .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+
+        self.insert_billing_ledger_tx(
+            &tx,
+            user_id,
+            "api_key_charge",
+            -amount_nano_usd,
+            Some(next_balance),
+            meta,
+            &now,
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        self.api_key_cache.invalidate_by_key_id(api_key_id);
+        Ok(())
+    }
+
+    pub async fn transfer_to_sub_account(
+        &self,
+        api_key_id: &str,
+        user_id: &str,
+        amount_nano_usd: i128,
+    ) -> Result<(i128, i128), BillingError> {
+        if amount_nano_usd <= 0 {
+            return Err(BillingError::new(
+                BillingErrorKind::Internal,
+                "transfer amount must be positive",
+            ));
+        }
+
+        let _write_guard = self.db.write().await;
+        let tx = _write_guard
+            .begin()
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+
+        let key_row = tx
+            .query_one(self.db.stmt(
+                "SELECT sub_account_enabled, sub_account_balance_nano FROM api_keys WHERE id = $1",
+                vec![api_key_id.into()],
+            ))
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        let Some(key_row) = key_row else {
+            return Err(BillingError::new(BillingErrorKind::NotFound, "api key not found"));
+        };
+        let sub_enabled: i32 = key_row.try_get("", "sub_account_enabled").unwrap_or(0);
+        if sub_enabled != 1 {
+            return Err(BillingError::new(
+                BillingErrorKind::Internal,
+                "sub-account not enabled on this key",
+            ));
+        }
+
+        let user_row = tx
+            .query_one(self.db.stmt(
+                "SELECT balance_nano_usd, balance_unlimited FROM users WHERE id = $1",
+                vec![user_id.into()],
+            ))
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        let Some(user_row) = user_row else {
+            return Err(BillingError::new(BillingErrorKind::NotFound, "user not found"));
+        };
+        let user_unlimited = user_row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1;
+        let user_balance_raw: String = user_row
+            .try_get("", "balance_nano_usd")
+            .unwrap_or_else(|_| "0".to_string());
+        let user_balance = parse_nano_usd(&user_balance_raw)
+            .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
+
+        let new_user_balance = if user_unlimited {
+            user_balance
+        } else {
+            let next = user_balance.checked_sub(amount_nano_usd).ok_or_else(|| {
+                BillingError::new(BillingErrorKind::Overflow, "user balance overflow")
+            })?;
+            if next < 0 {
+                return Err(BillingError::new(
+                    BillingErrorKind::InsufficientBalance,
+                    "insufficient balance for transfer",
+                ));
+            }
+            tx.execute(self.db.stmt(
+                "UPDATE users SET balance_nano_usd = $1 WHERE id = $2",
+                vec![next.to_string().into(), user_id.into()],
+            ))
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+            next
+        };
+
+        let key_balance_raw: String = key_row
+            .try_get("", "sub_account_balance_nano")
+            .unwrap_or_else(|_| "0".to_string());
+        let key_balance = parse_nano_usd(&key_balance_raw)
+            .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
+        let new_key_balance = key_balance.checked_add(amount_nano_usd).ok_or_else(|| {
+            BillingError::new(BillingErrorKind::Overflow, "sub-account balance overflow")
+        })?;
+
+        tx.execute(self.db.stmt(
+            "UPDATE api_keys SET sub_account_balance_nano = $1 WHERE id = $2",
+            vec![new_key_balance.to_string().into(), api_key_id.into()],
+        ))
+        .await
+        .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+
+        let now = Utc::now().to_rfc3339();
+        if !user_unlimited {
+            self.insert_billing_ledger_tx(
+                &tx,
+                user_id,
+                "sub_account_transfer_out",
+                -amount_nano_usd,
+                Some(new_user_balance),
+                &serde_json::json!({ "api_key_id": api_key_id }),
+                &now,
+            )
+            .await?;
+        }
+        self.insert_billing_ledger_tx(
+            &tx,
+            user_id,
+            "sub_account_transfer_in",
+            amount_nano_usd,
+            Some(new_key_balance),
+            &serde_json::json!({ "api_key_id": api_key_id }),
+            &now,
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
+        self.balance_cache.invalidate(user_id);
+        self.api_key_cache.invalidate_by_key_id(api_key_id);
+        Ok((new_key_balance, new_user_balance))
+    }
+
+    pub async fn ensure_sub_account_can_spend(
+        &self,
+        api_key_id: &str,
+    ) -> Result<(), BillingError> {
+        let key = self
+            .get_api_key_by_id(api_key_id)
+            .await
+            .map_err(|e| BillingError::new(BillingErrorKind::Internal, e))?
+            .ok_or_else(|| BillingError::new(BillingErrorKind::NotFound, "api key not found"))?;
+        let balance = parse_nano_usd(&key.sub_account_balance_nano)
+            .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
+        if balance <= 0 {
+            return Err(BillingError::new(
+                BillingErrorKind::InsufficientBalance,
+                "insufficient balance",
+            ));
+        }
         Ok(())
     }
 

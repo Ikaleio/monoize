@@ -138,12 +138,10 @@ pub struct ApiKey {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_used_at: Option<DateTime<Utc>>,
     pub enabled: bool,
-    /// Remaining quota in credits. None means quota_unlimited applies.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quota_remaining: Option<i32>,
-    /// Whether quota is unlimited
     #[serde(default)]
-    pub quota_unlimited: bool,
+    pub sub_account_enabled: bool,
+    #[serde(default)]
+    pub sub_account_balance_nano: String,
     /// Whether model restrictions are active
     #[serde(default)]
     pub model_limits_enabled: bool,
@@ -170,9 +168,8 @@ pub struct ApiKey {
 pub struct CreateApiKeyInput {
     pub name: String,
     pub expires_in_days: Option<i64>,
-    pub quota: Option<i32>,
-    #[serde(default = "default_quota_unlimited")]
-    pub quota_unlimited: bool,
+    #[serde(default)]
+    pub sub_account_enabled: bool,
     #[serde(default)]
     pub model_limits_enabled: bool,
     #[serde(default)]
@@ -187,10 +184,6 @@ pub struct CreateApiKeyInput {
     pub transforms: Vec<TransformRuleConfig>,
     #[serde(default)]
     pub model_redirects: Vec<ModelRedirectRule>,
-}
-
-fn default_quota_unlimited() -> bool {
-    true
 }
 
 pub fn validate_model_redirects(rules: &[ModelRedirectRule]) -> Result<(), String> {
@@ -296,8 +289,7 @@ pub fn is_channel_group_eligible(
 pub struct UpdateApiKeyInput {
     pub name: Option<String>,
     pub enabled: Option<bool>,
-    pub quota: Option<i32>,
-    pub quota_unlimited: Option<bool>,
+    pub sub_account_enabled: Option<bool>,
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
