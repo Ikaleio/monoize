@@ -96,6 +96,7 @@ pub async fn create_image_edit(
     let mut model: Option<String> = None;
     let mut n_raw: Option<String> = None;
     let mut image_data: Option<(String, String)> = None;
+    let mut extra_images: Vec<(String, String)> = Vec::new();
     let mut mask_data: Option<(String, String)> = None;
     let mut max_multiplier_raw: Option<String> = None;
     let mut extra_text_fields: HashMap<String, Value> = HashMap::new();
@@ -127,7 +128,7 @@ pub async fn create_image_edit(
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
                 })?);
             }
-            "image" => {
+            "image" | "image[]" => {
                 let media_type = field
                     .content_type()
                     .map(|s| s.to_string())
@@ -136,7 +137,11 @@ pub async fn create_image_edit(
                     AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e.to_string())
                 })?;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                image_data = Some((media_type, b64));
+                if image_data.is_none() {
+                    image_data = Some((media_type, b64));
+                } else {
+                    extra_images.push((media_type, b64));
+                }
             }
             "mask" => {
                 let media_type = field
@@ -213,6 +218,15 @@ pub async fn create_image_edit(
         },
         extra_body: HashMap::new(),
     });
+    for (extra_media_type, extra_b64) in extra_images {
+        parts.push(urp::Part::Image {
+            source: urp::ImageSource::Base64 {
+                media_type: extra_media_type,
+                data: extra_b64,
+            },
+            extra_body: HashMap::new(),
+        });
+    }
     if let Some((mask_media_type, mask_b64)) = mask_data {
         parts.push(urp::Part::Image {
             source: urp::ImageSource::Base64 {
@@ -417,6 +431,27 @@ async fn fan_out_subrequests(
 }
 
 /// Represents one extracted image from a URP response.
+fn collect_response_text(resp: &urp::UrpResponse) -> String {
+    let mut parts = Vec::new();
+    for item in &resp.outputs {
+        let urp::Item::Message { parts: msg_parts, .. } = item else {
+            continue;
+        };
+        for part in msg_parts {
+            match part {
+                urp::Part::Text { content, .. } if !content.trim().is_empty() => {
+                    parts.push(content.as_str());
+                }
+                urp::Part::Refusal { content, .. } if !content.trim().is_empty() => {
+                    parts.push(content.as_str());
+                }
+                _ => {}
+            }
+        }
+    }
+    parts.join("\n")
+}
+
 struct ExtractedImage {
     b64_json: Option<String>,
     url: Option<String>,
@@ -484,10 +519,18 @@ fn assemble_image_response(
             Ok((resp, _logical_model)) => {
                 let images = extract_images_from_response(&resp);
                 if images.is_empty() {
+                    let upstream_text = collect_response_text(&resp);
+                    let detail = if upstream_text.is_empty() {
+                        "upstream response contained no images".to_string()
+                    } else {
+                        format!(
+                            "upstream response contained no images. upstream output: {upstream_text}"
+                        )
+                    };
                     last_error = Some(AppError::new(
                         StatusCode::BAD_GATEWAY,
                         "upstream_error",
-                        "upstream response contained no images",
+                        detail,
                     ));
                     continue;
                 }
