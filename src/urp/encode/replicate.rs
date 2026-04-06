@@ -7,7 +7,7 @@ use serde_json::{json, Map, Value};
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut input = Map::new();
     let mut prompt_parts: Vec<String> = Vec::new();
-    let mut image_count: usize = 0;
+    let mut images: Vec<Value> = Vec::new();
 
     for item in &req.inputs {
         match item {
@@ -33,10 +33,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                                 prompt_parts.push(content.clone());
                             }
                             Part::Image { source, .. } => {
-                                let image_value = image_source_to_value(source);
-                                let field = image_field_name(image_count);
-                                input.insert(field, image_value);
-                                image_count += 1;
+                                images.push(image_source_to_value(source));
                             }
                             Part::File { source, .. } => {
                                 let url = match source {
@@ -82,6 +79,27 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 
     if !prompt_parts.is_empty() {
         input.insert("prompt".to_string(), Value::String(prompt_parts.join("\n")));
+    }
+
+    if !images.is_empty() {
+        let arr = Value::Array(images.clone());
+        if images.len() == 1 {
+            input
+                .entry("image".to_string())
+                .or_insert_with(|| images[0].clone());
+            input
+                .entry("input_image".to_string())
+                .or_insert_with(|| images[0].clone());
+        }
+        input
+            .entry("image_input".to_string())
+            .or_insert_with(|| arr.clone());
+        input
+            .entry("input_images".to_string())
+            .or_insert_with(|| arr.clone());
+        input
+            .entry("reference_images".to_string())
+            .or_insert_with(|| arr);
     }
 
     if let Some(max_tokens) = req.max_output_tokens {
@@ -158,15 +176,6 @@ fn image_source_to_value(source: &ImageSource) -> Value {
         ImageSource::Base64 { media_type, data } => {
             Value::String(format!("data:{media_type};base64,{data}"))
         }
-    }
-}
-
-/// First image → "image", second → "mask", subsequent → "image_2", "image_3", …
-fn image_field_name(index: usize) -> String {
-    match index {
-        0 => "image".to_string(),
-        1 => "mask".to_string(),
-        n => format!("image_{n}"),
     }
 }
 
