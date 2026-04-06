@@ -658,7 +658,10 @@ fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static st
         ProviderType::Messages => EXTRA_WHITELIST_ANTHROPIC,
         ProviderType::Gemini => EXTRA_WHITELIST_GEMINI,
         ProviderType::OpenaiImage => EXTRA_WHITELIST_OPENAI_IMAGE,
-        ProviderType::Replicate | ProviderType::Group => &[],
+        ProviderType::Group => &[],
+        // Replicate model input schemas are model-specific; whitelist is
+        // handled inside the encoder by routing fields into `input`.
+        ProviderType::Replicate => &["*"],
     }
 }
 
@@ -678,6 +681,10 @@ pub(super) fn filter_extra_body_for_provider(
     }
 
     let defaults = default_extra_whitelist(provider_type);
+    if defaults.contains(&"*") {
+        return;
+    }
+
     let override_set: HashSet<&str> = provider_override
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect())

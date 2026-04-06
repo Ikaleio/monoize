@@ -7,6 +7,7 @@ use serde_json::{json, Map, Value};
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut input = Map::new();
     let mut prompt_parts: Vec<String> = Vec::new();
+    let mut image_count: usize = 0;
 
     for item in &req.inputs {
         match item {
@@ -31,15 +32,12 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                             Part::Text { content, .. } => {
                                 prompt_parts.push(content.clone());
                             }
-                            Part::Image { source, .. } => match source {
-                                ImageSource::Url { url, .. } => {
-                                    input.insert("image".to_string(), Value::String(url.clone()));
-                                }
-                                ImageSource::Base64 { media_type, data } => {
-                                    let data_url = format!("data:{media_type};base64,{data}");
-                                    input.insert("image".to_string(), Value::String(data_url));
-                                }
-                            },
+                            Part::Image { source, .. } => {
+                                let image_value = image_source_to_value(source);
+                                let field = image_field_name(image_count);
+                                input.insert(field, image_value);
+                                image_count += 1;
+                            }
                             Part::File { source, .. } => {
                                 let url = match source {
                                     crate::urp::FileSource::Url { url } => url.clone(),
@@ -97,6 +95,32 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         input.insert("top_p".to_string(), Value::from(top_p));
     }
 
+    // extra_body fields that are objects named "input" merge into the input map;
+    // all other extra_body fields also go into input (Replicate model params are
+    // model-specific and live inside the input object).
+    for (k, v) in &req.extra_body {
+        match k.as_str() {
+            "model"
+            | "max_multiplier"
+            | "stream"
+            | "version"
+            | "webhook"
+            | "webhook_events_filter" => {
+                // these are top-level Replicate fields, not input fields
+            }
+            "input" => {
+                if let Some(obj) = v.as_object() {
+                    for (ik, iv) in obj {
+                        input.entry(ik.clone()).or_insert_with(|| iv.clone());
+                    }
+                }
+            }
+            _ => {
+                input.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+    }
+
     let mut body = Map::new();
 
     if upstream_model.contains(':') && !upstream_model.starts_with("deployment:") {
@@ -112,11 +136,38 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         body.insert("stream".to_string(), Value::Bool(true));
     }
 
-    merge_extra(&mut body, &req.extra_body);
+    // Only merge top-level Replicate fields from extra_body
+    for (k, v) in &req.extra_body {
+        match k.as_str() {
+            "webhook" | "webhook_events_filter" => {
+                body.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            _ => {}
+        }
+    }
+
     body.remove("model");
     body.remove("max_multiplier");
 
     Value::Object(body)
+}
+
+fn image_source_to_value(source: &ImageSource) -> Value {
+    match source {
+        ImageSource::Url { url, .. } => Value::String(url.clone()),
+        ImageSource::Base64 { media_type, data } => {
+            Value::String(format!("data:{media_type};base64,{data}"))
+        }
+    }
+}
+
+/// First image → "image", second → "mask", subsequent → "image_2", "image_3", …
+fn image_field_name(index: usize) -> String {
+    match index {
+        0 => "image".to_string(),
+        1 => "mask".to_string(),
+        n => format!("image_{n}"),
+    }
 }
 
 fn collect_text(parts: &[Part]) -> String {
