@@ -14,6 +14,7 @@ pub mod auto_cache_system;
 pub mod auto_cache_tool_use;
 pub mod auto_cache_user_id;
 pub mod compress_user_message_images;
+pub mod developer_to_system_role;
 pub mod force_stream;
 pub mod inject_system_prompt;
 pub mod merge_consecutive_roles;
@@ -171,6 +172,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(auto_cache_tool_use::AutoCacheToolUseTransform),
         Box::new(auto_cache_user_id::AutoCacheUserIdTransform),
         Box::new(compress_user_message_images::CompressUserMessageImagesTransform),
+        Box::new(developer_to_system_role::DeveloperToSystemRoleTransform),
         Box::new(resolve_image_urls::ResolveImageUrlsTransform),
     ]
 }
@@ -328,6 +330,16 @@ pub fn move_system_to_developer(items: &mut [Item]) {
         if let Item::Message { role, .. } = item {
             if *role == Role::System {
                 *role = Role::Developer;
+            }
+        }
+    }
+}
+
+pub fn move_developer_to_system(items: &mut [Item]) {
+    for item in items.iter_mut() {
+        if let Item::Message { role, .. } = item {
+            if *role == Role::Developer {
+                *role = Role::System;
             }
         }
     }

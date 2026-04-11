@@ -110,6 +110,7 @@ TF-7. Built-ins that MUST exist:
 - `strip_reasoning`
 - `strip_input_reasoning`
 - `system_to_developer_role`
+- `developer_to_system_role`
 - `merge_consecutive_roles`
 - `inject_system_prompt`
 - `override_max_tokens`
