@@ -50,7 +50,7 @@ ENC-4. Model rewrite MUST apply provider `models[requested].redirect` when prese
 
 ENC-5. Cross-protocol nested extra_body stripping:
 - Definition: downstream and upstream are "same protocol family" iff: (ChatCompletions, ChatCompletion), (Responses, Responses), (AnthropicMessages, Messages). All other combinations, including any involving Gemini, are cross-protocol.
-- When the downstream protocol family differs from the upstream provider type, the system MUST clear `extra_body` on all `Item` (both `Message` and `ToolResult` variants) and all `Part` variants in `UrpRequest.inputs` before encoding the upstream request. Response `extra_body` fields are never affected.
+- When the downstream protocol family differs from the upstream provider type, the system MUST clear `extra_body` on all `Item` (both `Message` and `ToolResult` variants) and all `Part` variants in `UrpRequest.inputs` **before** provider request-phase transforms execute (PIPE-1 step 6). This ensures that downstream-protocol-specific fields do not leak to a different upstream protocol, while allowing provider transforms (e.g. auto-cache transforms) to inject upstream-protocol-specific `extra_body` entries after stripping.
 - This behavior is controlled by a three-level toggle:
   1. Global setting `monoize_strip_cross_protocol_nested_extra` (bool, default `true`).
   2. Provider-level override `strip_cross_protocol_nested_extra` (`Option<bool>`).

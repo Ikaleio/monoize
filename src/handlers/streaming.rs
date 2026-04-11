@@ -69,6 +69,11 @@ pub(super) async fn forward_stream_typed(
             let attempt_number = execution_state.record_upstream_attempt();
             let mut req_attempt = req.clone();
             req_attempt.model = attempt.upstream_model.clone();
+            if attempt.strip_cross_protocol_nested_extra
+                && !downstream.is_same_family(attempt.provider_type)
+            {
+                urp::strip_nested_extra_body(&mut req_attempt.inputs);
+            }
             apply_transform_rules_request(
                 &state,
                 &mut req_attempt,
@@ -80,7 +85,7 @@ pub(super) async fn forward_stream_typed(
             if requires_buffered_stream {
                 let mut nonstream_req = req_attempt.clone();
                 nonstream_req.stream = Some(false);
-                let upstream_body = encode_request_for_provider(&mut nonstream_req, &attempt, downstream)?;
+                let upstream_body = encode_request_for_provider(&mut nonstream_req, &attempt)?;
                 let provider = build_channel_provider_config(&attempt);
                 let path =
                     upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
@@ -253,7 +258,7 @@ pub(super) async fn forward_stream_typed(
                 }
             }
 
-            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
+            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             log_outgoing_request_shape(

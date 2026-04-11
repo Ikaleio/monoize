@@ -72,6 +72,11 @@ pub(super) async fn execute_nonstream_typed(
             let attempt_number = execution_state.record_upstream_attempt();
             let mut req_attempt = req.clone();
             req_attempt.model = attempt.upstream_model.clone();
+            if attempt.strip_cross_protocol_nested_extra
+                && !downstream.is_same_family(attempt.provider_type)
+            {
+                urp::strip_nested_extra_body(&mut req_attempt.inputs);
+            }
             apply_transform_rules_request(
                 state,
                 &mut req_attempt,
@@ -80,7 +85,7 @@ pub(super) async fn execute_nonstream_typed(
             )
             .await?;
 
-            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
+            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(
                 attempt.provider_type,
@@ -285,14 +290,8 @@ pub(super) async fn forward_nonstream_typed(
 pub(super) fn encode_request_for_provider(
     req: &mut urp::UrpRequest,
     attempt: &MonoizeAttempt,
-    downstream: DownstreamProtocol,
 ) -> AppResult<Value> {
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
-    if attempt.strip_cross_protocol_nested_extra
-        && !downstream.is_same_family(attempt.provider_type)
-    {
-        urp::strip_nested_extra_body(&mut req.inputs);
-    }
     strip_orphaned_tool_calls(req);
     let model = req.model.clone();
     let value = match attempt.provider_type {
