@@ -3,18 +3,41 @@ use crate::urp::encode::{
     usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse,
+    nodes_to_items, FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role,
+    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 #[derive(Clone)]
 struct PendingResponsesMessageItem {
+    id: Option<String>,
     role: Role,
     phase: Option<String>,
     content: Vec<Value>,
     extra_body: HashMap<String, Value>,
+}
+
+fn normalize_openai_message_id(id: Option<&str>) -> String {
+    match id {
+        Some(existing) if existing.starts_with("msg_") => existing.to_string(),
+        _ => format!("msg_{}", uuid::Uuid::new_v4().simple()),
+    }
+}
+
+fn normalize_openai_function_call_item_id(id: Option<&str>) -> String {
+    match id {
+        Some(existing) if existing.starts_with("fc_") => existing.to_string(),
+        _ => format!("fc_{}", uuid::Uuid::new_v4().simple()),
+    }
+}
+
+fn normalize_openai_function_output_id(id: Option<&str>) -> String {
+    match id {
+        Some(existing) if existing.starts_with("fco_") => existing.to_string(),
+        Some(existing) if existing.starts_with("fc_") => existing.replacen("fc_", "fco_", 1),
+        _ => format!("fco_{}", uuid::Uuid::new_v4().simple()),
+    }
 }
 
 fn text_part_phase(part: &Part) -> Option<&str> {
@@ -29,6 +52,7 @@ fn can_use_responses_instructions(item: &Item) -> bool {
         role,
         parts,
         extra_body,
+        ..
     } = item
     else {
         return false;
@@ -63,7 +87,7 @@ fn flush_pending_message_item(
     obj.insert("type".to_string(), Value::String("message".to_string()));
     obj.insert(
         "id".to_string(),
-        Value::String(format!("msg_{}", uuid::Uuid::new_v4().simple())),
+        Value::String(normalize_openai_message_id(pending_item.id.as_deref())),
     );
     obj.insert("status".to_string(), Value::String("completed".to_string()));
     obj.insert(
@@ -97,6 +121,10 @@ fn append_content_part_to_pending(
     }
 
     let entry = pending.get_or_insert_with(|| PendingResponsesMessageItem {
+        id: message_extra
+            .get("id")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string()),
         role,
         phase: phase_owned,
         content: Vec::new(),
@@ -169,6 +197,7 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
 fn encode_reasoning_item(part: &Part) -> Option<Value> {
     match part {
         Part::Reasoning {
+            id,
             content,
             encrypted,
             summary,
@@ -176,10 +205,14 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
             extra_body,
         } => {
             let mut obj = Map::new();
-            let id = extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
+            let id = id
+                .clone()
+                .or_else(|| {
+                    extra_body
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string())
+                })
                 .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4().simple()));
             obj.insert("id".to_string(), Value::String(id));
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
@@ -257,6 +290,7 @@ fn ensure_default_responses_reasoning_summary(obj: &mut Map<String, Value>) {
 fn encode_tool_call_item(part: &Part) -> Option<Value> {
     match part {
         Part::ToolCall {
+            id,
             call_id,
             name,
             arguments,
@@ -269,7 +303,10 @@ fn encode_tool_call_item(part: &Part) -> Option<Value> {
             );
             obj.insert(
                 "id".to_string(),
-                Value::String(format!("fc_{}", uuid::Uuid::new_v4().simple())),
+                Value::String(normalize_openai_function_call_item_id(
+                    id.as_deref()
+                        .or_else(|| extra_body.get("id").and_then(Value::as_str)),
+                )),
             );
             obj.insert("status".to_string(), Value::String("completed".to_string()));
             obj.insert("call_id".to_string(), Value::String(call_id.clone()));
@@ -283,11 +320,12 @@ fn encode_tool_call_item(part: &Part) -> Option<Value> {
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+    let request_items = nodes_to_items(&req.input);
     let mut input_items = Vec::new();
     let mut instructions: Option<String> = None;
     let mut consumed_instructions = false;
 
-    for item in &req.inputs {
+    for item in &request_items {
         if !consumed_instructions && can_use_responses_instructions(item) {
             if let Item::Message { parts, .. } = item {
                 let text = text_parts(parts);
@@ -355,14 +393,22 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    let response_items = nodes_to_items(&resp.output);
     let mut output = Vec::new();
-    for item in &resp.outputs {
+    for item in &response_items {
         match item {
             Item::Message {
+                id,
                 role,
                 parts,
                 extra_body,
             } => {
+                let mut message_extra = extra_body.clone();
+                if let Some(id) = id.clone() {
+                    message_extra
+                        .entry("id".to_string())
+                        .or_insert(Value::String(id));
+                }
                 let mut pending_message: Option<PendingResponsesMessageItem> = None;
                 for part in parts {
                     if let Some(content_part) = encode_message_content_part(part, true) {
@@ -371,7 +417,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                             &mut output,
                             *role,
                             text_part_phase(part),
-                            extra_body,
+                            &message_extra,
                             content_part,
                         );
                         continue;
@@ -393,6 +439,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                         item_type,
                         body,
                         extra_body,
+                        ..
                     } = part
                     {
                         let mut item = match body {
@@ -412,15 +459,25 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 flush_pending_message_item(&mut pending_message, &mut output);
             }
             Item::ToolResult {
+                id,
                 call_id,
                 content,
                 is_error,
                 extra_body,
-            } => encode_tool_result_item(call_id, content, *is_error, extra_body, &mut output),
+            } => encode_tool_result_item(
+                id.as_deref(),
+                call_id,
+                content,
+                *is_error,
+                extra_body,
+                &mut output,
+            ),
         }
     }
 
-    let created_at = chrono::Utc::now().timestamp();
+    let created_at = resp
+        .created_at
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
     let status = finish_reason_to_status(resp.finish_reason);
     let completed_at = if status == "completed" {
         Value::Number(serde_json::Number::from(created_at))
@@ -497,10 +554,17 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
 fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
     match item {
         Item::Message {
+            id,
             role,
             parts,
             extra_body,
         } => {
+            let mut message_extra = extra_body.clone();
+            if let Some(id) = id.clone() {
+                message_extra
+                    .entry("id".to_string())
+                    .or_insert(Value::String(id));
+            }
             let mut pending_message: Option<PendingResponsesMessageItem> = None;
             let output_text_type = matches!(role, Role::Assistant);
 
@@ -511,7 +575,7 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
                         out,
                         *role,
                         text_part_phase(part),
-                        extra_body,
+                        &message_extra,
                         content_part,
                     );
                     continue;
@@ -529,15 +593,17 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             flush_pending_message_item(&mut pending_message, out);
         }
         Item::ToolResult {
+            id,
             call_id,
             content,
             is_error,
             extra_body,
-        } => encode_tool_result_item(call_id, content, *is_error, extra_body, out),
+        } => encode_tool_result_item(id.as_deref(), call_id, content, *is_error, extra_body, out),
     }
 }
 
 fn encode_tool_result_item(
+    id: Option<&str>,
     call_id: &str,
     content: &[ToolResultContent],
     _is_error: bool,
@@ -567,6 +633,17 @@ fn encode_tool_result_item(
         "type".to_string(),
         Value::String("function_call_output".to_string()),
     );
+    if let Some(id) = id {
+        obj.insert(
+            "id".to_string(),
+            Value::String(normalize_openai_function_output_id(Some(id))),
+        );
+    } else {
+        obj.insert(
+            "id".to_string(),
+            Value::String(normalize_openai_function_output_id(None)),
+        );
+    }
     obj.insert("call_id".to_string(), Value::String(call_id.to_string()));
 
     if tool_content.is_empty() {
@@ -801,7 +878,9 @@ fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str 
 mod tests {
     use super::*;
     use crate::urp::decode::openai_responses as decode_responses;
-    use crate::urp::{InputDetails, Item, OutputDetails, Role, Usage};
+    use crate::urp::{
+        items_to_nodes, nodes_to_items, InputDetails, Item, OutputDetails, Role, Usage,
+    };
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
@@ -812,7 +891,9 @@ mod tests {
         let resp = UrpResponse {
             id: "resp_1".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![
                     Part::Text {
@@ -824,6 +905,7 @@ mod tests {
                         },
                     },
                     Part::ToolCall {
+                        id: None,
                         call_id: "call_1".to_string(),
                         name: "tool_a".to_string(),
                         arguments: "{}".to_string(),
@@ -843,7 +925,7 @@ mod tests {
                     m.insert("custom_message_field".to_string(), json!(true));
                     m
                 },
-            }],
+            }]),
             finish_reason: Some(FinishReason::ToolCalls),
             usage: None,
             extra_body: empty_map(),
@@ -941,9 +1023,14 @@ mod tests {
 
         let decoded = decode_responses::decode_response(&source).expect("decode");
         assert_eq!(
-            decoded.outputs.len(),
+            decoded.output.len(),
+            4,
+            "canonical flat output must preserve node order"
+        );
+        assert_eq!(
+            nodes_to_items(&decoded.output).len(),
             2,
-            "greedy merger must produce 2 items"
+            "bridge regrouping must preserve the old 2-item assistant shape"
         );
 
         let reencoded = encode_response(&decoded, "gpt-5.4");
@@ -962,7 +1049,8 @@ mod tests {
     fn encode_request_keeps_phased_developer_message_as_input_message() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            inputs: vec![Item::Message {
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Developer,
                 parts: vec![Part::Text {
                     content: "preface".to_string(),
@@ -973,7 +1061,7 @@ mod tests {
                     },
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             stream: None,
             temperature: None,
             top_p: None,
@@ -996,10 +1084,12 @@ mod tests {
     fn encode_request_preserves_distinct_plain_reasoning_parts_when_other_parts_are_encrypted() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            inputs: vec![Item::Message {
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![
                     Part::Reasoning {
+                        id: None,
                         content: Some("signed think".to_string()),
                         encrypted: Some(json!("sig_1")),
                         summary: Some("signed summary".to_string()),
@@ -1007,6 +1097,7 @@ mod tests {
                         extra_body: empty_map(),
                     },
                     Part::Reasoning {
+                        id: None,
                         content: Some("plain think".to_string()),
                         encrypted: None,
                         summary: None,
@@ -1015,7 +1106,7 @@ mod tests {
                     },
                 ],
                 extra_body: empty_map(),
-            }],
+            }]),
             stream: None,
             temperature: None,
             top_p: None,
@@ -1052,8 +1143,9 @@ mod tests {
     fn encode_request_uses_output_text_blocks_for_assistant_messages() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            inputs: vec![
+            input: items_to_nodes(vec![
                 Item::Message {
+                    id: None,
                     role: Role::User,
                     parts: vec![Part::Text {
                         content: "question".to_string(),
@@ -1062,6 +1154,7 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::Text {
                         content: "commentary".to_string(),
@@ -1069,7 +1162,7 @@ mod tests {
                     }],
                     extra_body: empty_map(),
                 },
-            ],
+            ]),
             stream: None,
             temperature: None,
             top_p: None,
@@ -1094,14 +1187,15 @@ mod tests {
     fn encode_request_defaults_responses_reasoning_summary_to_detailed() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            inputs: vec![Item::Message {
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::User,
                 parts: vec![Part::Text {
                     content: "hello".to_string(),
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             stream: None,
             temperature: None,
             top_p: None,
@@ -1123,14 +1217,15 @@ mod tests {
     fn encode_request_preserves_explicit_responses_reasoning_summary() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            inputs: vec![Item::Message {
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::User,
                 parts: vec![Part::Text {
                     content: "hello".to_string(),
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             stream: None,
             temperature: None,
             top_p: None,
@@ -1158,7 +1253,8 @@ mod tests {
         let response = UrpResponse {
             id: "resp_usage".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::new_message(Role::Assistant)],
+            created_at: None,
+            output: items_to_nodes(vec![Item::new_message(Role::Assistant)]),
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 30,
@@ -1235,9 +1331,12 @@ mod tests {
         let response = UrpResponse {
             id: "resp_roundtrip_reasoning".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![Part::Reasoning {
+                    id: None,
                     content: Some("full reasoning".to_string()),
                     encrypted: Some(json!("sig_1")),
                     summary: Some("brief summary".to_string()),
@@ -1245,7 +1344,7 @@ mod tests {
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -1260,7 +1359,8 @@ mod tests {
         assert_eq!(reasoning_item["encrypted_content"].as_str(), Some("sig_1"));
 
         let decoded = decode_responses::decode_response(&encoded).expect("decode response");
-        let Item::Message { parts, .. } = &decoded.outputs[0] else {
+        let decoded_outputs = nodes_to_items(&decoded.output);
+        let Item::Message { parts, .. } = &decoded_outputs[0] else {
             panic!("expected assistant output");
         };
 
@@ -1280,9 +1380,12 @@ mod tests {
         let response = UrpResponse {
             id: "resp_roundtrip_plain_reasoning".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![Part::Reasoning {
+                    id: None,
                     content: Some("plain reasoning".to_string()),
                     encrypted: None,
                     summary: None,
@@ -1290,7 +1393,7 @@ mod tests {
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -1307,7 +1410,8 @@ mod tests {
         );
 
         let decoded = decode_responses::decode_response(&encoded).expect("decode response");
-        let Item::Message { parts, .. } = &decoded.outputs[0] else {
+        let decoded_outputs = nodes_to_items(&decoded.output);
+        let Item::Message { parts, .. } = &decoded_outputs[0] else {
             panic!("expected assistant output");
         };
         assert!(matches!(
@@ -1325,14 +1429,15 @@ mod tests {
     fn encode_request_keeps_json_object_response_format() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
-            inputs: vec![Item::Message {
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::User,
                 parts: vec![Part::Text {
                     content: "hello".to_string(),
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             stream: None,
             temperature: None,
             top_p: None,

@@ -4,8 +4,8 @@ use crate::urp::encode::{
 };
 use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse,
+    nodes_to_items, FileSource, FinishReason, ImageSource, Item, Node, OrdinaryRole, Part,
+    ResponseFormat, Role, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -202,9 +202,10 @@ fn push_part_into_pending_chat_message(
 }
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+    let request_items = nodes_to_items(&req.input);
     let mut body = json!({
         "model": upstream_model,
-        "messages": encode_messages(&req.inputs),
+        "messages": encode_messages(&request_items),
     });
 
     let obj = body.as_object_mut().expect("chat request object");
@@ -266,24 +267,17 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
-    let mut assistant_messages = Vec::new();
-    for item in &resp.outputs {
-        match item {
-            Item::Message {
-                role: Role::Assistant,
-                ..
-            } => assistant_messages.push(item.clone()),
-            Item::ToolResult { .. } | Item::Message { .. } => continue,
-        }
-    }
-
-    let message = merge_assistant_chat_messages(&assistant_messages);
+    let message = encode_assistant_chat_message_from_nodes(&resp.output);
 
     let finish_reason = resp
         .finish_reason
         .map(finish_reason_to_chat)
         .unwrap_or_else(|| {
-            if assistant_messages.iter().any(has_tool_calls) {
+            if resp
+                .output
+                .iter()
+                .any(|node| matches!(node, Node::ToolCall { .. }))
+            {
                 "tool_calls"
             } else {
                 "stop"
@@ -334,6 +328,172 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     result
 }
 
+fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value> {
+    let mut message = Map::new();
+    message.insert("role".to_string(), Value::String("assistant".to_string()));
+
+    let mut content_parts = Vec::new();
+    let mut tool_calls = Vec::new();
+    let mut refusal: Option<String> = None;
+    let mut reasoning_parts = Vec::new();
+    let mut message_extra = HashMap::new();
+
+    for node in nodes {
+        match node {
+            Node::Text {
+                role: OrdinaryRole::Assistant,
+                content,
+                extra_body,
+                ..
+            } => {
+                let mut block = json!({ "type": "text", "text": content });
+                if let Some(obj) = block.as_object_mut() {
+                    merge_extra(obj, extra_body);
+                }
+                merge_extra_preserving_existing(
+                    &mut message_extra,
+                    assistant_message_extra_from_node(node),
+                );
+                content_parts.push(block);
+            }
+            Node::Image {
+                role: OrdinaryRole::Assistant,
+                source,
+                extra_body,
+                ..
+            } => {
+                let mut image = match source {
+                    ImageSource::Url { url, detail } => {
+                        json!({ "type": "image_url", "image_url": { "url": url, "detail": detail } })
+                    }
+                    ImageSource::Base64 { media_type, data } => json!({
+                        "type": "image_url",
+                        "image_url": { "url": format!("data:{};base64,{}", media_type, data) }
+                    }),
+                };
+                if let Some(obj) = image.as_object_mut() {
+                    merge_extra(obj, extra_body);
+                }
+                merge_extra_preserving_existing(
+                    &mut message_extra,
+                    assistant_message_extra_from_node(node),
+                );
+                content_parts.push(image);
+            }
+            Node::File {
+                role: OrdinaryRole::Assistant,
+                source,
+                extra_body,
+                ..
+            } => {
+                let text = match source {
+                    FileSource::Url { url } => format!("[file:{url}]"),
+                    FileSource::Base64 {
+                        filename,
+                        media_type,
+                        ..
+                    } => format!(
+                        "[file:{}:{}]",
+                        filename.clone().unwrap_or_else(|| "file".to_string()),
+                        media_type
+                    ),
+                };
+                let mut block = json!({ "type": "text", "text": text });
+                if let Some(obj) = block.as_object_mut() {
+                    merge_extra(obj, extra_body);
+                }
+                merge_extra_preserving_existing(
+                    &mut message_extra,
+                    assistant_message_extra_from_node(node),
+                );
+                content_parts.push(block);
+            }
+            Node::Refusal { content, .. } => {
+                refusal.get_or_insert_with(|| content.clone());
+            }
+            Node::Reasoning { .. } => {
+                if let Node::Reasoning {
+                    id: _,
+                    content,
+                    encrypted,
+                    summary,
+                    source,
+                    extra_body,
+                } = node
+                {
+                    reasoning_parts.push(Part::Reasoning {
+                        id: None,
+                        content: content.clone(),
+                        encrypted: encrypted.clone(),
+                        summary: summary.clone(),
+                        source: source.clone(),
+                        extra_body: extra_body.clone(),
+                    });
+                }
+                merge_extra_preserving_existing(
+                    &mut message_extra,
+                    assistant_message_extra_from_node(node),
+                );
+            }
+            Node::ToolCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
+                tool_calls.push(json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": arguments
+                    }
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    finalize_chat_response_content(&mut message, content_parts);
+    if let Some(refusal) = refusal {
+        message.insert("refusal".to_string(), Value::String(refusal));
+    }
+    if !tool_calls.is_empty() {
+        message.insert("tool_calls".to_string(), Value::Array(tool_calls));
+    }
+    insert_openrouter_reasoning_fields(&mut message, &reasoning_parts);
+    merge_extra(&mut message, &message_extra);
+    message
+}
+
+fn assistant_message_extra_from_node(node: &Node) -> HashMap<String, Value> {
+    match node {
+        Node::Text {
+            phase, extra_body, ..
+        } => {
+            let mut out = extra_body.clone();
+            if let Some(phase) = phase {
+                out.insert("phase".to_string(), Value::String(phase.clone()));
+            }
+            out
+        }
+        Node::Image { extra_body, .. }
+        | Node::Audio { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::Refusal { extra_body, .. }
+        | Node::Reasoning { extra_body, .. }
+        | Node::ToolCall { extra_body, .. }
+        | Node::ProviderItem { extra_body, .. } => extra_body.clone(),
+        Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => HashMap::new(),
+    }
+}
+
+fn merge_extra_preserving_existing(dst: &mut HashMap<String, Value>, src: HashMap<String, Value>) {
+    for (k, v) in src {
+        dst.entry(k).or_insert(v);
+    }
+}
+
 fn encode_messages(messages: &[Item]) -> Vec<Value> {
     let mut out = Vec::new();
     for item in messages {
@@ -360,6 +520,7 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                 out.push(Value::Object(m));
             }
             Item::Message {
+                id: _,
                 role,
                 parts,
                 extra_body,
@@ -447,13 +608,6 @@ fn encode_response_format(format: &ResponseFormat) -> Value {
     }
 }
 
-fn has_tool_calls(item: &Item) -> bool {
-    match item {
-        Item::Message { parts, .. } => parts.iter().any(|p| matches!(p, Part::ToolCall { .. })),
-        Item::ToolResult { .. } => false,
-    }
-}
-
 fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part]) {
     let mut details = Vec::new();
     let mut reasoning_value: Option<String> = None;
@@ -462,6 +616,7 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
 
     for part in parts {
         let Part::Reasoning {
+            id: _,
             content,
             encrypted,
             summary,
@@ -539,99 +694,6 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     }
 }
 
-fn merge_assistant_chat_messages(assistant_messages: &[Item]) -> Map<String, Value> {
-    let encoded_messages = encode_messages(assistant_messages);
-    if encoded_messages.is_empty() {
-        let mut fallback = Map::new();
-        fallback.insert("role".to_string(), Value::String("assistant".to_string()));
-        fallback.insert("content".to_string(), Value::String(String::new()));
-        if let Some(Item::Message { extra_body, .. }) = assistant_messages.first() {
-            merge_extra(&mut fallback, extra_body);
-        }
-        return fallback;
-    }
-
-    let mut merged = Map::new();
-    merged.insert("role".to_string(), Value::String("assistant".to_string()));
-
-    let mut merged_content_parts = Vec::new();
-    let mut merged_tool_calls = Vec::new();
-    let mut merged_reasoning_details = Vec::new();
-    let mut refusal: Option<String> = None;
-
-    for encoded in encoded_messages {
-        let Some(obj) = encoded.as_object() else {
-            continue;
-        };
-
-        merge_message_content_parts(obj.get("content"), &mut merged_content_parts);
-
-        if let Some(tool_calls) = obj.get("tool_calls").and_then(|v| v.as_array()) {
-            merged_tool_calls.extend(tool_calls.iter().cloned());
-        }
-
-        if let Some(details) = obj.get("reasoning_details").and_then(|v| v.as_array()) {
-            merged_reasoning_details.extend(details.iter().cloned());
-        }
-
-        if let Some(reasoning) = obj.get("reasoning") {
-            merged
-                .entry("reasoning".to_string())
-                .or_insert_with(|| reasoning.clone());
-        }
-
-        if refusal.is_none() {
-            refusal = obj
-                .get("refusal")
-                .and_then(|v| v.as_str())
-                .filter(|v| !v.is_empty())
-                .map(str::to_string);
-        }
-
-        for (key, value) in obj {
-            if matches!(
-                key.as_str(),
-                "role" | "content" | "tool_calls" | "refusal" | "reasoning" | "reasoning_details"
-            ) {
-                continue;
-            }
-            merged.entry(key.clone()).or_insert_with(|| value.clone());
-        }
-    }
-
-    finalize_chat_response_content(&mut merged, merged_content_parts);
-    if !merged_tool_calls.is_empty() {
-        merged.insert("tool_calls".to_string(), Value::Array(merged_tool_calls));
-    }
-    if let Some(refusal) = refusal {
-        merged.insert("refusal".to_string(), Value::String(refusal));
-    }
-    if !merged_reasoning_details.is_empty() {
-        merged.insert(
-            "reasoning_details".to_string(),
-            Value::Array(merged_reasoning_details),
-        );
-    }
-
-    merged
-}
-
-fn merge_message_content_parts(content: Option<&Value>, out: &mut Vec<Value>) {
-    let Some(content) = content else {
-        return;
-    };
-
-    match content {
-        Value::String(text) => {
-            if !text.is_empty() {
-                out.push(json!({ "type": "text", "text": text }));
-            }
-        }
-        Value::Array(parts) => out.extend(parts.iter().cloned()),
-        _ => {}
-    }
-}
-
 fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
     match finish_reason {
         FinishReason::Stop => "stop",
@@ -646,7 +708,9 @@ fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::urp::decode::openai_chat as decode_chat;
-    use crate::urp::{InputDetails, OutputDetails, UrpResponse, Usage};
+    use crate::urp::{
+        items_to_nodes, nodes_to_items, InputDetails, OutputDetails, UrpResponse, Usage,
+    };
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
@@ -656,7 +720,7 @@ mod tests {
     fn base_request(messages: Vec<Item>) -> UrpRequest {
         UrpRequest {
             model: "logical-model".to_string(),
-            inputs: messages,
+            input: items_to_nodes(messages),
             stream: None,
             temperature: None,
             top_p: None,
@@ -676,6 +740,7 @@ mod tests {
         part_extra.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
 
         let req = base_request(vec![Item::Message {
+            id: None,
             role: Role::User,
             parts: vec![Part::Text {
                 content: "hello".to_string(),
@@ -704,6 +769,7 @@ mod tests {
     #[test]
     fn still_collapses_single_plain_text_block_to_string() {
         let req = base_request(vec![Item::Message {
+            id: None,
             role: Role::User,
             parts: vec![Part::Text {
                 content: "hello".to_string(),
@@ -722,6 +788,7 @@ mod tests {
     #[test]
     fn preserves_assistant_content_and_tool_calls_in_one_message() {
         let req = base_request(vec![Item::Message {
+            id: None,
             role: Role::Assistant,
             parts: vec![
                 Part::Text {
@@ -729,6 +796,7 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Part::ToolCall {
+                    id: None,
                     call_id: "call_1".to_string(),
                     name: "tool".to_string(),
                     arguments: "{}".to_string(),
@@ -745,24 +813,21 @@ mod tests {
         let encoded = encode_request(&req, "gpt-5.4");
         let messages = encoded["messages"].as_array().expect("messages array");
 
-        assert_eq!(messages.len(), 1);
+        assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], json!("assistant"));
         assert_eq!(
             messages[0]["tool_calls"][0]["function"]["name"],
             json!("tool")
         );
-        assert_eq!(
-            messages[0]["content"],
-            json!([
-                { "type": "text", "text": "prep" },
-                { "type": "text", "text": "answer" }
-            ])
-        );
+        assert_eq!(messages[0]["content"], json!("prep"));
+        assert_eq!(messages[1]["role"], json!("assistant"));
+        assert_eq!(messages[1]["content"], json!("answer"));
     }
 
     #[test]
     fn encodes_tool_result_items_as_tool_messages_with_text_only_content() {
         let req = base_request(vec![Item::ToolResult {
+            id: None,
             call_id: "call_1".to_string(),
             is_error: false,
             content: vec![
@@ -798,7 +863,8 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_usage".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::new_message(Role::Assistant)],
+            created_at: None,
+            output: items_to_nodes(vec![Item::new_message(Role::Assistant)]),
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 20,
@@ -875,8 +941,10 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_segments".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![
+            created_at: None,
+            output: items_to_nodes(vec![
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::Text {
                         content: "prep".to_string(),
@@ -885,8 +953,10 @@ mod tests {
                     extra_body: HashMap::from([("phase".to_string(), json!("analysis"))]),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::ToolCall {
+                        id: None,
                         call_id: "call_1".to_string(),
                         name: "tool".to_string(),
                         arguments: "{}".to_string(),
@@ -895,9 +965,11 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![
                         Part::Reasoning {
+                            id: None,
                             content: Some("think".to_string()),
                             encrypted: Some(json!("sig_1")),
                             summary: None,
@@ -911,7 +983,7 @@ mod tests {
                     ],
                     extra_body: HashMap::from([("segment".to_string(), json!(3))]),
                 },
-            ],
+            ]),
             finish_reason: Some(FinishReason::ToolCalls),
             usage: None,
             extra_body: empty_map(),
@@ -938,7 +1010,9 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_phase_string".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![
                     Part::Text {
@@ -951,7 +1025,7 @@ mod tests {
                     },
                 ],
                 extra_body: empty_map(),
-            }],
+            }]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -970,9 +1044,12 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_roundtrip_reasoning".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![Part::Reasoning {
+                    id: None,
                     content: Some("full reasoning".to_string()),
                     encrypted: Some(json!("sig_1")),
                     summary: Some("brief summary".to_string()),
@@ -980,7 +1057,7 @@ mod tests {
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -988,7 +1065,8 @@ mod tests {
 
         let encoded = encode_response(&response, "gpt-5.4");
         let decoded = decode_chat::decode_response(&encoded).expect("decode response");
-        let Item::Message { parts, .. } = decoded.outputs.first().expect("assistant output") else {
+        let decoded_outputs = nodes_to_items(&decoded.output);
+        let Item::Message { parts, .. } = decoded_outputs.first().expect("assistant output") else {
             panic!("expected assistant output");
         };
 
@@ -1023,9 +1101,12 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_summary_alias".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![Part::Reasoning {
+                    id: None,
                     content: None,
                     encrypted: Some(json!("sig_only_summary")),
                     summary: Some("brief summary only".to_string()),
@@ -1033,7 +1114,7 @@ mod tests {
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -1060,10 +1141,13 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_merge_reasoning_parts".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![
+            created_at: None,
+            output: items_to_nodes(vec![
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::Reasoning {
+                        id: None,
                         content: Some("segment reasoning".to_string()),
                         encrypted: None,
                         summary: None,
@@ -1073,8 +1157,10 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::Reasoning {
+                        id: None,
                         content: None,
                         encrypted: Some(json!("sig_merged")),
                         summary: None,
@@ -1083,7 +1169,7 @@ mod tests {
                     }],
                     extra_body: empty_map(),
                 },
-            ],
+            ]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -1110,10 +1196,13 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_multi_encrypted".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![
+            created_at: None,
+            output: items_to_nodes(vec![
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::Reasoning {
+                        id: None,
                         content: Some("segment reasoning".to_string()),
                         encrypted: Some(json!("sig_first")),
                         summary: None,
@@ -1123,8 +1212,10 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::Reasoning {
+                        id: None,
                         content: None,
                         encrypted: Some(json!("sig_second")),
                         summary: None,
@@ -1133,7 +1224,7 @@ mod tests {
                     }],
                     extra_body: empty_map(),
                 },
-            ],
+            ]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -1165,9 +1256,12 @@ mod tests {
         let response = UrpResponse {
             id: "chatcmpl_reasoning_content".to_string(),
             model: "gpt-5.4".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![Part::Reasoning {
+                    id: None,
                     content: Some("full reasoning".to_string()),
                     encrypted: None,
                     summary: Some("brief summary".to_string()),
@@ -1178,7 +1272,7 @@ mod tests {
                     )]),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),

@@ -1,22 +1,17 @@
-use crate::urp::{Item, Part, Role, UrpRequest};
+use crate::urp::{Node, UrpRequest};
 use serde_json::{Map, Value};
 
 pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
     let mut prompt_parts: Vec<String> = Vec::new();
-    for item in &req.inputs {
-        if let Item::Message {
-            role: Role::User,
-            parts,
+    for item in &req.input {
+        if let Node::Text {
+            role: crate::urp::OrdinaryRole::User,
+            content,
             ..
         } = item
+            && !content.trim().is_empty()
         {
-            for part in parts {
-                if let Part::Text { content, .. } = part {
-                    if !content.trim().is_empty() {
-                        prompt_parts.push(content.clone());
-                    }
-                }
-            }
+            prompt_parts.push(content.clone());
         }
     }
     let prompt = prompt_parts.join("\n");
@@ -37,6 +32,7 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::{items_to_nodes, Item, Part, Role};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -48,8 +44,9 @@ mod tests {
     fn encodes_user_text_parts_into_prompt_and_preserves_allowed_extra_fields() {
         let req = UrpRequest {
             model: "logical-model".to_string(),
-            inputs: vec![
+            input: items_to_nodes(vec![
                 Item::Message {
+                    id: None,
                     role: Role::System,
                     parts: vec![Part::Text {
                         content: "ignore system".to_string(),
@@ -58,6 +55,7 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::User,
                     parts: vec![
                         Part::Text {
@@ -72,6 +70,7 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![Part::Text {
                         content: "ignore assistant".to_string(),
@@ -80,6 +79,7 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::Message {
+                    id: None,
                     role: Role::User,
                     parts: vec![Part::Text {
                         content: "in watercolor".to_string(),
@@ -87,7 +87,7 @@ mod tests {
                     }],
                     extra_body: empty_map(),
                 },
-            ],
+            ]),
             stream: Some(true),
             temperature: Some(0.3),
             top_p: Some(0.9),
