@@ -1,84 +1,117 @@
-# Monoize URP + Transform System Specification
+# Monoize URP v2 Transform System Specification
 
 ## 0. Status
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Product name: Monoize
-- Internal protocol name: `URP`
-- Scope: URP structures, decode/encode behavior, transform execution, and routing integration.
+- Internal protocol name: `URP v2`
+- Scope: flat URP v2 request and response transform surfaces, flat decode and encode behavior, flat streaming transform behavior, cross-family nested passthrough stripping, and routing integration.
 
-## 1. URP Core Contract
+## 1. URP v2 Core Contract
 
-URP-1. Internal request representation MUST be `UrpRequest { model, inputs, ... }`.
+URPTF-1. This specification extends `spec/urp-v2-flat-structure.spec.md`. If the two files disagree about the meaning of a URP v2 request, response, node, control node, or stream event, `spec/urp-v2-flat-structure.spec.md` is authoritative for structure and this file is authoritative for transform execution.
 
-URP-2. URP MUST be messages-centric: request/response history is represented as an ordered array of `Message`.
+URPTF-2. Internal request representation for transforms MUST be `UrpRequestV2 { model, input, ... }` where `input` is an ordered flat `Vec<Node>`.
 
-URP-3. A `Message` MUST include `role` and `parts`.
+URPTF-3. Internal response representation for transforms MUST be `UrpResponseV2 { id, model, output, ... }` where `output` is an ordered flat `Vec<Node>`.
 
-URP-4. `Part` MUST support at least: `Text`, `Image`, `Audio`, `File`, `Reasoning`, `ToolCall`, `ToolResult`, `Refusal`, `ProviderItem`.
+URPTF-4. `Message { role, parts }` is not a URP v2 value and MUST NOT appear in canonical request storage, canonical response storage, transform-visible payload surfaces, or canonical stream terminal state.
 
-URP-5. Every URP struct that maps to JSON MUST support unknown field passthrough using flattened `extra_body`.
+URPTF-5. Transform-visible payload surfaces are only these surfaces:
+1. typed top-level request and response fields plus top-level `extra_body`;
+2. ordinary top-level nodes in `request.input` and `response.output`;
+3. top-level `ToolResult` nodes and their nested `ToolResultContent` entries;
+4. top-level control nodes;
+5. canonical URP v2 stream events and terminal `ResponseDone.output`.
 
-URP-6. Encode path MUST flatten `extra_body` entries into the output object.
+URPTF-6. A transform MUST operate on URP v2 values only. A transform MUST NOT require access to raw downstream wire payloads, raw upstream wire payloads, or decoder-private grouped helper state.
 
-URP-7. If a key exists in both a named field and `extra_body`, named field value MUST win.
+URPTF-7. Server behavior MUST remain stateless. Transform execution MUST NOT depend on persisted conversation state or on `previous_response_id` lookups.
 
-URP-8. Server MUST remain stateless: no conversation persistence and no dependency on `previous_response_id`.
+## 2. Decode and encode requirements for transforms
 
-## 2. Decode/Encode Requirements
+DEC-1. Downstream requests from `/v1/chat/completions`, `/v1/responses`, and `/v1/messages` MUST decode into `UrpRequestV2` before any request-phase transform executes.
 
-DEC-1. Downstream requests from `/v1/chat/completions`, `/v1/responses`, `/v1/messages` MUST decode into `UrpRequest`.
+DEC-2. Downstream responses and upstream responses MUST decode into `UrpResponseV2` before any response-phase non-stream transform executes.
 
-DEC-2. Unknown wire fields MUST be preserved into URP `extra_body`.
+DEC-3. Stream decoders MUST emit canonical URP v2 stream events before any response-phase stream transform executes.
 
-DEC-3. Tool calls MUST decode to `Part::ToolCall`.
+DEC-4. Unknown wire fields that belong to top-level request or response objects MUST decode into top-level `extra_body`.
 
-DEC-4. Tool result messages MUST decode to `Role::Tool` + `Item::ToolResult` with sibling content parts.
+DEC-5. Unknown wire fields that belong to one ordinary node, one `ToolResult`, or one `ToolResultContent` entry MUST decode into that exact owner's `extra_body`.
 
-DEC-5. Reasoning fields from upstream/downstream wire formats MUST decode into `Part::Reasoning`, using `encrypted` when the provider requires opaque passthrough data.
+DEC-6. Unknown wire fields that belong to one downstream or upstream envelope rather than to one emitted ordinary node or `ToolResult` MUST decode as `next_downstream_envelope_extra` control nodes under the URP v2 flat structure rules.
 
-ENC-1. Upstream request construction MUST encode from URP only; transforms MUST NOT access raw wire payloads.
+DEC-7. Tool calls MUST decode as ordinary `ToolCall` nodes.
 
-ENC-2. URP-to-upstream encoding MUST support provider types: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`.
+DEC-8. Tool execution output MUST decode as top-level `ToolResult` nodes. A decoder MUST NOT represent tool execution output as an ordinary role-bearing node.
 
-ENC-3. History encoding rule:
-- if a single `Part::Reasoning` carries both opaque reasoning payload (`encrypted`) and plaintext fields (`content` and/or `summary`), adapters MAY omit the plaintext fields only when the target wire format requires opaque reasoning exclusivity for that same reasoning part.
-- adapters MUST NOT drop a distinct `Part::Reasoning` solely because another reasoning part in the same message carries `encrypted: Some(_)`.
-- otherwise `Part::Reasoning` MAY be encoded when supported by target wire format.
+DEC-9. Reasoning data from upstream or downstream wire formats MUST decode as ordinary `Reasoning` nodes, using the typed `encrypted` field when the provider requires opaque reasoning passthrough data.
 
-ENC-4. Model rewrite MUST apply provider `models[requested].redirect` when present; otherwise use requested model.
+ENC-1. Upstream request construction MUST encode from URP v2 values only.
 
-ENC-5. Cross-protocol nested extra_body stripping:
-- Definition: downstream and upstream are "same protocol family" iff: (ChatCompletions, ChatCompletion), (Responses, Responses), (AnthropicMessages, Messages). All other combinations, including any involving Gemini, are cross-protocol.
-- When the downstream protocol family differs from the upstream provider type, the system MUST clear `extra_body` on all `Item` (both `Message` and `ToolResult` variants) and all `Part` variants in `UrpRequest.inputs` **before** provider request-phase transforms execute (PIPE-1 step 6). This ensures that downstream-protocol-specific fields do not leak to a different upstream protocol, while allowing provider transforms (e.g. auto-cache transforms) to inject upstream-protocol-specific `extra_body` entries after stripping.
-- This behavior is controlled by a three-level toggle:
-  1. Global setting `monoize_strip_cross_protocol_nested_extra` (bool, default `true`).
-  2. Provider-level override `strip_cross_protocol_nested_extra` (`Option<bool>`).
-  3. Resolution: provider override wins when present (`Some(true)` → always strip on cross-protocol, `Some(false)` → never strip); `None` inherits the global setting.
+ENC-2. URP v2 to upstream encoding MUST support provider types `responses`, `chat_completion`, `messages`, `gemini`, and `openai_image`.
 
-## 3. Streaming Representation
+ENC-3. If one `Reasoning` node carries both opaque reasoning payload in `encrypted` and plaintext fields in `content` and/or `summary`, an adapter MAY omit the plaintext fields only when the target wire format requires opaque reasoning exclusivity for that same reasoning node.
 
-STR-1. Internal streaming representation MUST use `UrpStreamEvent`.
+ENC-4. An adapter MUST NOT drop one `Reasoning` node solely because a different `Reasoning` node in the same flat node sequence carries `encrypted`.
 
-STR-2. `UrpStreamEvent` MUST support: `ResponseStart`, `ItemStart`, `PartStart`, `Delta`, `PartDone`, `ItemDone`, `ResponseDone`, `Error`.
+ENC-5. Model rewrite MUST apply provider `models[requested].redirect` when present; otherwise the requested model name remains the upstream model.
 
-STR-3. `Delta` MUST be part-indexed and typed via `PartDelta` (text/reasoning/tool args/media/refusal/provider-item variants).
+ENC-6. Logical downstream envelope reconstruction belongs only to the encoder. A decoder or transform MUST NOT reintroduce canonical grouped-message storage under different terminology.
 
-STR-3a. `PartDone.part` MUST contain the complete terminal `Part`, `ItemDone.item` MUST contain the complete terminal `Item`, and `ResponseDone.outputs` MUST contain the complete terminal ordered `Vec<Item>`.
+### 2.1 Cross-family nested passthrough stripping
 
-STR-3b. `ResponseDone.outputs` is the authoritative final streamed response state for downstream response reconstruction.
+XSTRIP-1. Protocol family names and cross-family hop semantics are defined by `spec/urp-v2-flat-structure.spec.md`.
 
-STR-3c. Pass-through streaming MUST follow an `upstream SSE -> decoder -> UrpStreamEvent channel -> downstream encoder` architecture. Provider-specific stream decoders emit `UrpStreamEvent`; downstream-specific stream encoders consume `UrpStreamEvent` and produce SSE.
+XSTRIP-2. Cross-family nested passthrough stripping applies only to nested passthrough state. Top-level request and response `extra_body` are not nested and MUST remain intact across all hops.
 
-STR-3d. If an upstream streaming protocol emits reasoning opaque payload incrementally (for example encrypted/signature reasoning metadata separated from plaintext reasoning text), the stream decoder MUST emit ordered `UrpStreamEvent::Delta` events that preserve that opaque payload before terminal `PartDone` / `ResponseDone` reconstruction. Downstream stream encoders MUST NOT rely on terminal reconstruction alone to surface opaque reasoning data during pass-through streaming.
+XSTRIP-3. When the downstream protocol family differs from the upstream provider type, and cross-family stripping is enabled for that provider attempt, the runtime MUST perform stripping after downstream request decoding and before provider request-phase transforms execute.
 
-STR-4. Transform engine MUST be able to process stream events incrementally with per-request mutable state.
+XSTRIP-4. The stripping pass in XSTRIP-3 MUST do all of the following on `UrpRequestV2.input`:
+1. clear `extra_body` on every ordinary node;
+2. clear `extra_body` on every top-level `ToolResult` node;
+3. clear `extra_body` on every nested `ToolResultContent` entry; and
+4. remove every `next_downstream_envelope_extra` control node.
 
-STR-5. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting, or the selected downstream streaming protocol cannot faithfully represent the transform's incremental output, the runtime MAY execute upstream in non-stream mode, apply response transforms on `UrpResponse`, and emit a synthesized downstream stream. In this mode, downstream still receives protocol-correct streaming events (`SSE` for Chat/Responses/Messages), but event timing is buffered.
+XSTRIP-5. After XSTRIP-4, later provider request-phase transforms MAY add new target-family nested passthrough state.
 
-## 4. Transform System
+XSTRIP-6. On a same-family hop, the runtime MUST preserve node-local `extra_body`, `ToolResult.extra_body`, `ToolResultContent.extra_body`, and control nodes.
 
-TF-1. A transform MUST implement:
+XSTRIP-7. Cross-family stripping enablement MUST be controlled by these settings in descending precedence:
+1. provider-level override `strip_cross_protocol_nested_extra` when present;
+2. global setting `monoize_strip_cross_protocol_nested_extra` otherwise.
+
+XSTRIP-8. Resolution semantics for XSTRIP-7 are exact:
+1. provider override `Some(true)` means strip on every cross-family hop for that provider attempt;
+2. provider override `Some(false)` means never strip for that provider attempt; and
+3. provider override `None` means inherit the global setting.
+
+## 3. Canonical streaming representation for transforms
+
+STR-1. Response-phase stream transforms MUST operate on canonical URP v2 stream events only.
+
+STR-2. The transform-visible canonical event set is: `ResponseStart`, `NodeStart`, `NodeDelta`, `NodeDone`, `ResponseDone`, and `Error`.
+
+STR-3. `NodeDone.node` MUST contain the complete terminal node for that `node_index`.
+
+STR-4. `ResponseDone.output` MUST contain the complete terminal ordered flat `Vec<Node>`.
+
+STR-5. `ResponseDone.output` is the authoritative final streamed response state for downstream stream reconstruction, synthetic terminal event synthesis, and all post-stream transform reasoning.
+
+STR-6. Pass-through streaming MUST use the architecture `upstream SSE -> decoder -> URP v2 stream event channel -> transform pipeline -> downstream encoder`.
+
+STR-7. If an upstream streaming protocol emits opaque reasoning payload incrementally, the stream decoder MUST emit ordered `NodeDelta` events that preserve that opaque payload before terminal `NodeDone` and `ResponseDone` reconstruction. A downstream stream encoder or transform MUST NOT rely on terminal reconstruction alone to surface opaque reasoning data during pass-through streaming.
+
+STR-8. The transform engine MUST support incremental stream processing with per-request mutable transform state.
+
+STR-9. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental URP v2 stream rewriting, or if the selected downstream streaming protocol cannot faithfully represent that transform's incremental output, the runtime MAY execute the upstream attempt in non-stream mode, apply response transforms to `UrpResponseV2`, and emit synthesized downstream streaming events. Buffered synthetic timing is allowed in that mode.
+
+STR-10. A stream transform MAY rewrite `NodeStart`, `NodeDelta`, `NodeDone`, and `ResponseDone`, but it MUST preserve a valid canonical node lifecycle unless the runtime switches to the buffered synthetic path in STR-9.
+
+## 4. Transform system
+
+TF-1. A transform MUST implement these conceptual interface members:
 - `type_id()`
 - `supported_phases()`
 - `supported_scopes()`
@@ -87,22 +120,22 @@ TF-1. A transform MUST implement:
 - `init_state()`
 - `apply()`
 
-TF-1a. Request-phase and response-phase transform execution MUST support asynchronous work. The runtime MAY await file I/O, network-free background work, or other asynchronous operations performed by `apply()` before continuing to the next rule.
+TF-1a. Request-phase and response-phase transform execution MUST support asynchronous work. The runtime MAY await file I/O, local computation, or other asynchronous operations performed by `apply()` before continuing to the next matching rule.
 
-TF-2. `TransformRuleConfig` persisted form MUST include: `transform`, `enabled`, `models`, `phase`, `config`.
+TF-2. Persisted `TransformRuleConfig` MUST include `transform`, `enabled`, `models`, `phase`, and `config`.
 
-TF-3. Transform rule execution MUST be ordered; output of rule `i` is input to rule `i+1`.
+TF-3. Transform rule execution MUST be ordered. The output of rule `i` MUST be the input to rule `i + 1` within the same phase and scope chain.
 
-TF-4. Rules MUST be filtered by:
-- `enabled=true`
-- matching phase
-- model glob match against the normalized logical model when `models` is present
+TF-4. A rule is eligible to execute only when all conditions below hold:
+1. `enabled = true`;
+2. the rule phase equals the current phase; and
+3. if `models` is present, at least one model glob matches the normalized logical model.
 
-TF-5. Transform registry MUST be auto-discovered using `inventory`.
+TF-5. Transform registry discovery MUST be automatic through `inventory`.
 
-TF-6. Adding a new transform file with inventory submit MUST be sufficient for registration.
+TF-6. Adding a new transform file with a valid inventory submission MUST be sufficient for registration.
 
-TF-7. Built-ins that MUST exist:
+TF-7. Built-ins that MUST exist are:
 - `reasoning_to_think_xml`
 - `think_xml_to_reasoning`
 - `reasoning_effort_to_budget`
@@ -129,386 +162,364 @@ TF-7. Built-ins that MUST exist:
 - `reasoning_content_delta`
 - `assistant_markdown_images_to_output`
 - `assistant_output_images_to_markdown`
+- `strip_orphaned_tool_use`
 
-TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include:
+TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include `type_id`, `supported_phases`, `supported_scopes`, and `config_schema`.
 
-- `type_id: string`
-- `supported_phases: Phase[]`
-- `supported_scopes: ("provider" | "api_key")[]`
-- `config_schema: object`
+TF-9. Scope semantics are exact:
+1. `provider` means the transform MAY be configured in provider transform chains;
+2. `api_key` means the transform MAY be configured in API-key transform chains;
+3. a transform MAY support both scopes; and
+4. dashboard editors MUST hide transforms that do not support the current editor scope.
 
-TF-9. Scope semantics:
+### 4.1 Transform-visible request and response surfaces
 
-- `provider` means the transform MAY be configured in provider transform chains.
-- `api_key` means the transform MAY be configured in API-key transform chains.
-- A transform MAY support both scopes.
-- Dashboard editors MUST hide transforms that do not include the current editor scope.
+SURF-1. Request-phase transforms MAY read and write typed top-level request fields and top-level request `extra_body`.
 
-### 4.2 `append_empty_user_message`
+SURF-2. Request-phase transforms MAY read and write ordinary nodes in `request.input`.
 
-AEUM-1. Phase: `request` only.
+SURF-3. Request-phase transforms MAY read and write top-level `ToolResult` nodes and their nested `ToolResultContent` entries in `request.input`.
 
-AEUM-2. Config MAY contain:
-- `content` (string, optional): text content for the padding user message. Defaults to `" "` (a single space).
-AEUM-3. On apply:
-1. Inspect the last element of `req.inputs`.
-2. If the last message has `role == assistant`, append a new `Message { role: user, parts: [Text { content: config.content }] }` to `req.inputs`.
-3. If the last message is not `assistant`, or `inputs` is empty, no-op.
+SURF-4. Request-phase transforms MAY read, remove, preserve, or insert control nodes only when this specification defines that behavior explicitly for the named transform. Otherwise control nodes are opaque sequence elements and MUST remain byte-for-byte unchanged.
 
-### 4.3 `compress_user_message_images`
+SURF-5. Response-phase transforms MAY read and write typed top-level response fields and top-level response `extra_body`.
 
-CUMI-1. Phase: `request` only.
+SURF-6. Response-phase transforms MAY read and write ordinary nodes in `response.output`.
+
+SURF-7. Response-phase transforms MAY read and write top-level `ToolResult` nodes and nested `ToolResultContent` entries in `response.output` when the transform's target surface includes those nodes explicitly.
+
+SURF-8. Response-phase stream transforms MAY read and write canonical stream events and terminal `ResponseDone.output`.
+
+SURF-9. Unless a transform section below says otherwise, a transform MUST treat `ToolResult` as outside ordinary role-based rewrite and merge semantics.
+
+SURF-10. Unless a transform section below says otherwise, a transform MUST treat `next_downstream_envelope_extra` as an opaque boundary marker rather than as user-visible content.
+
+### 4.2 Role and sequence transforms on ordinary nodes
+
+ROLE-1. `system_to_developer_role` is request-phase only.
+
+ROLE-2. `system_to_developer_role` MUST rewrite `role = system` to `role = developer` on ordinary nodes in `request.input`.
+
+ROLE-3. `system_to_developer_role` MUST NOT modify `ToolResult` nodes, `ToolResultContent` entries, or control nodes.
+
+ROLE-4. `developer_to_system_role` is request-phase only.
+
+ROLE-5. `developer_to_system_role` MUST rewrite `role = developer` to `role = system` on ordinary nodes in `request.input`.
+
+ROLE-6. `developer_to_system_role` MUST NOT modify `ToolResult` nodes, `ToolResultContent` entries, or control nodes.
+
+ROLE-7. `merge_consecutive_roles` is request-phase only.
+
+ROLE-8. `merge_consecutive_roles` MUST operate on a derived contiguous-run view of adjacent ordinary nodes in `request.input`. It MUST NOT introduce grouped canonical storage.
+
+ROLE-9. Within one maximal run of adjacent ordinary nodes, `merge_consecutive_roles` MAY merge neighboring ordinary nodes only when all conditions below hold:
+1. both nodes are ordinary nodes;
+2. both nodes carry the same ordinary `role`;
+3. neither node is `Reasoning` or `ToolCall` if the downstream encoder treats those node kinds as distinct top-level semantic units;
+4. no `ToolResult` node lies between them; and
+5. no control node lies between them.
+
+ROLE-10. If `merge_consecutive_roles` merges neighboring ordinary nodes, it MUST preserve node order and MUST preserve all surviving typed fields. If conflicting nested passthrough keys survive on merged ordinary-node state, the earlier surviving node's typed fields remain authoritative and merge policy for residual passthrough keys MUST be deterministic.
+
+ROLE-11. `merge_consecutive_roles` MUST NOT merge `ToolResult` into ordinary nodes and MUST NOT cross a control-node boundary.
+
+### 4.3 `append_empty_user_message`
+
+AEUM-1. Phase: request only.
+
+AEUM-2. Config MAY contain `content` as a string. Default value is one single-space string.
+
+AEUM-3. The transform MUST inspect the final element of `request.input`.
+
+AEUM-4. If the final element is an ordinary node with `role = assistant`, the transform MUST append one ordinary `Text` node with `role = user` and `content = config.content`.
+
+AEUM-5. If `request.input` is empty, or if the final element is not an ordinary assistant node, the transform MUST be a no-op.
+
+AEUM-6. `append_empty_user_message` MUST NOT append `ToolResult` nodes, MUST NOT append control nodes, and MUST NOT inspect derived grouped-message wrappers.
+
+### 4.4 `inject_system_prompt`
+
+ISP-1. Phase: request only.
+
+ISP-2. Config MUST contain `content: string` and `position: "prepend" | "append"`.
+
+ISP-3. `inject_system_prompt` targets only ordinary `Text` nodes with `role = system` in `request.input`.
+
+ISP-4. If `position = prepend`, the transform MUST locate the first ordinary `Text` node with `role = system` and append the configured text to that node's `content` as an additional system text segment under the encoder's later grouping rules. If no such node exists, the transform MUST insert one new ordinary `Text` node with `role = system` at the beginning of `request.input`.
+
+ISP-5. If `position = append`, the transform MUST locate the last ordinary `Text` node with `role = system` and append the configured text to that node's `content` as an additional system text segment under the encoder's later grouping rules. If no such node exists, the transform MUST append one new ordinary `Text` node with `role = system` to the end of `request.input`.
+
+ISP-6. `inject_system_prompt` MUST NOT rewrite `ToolResult` nodes, `ToolResultContent`, or control nodes.
+
+ISP-7. If a control node lies at the target insertion boundary, the inserted system text node MUST be placed as an ordinary sequence element without consuming or modifying the control node.
+
+### 4.5 `strip_orphaned_tool_use`
+
+SOTU-1. Phase: request only.
+
+SOTU-2. `strip_orphaned_tool_use` MUST collect the set of `call_id` values from top-level `ToolResult` nodes in `request.input`.
+
+SOTU-3. The transform MUST remove every ordinary `ToolCall` node in `request.input` whose `call_id` does not appear in the collected `ToolResult` set.
+
+SOTU-4. `strip_orphaned_tool_use` MUST NOT remove `ToolResult` nodes.
+
+SOTU-5. `strip_orphaned_tool_use` MUST preserve all non-`ToolCall` ordinary nodes unchanged.
+
+SOTU-6. `strip_orphaned_tool_use` MUST preserve control nodes unchanged.
+
+### 4.6 Image transforms on request ordinary nodes
+
+CUMI-1. `compress_user_message_images` is request-phase only.
 
 CUMI-2. Config MAY contain:
-- `max_edge_px` (integer, optional): maximum allowed width or height of a compressed image. Defaults to `1568`.
-- `jpeg_quality` (integer, optional): JPEG quality used when the output image has no alpha channel. Defaults to `80`.
-- `skip_if_smaller` (boolean, optional): if `true`, the transform MUST keep the original image when the compressed payload is not smaller than the original payload. Defaults to `true`.
+- `max_edge_px` (integer, default `1568`)
+- `jpeg_quality` (integer, default `80`)
+- `skip_if_smaller` (boolean, default `true`)
 
-CUMI-3. Input eligibility:
-1. The transform MUST inspect only messages with `role == user`.
-2. Within those messages, the transform MUST inspect `Part::Image` parts whose `source` is either:
-   - `ImageSource::Base64`; or
-   - `ImageSource::Url` whose `url` field is a `data:<image-media-type>;base64,<payload>` URL.
-3. `ImageSource::Url` parts that refer to non-`data:` URLs MUST be left unchanged.
-4. Parts whose media type is not decodable by the image codec stack MUST be left unchanged.
+CUMI-3. The transform MUST inspect only ordinary `Image` nodes with `role = user`.
 
-CUMI-4. Compression behavior:
-1. The transform MUST base64-decode the input bytes.
-2. If either image dimension exceeds `max_edge_px`, the transform MUST resize the image so that `max(width, height) == max_edge_px` and the original aspect ratio is preserved.
-3. If the decoded image has no alpha channel, the transform MUST encode the output as JPEG using a JPEG optimization crate and `jpeg_quality`.
-4. If the decoded image has an alpha channel, the transform MUST encode the output as PNG and MAY run an additional lossless PNG optimization pass before persistence.
-5. If `skip_if_smaller == true` and the transformed byte length is greater than or equal to the original byte length, the transform MUST keep the original part unchanged.
-6. On successful replacement:
-   - if the original source was `ImageSource::Base64`, the transform MUST update the part to `ImageSource::Base64 { media_type, data }` using the transformed media type and transformed base64 payload;
-   - if the original source was a `data:` URL in `ImageSource::Url`, the transform MUST keep the source variant as `ImageSource::Url` and replace `url` with a transformed `data:<media-type>;base64,<payload>` URL.
-7. When the original source is `ImageSource::Url` and carries provider-specific fields such as `detail`, the transform MUST preserve those fields unchanged.
+CUMI-4. Eligible image sources are:
+1. `Image.source = Base64`; or
+2. `Image.source = Url` whose `url` is a `data:<image-media-type>;base64,<payload>` URL.
 
-CUMI-5. Cache key and persistence:
-1. Successful transformed outputs MUST be persisted on local disk.
-2. The cache key MUST be a deterministic hash of: transform version identifier, input media type, compression config, and original decoded bytes.
-3. Cache lookup MUST occur before recompression.
-4. Cache hits MUST return the persisted transformed payload without recomputing the image.
-5. Cache entries that cannot be decoded from disk MUST be treated as misses and MAY be deleted eagerly.
+CUMI-5. Non-`data:` URL sources MUST remain unchanged.
 
-CUMI-6. Cache directory and eviction:
-1. Cache files MUST be stored under a dedicated image-transform cache directory.
-2. Each cache file MUST correspond to exactly one hash key.
-3. The runtime MUST run a periodic cleanup task that deletes cache files whose last-modified time is older than the cache TTL.
-4. Cache reads MUST treat expired files as misses even if the periodic cleanup task has not removed them yet.
+CUMI-6. If the media type is not decodable by the image codec stack, the node MUST remain unchanged.
 
-CUMI-7. Failure handling:
-1. Invalid base64 image payloads MUST leave the original part unchanged.
-2. Unsupported or undecodable image payloads MUST leave the original part unchanged.
-3. Cache write failures or cache cleanup failures MUST NOT mutate the request incorrectly; if compression succeeds but cache persistence fails, the runtime MAY still use the in-memory transformed payload for the current request.
+CUMI-7. On successful replacement:
+1. `Base64` sources MUST remain `Base64` with updated `media_type` and `data`;
+2. `data:` URL sources MUST remain `Url` with updated `url`; and
+3. provider-specific typed fields such as image detail hints MUST remain unchanged.
 
-### 4.4 `resolve_image_urls`
+CUMI-8. The cache key, persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary `Image` nodes rather than to nested message parts.
 
-RIU-1. Phase: `request` only.
+RIU-1. `resolve_image_urls` is request-phase only.
 
 RIU-2. Config MAY contain:
-- `timeout_seconds` (integer, optional): HTTP request timeout per image fetch. Defaults to `30`.
-- `max_bytes` (integer, optional): maximum response body size in bytes. If exceeded, the URL is left unchanged. Defaults to `20971520` (20 MiB).
-- `roles` (string array, optional): message roles whose `Part::Image` URL parts should be resolved. If absent, all roles (`user`, `assistant`, `system`, `developer`) are eligible.
+- `timeout_seconds` (integer, default `30`)
+- `max_bytes` (integer, default `20971520`)
+- `roles` (string array of ordinary roles, optional)
 
-RIU-3. Input eligibility:
-1. The transform MUST inspect messages whose role is in the configured `roles` set.
-2. Within those messages, the transform MUST inspect `Part::Image` parts whose `source` is `ImageSource::Url` and whose `url` does NOT start with `data:`.
-3. `ImageSource::Base64` parts MUST be left unchanged.
-4. `ImageSource::Url` parts whose `url` starts with `data:` MUST be left unchanged (these are inline data URLs, not remote resources).
+RIU-3. The transform MUST inspect only ordinary `Image` nodes whose `role` is in the configured role set, or all ordinary roles when `roles` is absent.
 
-RIU-4. Fetch behavior:
-1. For each eligible URL part, the transform MUST issue an HTTP GET request using the shared `reqwest::Client` from `TransformRuntimeContext`.
-2. The request MUST use the configured `timeout_seconds` as the per-request timeout.
-3. If the HTTP response status is not 2xx, the transform MUST log a warning and leave the original URL part unchanged.
-4. If the response body exceeds `max_bytes`, the transform MUST log a warning and leave the original URL part unchanged.
-5. The media type MUST be determined from the `Content-Type` response header. If absent, the transform MUST infer from the URL file extension. If inference fails, `application/octet-stream` MUST be used.
+RIU-4. The transform MUST inspect only `Image.source = Url` whose `url` does not start with `data:`.
 
-RIU-5. Replacement:
-1. On successful fetch, the transform MUST replace the `ImageSource::Url` with `ImageSource::Base64 { media_type, data }` where `data` is the standard base64 encoding of the fetched bytes.
+RIU-5. On successful fetch, the transform MUST replace the source with `Image.source = Base64 { media_type, data }` using standard base64 encoding.
 
-RIU-6. Concurrency:
-1. Multiple URL fetches within a single request MUST be issued concurrently (not sequentially).
+RIU-6. Multiple eligible image fetches within one request MUST be concurrent.
 
-RIU-7. Failure isolation:
-1. A failed fetch for one image MUST NOT prevent other images in the same request from being resolved.
-2. A failed fetch MUST leave the original `ImageSource::Url` unchanged.
+RIU-7. A failed fetch for one image node MUST NOT block other eligible image nodes and MUST leave the failed node unchanged.
 
-### 4.5 `split_sse_frames`
+### 4.7 Reasoning transforms on flat nodes and stream state
 
-SSF-1. Phase: `response` only.
-
-SSF-2. Config MAY contain:
-- `max_frame_length` (integer, optional): maximum allowed byte length of any emitted downstream SSE frame payload produced by this transform. Defaults to `131072`.
-
-SSF-3. Default rationale:
-1. The default value `131072` MUST match the effective default aiohttp `StreamReader.readline()` high-water limit for SSE body lines when aiohttp client settings are left at defaults.
-2. The runtime MUST NOT use aiohttp HTTP-header parser limits such as `8190` as the default for this transform, because those limits apply to header parsing rather than SSE body payload lines.
-
-SSF-4. Activation and scope:
-1. If a streaming request matches at least one enabled `split_sse_frames` response-phase rule, the runtime MUST execute the request through the existing response-transform synthetic-stream path defined in PIPE-1a.
-2. The transform MUST affect only downstream SSE emitted by Monoize.
-3. Non-stream requests MUST remain semantically unchanged.
-
-SSF-5. Splitting behavior:
-1. The runtime MUST preserve downstream protocol correctness for Responses, Chat Completions, and Anthropic Messages SSE output.
-2. The runtime MUST split oversized string-bearing delta payloads into multiple smaller downstream SSE events of the same protocol/event kind, in original order, such that concatenating the payload fragments according to the downstream protocol reconstructs the original content.
-3. Eligible split targets include text deltas, reasoning deltas, reasoning signature deltas, and tool-argument deltas.
-4. The runtime MUST NOT split inside a JSON string literal by inserting raw SSE line breaks into serialized JSON text.
-
-SSF-6. Snapshot event handling:
-1. If a Responses synthetic stream event contains a full snapshot object whose serialized payload would exceed `max_frame_length` because it duplicates content already emitted in delta events, the runtime MAY replace large text-bearing fields in that snapshot with protocol-valid empty values.
-2. When such sanitization occurs, the downstream stream MUST remain reconstructable from the emitted delta events and terminal events.
-3. Lifecycle events that are already within `max_frame_length` MUST be emitted unchanged.
-
-SSF-7. Failure handling:
-1. If `max_frame_length` is too small to encode even the minimal protocol wrapper for a required event, the runtime MAY emit the minimal unsplit event for that wrapper rather than fail the entire request.
-2. The transform MUST preserve event order.
-3. The transform MUST NOT change `usage`, `finish_reason`, `call_id`, `name`, `phase`, or role metadata except for emptying duplicated large snapshot strings under SSF-6.
-
-### 4.5 `plaintext_reasoning_to_summary`
-
-PRTS-1. Phase: `response` only.
+PRTS-1. `plaintext_reasoning_to_summary` is response-phase only.
 
 PRTS-2. Config MUST be an empty object.
 
-PRTS-3. Response behavior:
-1. The transform MUST inspect only `Part::Reasoning` parts.
-2. If a reasoning part carries plaintext reasoning in `content`, the transform MUST move the plaintext value into `summary` and clear `content`.
-3. Rule PRTS-3.2 applies regardless of whether the same reasoning part also carries `encrypted != None`.
-4. If a reasoning part already has `summary`, the transform MUST replace `summary` with the plaintext `content` value when rule PRTS-3.2 applies.
-5. The transform MUST preserve `encrypted`, `source`, and `extra_body` exactly.
-6. Empty plaintext content MUST NOT create a non-empty summary.
+PRTS-3. On non-stream responses, the transform MUST inspect only ordinary `Reasoning` nodes.
 
-PRTS-4. Streaming behavior:
-1. For `UrpStreamEvent::Delta` reasoning deltas that correspond to non-encrypted reasoning, the transform MUST mark the delta as summary reasoning by setting `extra_body.reasoning_delta_type = "summary"`.
-2. If a reasoning delta carries an encrypted signature in stream `extra_body.signature`, the transform MUST treat that reasoning part as encrypted and MUST NOT mark subsequent deltas for that part as summary deltas.
-3. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same plaintext-to-summary rewrite defined by PRTS-3.
+PRTS-4. If a `Reasoning` node carries non-empty plaintext `content`, the transform MUST move that value into `summary` and clear `content`.
 
-### 4.5a `reasoning_summary_to_raw_cot`
+PRTS-5. PRTS-4 applies whether or not the same `Reasoning` node also carries `encrypted`.
 
-RSRC-1. Phase: `response` only.
+PRTS-6. If a `Reasoning` node already has `summary`, the moved plaintext `content` value MUST replace the previous `summary`.
+
+PRTS-7. The transform MUST preserve `encrypted`, `source`, and node-local `extra_body`.
+
+PRTS-8. Empty plaintext content MUST NOT create a non-empty summary.
+
+PRTS-9. On streams, the transform MAY annotate `NodeDelta` event `extra_body` to mark summary-oriented reasoning deltas, but terminal correctness is defined by `NodeDone.node` and `ResponseDone.output` after applying PRTS-4 through PRTS-8 to `Reasoning` nodes.
+
+RSRC-1. `reasoning_summary_to_raw_cot` is response-phase only.
 
 RSRC-2. Config MUST be an empty object.
 
-RSRC-3. Response behavior:
-1. The transform MUST inspect only `Part::Reasoning` parts.
-2. If a reasoning part carries a non-empty `summary`, the transform MUST mark that part for OpenWebUI-compatible raw-CoT emission by setting `part.extra_body.openwebui_reasoning_content = true`.
-3. The transform MUST NOT modify `content`, `summary`, or `encrypted` field values.
+RSRC-3. On non-stream responses, the transform MUST inspect only ordinary `Reasoning` nodes.
 
-RSRC-4. Streaming behavior:
-1. For `UrpStreamEvent::Delta` reasoning deltas already marked as summary deltas (`extra_body.reasoning_delta_type = "summary"`), the transform MUST also set `extra_body.openwebui_reasoning_content = true`.
-2. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same part marking defined by RSRC-3.
+RSRC-4. If a `Reasoning` node carries non-empty `summary`, the transform MUST mark that node for OpenWebUI-compatible raw chain-of-thought emission by setting node-local `extra_body.openwebui_reasoning_content = true`.
 
-RSRC-5. Downstream Chat Completions compatibility:
-1. When a Chat Completions encoder sees `openwebui_reasoning_content = true` on a reasoning summary, it MUST emit that summary through OpenWebUI-compatible raw-CoT fields (`reasoning_content` for non-streaming, `delta.reasoning_content` for streaming).
-2. This transform MUST be optional. Without the transform enabled, the default Chat Completions behavior remains the existing OpenRouter-style `reasoning_details` summary extension.
+RSRC-5. The transform MUST NOT modify `content`, `summary`, or `encrypted`.
 
-### 4.5b `reasoning_content_delta`
+RSRC-6. On streams, the transform MAY annotate reasoning `NodeDelta` event `extra_body` for downstream encoders, but terminal correctness is defined by marking the final `Reasoning` nodes in `NodeDone.node` and `ResponseDone.output`.
 
-RCD-1. Phase: `response` only.
+RSRC-7. When a downstream Chat Completions encoder sees `openwebui_reasoning_content = true` on a reasoning summary node, it MUST emit that summary through OpenWebUI-compatible raw-CoT fields for non-streaming and streaming encodings.
+
+RCD-1. `reasoning_content_delta` is response-phase only.
 
 RCD-2. Config MUST be an empty object.
 
-RCD-3. Value resolution:
-1. For each `Part::Reasoning` (response) or `PartDelta::Reasoning` (stream delta), the transform MUST resolve a `reasoning_content` value as follows:
-   - If plaintext `content` is present and non-empty, use that value.
-   - Else if `summary` is present and non-empty, use that value.
-   - Else no value is resolved; the transform MUST NOT inject anything.
-2. `encrypted` MUST NOT contribute to the resolved `reasoning_content` value. If a reasoning part or delta carries only encrypted reasoning payload and no plaintext `content` or `summary`, the transform MUST inject nothing.
-3. The transform MUST NOT modify `content`, `summary`, or `encrypted` field values.
+RCD-3. For each ordinary `Reasoning` node or reasoning `NodeDelta`, the transform MUST resolve a plaintext `reasoning_content` value as follows:
+1. use non-empty `content` if present;
+2. otherwise use non-empty `summary` if present; and
+3. otherwise resolve no value.
 
-RCD-4. Response behavior:
-1. If a value is resolved per RCD-3, the transform MUST set `part.extra_body.inject_reasoning_content = Value::String(resolved_value)`.
-2. Parts where no value is resolved MUST remain unchanged.
+RCD-4. `encrypted` MUST NOT contribute to the resolved value.
 
-RCD-5. Streaming behavior:
-1. For `UrpStreamEvent::Delta` with `PartDelta::Reasoning`, the transform MUST resolve per RCD-3 and, if a value is found, set `event.extra_body.inject_reasoning_content = Value::String(resolved_value)`.
-2. For `PartDone.part` and `ResponseDone.outputs`, the transform MUST apply the same logic as RCD-4.
+RCD-5. If a resolved value exists on a terminal `Reasoning` node, the transform MUST set node-local `extra_body.inject_reasoning_content` to that string.
 
-RCD-6. Downstream Chat Completions compatibility:
-1. When a Chat Completions encoder (streaming or synthetic) sees `inject_reasoning_content` as a non-empty string in `extra_body`, it MUST emit an additional SSE chunk whose JSON payload places that value at `choices[0].delta.reasoning_content`, before emitting the standard `reasoning_details` fields.
-2. This provides DeepSeek-style `reasoning_content` field injection for downstream clients that only recognize that field.
-3. This transform MUST be independent of `reasoning_summary_to_raw_cot`. Both MAY be enabled simultaneously without conflict.
-4. The additional `choices[0].delta.reasoning_content` chunk defined by RCD-6.1 MUST contain only plaintext reasoning derived per RCD-3. Encrypted reasoning payloads MUST continue to flow only through the normal Chat Completions reasoning fields when those fields are otherwise enabled.
+RCD-6. If a resolved value exists on a reasoning `NodeDelta`, the transform MAY set event-local `extra_body.inject_reasoning_content` to that string.
 
-### 4.6 `assistant_markdown_images_to_output`
+RCD-7. If a reasoning node or delta carries only encrypted reasoning and no plaintext `content` or `summary`, the transform MUST inject nothing.
 
-AMIO-1. Phase: `response` only.
+RCD-8. The transform MUST be independent of `reasoning_summary_to_raw_cot`. Both transforms MAY be enabled simultaneously.
+
+RCD-9. When a downstream Chat Completions encoder sees non-empty `inject_reasoning_content`, it MUST emit the additional OpenRouter-compatible or DeepSeek-compatible downstream reasoning-content field without removing normal reasoning fields.
+
+### 4.8 Response image transforms on flat ordinary nodes and stream state
+
+AMIO-1. `assistant_markdown_images_to_output` is response-phase only.
 
 AMIO-2. Config MUST be an empty object.
 
-AMIO-3. Extraction target:
-1. The transform MUST inspect only assistant `Item::Message` items.
-2. Within those items, the transform MUST inspect only `Part::Text` parts.
-3. The transform MUST recognize Markdown image syntax of the form `![alt](url)`.
-4. The transform MUST accept both ordinary URLs and `data:image/<subtype>;base64,<payload>` URLs.
+AMIO-3. The transform MUST inspect only ordinary assistant `Text` nodes.
 
-AMIO-4. Extraction behavior:
-1. Each recognized Markdown image block MUST be removed from the originating text content.
-2. Each recognized block MUST be converted into a `Part::Image` output part.
-3. Ordinary URLs MUST become `ImageSource::Url { url, detail: None }`.
-4. `data:image/...;base64,...` URLs MUST become `ImageSource::Base64 { media_type, data }`.
-5. Non-image `data:` URLs and malformed Markdown image blocks MUST remain in text unchanged.
-6. Extracted image parts MUST be inserted immediately after the originating text part, preserving original order.
-7. If removing Markdown image blocks leaves a text part empty, the transform MAY remove that empty text part.
+AMIO-4. The transform MUST recognize Markdown image syntax `![alt](url)` inside those text-node contents.
 
-AMIO-5. Streaming behavior:
-1. For downstream streaming protocols that can represent assistant image parts incrementally (including `/v1/responses`), the transform MUST preserve pass-through timing by buffering only the ambiguous Markdown-image suffix needed to disambiguate `![...](...)`, emitting cleaned text deltas for safe text prefixes, and emitting image-part lifecycle events in original order once a full Markdown image block is recognized.
-2. Under the pass-through behavior in AMIO-5.1, the transform MUST update at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative streamed response state contains the cleaned text and the new image parts.
-3. For downstream streaming protocols that cannot faithfully surface extracted assistant image parts incrementally, the runtime MUST execute the transform through the response-transform fallback path defined in PIPE-1a.
+AMIO-5. Recognized ordinary URLs MUST become ordinary assistant `Image` nodes with `Image.source = Url { url, detail: None }`.
 
-### 4.7 `assistant_output_images_to_markdown`
+AMIO-6. Recognized `data:image/...;base64,...` URLs MUST become ordinary assistant `Image` nodes with `Image.source = Base64 { media_type, data }`.
 
-AOIM-1. Phase: `response` only.
+AMIO-7. Non-image `data:` URLs and malformed Markdown image blocks MUST remain inside the text content unchanged.
 
-AOIM-2. Config MAY contain:
-- `template` (string, optional): string template used for each image appended to assistant text. Supported raw placeholders are `{{src}}`, `{{url}}`, `{{media_type}}`, and `{{data}}`. Supported percent-encoded placeholders are `{{src_urlencoded}}`, `{{url_urlencoded}}`, `{{media_type_urlencoded}}`, and `{{data_urlencoded}}`.
+AMIO-8. Extracted image nodes MUST be inserted immediately after the originating ordinary assistant text node, preserving original order.
 
-AOIM-2a. Placeholder resolution:
-1. Raw placeholders MUST expand to the literal value without percent-encoding.
-2. Percent-encoded placeholders MUST percent-encode the UTF-8 bytes of the corresponding raw value.
-3. For `ImageSource::Url`, `src` and `url` MUST both resolve to the source URL, and `media_type` and `data` MUST resolve to the empty string.
-4. For `ImageSource::Base64`, `src` MUST resolve to `data:{media_type};base64,{data}`, `url` MUST resolve to the empty string, and `media_type` and `data` MUST resolve to the underlying raw fields.
-5. Percent-encoded placeholders exist so templates that embed image values inside another URL can preserve reserved characters such as `/`, `+`, `=`, `:`, and `,` as data rather than URL syntax.
+AMIO-9. If removing Markdown image blocks leaves a text node empty, the transform MAY remove that text node.
 
-AOIM-3. Default formatting:
-1. If `template` is absent and the image source is `ImageSource::Url`, the transform MUST render `![image]({url})`.
-2. If `template` is absent and the image source is `ImageSource::Base64`, the transform MUST render `![image](data:{media_type};base64,{data})`.
+AMIO-10. On streams where the downstream protocol can faithfully represent extracted image nodes incrementally, the transform MUST preserve pass-through timing by buffering only the ambiguous Markdown suffix required to disambiguate a candidate image block, emitting safe text deltas as soon as possible, and emitting image-node lifecycle events in source order once one full Markdown image block is recognized.
 
-AOIM-4. Response behavior:
-1. The transform MUST inspect only assistant `Item::Message` items.
-2. For each `Part::Image` in such a message, the transform MUST format one Markdown image string according to AOIM-2 or AOIM-3.
-3. The transform MUST append the formatted Markdown strings to the end of assistant text output.
-4. If the assistant message already contains at least one `Part::Text`, the transform MUST append the formatted Markdown strings to the final text part in that message.
-5. If the assistant message contains no text part, the transform MUST create a new trailing `Part::Text` containing the formatted Markdown strings.
-6. The transform MUST NOT remove or rewrite the original `Part::Image` parts.
+AMIO-11. Under the incremental path in AMIO-10, the transform MUST update terminal `NodeDone.node` and `ResponseDone.output` so the authoritative final flat node state contains the cleaned text nodes and inserted image nodes.
 
-AOIM-5. Streaming behavior:
-1. If a streaming request remains on the pass-through stream path, the transform MUST preserve pass-through timing and MUST apply only to terminal stream state by updating at least `ItemDone.item` and `ResponseDone.outputs` so the authoritative final streamed response state includes the appended Markdown image strings.
-2. If a streaming request is already executing through the synthetic-stream response-transform path because of some other matching whole-response transform, the transformed final `UrpResponse` MUST produce downstream text deltas that include the appended Markdown image strings.
-3. `assistant_output_images_to_markdown` by itself MUST NOT require the runtime to switch an otherwise pass-through stream into buffered synthetic streaming.
+AMIO-12. If the selected downstream protocol cannot faithfully represent the incremental rewritten node lifecycle, the runtime MUST use the buffered synthetic stream path.
 
-### 4.1 `reasoning_effort_to_model_suffix`
+AOIM-1. `assistant_output_images_to_markdown` is response-phase only.
 
-REMS-1. Phase: `request` only.
+AOIM-2. Config MAY contain `template: string`.
 
-REMS-2. Config MUST contain `rules`: a non-empty ordered array of objects, each with:
-- `pattern`: model glob pattern (same syntax as TF-4 model matching).
-- `suffix`: string template. The literal substring `{effort}` MUST be replaced with the resolved effort value (`low`, `medium`, or `high`).
+AOIM-3. Raw placeholders are `{{src}}`, `{{url}}`, `{{media_type}}`, and `{{data}}`. Percent-encoded placeholders are `{{src_urlencoded}}`, `{{url_urlencoded}}`, `{{media_type_urlencoded}}`, and `{{data_urlencoded}}`.
 
-REMS-3. On apply:
-1. Read `req.reasoning.effort`. If absent or not one of `low`/`medium`/`high`, skip (no-op).
-2. Iterate `rules` in order. For the first rule whose `pattern` matches `req.model`, expand `{effort}` in `suffix` and append the result to `req.model`.
-3. First match wins; remaining rules are not evaluated.
+AOIM-4. Placeholder resolution MUST follow these exact rules:
+1. raw placeholders expand to literal values;
+2. percent-encoded placeholders expand to percent-encoded UTF-8 bytes of the raw value;
+3. for `Image.source = Url`, `src` and `url` both resolve to the source URL while `media_type` and `data` resolve to empty strings; and
+4. for `Image.source = Base64`, `src` resolves to `data:{media_type};base64,{data}`, `url` resolves to the empty string, and `media_type` and `data` resolve to the underlying raw fields.
 
-REMS-4. The transform MUST NOT modify `req.reasoning`. Effort-stripping is a separate concern handled by other transforms or the upstream adapter.
+AOIM-5. If `template` is absent, the transform MUST render `![image]({url})` for URL-backed image nodes and `![image](data:{media_type};base64,{data})` for base64-backed image nodes.
 
-## 5. Routing + Transform Pipeline
+AOIM-6. The transform MUST inspect only ordinary assistant `Image` nodes.
 
-PIPE-1. Non-stream and stream request lifecycle MUST execute as:
+AOIM-7. The transform MUST append the rendered Markdown strings to assistant text output in source order.
 
-1. Decode downstream wire payload to URP.
-2. Apply API-key request-phase transforms.
-3. Resolve model suffix (§5.1).
-4. Route to provider/channel using waterfall + fail-forward.
-5. Set `urp.model` to the resolved upstream model (via `redirect` or requested model).
-6. Apply provider request-phase transforms (transforms MAY modify `urp.model`).
-7. Encode URP to upstream wire payload using `urp.model` as the upstream model name, and send.
-8. Decode upstream response/stream to URP.
-9. Apply provider response-phase transforms.
-10. Apply API-key response-phase transforms.
-11. Encode URP to downstream wire response using the original requested model name.
+AOIM-8. If an assistant text node already exists later in the same encoder-owned ordinary-node run, the rendered Markdown MUST append to the final such text node. Otherwise the transform MUST create one new trailing ordinary assistant `Text` node.
 
-PIPE-1b. Model identity split:
-- The upstream model name sent to the provider is `urp.model` after step 6 (post-transform).
-- Billing, logging, and downstream response `model` field MUST use the original requested model name (pre-step-5).
+AOIM-9. The transform MUST NOT remove or rewrite the original image nodes.
 
-PIPE-1c. Transform rule model matching:
-- Define the normalized logical model as follows:
-  1. Start from the original requested model name from downstream.
-  2. If that requested model matches a configured reasoning suffix under §5.1 and stripping the suffix yields an existing provider model, use the stripped base model.
-  3. Otherwise use the original requested model name unchanged.
-- API-key request-phase transform rules with `models` filters MUST match against the normalized logical model.
-- Provider request-phase transform rules with `models` filters MUST match against the normalized logical model, even though `urp.model` may already hold the redirected upstream model at execution time.
-- Response-phase transform rules with `models` filters MUST match against the normalized logical model.
+AOIM-10. On pass-through streams, the transform MUST preserve pass-through timing and MAY apply only to terminal stream state by updating `NodeDone.node` and `ResponseDone.output`.
 
-### 5.1 Model Suffix Resolution
+AOIM-11. If a request is already on the buffered synthetic path because of another matching response transform, the final transformed `UrpResponseV2` MUST produce downstream text deltas that include the appended Markdown.
 
-MSUF-1. After API-key request transforms and before routing, the runtime MUST attempt model suffix resolution.
+AOIM-12. `assistant_output_images_to_markdown` alone MUST NOT force an otherwise pass-through stream onto the buffered synthetic path.
 
-MSUF-2. If the requested model exists in at least one enabled provider's model table, suffix resolution is a no-op.
+### 4.9 `split_sse_frames`
 
-MSUF-3. If the requested model does NOT exist in any provider, the runtime MUST attempt to strip a known suffix from the model name:
-- Built-in effort suffixes: `-none`, `-minimum`, `-low`, `-medium`, `-high`, `-xhigh`, `-max` (where `-max` maps to `xhigh`).
-- System settings `reasoning_suffix_map`: user-defined suffix→effort mappings (e.g. `{"-thinking": "high"}`).
+SSF-1. Phase: response only.
 
-MSUF-4. Settings suffixes MUST take priority over built-in suffixes. Among settings suffixes, longer suffixes MUST be tried before shorter ones.
+SSF-2. Config MAY contain `max_frame_length` as an integer. Default value is `131072`.
 
-MSUF-5. On successful suffix match (base model exists in at least one provider):
-- `urp.model` MUST be rewritten to the base model (suffix stripped).
-- `urp.reasoning.effort` MUST be set to the effort value mapped by the suffix.
+SSF-3. If a streaming request matches at least one enabled `split_sse_frames` response rule, the runtime MUST execute the request through the buffered synthetic stream path.
 
-MSUF-6. If no suffix match yields an existing base model, `urp` MUST remain unchanged.
+SSF-4. The transform affects only downstream SSE emitted by Monoize.
 
-PIPE-1a. Stream transform fallback:
-- precondition: request is streaming, and at least one enabled response-phase transform rule matches and either requires whole-response mutation rather than incremental `UrpStreamEvent` rewriting or cannot be represented faithfully by the selected downstream streaming protocol.
-- behavior: runtime calls upstream non-stream endpoint for the selected attempt, decodes to `UrpResponse`, applies response transforms, then emits synthesized downstream stream events from transformed response.
-- postcondition: transformed content is visible on stream path even when upstream native stream is bypassed.
+SSF-5. Non-stream requests remain semantically unchanged.
 
-PIPE-2. API key policy MUST support:
-- `max_multiplier` default routing constraint
-- ordered transform rules
+SSF-6. The transform MUST preserve downstream protocol correctness for Responses, Chat Completions, and Anthropic Messages SSE output.
 
-PIPE-3. Provider config MUST support ordered transform rules.
+SSF-7. The transform MUST split oversized string-bearing delta payloads into multiple smaller downstream SSE events of the same downstream protocol event kind, in original order, such that downstream concatenation reconstructs the original logical content.
 
-PIPE-4. If request max multiplier is absent, router MUST use API key max multiplier when configured.
+SSF-8. Eligible split targets include text deltas, reasoning deltas, opaque reasoning signature or encrypted deltas, and tool-argument deltas.
 
-## 6. Routing and Health
+SSF-9. The runtime MUST NOT split inside a serialized JSON string literal by inserting raw SSE line breaks.
 
-ROUT-1. Provider list MUST be evaluated in configured order.
+SSF-10. If a Responses synthetic stream snapshot event would exceed `max_frame_length` only because it duplicates content already emitted in prior delta events, the runtime MAY replace large duplicated text-bearing snapshot fields with protocol-valid empty values.
 
-ROUT-2. Provider filter conditions:
-- `provider.enabled = true`
-- requested model exists in provider model table
-- multiplier constraint satisfied
+SSF-11. Sanitization under SSF-10 MUST preserve reconstructability from the emitted delta sequence and terminal events.
 
-ROUT-3. Channel candidate conditions:
-- `channel.enabled = true`
-- `channel.weight > 0`
-- runtime health is healthy (or probing-eligible after cooldown)
+SSF-12. If `max_frame_length` is too small to encode even the minimal wrapper for one required downstream event, the runtime MAY emit that minimal unsplit event rather than fail the entire request.
 
-ROUT-4. Intra-provider retry behavior:
-- `max_retries = -1` => try all eligible channels
-- else try `min(max_retries + 1, eligible_count)`
+SSF-13. The transform MUST preserve event order and MUST NOT change usage, finish reason, `call_id`, node role, node phase, or other typed metadata except for the duplicated snapshot text fields allowed by SSF-10.
 
-ROUT-5. Retryable failures (`429`, `5xx`, timeout/network) MUST advance to next channel.
+### 4.10 `reasoning_effort_to_model_suffix`
 
-ROUT-6. Non-retryable failures (`400`,`401`,`403`,`422`) MUST return immediately.
+REMS-1. Phase: request only.
 
-ROUT-7. Provider exhaustion MUST fail-forward to next provider.
+REMS-2. Config MUST contain `rules`, a non-empty ordered array of objects with `pattern` and `suffix`.
 
-ROUT-8. Full exhaustion MUST return `502`.
+REMS-3. The literal substring `{effort}` inside `suffix` MUST expand to the resolved effort value.
 
-HEALTH-1. Passive health check defaults:
-- failure threshold = `3`
-- cooldown seconds = `60`
-- window seconds = `30`
-- minimum samples = `20`
-- failure-rate threshold = `0.6`
-- 429 cooldown seconds = `15`
+REMS-4. On apply:
+1. read `request.reasoning.effort`;
+2. if the effort is absent or not one of `low`, `medium`, or `high`, the transform MUST no-op;
+3. otherwise iterate `rules` in order;
+4. for the first matching rule, append the expanded suffix to `request.model`; and
+5. stop after the first match.
 
-HEALTH-1a. Passive breaker effective parameters MUST be channel-scoped: channel override first, global fallback.
+REMS-5. The transform MUST NOT modify `request.reasoning`.
 
-HEALTH-1b. Channel becomes unhealthy when either condition is met:
-- consecutive transient retryable failures (`5xx`/timeout/network) reach failure threshold; or
-- windowed failure rate reaches threshold with sample count meeting minimum.
+## 5. Routing and transform pipeline
 
-HEALTH-1c. If unhealthy is triggered by retryable `429`, the 429 cooldown seconds MUST be used.
+PIPE-1. Non-stream and stream requests MUST execute in this order:
+1. decode the downstream wire payload into URP v2;
+2. apply API-key request-phase transforms;
+3. resolve model suffix;
+4. route to provider and channel using waterfall plus fail-forward;
+5. set `request.model` to the selected upstream model name;
+6. if required, perform cross-family nested passthrough stripping under XSTRIP-3 through XSTRIP-8;
+7. apply provider request-phase transforms;
+8. encode URP v2 to the upstream wire payload using the selected upstream model name;
+9. decode the upstream response or stream into URP v2;
+10. apply provider response-phase transforms;
+11. apply API-key response-phase transforms; and
+12. encode URP v2 to the downstream wire response using the original requested logical model name.
 
-HEALTH-2. Active probe defaults:
-- enabled = `true`
-- interval seconds = `30`
-- probe model = `null` (fallback to provider first model)
-- success threshold = `1`
+PIPE-1a. For streaming requests that satisfy STR-9, the runtime MAY call the upstream non-stream endpoint for that attempt, decode to `UrpResponseV2`, apply response transforms, and emit synthesized downstream stream events. The postcondition is that transformed content remains visible on the stream path even when upstream native streaming is bypassed.
 
-HEALTH-3. Runtime health states MUST include `healthy`, `unhealthy`, `probing`.
+PIPE-1b. Model identity split is exact:
+1. the upstream model name sent to the provider is `request.model` after provider request-phase transforms; and
+2. billing, logging, and downstream response `model` field MUST use the original requested logical model name.
+
+PIPE-1c. Transform rule model matching MUST use the normalized logical model rather than temporary redirected upstream model names.
+
+PIPE-2. API-key policy MUST support a default `max_multiplier` routing constraint and ordered transform rules.
+
+PIPE-3. Provider configuration MUST support ordered transform rules.
+
+PIPE-4. If request max multiplier is absent, the router MUST use the API-key max multiplier when configured.
+
+## 6. Externally stable downstream safety constraints
+
+SAFE-1. The transform system rewrite to flat URP v2 MUST preserve externally observable Responses safety constraints.
+
+SAFE-2. For `/v1/responses`, downstream encoders and transforms MUST preserve observable response lifecycle, output-item lifecycle, content-part lifecycle, output ordering, addressing coordinates, item status transitions, and terminal `response.completed` ordering even though canonical internal storage is flat.
+
+SAFE-3. `ResponseDone.output` is the only authoritative terminal flat state used to reconstruct final Responses output items.
+
+SAFE-4. The transform system rewrite to flat URP v2 MUST preserve Anthropic Messages safety constraints.
+
+SAFE-5. For `/v1/messages`, downstream encoders and transforms MUST preserve the exact event lifecycle `message_start -> content_block_* -> message_delta -> message_stop`, preserve block index semantics as final content positions, preserve cumulative usage semantics, and keep `tool_result` distinct from ordinary role-bearing content.
+
+SAFE-6. The transform system rewrite to flat URP v2 MUST preserve OpenRouter-compatible Chat safety constraints.
+
+SAFE-7. For `/v1/chat/completions`, downstream encoders and transforms MUST preserve OpenRouter-compatible reasoning behavior, including `reasoning_details`, plain-text reasoning fields when those exact downstream fields already exist, final usage chunk semantics, SSE comment compatibility, and chunk-shaped streaming error compatibility.
+
+SAFE-8. Control nodes MUST NOT be emitted downstream as visible content. Their only normative downstream effect is envelope-level passthrough application by the next downstream encoder-owned consumable envelope.
+
+## 7. Validity summary
+
+VALID-1. A valid transform-visible URP v2 request or response uses flat top-level node sequences, not grouped message wrappers.
+
+VALID-2. `ToolResult` remains a distinct top-level node type and MUST NOT be reclassified as an ordinary role-bearing node.
+
+VALID-3. Control-node behavior is explicit only where stated in this specification. Otherwise control nodes are opaque sequence elements.
+
+VALID-4. Response stream terminal state is authoritative. `ResponseDone.output` is the final flat node sequence.
+
+VALID-5. If faithful incremental stream rewriting is not possible, buffered synthetic streaming remains allowed.
