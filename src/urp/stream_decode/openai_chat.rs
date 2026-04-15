@@ -9,7 +9,8 @@ use crate::urp::stream_helpers::{
     extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks,
 };
 use crate::urp::{
-    FinishReason, Item, ItemHeader, Part, PartDelta, PartHeader, Role, UrpStreamEvent,
+    FinishReason, Item, ItemHeader, Node, NodeDelta, NodeHeader, OrdinaryRole, Part, PartDelta,
+    PartHeader, Role, UrpStreamEvent,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -25,8 +26,8 @@ struct ChatToolCallStreamState<'a> {
     call_id_by_index: &'a mut HashMap<usize, String>,
     response_started: &'a mut bool,
     item_started: &'a mut bool,
-    next_part_index: &'a mut u32,
-    tool_part_index_by_call_id: &'a mut HashMap<String, u32>,
+    next_node_index: &'a mut u32,
+    tool_node_index_by_call_id: &'a mut HashMap<String, u32>,
 }
 
 pub(crate) async fn stream_chat_to_urp_events(
@@ -49,10 +50,10 @@ pub(crate) async fn stream_chat_to_urp_events(
 
     let mut response_started = false;
     let mut item_started = false;
-    let mut next_part_index = 0u32;
-    let mut text_part_index = None;
-    let mut reasoning_part_index = None;
-    let mut tool_part_index_by_call_id: HashMap<String, u32> = HashMap::new();
+    let mut next_node_index = 0u32;
+    let mut text_node_index = None;
+    let mut reasoning_node_index = None;
+    let mut tool_node_index_by_call_id: HashMap<String, u32> = HashMap::new();
     let mut finish_reason = None;
 
     let idle_timeout = std::time::Duration::from_secs(120);
@@ -126,14 +127,7 @@ pub(crate) async fn stream_chat_to_urp_events(
         }
 
         if delta.get("role").and_then(|v| v.as_str()) == Some("assistant") {
-            ensure_response_and_item_started(
-                &tx,
-                &response_id,
-                &urp.model,
-                &mut response_started,
-                &mut item_started,
-            )
-            .await?;
+            ensure_response_started(&tx, &response_id, &urp.model, &mut response_started).await?;
         }
 
         if let Some(t) = delta.get("content").and_then(|v| v.as_str()) {
@@ -142,10 +136,11 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &response_id,
                 &urp.model,
                 t,
+                assistant_message_phase.as_deref(),
                 &mut response_started,
                 &mut item_started,
-                &mut text_part_index,
-                &mut next_part_index,
+                &mut text_node_index,
+                &mut next_node_index,
                 &mut output_text,
             )
             .await?;
@@ -159,10 +154,11 @@ pub(crate) async fn stream_chat_to_urp_events(
                         &response_id,
                         &urp.model,
                         text,
+                        assistant_message_phase.as_deref(),
                         &mut response_started,
                         &mut item_started,
-                        &mut text_part_index,
-                        &mut next_part_index,
+                        &mut text_node_index,
+                        &mut next_node_index,
                         &mut output_text,
                     )
                     .await?;
@@ -182,8 +178,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                         reasoning_block.format.as_deref(),
                         &mut response_started,
                         &mut item_started,
-                        &mut reasoning_part_index,
-                        &mut next_part_index,
+                        &mut reasoning_node_index,
+                        &mut next_node_index,
                         &mut reasoning_summary,
                         &mut reasoning_source,
                     )
@@ -196,8 +192,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                         reasoning_block.format.as_deref(),
                         &mut response_started,
                         &mut item_started,
-                        &mut reasoning_part_index,
-                        &mut next_part_index,
+                        &mut reasoning_node_index,
+                        &mut next_node_index,
                         &mut reasoning_text,
                         &mut reasoning_source,
                     )
@@ -210,8 +206,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                         reasoning_block.format.as_deref(),
                         &mut response_started,
                         &mut item_started,
-                        &mut reasoning_part_index,
-                        &mut next_part_index,
+                        &mut reasoning_node_index,
+                        &mut next_node_index,
                         &mut reasoning_sig,
                         &mut reasoning_source,
                     )
@@ -227,10 +223,11 @@ pub(crate) async fn stream_chat_to_urp_events(
                             &response_id,
                             &urp.model,
                             text,
+                            assistant_message_phase.as_deref(),
                             &mut response_started,
                             &mut item_started,
-                            &mut text_part_index,
-                            &mut next_part_index,
+                            &mut text_node_index,
+                            &mut next_node_index,
                             &mut output_text,
                         )
                         .await?;
@@ -243,8 +240,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                     call_id_by_index: &mut call_id_by_index,
                     response_started: &mut response_started,
                     item_started: &mut item_started,
-                    next_part_index: &mut next_part_index,
-                    tool_part_index_by_call_id: &mut tool_part_index_by_call_id,
+                    next_node_index: &mut next_node_index,
+                    tool_node_index_by_call_id: &mut tool_node_index_by_call_id,
                 };
                 process_tool_call_delta(
                     &tx,
@@ -269,8 +266,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                 summary.format.as_deref(),
                 &mut response_started,
                 &mut item_started,
-                &mut reasoning_part_index,
-                &mut next_part_index,
+                &mut reasoning_node_index,
+                &mut next_node_index,
                 &mut reasoning_summary,
                 &mut reasoning_source,
             )
@@ -285,8 +282,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                 t.format.as_deref(),
                 &mut response_started,
                 &mut item_started,
-                &mut reasoning_part_index,
-                &mut next_part_index,
+                &mut reasoning_node_index,
+                &mut next_node_index,
                 &mut reasoning_text,
                 &mut reasoning_source,
             )
@@ -301,8 +298,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                 sig.format.as_deref(),
                 &mut response_started,
                 &mut item_started,
-                &mut reasoning_part_index,
-                &mut next_part_index,
+                &mut reasoning_node_index,
+                &mut next_node_index,
                 &mut reasoning_sig,
                 &mut reasoning_source,
             )
@@ -317,8 +314,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                     call_id_by_index: &mut call_id_by_index,
                     response_started: &mut response_started,
                     item_started: &mut item_started,
-                    next_part_index: &mut next_part_index,
-                    tool_part_index_by_call_id: &mut tool_part_index_by_call_id,
+                    next_node_index: &mut next_node_index,
+                    tool_node_index_by_call_id: &mut tool_node_index_by_call_id,
                 };
                 process_tool_call_delta(
                     &tx,
@@ -340,14 +337,7 @@ pub(crate) async fn stream_chat_to_urp_events(
         || !reasoning_summary.is_empty()
         || !call_order.is_empty()
     {
-        ensure_response_and_item_started(
-            &tx,
-            &response_id,
-            &urp.model,
-            &mut response_started,
-            &mut item_started,
-        )
-        .await?;
+        ensure_response_started(&tx, &response_id, &urp.model, &mut response_started).await?;
     }
 
     let usage = latest_stream_usage_snapshot(&runtime_metrics).await;
@@ -361,43 +351,59 @@ pub(crate) async fn stream_chat_to_urp_events(
         .await;
     }
     let item = build_assistant_item(
-        assistant_message_phase,
-        text_part_index,
+        assistant_message_phase.as_deref(),
+        text_node_index,
         &output_text,
-        reasoning_part_index,
+        reasoning_node_index,
         &reasoning_text,
         &reasoning_summary,
         &reasoning_sig,
         reasoning_source.as_deref(),
         &call_order,
         &calls,
-        &tool_part_index_by_call_id,
+        &tool_node_index_by_call_id,
     );
 
     if matches!(item, Item::Message { .. }) {
-        for (part_index, part) in sorted_parts(
-            text_part_index,
+        for (node_index, node) in sorted_nodes(
+            assistant_message_phase.as_deref(),
+            text_node_index,
             &output_text,
-            reasoning_part_index,
+            reasoning_node_index,
             &reasoning_text,
             &reasoning_summary,
             &reasoning_sig,
             reasoning_source.as_deref(),
             &call_order,
             &calls,
-            &tool_part_index_by_call_id,
+            &tool_node_index_by_call_id,
         ) {
             send_event(
                 &tx,
-                UrpStreamEvent::PartDone {
-                    part_index,
-                    part,
+                UrpStreamEvent::NodeDone {
+                    node_index,
+                    node: node.clone(),
                     usage: None,
                     extra_body: HashMap::new(),
                 },
             )
             .await?;
+
+            if let Some(part) = bridge_part_from_node(&node) {
+                send_event(
+                    &tx,
+                    UrpStreamEvent::PartDone {
+                        part_index: node_index,
+                        part,
+                        usage: None,
+                        extra_body: HashMap::new(),
+                    },
+                )
+                .await?;
+            }
         }
+
+        ensure_bridge_item_started(&tx, &mut item_started).await?;
 
         send_event(
             &tx,
@@ -415,7 +421,7 @@ pub(crate) async fn stream_chat_to_urp_events(
             UrpStreamEvent::ResponseDone {
                 finish_reason,
                 usage,
-                outputs: vec![item.clone()],
+                output: crate::urp::items_to_nodes(vec![item.clone()]),
                 extra_body: HashMap::new(),
             },
         )
@@ -431,31 +437,42 @@ async fn process_text_delta(
     response_id: &str,
     model: &str,
     text: &str,
+    phase: Option<&str>,
     response_started: &mut bool,
     item_started: &mut bool,
-    text_part_index: &mut Option<u32>,
-    next_part_index: &mut u32,
+    text_node_index: &mut Option<u32>,
+    next_node_index: &mut u32,
     output_text: &mut String,
 ) -> AppResult<()> {
     if text.is_empty() {
         return Ok(());
     }
 
-    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
-        .await?;
-    let part_index =
-        ensure_part_started(tx, 0, text_part_index, next_part_index, PartHeader::Text).await?;
-    output_text.push_str(text);
-    send_event(
+    let node_index = ensure_node_started(
         tx,
-        UrpStreamEvent::Delta {
-            part_index,
-            delta: PartDelta::Text {
-                content: text.to_string(),
-            },
-            usage: None,
-            extra_body: HashMap::new(),
+        response_id,
+        model,
+        response_started,
+        item_started,
+        text_node_index,
+        next_node_index,
+        NodeHeader::Text {
+            id: None,
+            role: OrdinaryRole::Assistant,
+            phase: phase.map(str::to_string),
         },
+        Some(PartHeader::Text),
+        HashMap::new(),
+    )
+    .await?;
+    output_text.push_str(text);
+    send_node_delta_with_bridge(
+        tx,
+        node_index,
+        NodeDelta::Text {
+            content: text.to_string(),
+        },
+        HashMap::new(),
     )
     .await?;
     Ok(())
@@ -483,8 +500,8 @@ async fn process_reasoning_summary_delta(
     source: Option<&str>,
     response_started: &mut bool,
     item_started: &mut bool,
-    reasoning_part_index: &mut Option<u32>,
-    next_part_index: &mut u32,
+    reasoning_node_index: &mut Option<u32>,
+    next_node_index: &mut u32,
     reasoning_summary: &mut String,
     reasoning_source: &mut Option<String>,
 ) -> AppResult<()> {
@@ -494,29 +511,29 @@ async fn process_reasoning_summary_delta(
 
     let source = resolve_reasoning_source(reasoning_source, source);
     reasoning_summary.push_str(summary);
-    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
-        .await?;
-    let part_index = ensure_part_started(
+    let node_index = ensure_node_started(
         tx,
-        0,
-        reasoning_part_index,
-        next_part_index,
-        PartHeader::Reasoning,
+        response_id,
+        model,
+        response_started,
+        item_started,
+        reasoning_node_index,
+        next_node_index,
+        NodeHeader::Reasoning { id: None },
+        Some(PartHeader::Reasoning { id: None }),
+        HashMap::new(),
     )
     .await?;
-    send_event(
+    send_node_delta_with_bridge(
         tx,
-        UrpStreamEvent::Delta {
-            part_index,
-            delta: PartDelta::Reasoning {
-                content: None,
-                encrypted: None,
-                summary: Some(summary.to_string()),
-                source,
-            },
-            usage: None,
-            extra_body: HashMap::new(),
+        node_index,
+        NodeDelta::Reasoning {
+            content: None,
+            encrypted: None,
+            summary: Some(summary.to_string()),
+            source,
         },
+        HashMap::new(),
     )
     .await?;
     Ok(())
@@ -531,8 +548,8 @@ async fn process_reasoning_text_delta(
     source: Option<&str>,
     response_started: &mut bool,
     item_started: &mut bool,
-    reasoning_part_index: &mut Option<u32>,
-    next_part_index: &mut u32,
+    reasoning_node_index: &mut Option<u32>,
+    next_node_index: &mut u32,
     reasoning_text: &mut String,
     reasoning_source: &mut Option<String>,
 ) -> AppResult<()> {
@@ -541,30 +558,30 @@ async fn process_reasoning_text_delta(
     };
 
     let source = resolve_reasoning_source(reasoning_source, source);
-    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
-        .await?;
-    let part_index = ensure_part_started(
+    let node_index = ensure_node_started(
         tx,
-        0,
-        reasoning_part_index,
-        next_part_index,
-        PartHeader::Reasoning,
+        response_id,
+        model,
+        response_started,
+        item_started,
+        reasoning_node_index,
+        next_node_index,
+        NodeHeader::Reasoning { id: None },
+        Some(PartHeader::Reasoning { id: None }),
+        HashMap::new(),
     )
     .await?;
     reasoning_text.push_str(content);
-    send_event(
+    send_node_delta_with_bridge(
         tx,
-        UrpStreamEvent::Delta {
-            part_index,
-            delta: PartDelta::Reasoning {
-                content: Some(content.to_string()),
-                encrypted: None,
-                summary: None,
-                source,
-            },
-            usage: None,
-            extra_body: HashMap::new(),
+        node_index,
+        NodeDelta::Reasoning {
+            content: Some(content.to_string()),
+            encrypted: None,
+            summary: None,
+            source,
         },
+        HashMap::new(),
     )
     .await?;
     Ok(())
@@ -579,8 +596,8 @@ async fn process_reasoning_encrypted_delta(
     source: Option<&str>,
     response_started: &mut bool,
     item_started: &mut bool,
-    reasoning_part_index: &mut Option<u32>,
-    next_part_index: &mut u32,
+    reasoning_node_index: &mut Option<u32>,
+    next_node_index: &mut u32,
     reasoning_sig: &mut String,
     reasoning_source: &mut Option<String>,
 ) -> AppResult<()> {
@@ -600,30 +617,30 @@ async fn process_reasoning_encrypted_delta(
     }
 
     let source = resolve_reasoning_source(reasoning_source, source);
-    ensure_response_and_item_started(tx, response_id, model, response_started, item_started)
-        .await?;
-    let part_index = ensure_part_started(
+    let node_index = ensure_node_started(
         tx,
-        0,
-        reasoning_part_index,
-        next_part_index,
-        PartHeader::Reasoning,
+        response_id,
+        model,
+        response_started,
+        item_started,
+        reasoning_node_index,
+        next_node_index,
+        NodeHeader::Reasoning { id: None },
+        Some(PartHeader::Reasoning { id: None }),
+        HashMap::new(),
     )
     .await?;
     reasoning_sig.push_str(&sig);
-    send_event(
+    send_node_delta_with_bridge(
         tx,
-        UrpStreamEvent::Delta {
-            part_index,
-            delta: PartDelta::Reasoning {
-                content: None,
-                encrypted: Some(encrypted.clone()),
-                summary: None,
-                source,
-            },
-            usage: None,
-            extra_body: HashMap::new(),
+        node_index,
+        NodeDelta::Reasoning {
+            content: None,
+            encrypted: Some(encrypted.clone()),
+            summary: None,
+            source,
         },
+        HashMap::new(),
     )
     .await?;
     Ok(())
@@ -704,20 +721,20 @@ async fn process_tool_call_delta(
     )
     .await?;
 
-    let part_index = if let Some(part_index) = state.tool_part_index_by_call_id.get(&call_id) {
-        *part_index
+    let node_index = if let Some(node_index) = state.tool_node_index_by_call_id.get(&call_id) {
+        *node_index
     } else {
-        let part_index = *state.next_part_index;
-        *state.next_part_index += 1;
+        let node_index = *state.next_node_index;
+        *state.next_node_index += 1;
         state
-            .tool_part_index_by_call_id
-            .insert(call_id.clone(), part_index);
+            .tool_node_index_by_call_id
+            .insert(call_id.clone(), node_index);
         send_event(
             tx,
-            UrpStreamEvent::PartStart {
-                part_index,
-                item_index: 0,
-                header: PartHeader::ToolCall {
+            UrpStreamEvent::NodeStart {
+                node_index,
+                header: NodeHeader::ToolCall {
+                    id: None,
                     call_id: call_id.clone(),
                     name: name.clone(),
                 },
@@ -725,7 +742,21 @@ async fn process_tool_call_delta(
             },
         )
         .await?;
-        part_index
+        send_event(
+            tx,
+            UrpStreamEvent::PartStart {
+                part_index: node_index,
+                item_index: 0,
+                header: PartHeader::ToolCall {
+                    id: None,
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                },
+                extra_body: HashMap::new(),
+            },
+        )
+        .await?;
+        node_index
     };
 
     let Some(entry) = state.calls.get_mut(&call_id) else {
@@ -738,16 +769,13 @@ async fn process_tool_call_delta(
     }
     if !args_delta.is_empty() {
         entry.1.push_str(&args_delta);
-        send_event(
+        send_node_delta_with_bridge(
             tx,
-            UrpStreamEvent::Delta {
-                part_index,
-                delta: PartDelta::ToolCallArguments {
-                    arguments: args_delta,
-                },
-                usage: None,
-                extra_body: HashMap::new(),
+            node_index,
+            NodeDelta::ToolCallArguments {
+                arguments: args_delta,
             },
+            HashMap::new(),
         )
         .await?;
     }
@@ -769,12 +797,11 @@ fn tool_call_arguments_delta_text(tc_obj: &Map<String, Value>) -> Option<String>
         .filter(|text| !text.is_empty())
 }
 
-async fn ensure_response_and_item_started(
+async fn ensure_response_started(
     tx: &mpsc::Sender<UrpStreamEvent>,
     response_id: &str,
     model: &str,
     response_started: &mut bool,
-    item_started: &mut bool,
 ) -> AppResult<()> {
     if !*response_started {
         send_event(
@@ -788,12 +815,20 @@ async fn ensure_response_and_item_started(
         .await?;
         *response_started = true;
     }
+    Ok(())
+}
+
+async fn ensure_bridge_item_started(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    item_started: &mut bool,
+) -> AppResult<()> {
     if !*item_started {
         send_event(
             tx,
             UrpStreamEvent::ItemStart {
                 item_index: 0,
                 header: ItemHeader::Message {
+                    id: None,
                     role: Role::Assistant,
                 },
                 extra_body: HashMap::new(),
@@ -805,30 +840,90 @@ async fn ensure_response_and_item_started(
     Ok(())
 }
 
-async fn ensure_part_started(
+async fn ensure_response_and_item_started(
     tx: &mpsc::Sender<UrpStreamEvent>,
-    item_index: u32,
+    response_id: &str,
+    model: &str,
+    response_started: &mut bool,
+    item_started: &mut bool,
+) -> AppResult<()> {
+    ensure_response_started(tx, response_id, model, response_started).await?;
+    ensure_bridge_item_started(tx, item_started).await
+}
+
+async fn ensure_node_started(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    response_started: &mut bool,
+    item_started: &mut bool,
     slot: &mut Option<u32>,
-    next_part_index: &mut u32,
-    header: PartHeader,
+    next_node_index: &mut u32,
+    node_header: NodeHeader,
+    bridge_header: Option<PartHeader>,
+    extra_body: HashMap<String, Value>,
 ) -> AppResult<u32> {
-    if let Some(part_index) = *slot {
-        return Ok(part_index);
+    if let Some(node_index) = *slot {
+        return Ok(node_index);
     }
-    let part_index = *next_part_index;
-    *next_part_index += 1;
-    *slot = Some(part_index);
+    ensure_response_started(tx, response_id, model, response_started).await?;
+    let node_index = *next_node_index;
+    *next_node_index += 1;
+    *slot = Some(node_index);
     send_event(
         tx,
-        UrpStreamEvent::PartStart {
-            part_index,
-            item_index,
-            header,
-            extra_body: HashMap::new(),
+        UrpStreamEvent::NodeStart {
+            node_index,
+            header: node_header,
+            extra_body: extra_body.clone(),
         },
     )
     .await?;
-    Ok(part_index)
+    if let Some(bridge_header) = bridge_header {
+        ensure_bridge_item_started(tx, item_started).await?;
+        send_event(
+            tx,
+            UrpStreamEvent::PartStart {
+                part_index: node_index,
+                item_index: 0,
+                header: bridge_header,
+                extra_body,
+            },
+        )
+        .await?;
+    }
+    Ok(node_index)
+}
+
+async fn send_node_delta_with_bridge(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    node_index: u32,
+    delta: NodeDelta,
+    extra_body: HashMap<String, Value>,
+) -> AppResult<()> {
+    send_event(
+        tx,
+        UrpStreamEvent::NodeDelta {
+            node_index,
+            delta: delta.clone(),
+            usage: None,
+            extra_body: extra_body.clone(),
+        },
+    )
+    .await?;
+    if let Some(part_delta) = bridge_delta_from_node_delta(&delta) {
+        send_event(
+            tx,
+            UrpStreamEvent::Delta {
+                part_index: node_index,
+                delta: part_delta,
+                usage: None,
+                extra_body,
+            },
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn send_event(tx: &mpsc::Sender<UrpStreamEvent>, event: UrpStreamEvent) -> AppResult<()> {
@@ -847,60 +942,157 @@ fn parse_finish_reason(s: &str) -> FinishReason {
     }
 }
 
+fn bridge_delta_from_node_delta(delta: &NodeDelta) -> Option<PartDelta> {
+    match delta {
+        NodeDelta::Text { content } => Some(PartDelta::Text {
+            content: content.clone(),
+        }),
+        NodeDelta::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source,
+        } => Some(PartDelta::Reasoning {
+            content: content.clone(),
+            encrypted: encrypted.clone(),
+            summary: summary.clone(),
+            source: source.clone(),
+        }),
+        NodeDelta::Refusal { content } => Some(PartDelta::Refusal {
+            content: content.clone(),
+        }),
+        NodeDelta::ToolCallArguments { arguments } => Some(PartDelta::ToolCallArguments {
+            arguments: arguments.clone(),
+        }),
+        NodeDelta::Image { source } => Some(PartDelta::Image {
+            source: source.clone(),
+        }),
+        NodeDelta::Audio { source } => Some(PartDelta::Audio {
+            source: source.clone(),
+        }),
+        NodeDelta::File { source } => Some(PartDelta::File {
+            source: source.clone(),
+        }),
+        NodeDelta::ProviderItem { data } => Some(PartDelta::ProviderItem { data: data.clone() }),
+    }
+}
+
+fn bridge_part_from_node(node: &Node) -> Option<Part> {
+    match node {
+        Node::Text { content, .. } => Some(Part::Text {
+            content: content.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::Reasoning {
+            content,
+            encrypted,
+            summary,
+            source,
+            ..
+        } => Some(Part::Reasoning {
+            id: Some(crate::urp::synthetic_reasoning_id()),
+            content: content.clone(),
+            encrypted: encrypted.clone(),
+            summary: summary.clone(),
+            source: source.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::ToolCall {
+            call_id,
+            name,
+            arguments,
+            ..
+        } => Some(Part::ToolCall {
+            id: Some(crate::urp::synthetic_tool_call_id()),
+            call_id: call_id.clone(),
+            name: name.clone(),
+            arguments: arguments.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::Refusal { content, .. } => Some(Part::Refusal {
+            content: content.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::Image { source, .. } => Some(Part::Image {
+            source: source.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::Audio { source, .. } => Some(Part::Audio {
+            source: source.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::File { source, .. } => Some(Part::File {
+            source: source.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::ProviderItem { item_type, body, .. } => Some(Part::ProviderItem {
+            id: Some(crate::urp::synthetic_provider_item_id()),
+            item_type: item_type.clone(),
+            body: body.clone(),
+            extra_body: HashMap::new(),
+        }),
+        Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_assistant_item(
-    assistant_message_phase: Option<String>,
-    text_part_index: Option<u32>,
+    assistant_message_phase: Option<&str>,
+    text_node_index: Option<u32>,
     output_text: &str,
-    reasoning_part_index: Option<u32>,
+    reasoning_node_index: Option<u32>,
     reasoning_text: &str,
     reasoning_summary: &str,
     reasoning_sig: &str,
     reasoning_source: Option<&str>,
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
-    tool_part_index_by_call_id: &HashMap<String, u32>,
+    tool_node_index_by_call_id: &HashMap<String, u32>,
 ) -> Item {
     Item::Message {
+        id: Some(crate::urp::synthetic_message_id()),
         role: Role::Assistant,
-        parts: sorted_parts(
-            text_part_index,
+        parts: sorted_nodes(
+            assistant_message_phase.as_deref(),
+            text_node_index,
             output_text,
-            reasoning_part_index,
+            reasoning_node_index,
             reasoning_text,
             reasoning_summary,
             reasoning_sig,
             reasoning_source,
             call_order,
             calls,
-            tool_part_index_by_call_id,
+            tool_node_index_by_call_id,
         )
         .into_iter()
-        .map(|(_, part)| part)
+        .filter_map(|(_, node)| bridge_part_from_node(&node))
         .collect(),
-        extra_body: item_extra_body(&assistant_message_phase),
+        extra_body: item_extra_body(assistant_message_phase),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn sorted_parts(
-    text_part_index: Option<u32>,
+fn sorted_nodes(
+    assistant_message_phase: Option<&str>,
+    text_node_index: Option<u32>,
     output_text: &str,
-    reasoning_part_index: Option<u32>,
+    reasoning_node_index: Option<u32>,
     reasoning_text: &str,
     reasoning_summary: &str,
     reasoning_sig: &str,
     reasoning_source: Option<&str>,
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
-    tool_part_index_by_call_id: &HashMap<String, u32>,
-) -> Vec<(u32, Part)> {
-    let mut parts = Vec::new();
+    tool_node_index_by_call_id: &HashMap<String, u32>,
+) -> Vec<(u32, Node)> {
+    let mut nodes = Vec::new();
 
-    if let Some(part_index) = reasoning_part_index {
-        parts.push((
-            part_index,
-            Part::Reasoning {
+    if let Some(node_index) = reasoning_node_index {
+        nodes.push((
+            node_index,
+            Node::Reasoning {
+                id: Some(crate::urp::synthetic_reasoning_id()),
                 content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
                 encrypted: (!reasoning_sig.is_empty())
                     .then(|| Value::String(reasoning_sig.to_string())),
@@ -911,26 +1103,30 @@ fn sorted_parts(
         ));
     }
 
-    if let Some(part_index) = text_part_index {
-        parts.push((
-            part_index,
-            Part::Text {
+    if let Some(node_index) = text_node_index {
+        nodes.push((
+            node_index,
+            Node::Text {
+                id: Some(crate::urp::synthetic_message_id()),
+                role: OrdinaryRole::Assistant,
                 content: output_text.to_string(),
+                phase: assistant_message_phase.map(str::to_string),
                 extra_body: HashMap::new(),
             },
         ));
     }
 
     for call_id in call_order {
-        let Some(part_index) = tool_part_index_by_call_id.get(call_id).copied() else {
+        let Some(node_index) = tool_node_index_by_call_id.get(call_id).copied() else {
             continue;
         };
         let Some((name, arguments)) = calls.get(call_id) else {
             continue;
         };
-        parts.push((
-            part_index,
-            Part::ToolCall {
+        nodes.push((
+            node_index,
+            Node::ToolCall {
+                id: Some(crate::urp::synthetic_tool_call_id()),
                 call_id: call_id.clone(),
                 name: name.clone(),
                 arguments: arguments.clone(),
@@ -939,13 +1135,14 @@ fn sorted_parts(
         ));
     }
 
-    parts
+    nodes.sort_by_key(|(node_index, _)| *node_index);
+    nodes
 }
 
-fn item_extra_body(assistant_message_phase: &Option<String>) -> HashMap<String, Value> {
+fn item_extra_body(assistant_message_phase: Option<&str>) -> HashMap<String, Value> {
     let mut extra_body = HashMap::new();
     if let Some(phase) = assistant_message_phase {
-        extra_body.insert("phase".to_string(), Value::String(phase.clone()));
+        extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
     }
     extra_body
 }
@@ -953,6 +1150,7 @@ fn item_extra_body(assistant_message_phase: &Option<String>) -> HashMap<String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
 
     #[test]
     fn resolve_reasoning_source_preserves_none_without_fallback() {
@@ -975,5 +1173,215 @@ mod tests {
             resolve_reasoning_source(&mut reasoning_source, None),
             Some("anthropic".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn chat_text_and_tool_nodes_emit_node_first_bridge_events_with_canonical_indices() {
+        let (tx, mut rx) = mpsc::channel(32);
+        let response_id = "resp_test";
+        let model = "gpt-5.4";
+        let mut response_started = false;
+        let mut item_started = false;
+        let mut next_node_index = 0;
+        let mut text_node_index = None;
+        let mut output_text = String::new();
+
+        process_text_delta(
+            &tx,
+            response_id,
+            model,
+            "hello",
+            Some("analysis"),
+            &mut response_started,
+            &mut item_started,
+            &mut text_node_index,
+            &mut next_node_index,
+            &mut output_text,
+        )
+        .await
+        .expect("text delta should succeed");
+
+        let mut call_order = Vec::new();
+        let mut calls = HashMap::new();
+        let mut call_id_by_index = HashMap::new();
+        let mut tool_node_index_by_call_id = HashMap::new();
+        let mut tool_state = ChatToolCallStreamState {
+            call_order: &mut call_order,
+            calls: &mut calls,
+            call_id_by_index: &mut call_id_by_index,
+            response_started: &mut response_started,
+            item_started: &mut item_started,
+            next_node_index: &mut next_node_index,
+            tool_node_index_by_call_id: &mut tool_node_index_by_call_id,
+        };
+
+        process_tool_call_delta(
+            &tx,
+            response_id,
+            model,
+            &serde_json::json!({
+                "index": 0,
+                "id": "call_1",
+                "function": {
+                    "name": "lookup",
+                    "arguments": "{\"a\":1}"
+                }
+            }),
+            0,
+            &mut tool_state,
+        )
+        .await
+        .expect("tool call delta should succeed");
+
+        drop(tx);
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+
+        assert!(matches!(
+            &events[0],
+            UrpStreamEvent::ResponseStart { id, model, .. }
+                if id == response_id && model == "gpt-5.4"
+        ));
+        assert!(matches!(
+            &events[1],
+            UrpStreamEvent::NodeStart {
+                node_index,
+                header: NodeHeader::Text { role: OrdinaryRole::Assistant, phase, .. },
+                ..
+            } if *node_index == 0 && phase.as_deref() == Some("analysis")
+        ));
+        assert!(matches!(
+            &events[2],
+            UrpStreamEvent::ItemStart {
+                item_index,
+                header: ItemHeader::Message { role: Role::Assistant, .. },
+                ..
+            } if *item_index == 0
+        ));
+        assert!(matches!(
+            &events[3],
+            UrpStreamEvent::PartStart {
+                part_index,
+                item_index,
+                header: PartHeader::Text,
+                ..
+            } if *part_index == 0 && *item_index == 0
+        ));
+        assert!(matches!(
+            &events[4],
+            UrpStreamEvent::NodeDelta {
+                node_index,
+                delta: NodeDelta::Text { content },
+                ..
+            } if *node_index == 0 && content == "hello"
+        ));
+        assert!(matches!(
+            &events[5],
+            UrpStreamEvent::Delta {
+                part_index,
+                delta: PartDelta::Text { content },
+                ..
+            } if *part_index == 0 && content == "hello"
+        ));
+        assert!(matches!(
+            &events[6],
+            UrpStreamEvent::NodeStart {
+                node_index,
+                header: NodeHeader::ToolCall { call_id, name, .. },
+                ..
+            } if *node_index == 1 && call_id == "call_1" && name == "lookup"
+        ));
+        assert!(matches!(
+            &events[7],
+            UrpStreamEvent::PartStart {
+                part_index,
+                item_index,
+                header: PartHeader::ToolCall { call_id, name, .. },
+                ..
+            } if *part_index == 1 && *item_index == 0 && call_id == "call_1" && name == "lookup"
+        ));
+        assert!(matches!(
+            &events[8],
+            UrpStreamEvent::NodeDelta {
+                node_index,
+                delta: NodeDelta::ToolCallArguments { arguments },
+                ..
+            } if *node_index == 1 && arguments == "{\"a\":1}"
+        ));
+        assert!(matches!(
+            &events[9],
+            UrpStreamEvent::Delta {
+                part_index,
+                delta: PartDelta::ToolCallArguments { arguments },
+                ..
+            } if *part_index == 1 && arguments == "{\"a\":1}"
+        ));
+    }
+
+    #[test]
+    fn chat_completion_builds_terminal_item_from_sorted_nodes_not_message_accumulation() {
+        let call_order = vec!["call_b".to_string(), "call_a".to_string()];
+        let calls = HashMap::from([
+            ("call_b".to_string(), ("beta".to_string(), "{\"b\":2}".to_string())),
+            ("call_a".to_string(), ("alpha".to_string(), "{\"a\":1}".to_string())),
+        ]);
+        let tool_node_index_by_call_id = HashMap::from([
+            ("call_b".to_string(), 5),
+            ("call_a".to_string(), 1),
+        ]);
+
+        let item = build_assistant_item(
+            Some("analysis"),
+            Some(4),
+            "final text",
+            Some(0),
+            "think",
+            "summary",
+            "sig",
+            Some("anthropic"),
+            &call_order,
+            &calls,
+            &tool_node_index_by_call_id,
+        );
+
+        let Item::Message {
+            role,
+            parts,
+            extra_body,
+            ..
+        } = item
+        else {
+            panic!("expected assistant message item");
+        };
+
+        assert_eq!(role, Role::Assistant);
+        assert_eq!(extra_body.get("phase"), Some(&Value::String("analysis".to_string())));
+        assert_eq!(parts.len(), 4);
+        assert!(matches!(
+            &parts[0],
+            Part::Reasoning {
+                content: Some(content),
+                summary: Some(summary),
+                encrypted: Some(Value::String(sig)),
+                source: Some(source),
+                ..
+            } if content == "think" && summary == "summary" && sig == "sig" && source == "anthropic"
+        ));
+        assert!(matches!(
+            &parts[1],
+            Part::ToolCall { call_id, name, arguments, .. }
+                if call_id == "call_a" && name == "alpha" && arguments == "{\"a\":1}"
+        ));
+        assert!(matches!(
+            &parts[2],
+            Part::Text { content, .. } if content == "final text"
+        ));
+        assert!(matches!(
+            &parts[3],
+            Part::ToolCall { call_id, name, arguments, .. }
+                if call_id == "call_b" && name == "beta" && arguments == "{\"b\":2}"
+        ));
     }
 }
