@@ -2,68 +2,91 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Item, Part, Role, ToolDefinition, ToolResultContent,
+    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, ToolDefinition, ToolResultContent,
     UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
+const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 64_000;
+
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut system_blocks: Vec<Value> = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
+    let request_nodes = &req.input;
+    let mut pending_message: Option<AnthropicMessageEnvelope> = None;
 
-    for item in &req.inputs {
-        match item {
-            Item::Message {
-                role,
-                parts,
-                extra_body: _,
-            } => match role {
-                Role::System | Role::Developer => {
-                    for part in parts {
-                        if let Part::Text {
-                            content: text,
-                            extra_body,
-                            ..
-                        } = part
-                        {
-                            if !text.is_empty() {
-                                let mut block = json!({ "type": "text", "text": text });
-                                if let Some(obj) = block.as_object_mut() {
-                                    if let Some(phase) =
-                                        extra_body.get("phase").and_then(|v| v.as_str())
-                                    {
-                                        obj.insert(
-                                            "phase".to_string(),
-                                            Value::String(phase.to_string()),
-                                        );
-                                    }
-                                    merge_extra(obj, extra_body);
-                                }
-                                system_blocks.push(block);
-                            }
-                        }
-                    }
-                }
-                Role::User | Role::Assistant | Role::Tool => {
-                    messages.push(encode_regular_message(item))
-                }
-            },
-            Item::ToolResult {
+    for node in request_nodes {
+        match node {
+            Node::NextDownstreamEnvelopeExtra { .. } => {
+                flush_pending_anthropic_message(&mut pending_message, &mut messages);
+            }
+            Node::ToolResult {
+                id: _,
                 call_id,
                 content,
                 is_error,
                 extra_body,
-            } => messages.push(encode_tool_result_message(
-                call_id, content, *is_error, extra_body,
-            )),
+            } => {
+                flush_pending_anthropic_message(&mut pending_message, &mut messages);
+                messages.push(encode_tool_result_message(
+                    call_id, content, *is_error, extra_body,
+                ));
+            }
+            Node::Text {
+                role: OrdinaryRole::System | OrdinaryRole::Developer,
+                ..
+            } => {
+                flush_pending_anthropic_message(&mut pending_message, &mut messages);
+                if let Some(block) = encode_system_block(node) {
+                    system_blocks.push(block);
+                }
+            }
+            Node::Text {
+                role: OrdinaryRole::User | OrdinaryRole::Assistant,
+                ..
+            }
+            | Node::Image {
+                role: OrdinaryRole::User | OrdinaryRole::Assistant,
+                ..
+            }
+            | Node::File {
+                role: OrdinaryRole::User | OrdinaryRole::Assistant,
+                ..
+            }
+            | Node::ProviderItem {
+                role: OrdinaryRole::User | OrdinaryRole::Assistant,
+                ..
+            }
+            | Node::Reasoning { .. }
+            | Node::ToolCall { .. } => {
+                append_node_to_pending_anthropic_message(&mut pending_message, &mut messages, node);
+            }
+            Node::Image {
+                role: OrdinaryRole::System | OrdinaryRole::Developer,
+                ..
+            }
+            | Node::File {
+                role: OrdinaryRole::System | OrdinaryRole::Developer,
+                ..
+            }
+            | Node::ProviderItem {
+                role: OrdinaryRole::System | OrdinaryRole::Developer,
+                ..
+            } => {
+                flush_pending_anthropic_message(&mut pending_message, &mut messages);
+            }
+            Node::Audio { .. } | Node::Refusal { .. } => {}
         }
     }
+    flush_pending_anthropic_message(&mut pending_message, &mut messages);
 
     let mut body = json!({
         "model": upstream_model,
         "messages": messages,
-        "max_tokens": req.max_output_tokens.unwrap_or(1024),
+        "max_tokens": req
+            .max_output_tokens
+            .unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS),
     });
     let obj = body.as_object_mut().expect("anthropic request object");
 
@@ -109,150 +132,38 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    let response_nodes = &resp.output;
     let mut content = Vec::new();
     let mut encrypted = None;
-    for item in &resp.outputs {
-        match item {
-            Item::Message {
-                role: Role::Assistant,
-                parts,
-                ..
-            } => {
-                if encrypted.is_none() {
-                    encrypted = parts.iter().find_map(|part| match part {
-                        Part::Reasoning {
-                            encrypted: Some(data),
-                            ..
-                        } => Some(data.clone()),
-                        _ => None,
-                    });
-                }
-            }
-            Item::ToolResult { .. } | Item::Message { .. } => continue,
+    for node in response_nodes {
+        if encrypted.is_some() {
+            continue;
+        }
+        if let Node::Reasoning {
+            encrypted: Some(data),
+            ..
+        } = node
+        {
+            encrypted = Some(data.clone());
         }
     }
 
-    for item in &resp.outputs {
-        match item {
-            Item::Message {
-                role: Role::Assistant,
-                parts,
-                ..
-            } => {
-                for part in parts {
-                    match part {
-                        Part::Reasoning {
-                            content: Some(text),
-                            extra_body,
-                            ..
-                        } => {
-                            let mut thinking = Map::new();
-                            thinking
-                                .insert("type".to_string(), Value::String("thinking".to_string()));
-                            thinking.insert("thinking".to_string(), Value::String(text.clone()));
-                            if let Some(sig) = encrypted.clone() {
-                                thinking.insert("signature".to_string(), sig);
-                            }
-                            merge_extra(&mut thinking, extra_body);
-                            content.push(Value::Object(thinking));
-                        }
-                        Part::Text {
-                            content: text,
-                            extra_body,
-                            ..
-                        } => {
-                            let mut block = json!({ "type": "text", "text": text });
-                            if let Some(obj) = block.as_object_mut() {
-                                if let Some(phase) =
-                                    extra_body.get("phase").and_then(|v| v.as_str())
-                                {
-                                    obj.insert(
-                                        "phase".to_string(),
-                                        Value::String(phase.to_string()),
-                                    );
-                                }
-                                merge_extra(obj, extra_body);
-                            }
-                            content.push(block);
-                        }
-                        Part::ToolCall {
-                            call_id,
-                            name,
-                            arguments,
-                            extra_body,
-                        } => {
-                            let input = serde_json::from_str::<Value>(arguments)
-                                .unwrap_or_else(|_| json!({ "_raw": arguments }));
-                            let mut block = json!({
-                                "type": "tool_use",
-                                "id": call_id,
-                                "name": name,
-                                "input": input
-                            });
-                            if let Some(obj) = block.as_object_mut() {
-                                merge_extra(obj, extra_body);
-                            }
-                            content.push(block);
-                        }
-                        Part::Image {
-                            source, extra_body, ..
-                        } => {
-                            let mut block = encode_anthropic_image(source);
-                            if let Some(obj) = block.as_object_mut() {
-                                merge_extra(obj, extra_body);
-                            }
-                            content.push(block);
-                        }
-                        Part::File {
-                            source, extra_body, ..
-                        } => {
-                            let mut block = encode_anthropic_file(source);
-                            if let Some(obj) = block.as_object_mut() {
-                                merge_extra(obj, extra_body);
-                            }
-                            content.push(block);
-                        }
-                        Part::ProviderItem {
-                            body, extra_body, ..
-                        } => {
-                            let mut block = body.clone();
-                            if let Some(obj) = block.as_object_mut() {
-                                merge_extra(obj, extra_body);
-                            }
-                            content.push(block);
-                        }
-                        Part::Audio { .. } | Part::Refusal { .. } => {}
-                        Part::Reasoning {
-                            encrypted: Some(_), ..
-                        } => {
-                            // Handled below: emitted as standalone block only when no
-                            // Part::Reasoning exists to carry it as a `signature`.
-                        }
-                        Part::Reasoning { .. } => {}
-                    }
-                }
-            }
-            Item::ToolResult { .. } | Item::Message { .. } => continue,
+    for node in response_nodes {
+        if let Some(block) = encode_assistant_response_block(node, encrypted.as_ref()) {
+            content.push(block);
         }
     }
 
     // When the response contains encrypted reasoning but no plaintext reasoning
     // (e.g. Gemini returns only thoughtSignature), emit a standalone thinking
     // block so the downstream receives the encrypted data.
-    let has_reasoning_part = resp.outputs.iter().any(|item| {
+    let has_reasoning_part = response_nodes.iter().any(|node| {
         matches!(
-            item,
-            Item::Message {
-                role: Role::Assistant,
-                parts,
+            node,
+            Node::Reasoning {
+                content: Some(_),
                 ..
-            } if parts.iter().any(|p| matches!(
-                p,
-                Part::Reasoning {
-                    content: Some(_),
-                    ..
-                }
-            ))
+            }
         )
     });
     if !has_reasoning_part {
@@ -326,123 +237,318 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     body
 }
 
-fn encode_regular_message(message: &Item) -> Value {
-    let Item::Message {
-        role,
-        parts,
-        extra_body,
-    } = message
-    else {
-        unreachable!("encode_regular_message requires Item::Message")
-    };
-    let role = match role {
-        Role::Assistant => "assistant",
-        _ => "user",
-    };
-    let mut content = Vec::new();
-    let has_encrypted = parts.iter().any(|part| {
-        matches!(
-            part,
-            Part::Reasoning {
-                encrypted: Some(_),
-                ..
-            }
-        )
-    });
+#[derive(Clone)]
+struct AnthropicMessageEnvelope {
+    role: OrdinaryRole,
+    content: Vec<Value>,
+    extra_body: HashMap<String, Value>,
+}
 
-    for part in parts {
-        match part {
-            Part::Text {
-                content: text,
-                extra_body,
-                ..
-            } => {
-                let mut block = json!({ "type": "text", "text": text });
-                if let Some(obj) = block.as_object_mut() {
-                    if let Some(phase) = extra_body.get("phase").and_then(|v| v.as_str()) {
-                        obj.insert("phase".to_string(), Value::String(phase.to_string()));
-                    }
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::Image {
-                source, extra_body, ..
-            } => {
-                let mut block = encode_anthropic_image(source);
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::File {
-                source, extra_body, ..
-            } => {
-                let mut block = encode_anthropic_file(source);
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::Reasoning {
-                content: Some(text),
-                extra_body,
-                ..
-            } if !has_encrypted => {
-                let mut block = json!({ "type": "thinking", "thinking": text });
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::Reasoning {
-                encrypted: Some(data),
-                extra_body,
-                ..
-            } => {
-                let mut block = json!({ "type": "thinking", "encrypted_thinking": data });
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::ToolCall {
-                call_id,
-                name,
-                arguments,
-                extra_body,
-            } => {
-                let input = serde_json::from_str::<Value>(arguments)
-                    .unwrap_or_else(|_| json!({ "_raw": arguments }));
-                let mut block = json!({
-                    "type": "tool_use",
-                    "id": call_id,
-                    "name": name,
-                    "input": input
-                });
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::ProviderItem {
-                body, extra_body, ..
-            } => {
-                let mut block = body.clone();
-                if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
-                }
-                content.push(block);
-            }
-            Part::Audio { .. } | Part::Refusal { .. } => {}
-            Part::Reasoning { .. } => {}
-        }
+fn flush_pending_anthropic_message(
+    pending: &mut Option<AnthropicMessageEnvelope>,
+    out: &mut Vec<Value>,
+) {
+    let Some(message) = pending.take() else {
+        return;
+    };
+    if message.content.is_empty() {
+        return;
     }
-    let mut msg = json!({ "role": role, "content": content });
+
+    let role = match message.role {
+        OrdinaryRole::Assistant => "assistant",
+        OrdinaryRole::User | OrdinaryRole::System | OrdinaryRole::Developer => "user",
+    };
+    let mut msg = json!({ "role": role, "content": message.content });
     if let Some(obj) = msg.as_object_mut() {
-        merge_extra(obj, extra_body);
+        merge_extra(obj, &message.extra_body);
     }
-    msg
+    out.push(msg);
+}
+
+fn append_node_to_pending_anthropic_message(
+    pending: &mut Option<AnthropicMessageEnvelope>,
+    out: &mut Vec<Value>,
+    node: &Node,
+) {
+    let Some(role) = anthropic_message_role_for_node(node) else {
+        return;
+    };
+    let should_flush = pending
+        .as_ref()
+        .is_some_and(|existing| existing.role != role);
+    if should_flush {
+        flush_pending_anthropic_message(pending, out);
+    }
+
+    let Some(block) = encode_regular_message_block(node) else {
+        return;
+    };
+    let entry = pending.get_or_insert_with(|| AnthropicMessageEnvelope {
+        role,
+        content: Vec::new(),
+        extra_body: anthropic_message_extra_from_node(node),
+    });
+    entry.content.push(block);
+}
+
+fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
+    match node {
+        Node::Text { role, .. }
+        | Node::Image { role, .. }
+        | Node::File { role, .. }
+        | Node::ProviderItem { role, .. } => match role {
+            OrdinaryRole::System | OrdinaryRole::Developer => None,
+            OrdinaryRole::User | OrdinaryRole::Assistant => Some(*role),
+        },
+        Node::Reasoning { .. } | Node::ToolCall { .. } => Some(OrdinaryRole::Assistant),
+        Node::ToolResult { .. }
+        | Node::NextDownstreamEnvelopeExtra { .. }
+        | Node::Audio { .. }
+        | Node::Refusal { .. } => None,
+    }
+}
+
+fn anthropic_message_extra_from_node(node: &Node) -> HashMap<String, Value> {
+    match node {
+        Node::Text {
+            phase, extra_body, ..
+        } => {
+            let mut out = extra_body.clone();
+            if let Some(phase) = phase {
+                out.insert("phase".to_string(), Value::String(phase.clone()));
+            }
+            out
+        }
+        Node::Image { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::Reasoning { extra_body, .. }
+        | Node::ToolCall { extra_body, .. }
+        | Node::ProviderItem { extra_body, .. } => extra_body.clone(),
+        Node::Audio { .. }
+        | Node::Refusal { .. }
+        | Node::ToolResult { .. }
+        | Node::NextDownstreamEnvelopeExtra { .. } => HashMap::new(),
+    }
+}
+
+fn encode_system_block(node: &Node) -> Option<Value> {
+    match node {
+        Node::Text {
+            content,
+            phase,
+            extra_body,
+            ..
+        } if !content.is_empty() => {
+            let mut block = json!({ "type": "text", "text": content });
+            if let Some(obj) = block.as_object_mut() {
+                if let Some(phase) = phase {
+                    obj.insert("phase".to_string(), Value::String(phase.clone()));
+                }
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        _ => None,
+    }
+}
+
+fn encode_regular_message_block(node: &Node) -> Option<Value> {
+    match node {
+        Node::Text {
+            content,
+            phase,
+            extra_body,
+            ..
+        } => {
+            let mut block = json!({ "type": "text", "text": content });
+            if let Some(obj) = block.as_object_mut() {
+                if let Some(phase) = phase {
+                    obj.insert("phase".to_string(), Value::String(phase.clone()));
+                }
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::Image {
+            source, extra_body, ..
+        } => {
+            let mut block = encode_anthropic_image(source);
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::File {
+            source, extra_body, ..
+        } => {
+            let mut block = encode_anthropic_file(source);
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::Reasoning {
+            content: Some(text),
+            encrypted,
+            extra_body,
+            ..
+        } => {
+            let mut block = json!({ "type": "thinking", "thinking": text });
+            if let Some(obj) = block.as_object_mut() {
+                if let Some(signature) = encrypted.clone() {
+                    obj.insert("signature".to_string(), signature);
+                }
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::Reasoning {
+            encrypted: Some(signature),
+            extra_body,
+            ..
+        } => {
+            let mut block = json!({ "type": "thinking", "encrypted_thinking": signature });
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::ToolCall {
+            id: _,
+            call_id,
+            name,
+            arguments,
+            extra_body,
+        } => {
+            let input = serde_json::from_str::<Value>(arguments)
+                .unwrap_or_else(|_| json!({ "_raw": arguments }));
+            let mut block = json!({
+                "type": "tool_use",
+                "id": call_id,
+                "name": name,
+                "input": input
+            });
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::ProviderItem {
+            body, extra_body, ..
+        } => {
+            let mut block = body.clone();
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::Reasoning { .. }
+        | Node::Audio { .. }
+        | Node::Refusal { .. }
+        | Node::ToolResult { .. }
+        | Node::NextDownstreamEnvelopeExtra { .. } => None,
+    }
+}
+
+fn encode_assistant_response_block(node: &Node, encrypted: Option<&Value>) -> Option<Value> {
+    match node {
+        Node::Text {
+            role: OrdinaryRole::Assistant,
+            content,
+            phase,
+            extra_body,
+            ..
+        } => {
+            let mut block = json!({ "type": "text", "text": content });
+            if let Some(obj) = block.as_object_mut() {
+                if let Some(phase) = phase {
+                    obj.insert("phase".to_string(), Value::String(phase.clone()));
+                }
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::Reasoning {
+            content: Some(text),
+            extra_body,
+            ..
+        } => {
+            let mut thinking = Map::new();
+            thinking.insert("type".to_string(), Value::String("thinking".to_string()));
+            thinking.insert("thinking".to_string(), Value::String(text.clone()));
+            if let Some(sig) = encrypted.cloned() {
+                thinking.insert("signature".to_string(), sig);
+            }
+            merge_extra(&mut thinking, extra_body);
+            Some(Value::Object(thinking))
+        }
+        Node::ToolCall {
+            id: _,
+            call_id,
+            name,
+            arguments,
+            extra_body,
+        } => {
+            let input = serde_json::from_str::<Value>(arguments)
+                .unwrap_or_else(|_| json!({ "_raw": arguments }));
+            let mut block = json!({
+                "type": "tool_use",
+                "id": call_id,
+                "name": name,
+                "input": input
+            });
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::Image {
+            role: OrdinaryRole::Assistant,
+            source,
+            extra_body,
+            ..
+        } => {
+            let mut block = encode_anthropic_image(source);
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::File {
+            role: OrdinaryRole::Assistant,
+            source,
+            extra_body,
+            ..
+        } => {
+            let mut block = encode_anthropic_file(source);
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::ProviderItem {
+            role: OrdinaryRole::Assistant,
+            body,
+            extra_body,
+            ..
+        } => {
+            let mut block = body.clone();
+            if let Some(obj) = block.as_object_mut() {
+                merge_extra(obj, extra_body);
+            }
+            Some(block)
+        }
+        Node::Reasoning { .. }
+        | Node::Audio { .. }
+        | Node::Refusal { .. }
+        | Node::ToolResult { .. }
+        | Node::NextDownstreamEnvelopeExtra { .. }
+        | Node::Text { .. }
+        | Node::Image { .. }
+        | Node::File { .. }
+        | Node::ProviderItem { .. } => None,
+    }
 }
 
 fn encode_tool_result_message(
@@ -607,7 +713,10 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
 mod tests {
     use super::*;
     use crate::urp::decode::anthropic as decode_anthropic;
-    use crate::urp::{Item, OutputDetails, ResponseFormat, Role, UrpRequest, UrpResponse, Usage};
+    use crate::urp::{
+        items_to_nodes, nodes_to_items, Item, OutputDetails, Part, ResponseFormat, Role,
+        UrpRequest, UrpResponse, Usage,
+    };
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
@@ -618,14 +727,15 @@ mod tests {
     fn encode_request_does_not_emit_fake_response_format() {
         let req = UrpRequest {
             model: "claude-sonnet-4-5".to_string(),
-            inputs: vec![Item::Message {
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::User,
                 parts: vec![Part::Text {
                     content: "hello".to_string(),
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             stream: None,
             temperature: None,
             top_p: None,
@@ -643,6 +753,40 @@ mod tests {
             encoded.get("response_format").is_none(),
             "Anthropic requests must omit unsupported response_format"
         );
+        assert_eq!(
+            encoded["max_tokens"],
+            json!(ANTHROPIC_DEFAULT_MAX_TOKENS),
+            "Anthropic requests without a downstream cap must default to Anthropic's max output budget"
+        );
+    }
+
+    #[test]
+    fn encode_request_preserves_explicit_max_output_tokens() {
+        let req = UrpRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: Some(321),
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "claude-sonnet-4-5");
+        assert_eq!(encoded["max_tokens"], json!(321));
     }
 
     #[test]
@@ -676,7 +820,8 @@ mod tests {
         let response = UrpResponse {
             id: "msg_usage".to_string(),
             model: "claude".to_string(),
-            outputs: vec![Item::new_message(Role::Assistant)],
+            created_at: None,
+            output: items_to_nodes(vec![Item::new_message(Role::Assistant)]),
             finish_reason: Some(FinishReason::Stop),
             usage: Some(Usage {
                 input_tokens: 11,
@@ -744,9 +889,12 @@ mod tests {
         let response = UrpResponse {
             id: "msg_roundtrip_reasoning".to_string(),
             model: "claude".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: Role::Assistant,
                 parts: vec![Part::Reasoning {
+                    id: None,
                     content: Some("full reasoning".to_string()),
                     encrypted: Some(json!("sig_1")),
                     summary: None,
@@ -754,7 +902,7 @@ mod tests {
                     extra_body: empty_map(),
                 }],
                 extra_body: empty_map(),
-            }],
+            }]),
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: empty_map(),
@@ -762,7 +910,8 @@ mod tests {
 
         let encoded = encode_response(&response, "claude");
         let decoded = decode_anthropic::decode_response(&encoded).expect("decode response");
-        let Item::Message { parts, .. } = &decoded.outputs[0] else {
+        let decoded_outputs = nodes_to_items(&decoded.output);
+        let Item::Message { parts, .. } = &decoded_outputs[0] else {
             panic!("expected assistant output");
         };
 
@@ -789,18 +938,21 @@ mod tests {
 
         let mut req = UrpRequest {
             model: "claude-sonnet-4-6".to_string(),
-            inputs: vec![
+            input: items_to_nodes(vec![
                 Item::text(Role::User, "list files"),
                 Item::Message {
+                    id: None,
                     role: Role::Assistant,
                     parts: vec![
                         Part::ToolCall {
+                            id: None,
                             call_id: "answered".to_string(),
                             name: "bash".to_string(),
                             arguments: r#"{"command":"ls"}"#.to_string(),
                             extra_body: empty_map(),
                         },
                         Part::ToolCall {
+                            id: None,
                             call_id: "orphan".to_string(),
                             name: "bash".to_string(),
                             arguments: r#"{"command":"cat x"}"#.to_string(),
@@ -810,6 +962,7 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::ToolResult {
+                    id: None,
                     call_id: "answered".to_string(),
                     is_error: false,
                     content: vec![ToolResultContent::Text {
@@ -818,7 +971,7 @@ mod tests {
                     extra_body: empty_map(),
                 },
                 Item::text(Role::User, "thanks"),
-            ],
+            ]),
             stream: None,
             temperature: None,
             top_p: None,
