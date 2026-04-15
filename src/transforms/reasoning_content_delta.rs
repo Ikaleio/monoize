@@ -2,7 +2,7 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData, response_output_items_mut,
 };
-use crate::urp::{Item, Part, PartDelta, UrpStreamEvent};
+use crate::urp::{Item, Node, NodeDelta, Part, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -70,7 +70,8 @@ impl Transform for ReasoningContentDeltaTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                for item in response_output_items_mut(resp) {
+                let mut items = response_output_items_mut(resp);
+                for item in items.iter_mut() {
                     mark_item(item);
                 }
             }
@@ -117,11 +118,28 @@ fn mark_item(item: &mut Item) {
     }
 }
 
+fn mark_node(node: &mut Node) {
+    let Node::Reasoning {
+        content,
+        encrypted,
+        summary,
+        extra_body,
+        ..
+    } = node
+    else {
+        return;
+    };
+    let _ = encrypted;
+    if let Some(value) = extract_reasoning_content(content, summary) {
+        extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
+    }
+}
+
 fn mark_stream(event: &mut UrpStreamEvent) {
     match event {
-        UrpStreamEvent::Delta {
+        UrpStreamEvent::NodeDelta {
             delta:
-                PartDelta::Reasoning {
+                NodeDelta::Reasoning {
                     content,
                     encrypted,
                     summary,
@@ -135,14 +153,14 @@ fn mark_stream(event: &mut UrpStreamEvent) {
                 extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
             }
         }
-        UrpStreamEvent::PartDone { part, .. } => {
-            let Part::Reasoning {
+        UrpStreamEvent::NodeDone { node, .. } => {
+            let Node::Reasoning {
                 content,
                 encrypted,
                 summary,
                 extra_body,
                 ..
-            } = part
+            } = node
             else {
                 return;
             };
@@ -151,10 +169,9 @@ fn mark_stream(event: &mut UrpStreamEvent) {
                 extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
             }
         }
-        UrpStreamEvent::ItemDone { item, .. } => mark_item(item),
-        UrpStreamEvent::ResponseDone { outputs, .. } => {
-            for item in outputs {
-                mark_item(item);
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            for node in output {
+                mark_node(node);
             }
         }
         _ => {}
@@ -170,7 +187,7 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::TransformRuntimeContext;
-    use crate::urp::PartDelta;
+    use crate::urp::{Item, Part, items_to_nodes, nodes_to_items};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -194,9 +211,9 @@ mod tests {
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
-        let mut event = UrpStreamEvent::Delta {
-            part_index: 0,
-            delta: PartDelta::Reasoning {
+        let mut event = UrpStreamEvent::NodeDelta {
+            node_index: 0,
+            delta: NodeDelta::Reasoning {
                 content: Some("plaintext_reasoning".to_string()),
                 encrypted: Some(Value::String("encrypted_data".to_string())),
                 summary: Some("summary_text".to_string()),
@@ -216,7 +233,7 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+        let UrpStreamEvent::NodeDelta { extra_body, .. } = event else {
             panic!("expected delta");
         };
         assert_eq!(
@@ -234,9 +251,9 @@ mod tests {
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
-        let mut event = UrpStreamEvent::Delta {
-            part_index: 0,
-            delta: PartDelta::Reasoning {
+        let mut event = UrpStreamEvent::NodeDelta {
+            node_index: 0,
+            delta: NodeDelta::Reasoning {
                 content: None,
                 encrypted: None,
                 summary: Some("summary_fallback".to_string()),
@@ -256,7 +273,7 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+        let UrpStreamEvent::NodeDelta { extra_body, .. } = event else {
             panic!("expected delta");
         };
         assert_eq!(
@@ -274,9 +291,9 @@ mod tests {
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
-        let mut event = UrpStreamEvent::Delta {
-            part_index: 0,
-            delta: PartDelta::Reasoning {
+        let mut event = UrpStreamEvent::NodeDelta {
+            node_index: 0,
+            delta: NodeDelta::Reasoning {
                 content: None,
                 encrypted: Some(Value::String("encrypted_only".to_string())),
                 summary: None,
@@ -296,7 +313,7 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+        let UrpStreamEvent::NodeDelta { extra_body, .. } = event else {
             panic!("expected delta");
         };
         assert!(
@@ -314,7 +331,9 @@ mod tests {
         let mut resp = crate::urp::UrpResponse {
             id: "resp_1".to_string(),
             model: "test".to_string(),
-            outputs: vec![Item::Message {
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
                 role: crate::urp::Role::Assistant,
                 parts: vec![Part::Reasoning {
                     content: Some("plain_resp".to_string()),
@@ -322,9 +341,10 @@ mod tests {
                     summary: Some("sum_resp".to_string()),
                     source: None,
                     extra_body: HashMap::new(),
+                    id: None,
                 }],
                 extra_body: HashMap::new(),
-            }],
+            }]),
             finish_reason: None,
             usage: None,
             extra_body: HashMap::new(),
@@ -340,7 +360,8 @@ mod tests {
             .await
             .expect("apply");
 
-        let Item::Message { parts, .. } = &resp.outputs[0] else {
+        let outputs = nodes_to_items(&resp.output);
+        let Item::Message { parts, .. } = &outputs[0] else {
             panic!("expected message");
         };
         let Part::Reasoning { extra_body, .. } = &parts[0] else {

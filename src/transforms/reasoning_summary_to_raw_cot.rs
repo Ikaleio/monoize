@@ -2,7 +2,7 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData, response_output_items_mut,
 };
-use crate::urp::{Item, Part, PartDelta, UrpStreamEvent};
+use crate::urp::{Item, Node, Part, PartDelta, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -70,7 +70,8 @@ impl Transform for ReasoningSummaryToRawCotTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                for item in response_output_items_mut(resp) {
+                let mut items = response_output_items_mut(resp);
+                for item in items.iter_mut() {
                     mark_item(item);
                 }
             }
@@ -100,6 +101,23 @@ fn mark_item(item: &mut Item) {
         {
             extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
         }
+    }
+}
+
+fn mark_node(node: &mut Node) {
+    let Node::Reasoning {
+        summary,
+        extra_body,
+        ..
+    } = node
+    else {
+        return;
+    };
+    if summary
+        .as_deref()
+        .is_some_and(|summary| !summary.is_empty())
+    {
+        extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
     }
 }
 
@@ -133,9 +151,9 @@ fn mark_stream(event: &mut UrpStreamEvent) {
             }
         }
         UrpStreamEvent::ItemDone { item, .. } => mark_item(item),
-        UrpStreamEvent::ResponseDone { outputs, .. } => {
-            for item in outputs {
-                mark_item(item);
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            for node in output {
+                mark_node(node);
             }
         }
         _ => {}
@@ -151,7 +169,7 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::{PartDelta, Role, UrpResponse};
+    use crate::urp::{Item, Part, PartDelta, Role, UrpResponse, items_to_nodes, nodes_to_items};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -180,24 +198,19 @@ mod tests {
             config: json!({}),
         }];
         let mut states = build_states_for_rules(&rules, &registry).expect("states");
-        let mut resp = UrpResponse {
-            id: "resp_1".to_string(),
-            model: "gpt-test".to_string(),
-            outputs: vec![Item::Message {
-                role: Role::Assistant,
-                parts: vec![Part::Reasoning {
-                    content: Some("full reasoning".to_string()),
-                    encrypted: None,
-                    summary: Some("brief summary".to_string()),
-                    source: None,
-                    extra_body: HashMap::new(),
-                }],
+        let mut resp = UrpResponse { id: "resp_1".to_string(), model: "gpt-test".to_string(), created_at: None, output: items_to_nodes(vec![Item::Message {
+            id: None,
+            role: Role::Assistant,
+            parts: vec![Part::Reasoning {
+                id: None,
+                content: Some("full reasoning".to_string()),
+                encrypted: None,
+                summary: Some("brief summary".to_string()),
+                source: None,
                 extra_body: HashMap::new(),
             }],
-            finish_reason: None,
-            usage: None,
             extra_body: HashMap::new(),
-        };
+        }]), finish_reason: None, usage: None, extra_body: HashMap::new() };
         crate::transforms::apply_transforms(
             UrpData::Response(&mut resp),
             &rules,
@@ -210,7 +223,8 @@ mod tests {
         .await
         .expect("apply");
 
-        let Item::Message { parts, .. } = &resp.outputs[0] else {
+        let outputs = nodes_to_items(&resp.output);
+        let Item::Message { parts, .. } = &outputs[0] else {
             panic!("expected message");
         };
         let Part::Reasoning { extra_body, .. } = &parts[0] else {

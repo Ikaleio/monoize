@@ -69,7 +69,8 @@ impl Transform for ReasoningToThinkXmlTransform {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
             UrpData::Response(resp) => {
-                for message in response_output_items_mut(resp) {
+                let mut messages = response_output_items_mut(resp);
+                for message in messages.iter_mut() {
                     if let Item::Message { parts, .. } = message {
                         let mut next_parts = Vec::with_capacity(parts.len());
                         for part in parts.iter() {
@@ -100,7 +101,7 @@ impl Transform for ReasoningToThinkXmlTransform {
 fn convert_stream_reasoning_to_xml(event: &mut UrpStreamEvent, tag: &str) {
     match event {
         UrpStreamEvent::PartStart { header, .. } => {
-            if matches!(header, PartHeader::Reasoning) {
+            if matches!(header, PartHeader::Reasoning { .. }) {
                 *header = PartHeader::Text;
             }
         }

@@ -2,7 +2,7 @@ use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
     TransformScope, TransformState, UrpData, response_output_items_mut,
 };
-use crate::urp::{Item, Part, PartDelta, UrpStreamEvent};
+use crate::urp::{Item, Node, NodeDelta, Part, PartDelta, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,6 +21,7 @@ impl TransformConfig for Config {
 #[derive(Default)]
 struct StreamState {
     encrypted_parts: HashSet<u32>,
+    encrypted_nodes: HashSet<u32>,
 }
 
 impl TransformState for StreamState {
@@ -73,7 +74,8 @@ impl Transform for PlaintextReasoningToSummaryTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                for item in response_output_items_mut(resp) {
+                let mut items = response_output_items_mut(resp);
+                for item in items.iter_mut() {
                     rewrite_item_reasoning(item);
                 }
             }
@@ -91,6 +93,35 @@ impl Transform for PlaintextReasoningToSummaryTransform {
 
 fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState) {
     match event {
+        UrpStreamEvent::NodeDelta {
+            node_index, delta, ..
+        } => {
+            let NodeDelta::Reasoning {
+                content,
+                encrypted,
+                summary,
+                ..
+            } = delta
+            else {
+                return;
+            };
+            if encrypted.is_some() {
+                state.encrypted_nodes.insert(*node_index);
+            }
+            if let Some(text) = content.take().filter(|text| !text.is_empty()) {
+                *summary = Some(text);
+            }
+        }
+        UrpStreamEvent::NodeDone {
+            node_index, node, ..
+        } => {
+            if let Node::Reasoning { encrypted, .. } = node {
+                if encrypted.is_some() {
+                    state.encrypted_nodes.insert(*node_index);
+                }
+            }
+            rewrite_reasoning_node(node);
+        }
         UrpStreamEvent::Delta {
             part_index, delta, ..
         } => {
@@ -124,9 +155,9 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
             rewrite_reasoning_part(part);
         }
         UrpStreamEvent::ItemDone { item, .. } => rewrite_item_reasoning(item),
-        UrpStreamEvent::ResponseDone { outputs, .. } => {
-            for item in outputs {
-                rewrite_item_reasoning(item);
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            for node in output {
+                rewrite_reasoning_node(node);
             }
         }
         _ => {}
@@ -158,6 +189,22 @@ fn rewrite_reasoning_part(part: &mut Part) {
     *summary = Some(text);
 }
 
+fn rewrite_reasoning_node(node: &mut Node) {
+    let Node::Reasoning {
+        content, summary, ..
+    } = node
+    else {
+        return;
+    };
+    let Some(text) = content.take() else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    *summary = Some(text);
+}
+
 inventory::submit!(TransformEntry {
     factory: || Box::new(PlaintextReasoningToSummaryTransform),
 });
@@ -167,7 +214,7 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::{Role, UrpResponse};
+    use crate::urp::{Item, Part, Role, UrpResponse, items_to_nodes, nodes_to_items};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -196,24 +243,19 @@ mod tests {
             config: json!({}),
         }];
         let mut states = build_states_for_rules(&rules, &registry).expect("states");
-        let mut resp = UrpResponse {
-            id: "resp_1".to_string(),
-            model: "gpt-test".to_string(),
-            outputs: vec![Item::Message {
-                role: Role::Assistant,
-                parts: vec![Part::Reasoning {
-                    content: Some("plain reasoning".to_string()),
-                    encrypted: None,
-                    summary: None,
-                    source: None,
-                    extra_body: HashMap::new(),
-                }],
+        let mut resp = UrpResponse { id: "resp_1".to_string(), model: "gpt-test".to_string(), created_at: None, output: items_to_nodes(vec![Item::Message {
+            id: None,
+            role: Role::Assistant,
+            parts: vec![Part::Reasoning {
+                id: None,
+                content: Some("plain reasoning".to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
                 extra_body: HashMap::new(),
             }],
-            finish_reason: None,
-            usage: None,
             extra_body: HashMap::new(),
-        };
+        }]), finish_reason: None, usage: None, extra_body: HashMap::new() };
         crate::transforms::apply_transforms(
             UrpData::Response(&mut resp),
             &rules,
@@ -226,7 +268,8 @@ mod tests {
         .await
         .expect("apply");
 
-        let Item::Message { parts, .. } = &resp.outputs[0] else {
+        let outputs = nodes_to_items(&resp.output);
+        let Item::Message { parts, .. } = &outputs[0] else {
             panic!("expected message");
         };
         let Part::Reasoning {
@@ -250,27 +293,22 @@ mod tests {
             config: json!({}),
         }];
         let mut states = build_states_for_rules(&rules, &registry).expect("states");
-        let mut resp = UrpResponse {
-            id: "resp_1".to_string(),
-            model: "gpt-test".to_string(),
-            outputs: vec![Item::Message {
-                role: Role::Assistant,
-                parts: vec![Part::Reasoning {
-                    content: Some("plain reasoning".to_string()),
-                    encrypted: Some(Value::String("ciphertext".to_string())),
-                    summary: None,
-                    source: Some("openrouter".to_string()),
-                    extra_body: HashMap::from([(
-                        "preserved".to_string(),
-                        Value::String("yes".to_string()),
-                    )]),
-                }],
-                extra_body: HashMap::new(),
+        let mut resp = UrpResponse { id: "resp_1".to_string(), model: "gpt-test".to_string(), created_at: None, output: items_to_nodes(vec![Item::Message {
+            id: None,
+            role: Role::Assistant,
+            parts: vec![Part::Reasoning {
+                id: None,
+                content: Some("plain reasoning".to_string()),
+                encrypted: Some(Value::String("ciphertext".to_string())),
+                summary: None,
+                source: Some("openrouter".to_string()),
+                extra_body: HashMap::from([(
+                    "preserved".to_string(),
+                    Value::String("yes".to_string()),
+                )]),
             }],
-            finish_reason: None,
-            usage: None,
             extra_body: HashMap::new(),
-        };
+        }]), finish_reason: None, usage: None, extra_body: HashMap::new() };
         crate::transforms::apply_transforms(
             UrpData::Response(&mut resp),
             &rules,
@@ -283,7 +321,8 @@ mod tests {
         .await
         .expect("apply");
 
-        let Item::Message { parts, .. } = &resp.outputs[0] else {
+        let outputs = nodes_to_items(&resp.output);
+        let Item::Message { parts, .. } = &outputs[0] else {
             panic!("expected message");
         };
         let Part::Reasoning {
@@ -292,6 +331,7 @@ mod tests {
             summary,
             source,
             extra_body,
+            ..
         } = &parts[0]
         else {
             panic!("expected reasoning");
@@ -360,16 +400,10 @@ mod tests {
         let mut state = transform.init_state();
         let mut event = UrpStreamEvent::PartDone {
             part_index: 2,
-            part: Part::Reasoning {
-                content: Some("plain".to_string()),
-                encrypted: Some(Value::String("ciphertext".to_string())),
-                summary: None,
-                source: Some("openrouter".to_string()),
-                extra_body: HashMap::from([(
-                    "preserved".to_string(),
-                    Value::String("yes".to_string()),
-                )]),
-            },
+            part: Part::Reasoning { id: None, content: Some("plain".to_string()), encrypted: Some(Value::String("ciphertext".to_string())), summary: None, source: Some("openrouter".to_string()), extra_body: HashMap::from([(
+                "preserved".to_string(),
+                Value::String("yes".to_string()),
+            )]) },
             usage: None,
             extra_body: HashMap::new(),
         };
@@ -393,6 +427,7 @@ mod tests {
             summary,
             source,
             extra_body,
+            ..
         } = part
         else {
             panic!("expected reasoning");
