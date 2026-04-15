@@ -180,7 +180,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
 async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let ctx = setup().await;
     seed_test_model_pricing(&ctx.state, &["gpt-5-target"]).await;
-    let (upstream_addr, _) = start_upstream().await;
+    let (upstream_addr, _, _) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let mut models = HashMap::new();

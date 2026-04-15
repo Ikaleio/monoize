@@ -200,6 +200,23 @@ fn assert_messages_stream_invariants(events: &[Value], label: &str) {
     }
 }
 
+fn assert_exactly_one_message_terminal_pair(events: &[Value], label: &str) {
+    let message_delta_positions: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, event)| (event["type"].as_str() == Some("message_delta")).then_some(idx))
+        .collect();
+    let message_stop_positions: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, event)| (event["type"].as_str() == Some("message_stop")).then_some(idx))
+        .collect();
+
+    assert_eq!(message_delta_positions.len(), 1, "{label}: message_delta must occur exactly once");
+    assert_eq!(message_stop_positions.len(), 1, "{label}: message_stop must occur exactly once");
+    assert!(message_delta_positions[0] < message_stop_positions[0], "{label}: message_delta must precede message_stop");
+}
+
 #[tokio::test]
 async fn messages_streaming_preserves_upstream_thinking_delta_granularity() {
     let ctx = setup().await;
@@ -385,6 +402,24 @@ async fn messages_streaming_emits_message_delta_before_stop_for_responses_upstre
 }
 
 #[tokio::test]
+async fn messages_streaming_live_style_terminal_events_occur_exactly_once() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream passthrough" }] }],
+            "stream": true
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "messages passthrough exact-once terminal stream");
+    assert_exactly_one_message_terminal_pair(&events, "messages passthrough exact-once terminal stream");
+}
+
+#[tokio::test]
 async fn messages_streaming_from_responses_includes_message_delta_usage() {
     let ctx = setup().await;
     let events = collect_messages_stream_events(
@@ -490,7 +525,7 @@ async fn messages_streaming_does_not_duplicate_text_deltas_or_blocks() {
 #[tokio::test]
 async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_delta() {
     let ctx = setup().await;
-    let (upstream_addr, _) = start_upstream().await;
+    let (upstream_addr, _, _) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let mut models = HashMap::new();
@@ -686,6 +721,82 @@ async fn messages_stream_passthrough_from_messages_upstream() {
         Some("message_start"),
         "passthrough should start with message_start"
     );
+    assert_exactly_one_message_terminal_pair(&events, "same-family messages passthrough");
+}
+
+#[tokio::test]
+async fn messages_streaming_consumes_next_envelope_extra_exactly_once() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{ "type": "text", "text": "first" }],
+                    "first_only": "A"
+                },
+                {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "second" }]
+                }
+            ],
+            "stream": true
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "messages control-node passthrough stream");
+    let message_start = events.first().expect("message_start");
+    assert_eq!(message_start["message"]["first_only"], json!("A"));
+
+    let block_starts: Vec<&Value> = events
+        .iter()
+        .filter(|event| event["type"].as_str() == Some("content_block_start"))
+        .collect();
+    assert!(
+        !block_starts.is_empty(),
+        "expected visible content blocks after message_start"
+    );
+    assert!(
+        block_starts
+            .iter()
+            .all(|event| event["content_block"].get("first_only").is_none()),
+        "control-node metadata must not leak into visible content blocks: {events:?}"
+    );
+    assert!(
+        block_starts.iter().all(|event| {
+            event["content_block"]["type"].as_str() != Some("next_downstream_envelope_extra")
+        }),
+        "control node must not surface as a visible Messages block: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn messages_streaming_discards_unmatched_trailing_next_envelope_extra() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream plain" }] }],
+            "stream": true,
+            "stream_mode": "trailing_control_only"
+        }),
+    )
+    .await;
+    let frames = parse_sse_frames(&text);
+    let payloads: Vec<Value> = frames
+        .iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(data).ok())
+        .collect();
+
+    assert!(
+        payloads.is_empty(),
+        "unmatched trailing control must not emit an empty Messages lifecycle: {text}"
+    );
 }
 
 #[tokio::test]
@@ -704,6 +815,10 @@ async fn messages_stream_thinking_from_responses_upstream() {
         }),
     )
     .await;
+
+    for (idx, event) in events.iter().enumerate() {
+        eprintln!("event {} type = {:?}", idx, event["type"].as_str());
+    }
 
     assert_messages_stream_invariants(&events, "resp→msg thinking stream");
 
@@ -982,6 +1097,74 @@ async fn messages_streaming_from_responses_preserves_strict_block_order_in_raw_s
         .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
         .collect();
     assert_non_interleaved_message_blocks(&events, "raw responses→msg mixed stream");
+}
+
+#[tokio::test]
+async fn messages_stream_response_done_output_does_not_replay_node_owned_surfaces() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "think stream" }] }],
+            "stream": true,
+            "stream_mode": "reasoning_text_tool",
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }]
+        }),
+    )
+    .await;
+
+    let thinking_starts = events
+        .iter()
+        .filter(|event| {
+            event["type"].as_str() == Some("content_block_start")
+                && event["content_block"]["type"].as_str() == Some("thinking")
+        })
+        .count();
+    assert_eq!(thinking_starts, 1, "canonical reasoning lifecycle should own thinking block emission");
+
+    let text_starts = events
+        .iter()
+        .filter(|event| {
+            event["type"].as_str() == Some("content_block_start")
+                && event["content_block"]["type"].as_str() == Some("text")
+        })
+        .count();
+    assert_eq!(text_starts, 1, "canonical text lifecycle should own text block emission");
+
+    let tool_starts = events
+        .iter()
+        .filter(|event| {
+            event["type"].as_str() == Some("content_block_start")
+                && event["content_block"]["type"].as_str() == Some("tool_use")
+        })
+        .count();
+    assert_eq!(tool_starts, 1, "canonical tool lifecycle should own tool_use block emission");
+
+    let text_deltas: Vec<&str> = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("text_delta"))
+        .filter_map(|event| event["delta"]["text"].as_str())
+        .collect();
+    assert_eq!(text_deltas, vec!["answer"], "completed outputs must not replay node-owned text");
+
+    let thinking_deltas: Vec<&str> = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
+        .filter_map(|event| event["delta"]["thinking"].as_str())
+        .collect();
+    assert_eq!(thinking_deltas, vec!["mock_reasoning"], "completed outputs must not replay node-owned thinking");
+
+    let tool_json_deltas: Vec<&str> = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("input_json_delta"))
+        .filter_map(|event| event["delta"]["partial_json"].as_str())
+        .collect();
+    assert_eq!(tool_json_deltas, vec!["{\"a\":1}"], "completed outputs must not replay node-owned tool input");
+
+    assert_non_interleaved_message_blocks(&events, "node-owned responses→msg mixed stream");
 }
 
 #[tokio::test]

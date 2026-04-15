@@ -19,12 +19,14 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
+type CapturedBodies = Arc<Mutex<Vec<(String, Value)>>>;
 
 struct TestContext {
     router: axum::Router,
     auth_header: String,
     state: monoize::app::AppState,
     captured_headers: CapturedHeaders,
+    captured_bodies: CapturedBodies,
     _temp_dir: TempDir,
 }
 
@@ -171,13 +173,20 @@ async fn maybe_forced_upstream_delay(body: &Value) {
     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 }
 
-async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
+async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
     let captured_headers: CapturedHeaders = Arc::new(Mutex::new(Vec::new()));
+    let captured_bodies: CapturedBodies = Arc::new(Mutex::new(Vec::new()));
     async fn responses(
-        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
+        axum::extract::State((captured_headers, captured_bodies)): axum::extract::State<(
+            CapturedHeaders,
+            CapturedBodies,
+        )>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> impl axum::response::IntoResponse {
+        if let Ok(mut lock) = captured_bodies.lock() {
+            lock.push(("responses".to_string(), body.clone()));
+        }
         if let Some(v) = headers
             .get("anthropic-version")
             .and_then(|h| h.to_str().ok())
@@ -598,6 +607,169 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
                     ]);
                     return Sse::new(stream).into_response();
                 }
+                if body.get("stream_mode").and_then(|v| v.as_str())
+                    == Some("reasoning_message_then_tool_completed")
+                {
+                    let stream = futures_util::stream::iter(vec![
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": 0,
+                                    "item": {
+                                        "type": "reasoning",
+                                        "id": "rs_mock",
+                                        "summary": [{ "type": "summary_text", "text": "" }],
+                                        "text": ""
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": 1,
+                                    "item": {
+                                        "type": "message",
+                                        "id": "msg_mock",
+                                        "role": "assistant",
+                                        "phase": "commentary",
+                                        "content": []
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.content_part.added").data(
+                                json!({
+                                    "type": "response.content_part.added",
+                                    "output_index": 1,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "part": { "type": "output_text", "text": "", "annotations": [] }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_text.delta").data(
+                                json!({
+                                    "type": "response.output_text.delta",
+                                    "output_index": 1,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "logprobs": Value::Null,
+                                    "delta": "Searching"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_text.done").data(
+                                json!({
+                                    "type": "response.output_text.done",
+                                    "output_index": 1,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "logprobs": Value::Null,
+                                    "text": "Searching"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.content_part.done").data(
+                                json!({
+                                    "type": "response.content_part.done",
+                                    "output_index": 1,
+                                    "content_index": 0,
+                                    "item_id": "msg_mock",
+                                    "part": { "type": "output_text", "text": "Searching", "annotations": [] }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.done").data(
+                                json!({
+                                    "type": "response.output_item.done",
+                                    "output_index": 1,
+                                    "item": {
+                                        "type": "message",
+                                        "id": "msg_mock",
+                                        "role": "assistant",
+                                        "phase": "commentary",
+                                        "content": [{ "type": "output_text", "text": "Searching" }]
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": 2,
+                                    "item": {
+                                        "type": "function_call",
+                                        "id": "fc_mock",
+                                        "call_id": "call_1",
+                                        "name": "tool_a",
+                                        "arguments": ""
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.function_call_arguments.delta").data(
+                                json!({
+                                    "type": "response.function_call_arguments.delta",
+                                    "output_index": 2,
+                                    "item_id": "fc_mock",
+                                    "delta": "{\"a\":1}"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.completed").data(
+                                json!({
+                                    "type": "response.completed",
+                                    "response": {
+                                        "id": "resp_mock",
+                                        "object": "response",
+                                        "created_at": 0,
+                                        "model": model,
+                                        "status": "completed",
+                                        "output": [
+                                            {
+                                                "type": "message",
+                                                "id": "msg_mock",
+                                                "role": "assistant",
+                                                "phase": "commentary",
+                                                "content": [{ "type": "output_text", "text": "Searching" }]
+                                            },
+                                            {
+                                                "type": "function_call",
+                                                "id": "fc_mock",
+                                                "call_id": "call_1",
+                                                "name": "tool_a",
+                                                "arguments": "{\"a\":1}"
+                                            }
+                                        ]
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                    ]);
+                    return Sse::new(stream).into_response();
+                }
 
                 let mut events: Vec<Result<Event, Infallible>> = Vec::new();
                 events.push(Ok(Event::default()
@@ -734,6 +906,68 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
                 return Sse::new(stream).into_response();
             }
 
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("trailing_control_only") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.created").data(
+                            json!({
+                                "type": "response.created",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "in_progress"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.added").data(
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "next_downstream_envelope_extra",
+                                    "first_only": "A"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.done").data(
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "next_downstream_envelope_extra",
+                                    "first_only": "A"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().event("response.completed").data(
+                        json!({
+                            "type": "response.completed",
+                            "response": {
+                                "id": "resp_mock",
+                                "object": "response",
+                                "created_at": 0,
+                                "model": model,
+                                "status": "completed",
+                                "output": []
+                            }
+                        })
+                        .to_string(),
+                    )),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
             let mut events = Vec::new();
             if reasoning_enabled {
                 events.push(Ok::<_, Infallible>(
@@ -842,10 +1076,16 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
     }
 
     async fn chat(
-        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
+        axum::extract::State((captured_headers, captured_bodies)): axum::extract::State<(
+            CapturedHeaders,
+            CapturedBodies,
+        )>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> impl axum::response::IntoResponse {
+        if let Ok(mut lock) = captured_bodies.lock() {
+            lock.push(("chat".to_string(), body.clone()));
+        }
         if let Some(v) = headers
             .get("anthropic-version")
             .and_then(|h| h.to_str().ok())
@@ -1401,10 +1641,16 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
     }
 
     async fn messages(
-        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
+        axum::extract::State((captured_headers, captured_bodies)): axum::extract::State<(
+            CapturedHeaders,
+            CapturedBodies,
+        )>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> impl axum::response::IntoResponse {
+        if let Ok(mut lock) = captured_bodies.lock() {
+            lock.push(("messages".to_string(), body.clone()));
+        }
         if let Some(v) = headers
             .get("anthropic-version")
             .and_then(|h| h.to_str().ok())
@@ -1461,13 +1707,37 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
                 }
             }
         }
+        let first_message_extra = messages
+            .iter()
+            .find_map(|message| {
+                let obj = message.as_object()?;
+                Some(
+                    obj.iter()
+                        .filter(|(key, _)| {
+                            !matches!(
+                                key.as_str(),
+                                "role" | "content" | "type" | "id" | "model" | "stop_reason" | "stop_sequence" | "usage"
+                            )
+                        })
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect::<serde_json::Map<String, Value>>(),
+                )
+            })
+            .unwrap_or_else(serde_json::Map::new);
 
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
             if tools_present && tool_results.is_empty() {
                 let mut events: Vec<Result<Event, Infallible>> = Vec::new();
                 events.push(Ok(Event::default().data(json!({
                     "type": "message_start",
-                    "message": { "id": "msg_mock", "type": "message", "role": "assistant", "model": model, "content": [] }
+                    "message": {
+                        "id": "msg_mock",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [],
+                        "first_only": first_message_extra.get("first_only").cloned().unwrap_or(Value::Null)
+                    }
                 }).to_string())));
                 // thinking block
                 events.push(Ok(Event::default().data(
@@ -1537,7 +1807,14 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
                 let stream = futures_util::stream::iter(vec![
                     Ok::<_, Infallible>(Event::default().data(json!({
                         "type": "message_start",
-                        "message": { "id": "msg_mock", "type": "message", "role": "assistant", "model": model, "content": [] }
+                        "message": {
+                            "id": "msg_mock",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": model,
+                            "content": [],
+                            "first_only": first_message_extra.get("first_only").cloned().unwrap_or(Value::Null)
+                        }
                     }).to_string())),
                     Ok::<_, Infallible>(Event::default().data(json!({
                         "type": "content_block_start",
@@ -1558,7 +1835,14 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
             let mut events = Vec::new();
             events.push(Ok::<_, Infallible>(Event::default().data(json!({
                 "type": "message_start",
-                "message": { "id": "msg_mock", "type": "message", "role": "assistant", "model": model, "content": [] }
+                "message": {
+                    "id": "msg_mock",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [],
+                    "first_only": first_message_extra.get("first_only").cloned().unwrap_or(Value::Null)
+                }
             }).to_string())));
             if thinking_enabled {
                 events.push(Ok::<_, Infallible>(
@@ -1633,9 +1917,28 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
                 events.push(Ok::<_, Infallible>(
                     Event::default().data(
                         json!({
+                            "type": "content_block_start",
+                            "index": 0,
+                            "content_block": { "type": "text", "text": "" }
+                        })
+                        .to_string(),
+                    ),
+                ));
+                events.push(Ok::<_, Infallible>(
+                    Event::default().data(
+                        json!({
                             "type": "content_block_delta",
                             "index": 0,
                             "delta": { "type": "text_delta", "text": text }
+                        })
+                        .to_string(),
+                    ),
+                ));
+                events.push(Ok::<_, Infallible>(
+                    Event::default().data(
+                        json!({
+                            "type": "content_block_stop",
+                            "index": 0
                         })
                         .to_string(),
                     ),
@@ -1702,11 +2005,17 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
     }
 
     async fn gemini_dispatch(
-        axum::extract::State(captured_headers): axum::extract::State<CapturedHeaders>,
+        axum::extract::State((captured_headers, captured_bodies)): axum::extract::State<(
+            CapturedHeaders,
+            CapturedBodies,
+        )>,
         axum::extract::Path(rest): axum::extract::Path<String>,
         headers: axum::http::HeaderMap,
         Json(body): Json<Value>,
     ) -> impl axum::response::IntoResponse {
+        if let Ok(mut lock) = captured_bodies.lock() {
+            lock.push((format!("gemini:{rest}"), body.clone()));
+        }
         if let Some(v) = headers.get("x-goog-api-key").and_then(|h| h.to_str().ok()) {
             if let Ok(mut lock) = captured_headers.lock() {
                 lock.push(("x-goog-api-key".to_string(), v.to_string()));
@@ -1791,7 +2100,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
         .route("/v1/chat/completions", post(chat))
         .route("/v1/messages", post(messages))
         .route("/v1beta/models/{*rest}", post(gemini_dispatch))
-        .with_state(Arc::clone(&captured_headers));
+        .with_state((Arc::clone(&captured_headers), Arc::clone(&captured_bodies)));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1800,7 +2109,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders) {
         axum::serve(listener, router).await.unwrap();
     });
 
-    (addr, captured_headers)
+    (addr, captured_headers, captured_bodies)
 }
 
 fn collect_responses_text(input: Option<&Value>) -> String {
@@ -2040,7 +2349,7 @@ async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
 }
 
 async fn setup_with_unknown_fields() -> TestContext {
-    let (upstream_addr, captured_headers) = start_upstream().await;
+    let (upstream_addr, captured_headers, captured_bodies) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -2150,6 +2459,7 @@ async fn setup_with_unknown_fields() -> TestContext {
         auth_header: format!("Bearer {test_token}"),
         state,
         captured_headers,
+        captured_bodies,
         _temp_dir: temp_dir,
     }
 }

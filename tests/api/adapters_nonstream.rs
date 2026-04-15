@@ -1,5 +1,16 @@
 use super::*;
 
+fn last_captured_body(ctx: &TestContext, endpoint: &str) -> Value {
+    ctx.captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .iter()
+        .rev()
+        .find(|(name, _)| name == endpoint)
+        .map(|(_, body)| body.clone())
+        .unwrap_or_else(|| panic!("missing captured upstream body for {endpoint}"))
+}
+
 #[tokio::test]
 async fn responses_forward_nonstream_and_preserves_unknown_fields() {
     let ctx = setup().await;
@@ -17,6 +28,36 @@ async fn responses_forward_nonstream_and_preserves_unknown_fields() {
     let v: Value = serde_json::from_str(&body).unwrap();
     let text = v["output"][0]["content"][0]["text"].as_str().unwrap_or("");
     assert!(text.contains("ping|extra_echo=E1"));
+}
+
+#[tokio::test]
+async fn responses_reject_item_reference_continuations_while_remaining_stateless() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "ping" }] },
+                { "type": "item_reference", "id": "msg_prev" },
+                { "type": "function_call_output", "call_id": "call_1", "output": "{\"ok\":true}" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let v: Value = serde_json::from_str(&body).expect("error json");
+    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+    let message = v["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("item_reference"),
+        "error must mention item_reference: {body}"
+    );
+    assert!(
+        message.contains("stateless"),
+        "error must explain the stateless boundary: {body}"
+    );
 }
 
 #[tokio::test]
@@ -48,6 +89,78 @@ async fn chat_to_responses_upstream_reasoning_inputs_always_include_summary() {
     assert_eq!(
         v["choices"][0]["message"]["content"],
         json!("startcontinue")
+    );
+}
+
+#[tokio::test]
+async fn chat_nonstream_openrouter_request_extensions_passthrough() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": "extensions" }],
+            "models": ["openai/gpt-5-mini", "anthropic/claude-3.7-sonnet"],
+            "route": "fallback",
+            "provider": { "order": ["openai", "anthropic"], "allow_fallbacks": true },
+            "plugins": [{ "id": "web", "enabled": true }],
+            "user": "user-123",
+            "debug": { "echo_upstream_body": true }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    assert_eq!(upstream["models"], json!(["openai/gpt-5-mini", "anthropic/claude-3.7-sonnet"]));
+    assert_eq!(upstream["route"], json!("fallback"));
+    assert_eq!(upstream["provider"], json!({ "order": ["openai", "anthropic"], "allow_fallbacks": true }));
+    assert_eq!(upstream["plugins"], json!([{ "id": "web", "enabled": true }]));
+    assert_eq!(upstream["user"], json!("user-123"));
+    assert_eq!(upstream["debug"], json!({ "echo_upstream_body": true }));
+}
+
+#[tokio::test]
+async fn chat_nonstream_reasoning_details_replay_preserves_order() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [
+                { "role": "user", "content": "start" },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_details": [
+                        { "type": "reasoning.summary", "summary": "first", "format": "openrouter" },
+                        { "type": "reasoning.text", "text": "second", "format": "openrouter" },
+                        { "type": "reasoning.encrypted", "data": "third", "format": "openrouter" }
+                    ]
+                },
+                { "role": "user", "content": "continue" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    let assistant = upstream["messages"]
+        .as_array()
+        .expect("chat messages array")
+        .iter()
+        .find(|message| message["role"].as_str() == Some("assistant"))
+        .expect("assistant replay message");
+    assert_eq!(
+        assistant["reasoning_details"],
+        json!([
+            { "type": "reasoning.summary", "summary": "first", "format": "openrouter" },
+            { "type": "reasoning.text", "text": "second", "format": "openrouter" },
+            { "type": "reasoning.encrypted", "data": "third", "format": "openrouter" }
+        ])
     );
 }
 
@@ -88,6 +201,183 @@ async fn messages_adapter_nonstream() {
     let v: Value = serde_json::from_str(&body).unwrap();
     let text = v["content"][0]["text"].as_str().unwrap_or("");
     assert!(text.contains("yo|extra_echo=E3"));
+}
+
+#[tokio::test]
+async fn cross_family_top_level_extra_survives_while_nested_extra_is_stripped() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "hello",
+                        "nested_local": "strip-me",
+                        "phase": "commentary"
+                    }
+                ],
+                "message_local": "strip-me-too"
+            }],
+            "extra_echo": "TOP"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["extra_echo"], json!("TOP"));
+    let input_message = &upstream["input"][0];
+    assert_eq!(input_message["type"], json!("message"));
+    assert!(input_message.get("message_local").is_none(), "cross-family nested envelope extra must strip: {input_message}");
+    assert!(input_message["content"][0].get("nested_local").is_none(), "cross-family nested node extra must strip: {input_message}");
+}
+
+#[tokio::test]
+async fn responses_same_family_next_downstream_envelope_extra_applies_once() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "first" }],
+                    "first_only": "A"
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": "second" }]
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let input = upstream["input"].as_array().expect("responses input array");
+    assert_eq!(input[0]["first_only"], json!("A"));
+    assert!(input[1].get("first_only").is_none(), "next_downstream_envelope_extra must apply once: {input:?}");
+}
+
+#[tokio::test]
+async fn chat_cross_family_strips_next_downstream_envelope_extra() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "hidden-control",
+                    "tool_calls": [{
+                        "id": "call_x",
+                        "type": "function",
+                        "function": { "name": "tool_a", "arguments": "{}" }
+                    }],
+                    "chat_only_extra": "strip-before-responses"
+                },
+                { "role": "tool", "tool_call_id": "call_x", "content": "R1" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let input = upstream["input"].as_array().expect("responses input array");
+    assert_eq!(
+        input.iter().filter(|item| item["type"].as_str() == Some("function_call_output")).count(),
+        1,
+        "tool result must stay distinct: {input:?}"
+    );
+    assert_eq!(
+        input.iter().filter(|item| item.get("chat_only_extra").is_some()).count(),
+        0,
+        "cross-family next_downstream_envelope_extra must strip: {input:?}"
+    );
+    assert!(
+        !input.iter().any(|item| {
+            item["type"].as_str() == Some("message")
+                && item["content"].as_array().map(|parts| parts.is_empty()).unwrap_or(false)
+        }),
+        "control node must not synthesize an empty envelope: {input:?}"
+    );
+}
+
+#[tokio::test]
+async fn messages_cross_family_strips_next_downstream_envelope_extra() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "call_x",
+                    "content": "R1",
+                    "tool_result_extra": "strip-before-responses"
+                }],
+                "message_extra": "strip-too"
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let input = upstream["input"].as_array().expect("responses input array");
+    assert_eq!(input.len(), 1);
+    assert_eq!(input[0]["type"], json!("function_call_output"));
+    assert!(input[0].get("message_extra").is_none());
+    assert!(input[0].get("tool_result_extra").is_none());
+}
+
+#[tokio::test]
+async fn cross_family_phase_is_not_synthesized_for_chat_or_messages() {
+    let ctx = setup().await;
+
+    let (chat_status, chat_body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini",
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "phase-check", "phase": "analysis" }] }]
+        }),
+    )
+    .await;
+    assert_eq!(chat_status, StatusCode::OK, "{chat_body}");
+    let chat_upstream = last_captured_body(&ctx, "responses");
+    assert!(chat_upstream["input"][0]["content"][0].get("phase").is_none(), "chat cross-family phase must strip: {chat_upstream}");
+
+    let (messages_status, messages_body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "phase-check", "phase": "analysis" }] }]
+        }),
+    )
+    .await;
+    assert_eq!(messages_status, StatusCode::OK, "{messages_body}");
+    let messages_upstream = last_captured_body(&ctx, "responses");
+    assert!(messages_upstream["input"][0]["content"][0].get("phase").is_none(), "messages cross-family phase must strip: {messages_upstream}");
 }
 
 #[tokio::test]
@@ -551,6 +841,24 @@ async fn messages_upstream_sends_anthropic_version_header() {
 }
 
 #[tokio::test]
+async fn messages_upstream_defaults_max_tokens_to_anthropic_max_when_omitted() {
+    let ctx = setup().await;
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "yo" }] }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(upstream["max_tokens"], json!(64_000));
+}
+
+#[tokio::test]
 async fn gemini_native_nonstream_roundtrip_works() {
     let ctx = setup().await;
     let (status, body) = json_post(
@@ -595,7 +903,7 @@ async fn grok_native_responses_roundtrip_works() {
 #[tokio::test]
 async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdown() {
     let ctx = setup().await;
-    let (upstream_addr, _) = start_upstream().await;
+    let (upstream_addr, _, _) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let mut models = HashMap::new();

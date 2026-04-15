@@ -155,6 +155,99 @@ async fn chat_streaming_maps_tool_calls_and_reasoning_from_responses_upstream() 
 }
 
 #[tokio::test]
+async fn chat_streaming_from_responses_uses_node_authoritative_tool_deltas_without_duplication() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream tool"}],
+                "tools":[{ "type":"function","function":{ "name":"tool_a","parameters":{ "type":"object","additionalProperties":true }}}],
+                "parallel_tool_calls": true,
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut tool_header_chunks = 0usize;
+    let mut argument_chunks = 0usize;
+    let mut finish_reasons: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let Some(choice) = v
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+        else {
+            continue;
+        };
+        if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            if !reason.is_empty() {
+                finish_reasons.push(reason.to_string());
+            }
+        }
+        if let Some(tool_calls) = choice
+            .get("delta")
+            .and_then(|d| d.get("tool_calls"))
+            .and_then(|v| v.as_array())
+        {
+            for tool_call in tool_calls {
+                let idx = tool_call.get("index").and_then(|v| v.as_u64());
+                let id = tool_call.get("id").and_then(|v| v.as_str());
+                let name = tool_call
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|v| v.as_str());
+                let arguments = tool_call
+                    .get("function")
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if idx == Some(0) && id == Some("call_1") && name == Some("tool_a") {
+                    tool_header_chunks += 1;
+                }
+                if idx == Some(0) && arguments == "{\"a\":1}" {
+                    argument_chunks += 1;
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        tool_header_chunks, 1,
+        "node-owned tool header should emit exactly once even when bridge events coexist: {text}"
+    );
+    assert_eq!(
+        argument_chunks, 1,
+        "node-owned tool argument delta should emit exactly once even when bridge events coexist: {text}"
+    );
+    assert_eq!(
+        finish_reasons,
+        vec!["tool_calls".to_string()],
+        "terminal chunk should still be exactly once and normalized from node-owned tool deltas: {text}"
+    );
+}
+
+#[tokio::test]
 async fn chat_streaming_maps_tool_calls_from_responses_completed_fallback() {
     let ctx = setup().await;
     let req = Request::builder()
@@ -754,9 +847,63 @@ async fn chat_streaming_from_responses_includes_terminal_usage() {
 }
 
 #[tokio::test]
+async fn chat_streaming_openrouter_final_usage_chunk_shape() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "messages":[{"role":"user","content":"stream usage"}],
+                "stream": true,
+                "emit_usage": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let mut usage_chunks = Vec::new();
+    for line in text.lines() {
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        if v.get("usage").is_some() {
+            usage_chunks.push(v);
+        }
+    }
+
+    assert_eq!(usage_chunks.len(), 1, "chat stream must emit exactly one usage-bearing terminal chunk before [DONE]: {text}");
+    let usage_chunk = &usage_chunks[0];
+    let choice = usage_chunk["choices"]
+        .as_array()
+        .and_then(|choices| choices.first())
+        .expect("usage terminal chunk choice");
+    assert_eq!(choice["finish_reason"].as_str(), Some("stop"), "usage-bearing chunk must be the terminal finish chunk: {text}");
+    assert!(
+        choice["delta"].as_object().is_some_and(|delta| delta.is_empty()),
+        "usage-bearing terminal chunk must not carry additional assistant deltas: {text}"
+    );
+    assert_eq!(usage_chunk["usage"]["prompt_tokens"].as_u64(), Some(12));
+    assert_eq!(usage_chunk["usage"]["completion_tokens"].as_u64(), Some(8));
+}
+
+#[tokio::test]
 async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events() {
     let ctx = setup().await;
-    let (upstream_addr, _) = start_upstream().await;
+    let (upstream_addr, _, _) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let mut models = HashMap::new();
@@ -849,7 +996,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
 #[tokio::test]
 async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reasoning() {
     let ctx = setup().await;
-    let (upstream_addr, _) = start_upstream().await;
+    let (upstream_addr, _, _) = start_upstream().await;
     let base_url = format!("http://{upstream_addr}");
 
     let mut models = HashMap::new();
