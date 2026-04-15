@@ -2,10 +2,9 @@ use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
     parse_tool_definition, split_extra, value_to_text,
 };
-use crate::urp::greedy::{Action, GreedyMerger};
 use crate::urp::{
-    FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, Part, ReasoningConfig,
+    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -109,34 +108,38 @@ impl From<AnthropicUsage> for Usage {
     }
 }
 
-fn text_part_with_phase(
+fn text_node_with_phase(
+    role: OrdinaryRole,
     content: impl Into<String>,
     phase: Option<&str>,
     mut extra_body: HashMap<String, Value>,
-) -> Part {
+) -> Node {
     if let Some(phase) = phase {
         extra_body.insert("phase".to_string(), Value::String(phase.to_string()));
     }
-    Part::Text {
+    Node::Text {
+        id: None,
+        role,
         content: content.into(),
+        phase: phase.map(str::to_string),
         extra_body,
     }
 }
 
-fn make_item_message(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Item {
-    let mut body = serde_json::Map::new();
-    body.insert("type".to_string(), Value::String("message".to_string()));
-    body.insert(
-        "role".to_string(),
-        serde_json::to_value(role).expect("role serialization must succeed"),
-    );
-    body.insert(
-        "parts".to_string(),
-        serde_json::to_value(parts).expect("parts serialization must succeed"),
-    );
-    body.extend(extra_body);
+fn attach_message_extra(node: &mut Node, extra_body: &HashMap<String, Value>) {
+    if extra_body.is_empty() {
+        return;
+    }
+    node.extra_body_mut().extend(extra_body.clone());
+}
 
-    serde_json::from_value(Value::Object(body)).expect("message item serialization must succeed")
+fn ordinary_role_from_messages_role(role: &str) -> OrdinaryRole {
+    match role {
+        "assistant" => OrdinaryRole::Assistant,
+        "system" => OrdinaryRole::System,
+        "developer" => OrdinaryRole::Developer,
+        _ => OrdinaryRole::User,
+    }
 }
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
@@ -150,21 +153,46 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .ok_or_else(|| "missing model".to_string())?
         .to_string();
 
-    let mut inputs = Vec::new();
+    let mut input_nodes = Vec::new();
 
     if let Some(system) = obj.get("system") {
-        let system_text = if let Some(s) = system.as_str() {
-            s.to_string()
-        } else if let Some(arr) = system.as_array() {
-            arr.iter()
-                .filter_map(|b| b.get("text").and_then(|v| v.as_str()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            String::new()
-        };
-        if !system_text.is_empty() {
-            inputs.push(Item::text(Role::System, system_text));
+        if let Some(text) = system.as_str() {
+            if !text.is_empty() {
+                input_nodes.push(Node::Text {
+                    id: None,
+                    role: OrdinaryRole::System,
+                    content: text.to_string(),
+                    phase: None,
+                    extra_body: HashMap::new(),
+                });
+            }
+        } else if let Some(blocks) = system.as_array() {
+            for block in blocks {
+                let Some(bobj) = block.as_object() else {
+                    continue;
+                };
+                let btype = bobj.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+                match btype {
+                    "text" => {
+                        if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
+                            input_nodes.push(text_node_with_phase(
+                                OrdinaryRole::System,
+                                text,
+                                bobj.get("phase").and_then(|v| v.as_str()),
+                                split_extra(bobj, &["type", "text", "phase"]),
+                            ));
+                        }
+                    }
+                    _ => {
+                        input_nodes.push(text_node_with_phase(
+                            OrdinaryRole::System,
+                            serde_json::to_string(block).unwrap_or_default(),
+                            None,
+                            HashMap::new(),
+                        ));
+                    }
+                }
+            }
         }
     }
 
@@ -176,25 +204,25 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         let Some(msg_obj) = raw_msg.as_object() else {
             continue;
         };
-        let base_role = match msg_obj
-            .get("role")
-            .and_then(|v| v.as_str())
-            .unwrap_or("user")
-        {
-            "assistant" => Role::Assistant,
-            "system" => Role::System,
-            "developer" => Role::Developer,
-            _ => Role::User,
-        };
+        let base_role = ordinary_role_from_messages_role(
+            msg_obj
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("user"),
+        );
 
-        let mut parts = Vec::new();
         let msg_extra_body = split_extra(msg_obj, &["role", "content"]);
-
-        let mut tool_messages: Vec<Item> = Vec::new();
+        let mut message_nodes = Vec::new();
         let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
         if let Some(s) = content.as_str() {
             if !s.is_empty() {
-                parts.push(text_part_with_phase(s, None, HashMap::new()));
+                message_nodes.push(Node::Text {
+                    id: None,
+                    role: base_role,
+                    content: s.to_string(),
+                    phase: None,
+                    extra_body: HashMap::new(),
+                });
             }
         } else if let Some(blocks) = content.as_array() {
             for block in blocks {
@@ -205,7 +233,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 match btype {
                     "text" => {
                         if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
-                            parts.push(text_part_with_phase(
+                            message_nodes.push(text_node_with_phase(
+                                base_role,
                                 text,
                                 bobj.get("phase").and_then(|v| v.as_str()),
                                 split_extra(bobj, &["type", "text", "phase"]),
@@ -213,25 +242,25 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                         }
                     }
                     "thinking" => {
-                        if let Some(thinking) = bobj.get("thinking").and_then(|v| v.as_str()) {
-                            parts.push(Part::Reasoning {
-                                content: Some(thinking.to_string()),
-                                encrypted: None,
+                        let thinking = bobj
+                            .get("thinking")
+                            .and_then(|v| v.as_str())
+                            .filter(|thinking| !thinking.is_empty())
+                            .map(str::to_string);
+                        let encrypted = bobj
+                            .get("signature")
+                            .and_then(|v| v.as_str())
+                            .filter(|signature| !signature.is_empty())
+                            .map(|signature| Value::String(signature.to_string()));
+                        if thinking.is_some() || encrypted.is_some() {
+                            message_nodes.push(Node::Reasoning {
+                                id: None,
+                                content: thinking,
+                                encrypted,
                                 summary: None,
                                 source: None,
                                 extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
                             });
-                        }
-                        if let Some(signature) = bobj.get("signature").and_then(|v| v.as_str()) {
-                            if !signature.is_empty() {
-                                parts.push(Part::Reasoning {
-                                    content: None,
-                                    encrypted: Some(Value::String(signature.to_string())),
-                                    summary: None,
-                                    source: None,
-                                    extra_body: HashMap::new(),
-                                });
-                            }
                         }
                     }
                     "tool_use" => {
@@ -248,7 +277,11 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                         let arguments = bobj.get("input").cloned().unwrap_or(Value::Null);
                         let arguments =
                             serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string());
-                        parts.push(Part::ToolCall {
+                        message_nodes.push(Node::ToolCall {
+                            id: bobj
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
                             call_id,
                             name,
                             arguments,
@@ -265,7 +298,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                             .get("is_error")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        tool_messages.push(Item::ToolResult {
+                        message_nodes.push(Node::ToolResult {
+                            id: None,
                             call_id,
                             is_error,
                             content: decode_tool_result_content(bobj.get("content")),
@@ -276,7 +310,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                         });
                     }
                     _ => {
-                        parts.push(text_part_with_phase(
+                        message_nodes.push(text_node_with_phase(
+                            base_role,
                             serde_json::to_string(block).unwrap_or_default(),
                             None,
                             HashMap::new(),
@@ -286,10 +321,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             }
         }
 
-        if !parts.is_empty() {
-            inputs.push(make_item_message(base_role, parts, msg_extra_body));
+        if let Some(first_node) = message_nodes.first_mut() {
+            attach_message_extra(first_node, &msg_extra_body);
         }
-        inputs.extend(tool_messages);
+        input_nodes.extend(message_nodes);
     }
 
     let tools = obj.get("tools").and_then(|v| v.as_array()).map(|arr| {
@@ -350,43 +385,39 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
     };
 
-    Ok(UrpRequest {
-        model,
-        inputs,
-        stream: obj.get("stream").and_then(|v| v.as_bool()),
-        temperature: obj.get("temperature").and_then(|v| v.as_f64()),
-        top_p: obj.get("top_p").and_then(|v| v.as_f64()),
-        max_output_tokens: obj.get("max_tokens").and_then(|v| v.as_u64()),
-        reasoning,
-        tools,
-        tool_choice: obj
-            .get("tool_choice")
-            .cloned()
-            .map(tool_choice_from_messages_value),
-        response_format: None,
-        user: obj
-            .get("metadata")
-            .and_then(|v| v.get("user_id"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        extra_body: split_extra(
-            obj,
-            &[
-                "model",
-                "messages",
-                "system",
-                "stream",
-                "temperature",
-                "top_p",
-                "max_tokens",
-                "thinking",
-                "output_config",
-                "tools",
-                "tool_choice",
-                "metadata",
-            ],
-        ),
-    })
+    Ok(UrpRequest { model, input: input_nodes, stream: obj.get("stream").and_then(|v| v.as_bool()),
+    temperature: obj.get("temperature").and_then(|v| v.as_f64()),
+    top_p: obj.get("top_p").and_then(|v| v.as_f64()),
+    max_output_tokens: obj.get("max_tokens").and_then(|v| v.as_u64()),
+    reasoning,
+    tools,
+    tool_choice: obj
+        .get("tool_choice")
+        .cloned()
+        .map(tool_choice_from_messages_value),
+    response_format: None,
+    user: obj
+        .get("metadata")
+        .and_then(|v| v.get("user_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()),
+    extra_body: split_extra(
+        obj,
+        &[
+            "model",
+            "messages",
+            "system",
+            "stream",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "thinking",
+            "output_config",
+            "tools",
+            "tool_choice",
+            "metadata",
+        ],
+    ), })
 }
 
 pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
@@ -394,18 +425,18 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .as_object()
         .ok_or_else(|| "messages response must be object".to_string())?;
 
-    let mut outputs = Vec::new();
-    let mut merger = GreedyMerger::new();
+    let mut output_nodes = Vec::new();
     if let Some(content) = obj.get("content").and_then(|v| v.as_array()) {
         for block in content {
             let Some(bobj) = block.as_object() else {
                 continue;
             };
             let btype = bobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            let decoded_parts = match btype {
+            let decoded_nodes = match btype {
                 "text" => {
                     if let Some(text) = bobj.get("text").and_then(|v| v.as_str()) {
-                        vec![text_part_with_phase(
+                        vec![text_node_with_phase(
+                            OrdinaryRole::Assistant,
                             text,
                             bobj.get("phase").and_then(|v| v.as_str()),
                             split_extra(bobj, &["type", "text", "phase"]),
@@ -426,7 +457,8 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         .filter(|signature| !signature.is_empty())
                         .map(|signature| Value::String(signature.to_string()));
                     if thinking.is_some() || encrypted.is_some() {
-                        vec![Part::Reasoning {
+                        vec![Node::Reasoning {
+                            id: None,
                             content: thinking,
                             encrypted,
                             summary: None,
@@ -451,17 +483,44 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     let arguments =
                         serde_json::to_string(&bobj.get("input").cloned().unwrap_or(Value::Null))
                             .unwrap_or_else(|_| "{}".to_string());
-                    vec![Part::ToolCall {
+                    vec![Node::ToolCall {
+                        id: bobj
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
                         call_id,
                         name,
                         arguments,
                         extra_body: split_extra(bobj, &["type", "id", "name", "input"]),
                     }]
                 }
-                "image" => parse_image_part_from_obj(bobj).into_iter().collect(),
-                "document" | "file" => parse_file_part_from_obj(bobj).into_iter().collect(),
+                "image" => parse_image_part_from_obj(bobj)
+                    .into_iter()
+                    .map(|part| match part {
+                        crate::urp::Part::Image { source, extra_body } => Node::Image {
+                            id: None,
+                            role: OrdinaryRole::Assistant,
+                            source,
+                            extra_body,
+                        },
+                        _ => unreachable!(),
+                    })
+                    .collect(),
+                "document" | "file" => parse_file_part_from_obj(bobj)
+                    .into_iter()
+                    .map(|part| match part {
+                        crate::urp::Part::File { source, extra_body } => Node::File {
+                            id: None,
+                            role: OrdinaryRole::Assistant,
+                            source,
+                            extra_body,
+                        },
+                        _ => unreachable!(),
+                    })
+                    .collect(),
                 _ => {
-                    vec![text_part_with_phase(
+                    vec![text_node_with_phase(
+                        OrdinaryRole::Assistant,
                         serde_json::to_string(block).unwrap_or_default(),
                         None,
                         HashMap::new(),
@@ -469,27 +528,8 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                 }
             };
 
-            for part in decoded_parts {
-                match merger.feed(part, Role::Assistant) {
-                    Action::Append => {}
-                    Action::FlushAndNew(flushed_parts) => {
-                        outputs.push(make_item_message(
-                            Role::Assistant,
-                            flushed_parts,
-                            HashMap::new(),
-                        ));
-                    }
-                }
-            }
+            output_nodes.extend(decoded_nodes);
         }
-    }
-
-    if let Some(flushed_parts) = merger.finish() {
-        outputs.push(make_item_message(
-            Role::Assistant,
-            flushed_parts,
-            HashMap::new(),
-        ));
     }
 
     let finish_reason = match obj.get("stop_reason").and_then(|v| v.as_str()) {
@@ -505,33 +545,30 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .and_then(|v| serde_json::from_value::<AnthropicUsage>(v).ok())
         .map(Usage::from);
 
-    Ok(UrpResponse {
-        id: obj
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("msg")
-            .to_string(),
-        model: obj
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        outputs,
-        finish_reason,
-        usage,
-        extra_body: split_extra(
-            obj,
-            &[
-                "id",
-                "type",
-                "role",
-                "model",
-                "content",
-                "stop_reason",
-                "usage",
-            ],
-        ),
-    })
+    Ok(UrpResponse { id: obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("msg")
+        .to_string(),
+    model: obj
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string(),
+    created_at: None, output: output_nodes, finish_reason,
+    usage,
+    extra_body: split_extra(
+        obj,
+        &[
+            "id",
+            "type",
+            "role",
+            "model",
+            "content",
+            "stop_reason",
+            "usage",
+        ],
+    ), })
 }
 
 fn tool_choice_from_messages_value(v: Value) -> ToolChoice {

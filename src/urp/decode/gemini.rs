@@ -2,9 +2,8 @@ use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj, split_extra,
 };
 use crate::urp::{
-    greedy::{Action, GreedyMerger},
-    FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, Part, ReasoningConfig, Role,
+    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -132,12 +131,18 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .unwrap_or_default()
         .to_string();
 
-    let mut inputs = Vec::new();
+    let mut input_nodes = Vec::new();
 
     if let Some(system_instruction) = obj.get("systemInstruction") {
         let text = collect_content_text(system_instruction);
         if !text.is_empty() {
-            inputs.push(Item::text(Role::System, text));
+            input_nodes.push(Node::Text {
+                id: None,
+                role: OrdinaryRole::System,
+                content: text,
+                phase: None,
+                extra_body: HashMap::new(),
+            });
         }
     }
 
@@ -159,19 +164,19 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 for part in parts {
                     match decode_input_part(part) {
                         DecodedInput::Parts(parts) => message_parts.extend(parts),
-                        DecodedInput::ToolResult(item) => {
+                        DecodedInput::ToolResult(node) => {
                             push_message_item(
-                                &mut inputs,
+                                &mut input_nodes,
                                 role,
                                 &mut message_parts,
                                 message_extra.clone(),
                             );
-                            inputs.push(item);
+                            input_nodes.push(node);
                         }
                     }
                 }
             }
-            push_message_item(&mut inputs, role, &mut message_parts, message_extra);
+            push_message_item(&mut input_nodes, role, &mut message_parts, message_extra);
         }
     }
 
@@ -214,7 +219,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        inputs,
+        input: input_nodes,
         stream: obj
             .get("stream")
             .and_then(|v| v.as_bool())
@@ -270,48 +275,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .cloned()
         .unwrap_or_default();
 
-    let content_extra = split_extra(&content, &["role", "parts"]);
-    let mut outputs = Vec::new();
-    let mut merger = GreedyMerger::new();
-    let mut did_attach_content_extra = false;
-
-    if let Some(parts) = content.get("parts").and_then(|v| v.as_array()) {
-        for part in parts {
-            match decode_output_part(part) {
-                DecodedOutput::Parts(parts) => {
-                    for decoded_part in parts {
-                        match merger.feed(decoded_part, Role::Assistant) {
-                            Action::Append => {}
-                            Action::FlushAndNew(flushed_parts) => outputs.push(item_message(
-                                Role::Assistant,
-                                flushed_parts,
-                                take_output_extra(&content_extra, &mut did_attach_content_extra),
-                            )),
-                        }
-                    }
-                }
-                DecodedOutput::ToolResult(item) => {
-                    if let Some(flushed_parts) = merger.finish() {
-                        outputs.push(item_message(
-                            Role::Assistant,
-                            flushed_parts,
-                            take_output_extra(&content_extra, &mut did_attach_content_extra),
-                        ));
-                    }
-                    outputs.push(item);
-                }
-            }
-        }
-    }
-
-    if let Some(flushed_parts) = merger.finish() {
-        outputs.push(item_message(
-            Role::Assistant,
-            flushed_parts,
-            take_output_extra(&content_extra, &mut did_attach_content_extra),
-        ));
-    }
-
+    let output_nodes = decode_response_nodes(&content);
     let finish_reason = candidate
         .get("finishReason")
         .and_then(|v| v.as_str())
@@ -335,7 +299,8 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        outputs,
+        created_at: None,
+        output: output_nodes,
         finish_reason,
         usage,
         extra_body: split_extra(
@@ -417,12 +382,12 @@ fn parse_tool_choice(value: Value) -> Option<ToolChoice> {
 
 enum DecodedInput {
     Parts(Vec<Part>),
-    ToolResult(Item),
+    ToolResult(Node),
 }
 
 enum DecodedOutput {
-    Parts(Vec<Part>),
-    ToolResult(Item),
+    Nodes(Vec<Node>),
+    ToolResult(Node),
 }
 
 fn decode_input_part(part: &Value) -> DecodedInput {
@@ -439,14 +404,31 @@ fn decode_input_part(part: &Value) -> DecodedInput {
 
 fn decode_output_part(part: &Value) -> DecodedOutput {
     let Some(obj) = part.as_object() else {
-        return DecodedOutput::Parts(Vec::new());
+        return DecodedOutput::Nodes(Vec::new());
     };
 
     if let Some(fr) = obj.get("functionResponse").and_then(|v| v.as_object()) {
         return DecodedOutput::ToolResult(decode_function_response(fr));
     }
 
-    DecodedOutput::Parts(decode_content_parts(obj))
+    DecodedOutput::Nodes(parts_to_nodes(
+        Role::Assistant,
+        decode_content_parts(obj),
+        HashMap::new(),
+    ))
+}
+
+fn parts_to_nodes(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Vec<Node> {
+    let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
+    let mut nodes = Vec::new();
+    for (index, part) in parts.into_iter().enumerate() {
+        let mut node = part.into_node(ordinary_role);
+        if index == 0 && !extra_body.is_empty() {
+            node.extra_body_mut().extend(extra_body.clone());
+        }
+        nodes.push(node);
+    }
+    nodes
 }
 
 fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
@@ -456,6 +438,7 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
         if !text.is_empty() {
             if obj.get("thought").and_then(|v| v.as_bool()) == Some(true) {
                 out.push(Part::Reasoning {
+                    id: None,
                     content: Some(text.to_string()),
                     encrypted: None,
                     summary: None,
@@ -473,6 +456,7 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
 
     if let Some(sig) = obj.get("thoughtSignature") {
         out.push(Part::Reasoning {
+            id: None,
             content: None,
             encrypted: Some(sig.clone()),
             summary: None,
@@ -497,6 +481,7 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
             .unwrap_or_else(|_| "{}".to_string());
         if !name.is_empty() {
             out.push(Part::ToolCall {
+                id: fc.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
                 call_id,
                 name,
                 arguments: args,
@@ -572,14 +557,15 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
     out
 }
 
-fn decode_function_response(fr: &Map<String, Value>) -> Item {
+fn decode_function_response(fr: &Map<String, Value>) -> Node {
     let name = fr
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
     let response_value = fr.get("response").cloned().unwrap_or(Value::Null);
-    Item::ToolResult {
+    Node::ToolResult {
+        id: fr.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
         call_id: name.clone(),
         is_error: false,
         content: vec![ToolResultContent::Text {
@@ -590,7 +576,7 @@ fn decode_function_response(fr: &Map<String, Value>) -> Item {
 }
 
 fn push_message_item(
-    inputs: &mut Vec<Item>,
+    input: &mut Vec<Node>,
     role: Role,
     parts: &mut Vec<Part>,
     extra_body: HashMap<String, Value>,
@@ -599,7 +585,38 @@ fn push_message_item(
         return;
     }
 
-    inputs.push(item_message(role, std::mem::take(parts), extra_body));
+    input.extend(parts_to_nodes(role, std::mem::take(parts), extra_body));
+}
+
+fn decode_response_nodes(content: &Map<String, Value>) -> Vec<Node> {
+    let content_extra = split_extra(content, &["role", "parts"]);
+    let mut output_nodes = Vec::new();
+    let mut did_attach_content_extra = false;
+
+    if let Some(parts) = content.get("parts").and_then(|v| v.as_array()) {
+        for part in parts {
+            match decode_output_part(part) {
+                DecodedOutput::Nodes(nodes) => {
+                    for node in nodes {
+                        let mut node = node;
+                        if !did_attach_content_extra {
+                            let extra =
+                                take_output_extra(&content_extra, &mut did_attach_content_extra);
+                            if !extra.is_empty() {
+                                node.extra_body_mut().extend(extra);
+                            }
+                        }
+                        output_nodes.push(node);
+                    }
+                }
+                DecodedOutput::ToolResult(node) => {
+                    output_nodes.push(node);
+                }
+            }
+        }
+    }
+
+    output_nodes
 }
 
 fn take_output_extra(
@@ -612,23 +629,6 @@ fn take_output_extra(
         *did_attach_content_extra = true;
         content_extra.clone()
     }
-}
-
-fn item_message(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Item {
-    let mut obj = Map::new();
-    obj.insert("type".to_string(), Value::String("message".to_string()));
-    obj.insert(
-        "role".to_string(),
-        serde_json::to_value(role).unwrap_or(Value::String("assistant".to_string())),
-    );
-    obj.insert(
-        "parts".to_string(),
-        serde_json::to_value(parts).unwrap_or(Value::Array(Vec::new())),
-    );
-    for (key, value) in extra_body {
-        obj.insert(key, value);
-    }
-    serde_json::from_value(Value::Object(obj)).unwrap_or_else(|_| Item::new_message(role))
 }
 
 fn parse_finish_reason(reason: &str) -> FinishReason {
@@ -672,6 +672,7 @@ fn collect_content_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::decode_response;
+    use crate::urp::nodes_to_items;
     use serde_json::{json, Value};
 
     #[test]
@@ -696,26 +697,30 @@ mod tests {
         }))
         .expect("response should decode");
 
-        let outputs = serde_json::to_value(&response.outputs).expect("outputs should serialize");
+        let outputs = serde_json::to_value(&response.output).expect("outputs should serialize");
         assert_eq!(
             outputs,
             Value::Array(vec![
                 json!({
-                    "type": "message",
-                    "role": "assistant",
-                    "parts": [
-                        { "type": "reasoning", "content": "thinking" },
-                        { "type": "text", "content": "hello" },
-                        { "type": "tool_call", "call_id": "lookup", "name": "lookup", "arguments": "{\"q\":1}" }
-                    ],
+                    "type": "reasoning",
+                    "content": "thinking",
                     "custom": true
                 }),
                 json!({
-                    "type": "message",
+                    "type": "text",
                     "role": "assistant",
-                    "parts": [
-                        { "type": "text", "content": "after" }
-                    ]
+                    "content": "hello"
+                }),
+                json!({
+                    "type": "tool_call",
+                    "call_id": "lookup",
+                    "name": "lookup",
+                    "arguments": "{\"q\":1}"
+                }),
+                json!({
+                    "type": "text",
+                    "role": "assistant",
+                    "content": "after"
                 }),
                 json!({
                     "type": "tool_result",
@@ -727,5 +732,6 @@ mod tests {
                 })
             ])
         );
+        assert_eq!(nodes_to_items(&response.output).len(), 3);
     }
 }
