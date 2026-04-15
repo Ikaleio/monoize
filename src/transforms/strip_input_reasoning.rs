@@ -61,7 +61,8 @@ impl Transform for StripInputReasoningTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            for item in request_messages_mut(req) {
+            let mut messages = request_messages_mut(req);
+            for item in messages.iter_mut() {
                 if let Item::Message { parts, .. } = item {
                     *parts = strip_reasoning_parts(parts);
                 }

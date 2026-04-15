@@ -78,7 +78,7 @@ impl Transform for StripOrphanedToolUseTransform {
                 })
                 .collect();
 
-            let messages = request_messages_mut(req);
+            let mut messages = request_messages_mut(req);
             for item in messages.iter_mut() {
                 if let Item::Message { parts, .. } = item {
                     parts.retain(|part| match part {

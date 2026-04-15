@@ -81,7 +81,7 @@ impl Transform for InjectSystemPromptTransform {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
-        let messages = request_messages_mut(req);
+        let mut messages = request_messages_mut(req);
 
         let mut target_index: Option<usize> = None;
         match cfg.position {

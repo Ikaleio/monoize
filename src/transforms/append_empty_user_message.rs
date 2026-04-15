@@ -73,7 +73,7 @@ impl Transform for AppendEmptyUserMessageTransform {
             .downcast_ref::<Config>()
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         if let UrpData::Request(req) = data {
-            let messages = request_messages_mut(req);
+            let mut messages = request_messages_mut(req);
             if let Some(last) = messages.last() {
                 if matches!(
                     last,

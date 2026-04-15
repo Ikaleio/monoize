@@ -73,7 +73,8 @@ impl Transform for StripReasoningTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                for message in response_output_items_mut(resp) {
+                let mut messages = response_output_items_mut(resp);
+                for message in messages.iter_mut() {
                     if let Item::Message { parts, .. } = message {
                         *parts = strip_reasoning_parts(parts);
                     }
@@ -97,7 +98,7 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
             header,
             ..
         } => {
-            if matches!(header, PartHeader::Reasoning) {
+            if matches!(header, PartHeader::Reasoning { .. }) {
                 strip_state
                     .stripped_indices
                     .insert((*item_index << 16) | *part_index);

@@ -60,7 +60,8 @@ impl Transform for DeveloperToSystemRoleTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            move_developer_to_system(request_messages_mut(req));
+            let mut messages = request_messages_mut(req);
+            move_developer_to_system(&mut messages);
         }
         Ok(())
     }

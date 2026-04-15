@@ -80,7 +80,8 @@ impl Transform for ThinkXmlToReasoningTransform {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
             UrpData::Response(resp) => {
-                for message in response_output_items_mut(resp) {
+                let mut messages = response_output_items_mut(resp);
+                for message in messages.iter_mut() {
                     if let Item::Message { parts, .. } = message {
                         let mut out = Vec::new();
                         for part in parts.iter() {
@@ -136,6 +137,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
         let Some(end) = after_open.find(&close) else {
             if !after_open.is_empty() {
                 parts.push(Part::Reasoning {
+                    id: None,
                     content: Some(after_open.to_string()),
                     encrypted: None,
                     summary: None,
@@ -148,6 +150,7 @@ fn extract_text_and_reasoning(content: &str, tag: &str) -> Vec<Part> {
         let reasoning = &after_open[..end];
         if !reasoning.is_empty() {
             parts.push(Part::Reasoning {
+                id: None,
                 content: Some(reasoning.to_string()),
                 encrypted: None,
                 summary: None,

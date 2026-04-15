@@ -60,7 +60,9 @@ impl Transform for MergeConsecutiveRolesTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            *request_messages_mut(req) = merge_same_role_items(request_messages(req));
+            let merged = merge_same_role_items(&request_messages(req));
+            let mut messages = request_messages_mut(req);
+            *messages = merged;
         }
         Ok(())
     }
