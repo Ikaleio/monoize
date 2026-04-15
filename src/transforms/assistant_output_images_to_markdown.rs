@@ -77,16 +77,14 @@ impl Transform for AssistantOutputImagesToMarkdownTransform {
             .clone();
         match data {
             UrpData::Response(resp) => {
-                for item in response_output_items_mut(resp) {
+                let mut items = response_output_items_mut(resp);
+                for item in items.iter_mut() {
                     append_images_as_markdown(item, &cfg);
                 }
             }
             UrpData::Stream(event) => match event {
-                UrpStreamEvent::ItemDone { item, .. } => append_images_as_markdown(item, &cfg),
-                UrpStreamEvent::ResponseDone { outputs, .. } => {
-                    for item in outputs {
-                        append_images_as_markdown(item, &cfg);
-                    }
+                UrpStreamEvent::ResponseDone { output, .. } => {
+                    append_images_as_markdown_nodes(output, &cfg);
                 }
                 _ => {}
             },
@@ -126,6 +124,51 @@ fn append_images_as_markdown(item: &mut Item, config: &Config) {
         content: appended,
         extra_body: HashMap::new(),
     });
+}
+
+fn append_images_as_markdown_nodes(output: &mut Vec<crate::urp::Node>, config: &Config) {
+    let mut pending_appended = String::new();
+    let mut last_text_index: Option<usize> = None;
+
+    for (index, node) in output.iter_mut().enumerate() {
+        match node {
+            crate::urp::Node::Image {
+                role: crate::urp::OrdinaryRole::Assistant,
+                source,
+                ..
+            } => {
+                pending_appended.push_str(&format_image_markdown(source, config));
+            }
+            crate::urp::Node::Text {
+                role: crate::urp::OrdinaryRole::Assistant,
+                content,
+                ..
+            } => {
+                if !pending_appended.is_empty() {
+                    content.push_str(&pending_appended);
+                    pending_appended.clear();
+                }
+                last_text_index = Some(index);
+            }
+            _ => {}
+        }
+    }
+
+    if !pending_appended.is_empty() {
+        if let Some(index) = last_text_index {
+            if let Some(crate::urp::Node::Text { content, .. }) = output.get_mut(index) {
+                content.push_str(&pending_appended);
+            }
+        } else {
+            output.push(crate::urp::Node::Text {
+                id: None,
+                role: crate::urp::OrdinaryRole::Assistant,
+                content: pending_appended,
+                phase: None,
+                extra_body: HashMap::new(),
+            });
+        }
+    }
 }
 
 fn format_image_markdown(source: &ImageSource, config: &Config) -> String {
@@ -180,6 +223,7 @@ mod tests {
     fn appends_default_markdown_for_output_images() {
         let cfg = Config { template: None };
         let mut item = Item::Message {
+            id: None,
             role: Role::Assistant,
             parts: vec![
                 Part::Text {

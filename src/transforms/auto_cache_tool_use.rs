@@ -1,6 +1,7 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages,
+    request_messages_mut,
 };
 use crate::urp::{Item, Part, Role};
 use async_trait::async_trait;
@@ -68,7 +69,8 @@ impl Transform for AutoCacheToolUseTransform {
         };
 
         // Check if the last message is a Tool result
-        let last_msg = req.inputs.last();
+        let snapshot = request_messages(req);
+        let last_msg = snapshot.last();
         let is_tool_result = last_msg.is_some_and(|item| matches!(item, Item::ToolResult { .. }));
         if !is_tool_result {
             return Ok(());
@@ -81,7 +83,7 @@ impl Transform for AutoCacheToolUseTransform {
         // Walk backwards to find: Tool(result) <- Assistant(ToolCall) <- User(the target)
         // Find the last Assistant message with a ToolCall before the trailing tool results
         let mut assistant_tool_call_idx: Option<usize> = None;
-        for (i, item) in req.inputs.iter().enumerate().rev() {
+        for (i, item) in snapshot.iter().enumerate().rev() {
             if matches!(item, Item::ToolResult { .. }) {
                 continue;
             }
@@ -105,7 +107,7 @@ impl Transform for AutoCacheToolUseTransform {
         let mut target_user_idx: Option<usize> = None;
         for i in (0..assistant_idx).rev() {
             if matches!(
-                &req.inputs[i],
+                &snapshot[i],
                 Item::Message {
                     role: Role::User,
                     ..
@@ -121,7 +123,7 @@ impl Transform for AutoCacheToolUseTransform {
         };
 
         // Check if that User message already has cache_control
-        let already_has_cache = match &req.inputs[user_idx] {
+        let already_has_cache = match &snapshot[user_idx] {
             Item::Message { parts, .. } => parts
                 .iter()
                 .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control"))),
@@ -132,7 +134,8 @@ impl Transform for AutoCacheToolUseTransform {
         }
 
         // Add cache_control to the last part of the target User message
-        if let Item::Message { parts, .. } = &mut req.inputs[user_idx] {
+        let mut messages = request_messages_mut(req);
+        if let Item::Message { parts, .. } = &mut messages[user_idx] {
             if let Some(last_part) = parts.last_mut() {
                 if let Some(eb) = part_extra_body_mut(last_part) {
                     eb.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
@@ -145,7 +148,7 @@ impl Transform for AutoCacheToolUseTransform {
 }
 
 fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
-    req.inputs
+    request_messages(req)
         .iter()
         .map(|item| match item {
             Item::Message { parts, .. } => parts

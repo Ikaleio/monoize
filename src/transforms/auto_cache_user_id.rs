@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages,
 };
 use crate::urp::Item;
 use async_trait::async_trait;
@@ -99,7 +99,7 @@ impl Transform for AutoCacheUserIdTransform {
 }
 
 fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
-    req.inputs.iter().any(|item| match item {
+    request_messages(req).iter().any(|item| match item {
         Item::Message { parts, .. } => parts
             .iter()
             .any(|part| part_extra_body(part).is_some_and(|eb| eb.contains_key("cache_control"))),

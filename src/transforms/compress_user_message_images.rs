@@ -1,7 +1,7 @@
 use crate::image_transform_cache::CachedImagePayload;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
 };
 use crate::urp::{ImageSource, Item, Part, Role};
 use async_trait::async_trait;
@@ -123,7 +123,8 @@ impl Transform for CompressUserMessageImagesTransform {
             return Ok(());
         };
 
-        for message in &mut req.inputs {
+        let mut messages = request_messages_mut(req);
+        for message in messages.iter_mut() {
             let Item::Message { role, parts, .. } = message else {
                 continue;
             };
@@ -149,7 +150,7 @@ impl Transform for CompressUserMessageImagesTransform {
                         *source = next_source;
                     }
                     ImageSource::Url { url, detail } => {
-                        let Some((media_type, data)) = split_image_data_url(url) else {
+                        let Some((media_type, data)) = split_image_data_url(url.as_str()) else {
                             continue;
                         };
                         let Some(next_source) =
@@ -371,7 +372,7 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::{Item, UrpRequest};
+    use crate::urp::{Item, UrpRequest, items_to_nodes, nodes_to_items};
     use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
     use image::{ImageBuffer, ImageEncoder, Rgb};
     use serde_json::json;
@@ -392,30 +393,27 @@ mod tests {
             http_client: reqwest::Client::new(),
         };
         let input_png = build_png_data_url_source();
-        let mut req = UrpRequest {
-            model: "gpt-test".to_string(),
-            inputs: vec![Item::Message {
-                role: Role::User,
-                parts: vec![Part::Image {
-                    source: ImageSource::Base64 {
-                        media_type: "image/png".to_string(),
-                        data: input_png.clone(),
-                    },
-                    extra_body: HashMap::new(),
-                }],
+        let mut req = UrpRequest { model: "gpt-test".to_string(), input: items_to_nodes(vec![Item::Message {
+            id: None,
+            role: Role::User,
+            parts: vec![Part::Image {
+                source: ImageSource::Base64 {
+                    media_type: "image/png".to_string(),
+                    data: input_png.clone(),
+                },
                 extra_body: HashMap::new(),
             }],
-            stream: None,
-            temperature: None,
-            top_p: None,
-            max_output_tokens: None,
-            reasoning: None,
-            tools: None,
-            tool_choice: None,
-            response_format: None,
-            user: None,
             extra_body: HashMap::new(),
-        };
+        }]), stream: None,
+        temperature: None,
+        top_p: None,
+        max_output_tokens: None,
+        reasoning: None,
+        tools: None,
+        tool_choice: None,
+        response_format: None,
+        user: None,
+        extra_body: HashMap::new(), };
         let rules = vec![crate::transforms::TransformRuleConfig {
             transform: "compress_user_message_images".to_string(),
             enabled: true,
@@ -438,7 +436,8 @@ mod tests {
         .await
         .expect("apply transforms");
 
-        let Item::Message { parts, .. } = &req.inputs[0] else {
+        let inputs = nodes_to_items(&req.input);
+        let Item::Message { parts, .. } = &inputs[0] else {
             panic!("expected message item");
         };
         let Part::Image { source, .. } = &parts[0] else {
@@ -478,30 +477,27 @@ mod tests {
         };
         let input_png = build_png_data_url_source();
         let input_data_url = format!("data:image/png;base64,{input_png}");
-        let mut req = UrpRequest {
-            model: "gpt-test".to_string(),
-            inputs: vec![Item::Message {
-                role: Role::User,
-                parts: vec![Part::Image {
-                    source: ImageSource::Url {
-                        url: input_data_url,
-                        detail: Some("high".to_string()),
-                    },
-                    extra_body: HashMap::new(),
-                }],
+        let mut req = UrpRequest { model: "gpt-test".to_string(), input: items_to_nodes(vec![Item::Message {
+            id: None,
+            role: Role::User,
+            parts: vec![Part::Image {
+                source: ImageSource::Url {
+                    url: input_data_url,
+                    detail: Some("high".to_string()),
+                },
                 extra_body: HashMap::new(),
             }],
-            stream: None,
-            temperature: None,
-            top_p: None,
-            max_output_tokens: None,
-            reasoning: None,
-            tools: None,
-            tool_choice: None,
-            response_format: None,
-            user: None,
             extra_body: HashMap::new(),
-        };
+        }]), stream: None,
+        temperature: None,
+        top_p: None,
+        max_output_tokens: None,
+        reasoning: None,
+        tools: None,
+        tool_choice: None,
+        response_format: None,
+        user: None,
+        extra_body: HashMap::new(), };
         let rules = vec![crate::transforms::TransformRuleConfig {
             transform: "compress_user_message_images".to_string(),
             enabled: true,
@@ -524,7 +520,8 @@ mod tests {
         .await
         .expect("apply transforms");
 
-        let Item::Message { parts, .. } = &req.inputs[0] else {
+        let inputs = nodes_to_items(&req.input);
+        let Item::Message { parts, .. } = &inputs[0] else {
             panic!("expected message item");
         };
         let Part::Image { source, .. } = &parts[0] else {

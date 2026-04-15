@@ -1,6 +1,7 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages,
+    request_messages_mut,
 };
 use crate::urp::{Item, Role};
 use async_trait::async_trait;
@@ -70,8 +71,9 @@ impl Transform for AutoCacheSystemTransform {
             return Ok(());
         }
 
+        let snapshot = request_messages(req);
         // Find the last system message
-        let system_idx = req.inputs.iter().rposition(|item| {
+        let system_idx = snapshot.iter().rposition(|item| {
             matches!(
                 item,
                 Item::Message {
@@ -85,7 +87,7 @@ impl Transform for AutoCacheSystemTransform {
         };
 
         // Check if any part of the system message already has cache_control
-        let already_has_cache = match &req.inputs[idx] {
+        let already_has_cache = match &snapshot[idx] {
             Item::Message { parts, .. } => parts
                 .iter()
                 .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control"))),
@@ -96,7 +98,8 @@ impl Transform for AutoCacheSystemTransform {
         }
 
         // Add cache_control to the last part of the system message
-        if let Item::Message { parts, .. } = &mut req.inputs[idx] {
+        let mut messages = request_messages_mut(req);
+        if let Item::Message { parts, .. } = &mut messages[idx] {
             if let Some(last_part) = parts.last_mut() {
                 if let Some(eb) = part_extra_body_mut(last_part) {
                     eb.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
@@ -109,7 +112,7 @@ impl Transform for AutoCacheSystemTransform {
 }
 
 fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
-    req.inputs
+    request_messages(req)
         .iter()
         .map(|item| match item {
             Item::Message { parts, .. } => parts

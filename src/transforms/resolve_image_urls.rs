@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData,
+    TransformScope, TransformState, UrpData, request_messages, request_messages_mut,
 };
 use crate::urp::{ImageSource, Item, Part, Role};
 use async_trait::async_trait;
@@ -106,7 +106,8 @@ impl Transform for ResolveImageUrlsTransform {
 
         let mut futures = Vec::new();
 
-        for (item_idx, item) in req.inputs.iter().enumerate() {
+        let snapshot = request_messages(req);
+        for (item_idx, item) in snapshot.iter().enumerate() {
             let Item::Message { role, parts, .. } = item else {
                 continue;
             };
@@ -144,7 +145,8 @@ impl Transform for ResolveImageUrlsTransform {
             })?;
             match result {
                 Ok((media_type, b64_data)) => {
-                    if let Some(Item::Message { parts, .. }) = req.inputs.get_mut(item_idx) {
+                    let mut messages = request_messages_mut(req);
+                    if let Some(Item::Message { parts, .. }) = messages.get_mut(item_idx) {
                         if let Some(Part::Image { source, .. }) = parts.get_mut(part_idx) {
                             *source = ImageSource::Base64 {
                                 media_type,
