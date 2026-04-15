@@ -3,9 +3,8 @@ use crate::urp::decode::{
     parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
-    greedy::{Action, GreedyMerger},
-    FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, Part, ReasoningConfig, Role,
+    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -155,45 +154,39 @@ fn text_part_with_phase(
     }
 }
 
-fn build_message_item(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Item {
-    let mut obj = Map::new();
-    obj.insert("type".to_string(), Value::String("message".to_string()));
-    obj.insert(
-        "role".to_string(),
-        serde_json::to_value(role).expect("role should serialize"),
-    );
-    obj.insert(
-        "parts".to_string(),
-        serde_json::to_value(parts).expect("parts should serialize"),
-    );
-    obj.extend(extra_body);
-    serde_json::from_value(Value::Object(obj)).expect("message item should deserialize")
-}
-
-fn push_part(item: &mut Item, part: Part) {
-    let mut obj = serde_json::to_value(item.clone())
-        .expect("item should serialize")
-        .as_object()
-        .cloned()
-        .expect("item should serialize to object");
-
-    let parts = obj
-        .entry("parts".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let Value::Array(parts) = parts else {
-        panic!("message item should contain parts array");
-    };
-    parts.push(serde_json::to_value(part).expect("part should serialize"));
-
-    *item = serde_json::from_value(Value::Object(obj)).expect("item should deserialize");
-}
-
-fn item_parts(item: &Item) -> Option<Vec<Part>> {
-    let obj = serde_json::to_value(item).ok()?.as_object()?.clone();
-    if obj.get("type")?.as_str()? != "message" {
-        return None;
+fn push_message_nodes(
+    out: &mut Vec<Node>,
+    role: Role,
+    id: Option<String>,
+    parts: Vec<Part>,
+    extra_body: HashMap<String, Value>,
+) {
+    let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
+    for (index, part) in parts.into_iter().enumerate() {
+        let mut node = part.into_node(ordinary_role);
+        if index == 0 && !extra_body.is_empty() {
+            node.extra_body_mut().extend(extra_body.clone());
+        }
+        if index == 0 {
+            if id.is_some() {
+                node.set_id(id.clone());
+            }
+        }
+        out.push(node);
     }
-    serde_json::from_value(obj.get("parts")?.clone()).ok()
+}
+
+fn push_message_nodes_with_envelope_control(
+    out: &mut Vec<Node>,
+    role: Role,
+    id: Option<String>,
+    parts: Vec<Part>,
+    extra_body: HashMap<String, Value>,
+) {
+    if !extra_body.is_empty() && !parts.is_empty() {
+        out.push(Node::NextDownstreamEnvelopeExtra { extra_body });
+    }
+    push_message_nodes(out, role, id, parts, HashMap::new());
 }
 
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
@@ -207,16 +200,17 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .ok_or_else(|| "missing model".to_string())?
         .to_string();
 
-    let mut inputs = Vec::new();
+    let mut input_nodes = Vec::new();
 
     if let Some(instructions) = obj.get("instructions").and_then(|v| v.as_str()) {
         if !instructions.is_empty() {
-            inputs.push(Item::text(Role::Developer, instructions));
+            input_nodes.push(Node::text(OrdinaryRole::Developer, instructions));
         }
     }
 
     if let Some(input) = obj.get("input") {
-        decode_input_items(input, &mut inputs);
+        validate_stateless_responses_input(input)?;
+        decode_input_items_nodes(input, &mut input_nodes);
     }
 
     let reasoning = obj
@@ -242,7 +236,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        inputs,
+        input: input_nodes,
         stream: obj.get("stream").and_then(|v| v.as_bool()),
         temperature: obj.get("temperature").and_then(|v| v.as_f64()),
         top_p: obj.get("top_p").and_then(|v| v.as_f64()),
@@ -279,29 +273,58 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     })
 }
 
-fn decode_input_items(input: &Value, out: &mut Vec<Item>) {
+fn validate_stateless_responses_input(input: &Value) -> Result<(), String> {
+    if input.is_string() {
+        return Ok(());
+    }
+
+    if let Some(obj) = input.as_object() {
+        return validate_stateless_responses_input_item(obj);
+    }
+
+    if let Some(arr) = input.as_array() {
+        for item in arr {
+            validate_stateless_responses_input(item)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_stateless_responses_input_item(obj: &Map<String, Value>) -> Result<(), String> {
+    if obj.get("type").and_then(|v| v.as_str()) == Some("item_reference") {
+        return Err(
+            "Monoize is stateless and does not support Responses item_reference continuations; replay the full prior assistant and function_call items instead."
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn decode_input_items_nodes(input: &Value, out: &mut Vec<Node>) {
     if let Some(s) = input.as_str() {
-        out.push(Item::text(Role::User, s));
+        out.push(Node::text(OrdinaryRole::User, s));
         return;
     }
 
     if let Some(obj) = input.as_object() {
-        decode_input_item(obj, out);
+        decode_input_item_nodes(obj, out);
         return;
     }
 
     if let Some(arr) = input.as_array() {
         for item in arr {
             if let Some(obj) = item.as_object() {
-                decode_input_item(obj, out);
+                decode_input_item_nodes(obj, out);
             } else if let Some(s) = item.as_str() {
-                out.push(Item::text(Role::User, s));
+                out.push(Node::text(OrdinaryRole::User, s));
             }
         }
     }
 }
 
-fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Item>) {
+fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
     let item_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match item_type {
         "function_call" => {
@@ -325,17 +348,17 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Item>) {
             } else {
                 serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
             };
-            let mut item = Item::new_message(Role::Assistant);
-            push_part(
-                &mut item,
-                Part::ToolCall {
-                    call_id,
-                    name,
-                    arguments,
-                    extra_body: split_extra(obj, &["type", "call_id", "id", "name", "arguments"]),
-                },
-            );
-            out.push(item);
+            out.push(Node::ToolCall {
+                id: obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(crate::urp::synthetic_tool_call_id())),
+                call_id,
+                name,
+                arguments,
+                extra_body: split_extra(obj, &["type", "call_id", "id", "name", "arguments"]),
+            });
         }
         "function_call_output" => {
             let call_id = obj
@@ -347,7 +370,12 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Item>) {
             if let Some(output) = obj.get("output") {
                 decode_tool_result_content(output, &mut content);
             }
-            out.push(Item::ToolResult {
+            out.push(Node::ToolResult {
+                id: obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(crate::urp::synthetic_tool_result_id())),
                 call_id,
                 is_error: false,
                 content,
@@ -409,22 +437,28 @@ fn decode_input_item(obj: &Map<String, Value>, out: &mut Vec<Item>) {
                 }
             }
 
-            out.push(build_message_item(
+            push_message_nodes_with_envelope_control(
+                out,
                 role,
+                obj.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 parts,
                 split_extra(obj, &["type", "role", "content", "phase"]),
-            ));
+            );
         }
         _ => {
-            out.push(build_message_item(
+            push_message_nodes_with_envelope_control(
+                out,
                 Role::User,
+                Some(crate::urp::synthetic_message_id()),
                 vec![text_part_with_phase(
                     serde_json::to_string(obj).unwrap_or_default(),
                     None,
                     HashMap::new(),
                 )],
                 HashMap::new(),
-            ));
+            );
         }
     }
 }
@@ -504,72 +538,90 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
     }
 }
 
-fn merge_extra_body(dst: &mut HashMap<String, Value>, src: HashMap<String, Value>) {
-    for (key, value) in src {
-        dst.entry(key).or_insert(value);
-    }
-}
-
-fn flush_assistant_merger(
-    merger: &mut GreedyMerger,
-    pending_extra_body: &mut HashMap<String, Value>,
-    outputs: &mut Vec<Item>,
-) {
-    if let Some(parts) = merger.finish() {
-        outputs.push(build_message_item(
-            Role::Assistant,
-            parts,
-            std::mem::take(pending_extra_body),
-        ));
-    }
-}
-
-fn feed_assistant_part(
-    merger: &mut GreedyMerger,
-    pending_extra_body: &mut HashMap<String, Value>,
-    outputs: &mut Vec<Item>,
-    part: Part,
-    item_extra_body: &HashMap<String, Value>,
-) {
-    match merger.feed(part, Role::Assistant) {
-        Action::Append => {
-            if pending_extra_body.is_empty() {
-                *pending_extra_body = item_extra_body.clone();
-            } else {
-                merge_extra_body(pending_extra_body, item_extra_body.clone());
+fn decode_response_message_nodes(
+    role: Role,
+    message_id: Option<String>,
+    message_phase: Option<&str>,
+    extra_body: HashMap<String, Value>,
+    content_arr: Option<&Vec<Value>>,
+) -> Vec<Node> {
+    let mut parts = Vec::new();
+    if let Some(content_arr) = content_arr {
+        for p in content_arr {
+            let Some(pobj) = p.as_object() else { continue };
+            let ptype = pobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match ptype {
+                "output_text" | "text" => {
+                    if let Some(text) = pobj.get("text").and_then(|v| v.as_str()) {
+                        parts.push(text_part_with_phase(
+                            text,
+                            message_phase,
+                            split_extra(pobj, &["type", "text"]),
+                        ));
+                    }
+                }
+                "refusal" => {
+                    if let Some(text) = pobj.get("refusal").and_then(|v| v.as_str()) {
+                        parts.push(Part::Refusal {
+                            content: text.to_string(),
+                            extra_body: split_extra(pobj, &["type", "refusal"]),
+                        });
+                    }
+                }
+                _ => {
+                    if let Some(image) = parse_image_part_from_obj(pobj) {
+                        parts.push(image);
+                    }
+                    if let Some(file) = parse_file_part_from_obj(pobj) {
+                        parts.push(file);
+                    }
+                }
             }
         }
-        Action::FlushAndNew(flushed_parts) => {
-            outputs.push(build_message_item(
-                Role::Assistant,
-                flushed_parts,
-                std::mem::take(pending_extra_body),
-            ));
-            *pending_extra_body = item_extra_body.clone();
-        }
     }
+
+    let mut nodes = Vec::new();
+    push_message_nodes(&mut nodes, role, message_id, parts, extra_body);
+    nodes
 }
 
-fn push_assistant_parts(
-    merger: &mut GreedyMerger,
-    pending_extra_body: &mut HashMap<String, Value>,
-    outputs: &mut Vec<Item>,
-    item_extra_body: HashMap<String, Value>,
-    parts: Vec<Part>,
-) {
-    for part in parts {
-        feed_assistant_part(merger, pending_extra_body, outputs, part, &item_extra_body);
-    }
+fn decode_reasoning_node(item_obj: &Map<String, Value>) -> Option<Node> {
+    let shared_extra = split_extra(
+        item_obj,
+        &["type", "encrypted_content", "summary", "text", "source"],
+    );
+    let encrypted = item_obj.get("encrypted_content").map(|value| match value {
+        Value::String(text) => Value::String(text.clone()),
+        _ => value.clone(),
+    });
+    let summary = item_obj
+        .get("summary")
+        .and_then(|value| value.as_array())
+        .and_then(|_| summary_to_text(item_obj));
+    let text = item_obj
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let source = item_obj
+        .get("source")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    (text.is_some() || summary.is_some() || encrypted.is_some()).then(|| Node::Reasoning {
+        id: item_obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some(crate::urp::synthetic_reasoning_id())),
+        content: text.or_else(|| summary.clone()),
+        encrypted,
+        summary,
+        source,
+        extra_body: shared_extra,
+    })
 }
 
-pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "responses response must be object".to_string())?;
-
-    let mut outputs = Vec::new();
-    let mut merger = GreedyMerger::new();
-    let mut pending_assistant_extra_body = HashMap::new();
+fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
+    let mut nodes = Vec::new();
 
     if let Some(output) = obj.get("output").and_then(|v| v.as_array()) {
         for item in output {
@@ -592,58 +644,16 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         _ => Role::Assistant,
                     };
                     let extra_body = split_extra(item_obj, &["type", "role", "content", "phase"]);
-                    let mut parts = Vec::new();
-                    if let Some(content_arr) = item_obj.get("content").and_then(|v| v.as_array()) {
-                        for p in content_arr {
-                            let Some(pobj) = p.as_object() else { continue };
-                            let ptype = pobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                            match ptype {
-                                "output_text" | "text" => {
-                                    if let Some(text) = pobj.get("text").and_then(|v| v.as_str()) {
-                                        parts.push(text_part_with_phase(
-                                            text,
-                                            message_phase,
-                                            split_extra(pobj, &["type", "text"]),
-                                        ));
-                                    }
-                                }
-                                "refusal" => {
-                                    if let Some(text) = pobj.get("refusal").and_then(|v| v.as_str())
-                                    {
-                                        parts.push(Part::Refusal {
-                                            content: text.to_string(),
-                                            extra_body: split_extra(pobj, &["type", "refusal"]),
-                                        });
-                                    }
-                                }
-                                _ => {
-                                    if let Some(image) = parse_image_part_from_obj(pobj) {
-                                        parts.push(image);
-                                    }
-                                    if let Some(file) = parse_file_part_from_obj(pobj) {
-                                        parts.push(file);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if role == Role::Assistant {
-                        push_assistant_parts(
-                            &mut merger,
-                            &mut pending_assistant_extra_body,
-                            &mut outputs,
-                            extra_body,
-                            parts,
-                        );
-                    } else {
-                        flush_assistant_merger(
-                            &mut merger,
-                            &mut pending_assistant_extra_body,
-                            &mut outputs,
-                        );
-                        outputs.push(build_message_item(role, parts, extra_body));
-                    }
+                    nodes.extend(decode_response_message_nodes(
+                        role,
+                        item_obj
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        message_phase,
+                        extra_body,
+                        item_obj.get("content").and_then(|v| v.as_array()),
+                    ));
                 }
                 "function_call" => {
                     let call_id = item_obj
@@ -665,28 +675,21 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     } else {
                         serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
                     };
-                    feed_assistant_part(
-                        &mut merger,
-                        &mut pending_assistant_extra_body,
-                        &mut outputs,
-                        Part::ToolCall {
-                            call_id,
-                            name,
-                            arguments,
-                            extra_body: split_extra(
-                                item_obj,
-                                &["type", "call_id", "name", "arguments"],
-                            ),
-                        },
-                        &HashMap::new(),
-                    );
+                    nodes.push(Node::ToolCall {
+                        id: item_obj
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        call_id,
+                        name,
+                        arguments,
+                        extra_body: split_extra(
+                            item_obj,
+                            &["type", "id", "call_id", "name", "arguments"],
+                        ),
+                    });
                 }
                 "function_call_output" => {
-                    flush_assistant_merger(
-                        &mut merger,
-                        &mut pending_assistant_extra_body,
-                        &mut outputs,
-                    );
                     let call_id = item_obj
                         .get("call_id")
                         .or_else(|| item_obj.get("id"))
@@ -697,7 +700,11 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     if let Some(output) = item_obj.get("output") {
                         decode_tool_result_content(output, &mut content);
                     }
-                    outputs.push(Item::ToolResult {
+                    nodes.push(Node::ToolResult {
+                        id: item_obj
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
                         call_id,
                         is_error: false,
                         content,
@@ -705,70 +712,39 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     });
                 }
                 "reasoning" => {
-                    let shared_extra = split_extra(
-                        item_obj,
-                        &["type", "encrypted_content", "summary", "text", "source"],
-                    );
-                    let encrypted = item_obj.get("encrypted_content").map(|value| match value {
-                        Value::String(text) => Value::String(text.clone()),
-                        _ => value.clone(),
-                    });
-                    let summary = item_obj
-                        .get("summary")
-                        .and_then(|value| value.as_array())
-                        .and_then(|_| summary_to_text(item_obj));
-                    let text = item_obj
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let source = item_obj
-                        .get("source")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    if text.is_some() || summary.is_some() || encrypted.is_some() {
-                        feed_assistant_part(
-                            &mut merger,
-                            &mut pending_assistant_extra_body,
-                            &mut outputs,
-                            Part::Reasoning {
-                                content: text.or_else(|| summary.clone()),
-                                encrypted,
-                                summary,
-                                source,
-                                extra_body: shared_extra,
-                            },
-                            &HashMap::new(),
-                        );
+                    if let Some(node) = decode_reasoning_node(item_obj) {
+                        nodes.push(node);
                     }
                 }
                 _ => {
-                    feed_assistant_part(
-                        &mut merger,
-                        &mut pending_assistant_extra_body,
-                        &mut outputs,
-                        Part::ProviderItem {
-                            item_type: item_type.to_string(),
-                            body: Value::Object(item_obj.clone()),
-                            extra_body: HashMap::new(),
-                        },
-                        &HashMap::new(),
-                    );
+                    nodes.push(Node::ProviderItem {
+                        id: item_obj
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                        role: OrdinaryRole::Assistant,
+                        item_type: item_type.to_string(),
+                        body: Value::Object(item_obj.clone()),
+                        extra_body: HashMap::new(),
+                    });
                 }
             }
         }
     }
 
-    flush_assistant_merger(&mut merger, &mut pending_assistant_extra_body, &mut outputs);
+    nodes
+}
 
-    let has_tool_calls = outputs.iter().any(|item| {
-        item_parts(item)
-            .map(|parts| {
-                parts
-                    .iter()
-                    .any(|part| matches!(part, Part::ToolCall { .. }))
-            })
-            .unwrap_or(false)
-    });
+pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "responses response must be object".to_string())?;
+
+    let output_nodes = decode_response_nodes(obj);
+    let has_tool_calls = output_nodes
+        .iter()
+        .any(|node| matches!(node, Node::ToolCall { .. }));
 
     let finish_reason = match obj.get("status").and_then(|v| v.as_str()) {
         Some("completed") => Some(if has_tool_calls {
@@ -797,7 +773,8 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        outputs,
+        created_at: obj.get("created_at").and_then(|v| v.as_i64()),
+        output: output_nodes,
         finish_reason,
         usage,
         extra_body: split_extra(
@@ -887,6 +864,7 @@ fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::nodes_to_items;
     use serde_json::json;
 
     #[test]
@@ -931,5 +909,102 @@ mod tests {
             .expect("input_details should be present");
         assert_eq!(details.cache_read_tokens, 0);
         assert_eq!(details.cache_creation_tokens, 98);
+    }
+
+    #[test]
+    fn decode_response_nodes_preserves_reasoning_commentary_final_boundary_shape() {
+        let source = json!({
+            "id": "resp_cc",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+                { "type": "reasoning", "text": "hmm" },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{ "type": "output_text", "text": "phase A" }]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{ "type": "output_text", "text": "phase B" }]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_2",
+                    "name": "tool_b",
+                    "arguments": "{}"
+                }
+            ]
+        });
+
+        let obj = source.as_object().expect("response object");
+        let output_nodes = decode_response_nodes(obj);
+        assert_eq!(output_nodes.len(), 4, "expected four flat nodes");
+        assert!(
+            matches!(&output_nodes[0], Node::Reasoning { content: Some(text), .. } if text == "hmm")
+        );
+        assert!(
+            matches!(&output_nodes[1], Node::Text { role: OrdinaryRole::Assistant, content, phase: Some(phase), .. } if content == "phase A" && phase == "commentary")
+        );
+        assert!(
+            matches!(&output_nodes[2], Node::Text { role: OrdinaryRole::Assistant, content, phase: Some(phase), .. } if content == "phase B" && phase == "final_answer")
+        );
+        assert!(
+            matches!(&output_nodes[3], Node::ToolCall { call_id, name, .. } if call_id == "call_2" && name == "tool_b")
+        );
+        let outputs = nodes_to_items(&output_nodes);
+
+        assert_eq!(outputs.len(), 2, "decoded outputs should preserve 2 items");
+    }
+
+    #[test]
+    fn decode_request_inputs_emit_control_and_nodes_without_item_bridge_shape() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "first_only": "A",
+                    "content": [{ "type": "input_text", "text": "hello" }]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": { "q": 1 }
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "ok"
+                }
+            ]
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::NextDownstreamEnvelopeExtra { extra_body }
+                if extra_body.get("first_only") == Some(&json!("A"))
+        ));
+        assert!(matches!(
+            &decoded.input[1],
+            Node::Text { role: OrdinaryRole::User, content, .. } if content == "hello"
+        ));
+        assert!(matches!(
+            &decoded.input[2],
+            Node::ToolCall { call_id, name, arguments, .. }
+                if call_id == "call_1" && name == "lookup" && arguments == "{\"q\":1}"
+        ));
+        assert!(matches!(
+            &decoded.input[3],
+            Node::ToolResult { call_id, content, .. }
+                if call_id == "call_1"
+                    && matches!(&content[0], ToolResultContent::Text { text } if text == "ok")
+        ));
     }
 }

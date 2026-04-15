@@ -3,9 +3,8 @@ use crate::urp::decode::{
     parse_tool_call_part_from_obj, parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
-    greedy::{Action, GreedyMerger},
-    FinishReason, InputDetails, Item, OutputDetails, Part, ReasoningConfig, Role, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, Part, ReasoningConfig, Role,
+    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -147,19 +146,20 @@ fn text_part_with_phase(
     }
 }
 
-fn item_message(role: Role, parts: Vec<Part>, extra_body: HashMap<String, Value>) -> Item {
-    let mut obj = Map::new();
-    obj.insert("type".to_string(), Value::String("message".to_string()));
-    obj.insert(
-        "role".to_string(),
-        serde_json::to_value(role).expect("role should serialize"),
-    );
-    obj.insert(
-        "parts".to_string(),
-        serde_json::to_value(parts).expect("parts should serialize"),
-    );
-    obj.extend(extra_body);
-    serde_json::from_value(Value::Object(obj)).expect("message item should deserialize")
+fn push_message_nodes(
+    out: &mut Vec<Node>,
+    role: Role,
+    parts: Vec<Part>,
+    extra_body: HashMap<String, Value>,
+) {
+    let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
+    for (index, part) in parts.into_iter().enumerate() {
+        let mut node = part.into_node(ordinary_role);
+        if index == 0 && !extra_body.is_empty() {
+            node.extra_body_mut().extend(extra_body.clone());
+        }
+        out.push(node);
+    }
 }
 
 fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase: Option<&str>) {
@@ -221,7 +221,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .ok_or_else(|| "missing model".to_string())?
         .to_string();
 
-    let mut inputs = Vec::new();
+    let mut input_nodes = Vec::new();
     for raw_msg in obj
         .get("messages")
         .and_then(|v| v.as_array())
@@ -255,7 +255,11 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             if !text.is_empty() {
                 tool_result_content.push(ToolResultContent::Text { text });
             }
-            inputs.push(Item::ToolResult {
+            input_nodes.push(Node::ToolResult {
+                id: msg_obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 call_id,
                 is_error: false,
                 content: tool_result_content,
@@ -326,6 +330,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 };
                 if !call_id.is_empty() && !name.is_empty() {
                     parts.push(Part::ToolCall {
+                        id: tc_obj
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
                         call_id,
                         name,
                         arguments,
@@ -335,7 +343,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             }
         }
 
-        inputs.push(item_message(role, parts, extra_body));
+        push_message_nodes(&mut input_nodes, role, parts, extra_body);
     }
 
     let reasoning = extract_reasoning(obj);
@@ -345,46 +353,42 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .collect::<Vec<_>>()
     });
 
-    Ok(UrpRequest {
-        model,
-        inputs,
-        stream: obj.get("stream").and_then(|v| v.as_bool()),
-        temperature: obj.get("temperature").and_then(|v| v.as_f64()),
-        top_p: obj.get("top_p").and_then(|v| v.as_f64()),
-        max_output_tokens: obj
-            .get("max_completion_tokens")
-            .or_else(|| obj.get("max_tokens"))
-            .and_then(|v| v.as_u64()),
-        reasoning,
-        tools,
-        tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
-        response_format: obj
-            .get("response_format")
-            .cloned()
-            .and_then(parse_response_format),
-        user: obj
-            .get("user")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        extra_body: split_extra(
-            obj,
-            &[
-                "model",
-                "messages",
-                "stream",
-                "temperature",
-                "top_p",
-                "max_completion_tokens",
-                "max_tokens",
-                "reasoning_effort",
-                "reasoning",
-                "tools",
-                "tool_choice",
-                "response_format",
-                "user",
-            ],
-        ),
-    })
+    Ok(UrpRequest { model, input: input_nodes, stream: obj.get("stream").and_then(|v| v.as_bool()),
+    temperature: obj.get("temperature").and_then(|v| v.as_f64()),
+    top_p: obj.get("top_p").and_then(|v| v.as_f64()),
+    max_output_tokens: obj
+        .get("max_completion_tokens")
+        .or_else(|| obj.get("max_tokens"))
+        .and_then(|v| v.as_u64()),
+    reasoning,
+    tools,
+    tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
+    response_format: obj
+        .get("response_format")
+        .cloned()
+        .and_then(parse_response_format),
+    user: obj
+        .get("user")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()),
+    extra_body: split_extra(
+        obj,
+        &[
+            "model",
+            "messages",
+            "stream",
+            "temperature",
+            "top_p",
+            "max_completion_tokens",
+            "max_tokens",
+            "reasoning_effort",
+            "reasoning",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "user",
+        ],
+    ), })
 }
 
 pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
@@ -456,6 +460,10 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             };
             if !call_id.is_empty() && !name.is_empty() {
                 parts.push(Part::ToolCall {
+                    id: tc_obj
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                     call_id,
                     name,
                     arguments,
@@ -474,25 +482,13 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         }
     }
 
-    let mut outputs = Vec::new();
-    let mut merger = GreedyMerger::new();
-    for part in parts {
-        match merger.feed(part, Role::Assistant) {
-            Action::Append => {}
-            Action::FlushAndNew(flushed_parts) => outputs.push(item_message(
-                Role::Assistant,
-                flushed_parts,
-                message_extra_body.clone(),
-            )),
-        }
-    }
-    if let Some(flushed_parts) = merger.finish() {
-        outputs.push(item_message(
-            Role::Assistant,
-            flushed_parts,
-            message_extra_body.clone(),
-        ));
-    }
+    let mut output_nodes = Vec::new();
+    push_message_nodes(
+        &mut output_nodes,
+        Role::Assistant,
+        parts,
+        message_extra_body.clone(),
+    );
 
     let finish_reason = choice
         .get("finish_reason")
@@ -504,25 +500,22 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .and_then(|v| v.as_object())
         .map(parse_usage_from_chat);
 
-    Ok(UrpResponse {
-        id: obj
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("chat_completion")
-            .to_string(),
-        model: obj
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        outputs,
-        finish_reason,
-        usage,
-        extra_body: split_extra(
-            obj,
-            &["id", "object", "created", "model", "choices", "usage"],
-        ),
-    })
+    Ok(UrpResponse { id: obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("chat_completion")
+        .to_string(),
+    model: obj
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string(),
+    created_at: obj.get("created").and_then(|v| v.as_i64()), output: output_nodes, finish_reason,
+    usage,
+    extra_body: split_extra(
+        obj,
+        &["id", "object", "created", "model", "choices", "usage"],
+    ), })
 }
 
 fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
@@ -583,6 +576,7 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
         }
 
         parts.push(Part::Reasoning {
+            id: None,
             content,
             encrypted,
             summary,
@@ -782,13 +776,16 @@ fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::{nodes_to_items, Item, Node};
     use serde_json::json;
 
-    fn output_parts(item: &Item) -> Vec<Part> {
-        serde_json::to_value(item)
-            .ok()
-            .and_then(|value| value.get("parts").cloned())
-            .and_then(|value| serde_json::from_value(value).ok())
+    fn output_parts(nodes: &[Node]) -> Vec<Part> {
+        nodes_to_items(nodes)
+            .into_iter()
+            .find_map(|item| match item {
+                Item::Message { parts, .. } => Some(parts),
+                Item::ToolResult { .. } => None,
+            })
             .unwrap_or_default()
     }
 
@@ -825,7 +822,7 @@ mod tests {
         let decoded = decode_response(&value).expect("decode_response should succeed");
         let mut saw_reasoning = false;
         let mut saw_sig = false;
-        let parts = output_parts(&decoded.outputs[0]);
+        let parts = output_parts(&decoded.output);
         for part in &parts {
             if let Part::Reasoning {
                 content, encrypted, ..
@@ -861,7 +858,7 @@ mod tests {
         let decoded = decode_response(&value).expect("decode_response should succeed");
         let mut saw_reasoning = false;
         let mut saw_sig = false;
-        let parts = output_parts(&decoded.outputs[0]);
+        let parts = output_parts(&decoded.output);
         for part in &parts {
             if let Part::Reasoning {
                 content, encrypted, ..
@@ -918,7 +915,7 @@ mod tests {
         });
 
         let decoded = decode_response(&value).expect("decode_response should succeed");
-        let parts = output_parts(&decoded.outputs[0]);
+        let parts = output_parts(&decoded.output);
         assert!(parts.iter().any(|part| {
             matches!(
                 part,
@@ -950,7 +947,7 @@ mod tests {
         });
 
         let decoded = decode_response(&value).expect("decode_response should succeed");
-        let parts = output_parts(&decoded.outputs[0]);
+        let parts = output_parts(&decoded.output);
 
         assert!(parts.iter().any(|part| {
             matches!(part, Part::Text { content, .. } if content == "before tool")
@@ -987,7 +984,7 @@ mod tests {
         });
 
         let decoded = decode_response(&value).expect("decode_response should succeed");
-        let parts = output_parts(&decoded.outputs[0]);
+        let parts = output_parts(&decoded.output);
 
         assert!(parts.iter().any(|part| {
             matches!(part, Part::Text { content, .. } if content == "before tool")
