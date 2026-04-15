@@ -6,7 +6,7 @@ use crate::urp::{
 };
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -32,6 +32,7 @@ struct ActiveResponsesOutputItem {
     item: Value,
     next_content_index: u64,
     summary_part_added_sent: bool,
+    envelope_extra: HashMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +53,145 @@ struct StreamedPartState {
     item_id: String,
     call_id: Option<String>,
     name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StreamedNodeState {
+    output_index: usize,
+    zone: ResponsesOutputZone,
+    content_index: Option<u32>,
+    item_id: String,
+    phase: Option<String>,
+    call_id: Option<String>,
+    name: Option<String>,
+    reasoning_summary_part_added_sent: bool,
+    message_start_emitted: bool,
+    header: Option<urp::NodeHeader>,
+    node_extra_body: HashMap<String, Value>,
+    completed_item: Option<Value>,
+    is_shared_message_output: bool,
+}
+
+fn terminal_output_node_matches_state(node: &urp::Node, state: &StreamedNodeState) -> bool {
+    let header_family_matches = matches!(
+        (state.header.as_ref(), node),
+        (Some(urp::NodeHeader::Text { .. }), urp::Node::Text { .. })
+            | (Some(urp::NodeHeader::Image { .. }), urp::Node::Image { .. })
+            | (Some(urp::NodeHeader::Audio { .. }), urp::Node::Audio { .. })
+            | (Some(urp::NodeHeader::File { .. }), urp::Node::File { .. })
+            | (Some(urp::NodeHeader::Refusal { .. }), urp::Node::Refusal { .. })
+            | (Some(urp::NodeHeader::ProviderItem { .. }), urp::Node::ProviderItem { .. })
+            | (Some(urp::NodeHeader::Reasoning { .. }), urp::Node::Reasoning { .. })
+            | (Some(urp::NodeHeader::ToolCall { .. }), urp::Node::ToolCall { .. })
+            | (Some(urp::NodeHeader::ToolResult { .. }), urp::Node::ToolResult { .. })
+    );
+
+    match node {
+        urp::Node::Text { id, .. }
+        | urp::Node::Image { id, .. }
+        | urp::Node::Audio { id, .. }
+        | urp::Node::File { id, .. }
+        | urp::Node::Refusal { id, .. }
+        | urp::Node::ProviderItem { id, .. } => {
+            state.zone == ResponsesOutputZone::Message
+                && ((!state.item_id.is_empty()
+                    && id.as_deref() == Some(state.item_id.as_str()))
+                    || (header_family_matches && id.is_none())
+                    || (state.item_id.is_empty() && header_family_matches))
+        }
+        urp::Node::Reasoning { id, .. } => {
+            state.zone == ResponsesOutputZone::Reasoning
+                && ((!state.item_id.is_empty()
+                    && id.as_deref() == Some(state.item_id.as_str()))
+                    || (header_family_matches && id.is_none())
+                    || (state.item_id.is_empty() && header_family_matches))
+        }
+        urp::Node::ToolCall { id, call_id, .. } => {
+            state.zone == ResponsesOutputZone::FunctionCall
+                && (state.call_id.as_deref() == Some(call_id.as_str())
+                    || (!state.item_id.is_empty()
+                        && id.as_deref() == Some(state.item_id.as_str()))
+                    || (header_family_matches && id.is_none())
+                    || ((state.call_id.is_none() && state.item_id.is_empty())
+                        && header_family_matches))
+        }
+        urp::Node::ToolResult { id, call_id, .. } => {
+            state.zone == ResponsesOutputZone::FunctionCall
+                && (state.call_id.as_deref() == Some(call_id.as_str())
+                    || (!state.item_id.is_empty()
+                        && id.as_deref() == Some(state.item_id.as_str()))
+                    || (header_family_matches && id.is_none())
+                    || ((state.call_id.is_none() && state.item_id.is_empty())
+                        && header_family_matches))
+        }
+        urp::Node::NextDownstreamEnvelopeExtra { .. } => false,
+    }
+}
+
+fn find_terminal_output_node_for_state(
+    output: &[urp::Node],
+    preferred_index: usize,
+    state: &StreamedNodeState,
+    used_positions: &HashSet<usize>,
+) -> Option<(usize, urp::Node)> {
+    if let Some(candidate) = output.get(preferred_index)
+        && !used_positions.contains(&preferred_index)
+        && terminal_output_node_matches_state(candidate, state)
+    {
+        return Some((preferred_index, candidate.clone()));
+    }
+
+    output
+        .iter()
+        .enumerate()
+        .find(|(index, node)| {
+            !used_positions.contains(index) && terminal_output_node_matches_state(node, state)
+        })
+        .map(|(index, node)| (index, node.clone()))
+}
+
+fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp::Node> {
+    let header = state.header.as_ref()?;
+    let completed_item = state.completed_item.as_ref();
+
+    match header {
+        urp::NodeHeader::Reasoning { id } => Some(urp::Node::Reasoning {
+            id: id
+                .clone()
+                .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),
+            content: completed_item
+                .and_then(|item| item.get("text"))
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty()),
+            encrypted: completed_item.and_then(|item| item.get("encrypted_content").cloned()),
+            summary: completed_item
+                .and_then(|item| item.get("summary"))
+                .and_then(Value::as_array)
+                .and_then(|summary| summary.iter().find_map(|entry| entry.get("text").and_then(Value::as_str)))
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty()),
+            source: completed_item
+                .and_then(|item| item.get("source"))
+                .and_then(Value::as_str)
+                .map(|s| s.to_string()),
+            extra_body: state.node_extra_body.clone(),
+        }),
+        urp::NodeHeader::ToolCall { id, call_id, name } => Some(urp::Node::ToolCall {
+            id: id
+                .clone()
+                .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),
+            call_id: state.call_id.clone().unwrap_or_else(|| call_id.clone()),
+            name: state.name.clone().unwrap_or_else(|| name.clone()),
+            arguments: completed_item
+                .and_then(|item| item.get("arguments"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            extra_body: state.node_extra_body.clone(),
+        }),
+        _ => None,
+    }
 }
 
 pub(crate) async fn emit_synthetic_responses_stream(
@@ -325,11 +465,106 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut next_output_index = 0usize;
     let mut output_indices: HashMap<u32, usize> = HashMap::new();
     let mut part_states: HashMap<u32, StreamedPartState> = HashMap::new();
+    let mut node_states: HashMap<u32, StreamedNodeState> = HashMap::new();
     let mut pending_assistant_items: HashMap<u32, PendingResponsesAssistantItem> = HashMap::new();
     let mut flushed_output_indices: std::collections::HashSet<usize> =
         std::collections::HashSet::new();
     let mut completed_output_items: Vec<(usize, Value)> = Vec::new();
-    let mut had_early_flush = false;
+    let mut completed_output_indices: HashSet<usize> = HashSet::new();
+    let mut streamed_output_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_delta_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_done_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_summary_added_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_summary_delta_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_summary_text_done_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_summary_part_done_indices: HashSet<usize> = HashSet::new();
+    let mut function_args_delta_indices: HashSet<usize> = HashSet::new();
+    let mut function_args_done_indices: HashSet<usize> = HashSet::new();
+    let mut pending_envelope_extra: HashMap<String, Value> = HashMap::new();
+    let mut active_node_message_output: Option<ActiveResponsesOutputItem> = None;
+
+    async fn ensure_node_message_start_emitted(
+        tx: &mpsc::Sender<Event>,
+        seq: &mut u64,
+        node_state: &mut StreamedNodeState,
+        pending_envelope_extra: &mut HashMap<String, Value>,
+        _pending_assistant_items: &HashMap<u32, PendingResponsesAssistantItem>,
+        active_node_message_output: &mut Option<ActiveResponsesOutputItem>,
+        streamed_output_indices: &mut HashSet<usize>,
+        sse_max_frame_length: Option<usize>,
+    ) -> AppResult<()> {
+        if node_state.zone != ResponsesOutputZone::Message || node_state.message_start_emitted {
+            return Ok(());
+        }
+        let Some(header) = node_state.header.as_ref() else {
+            return Ok(());
+        };
+        let envelope_extra = pending_envelope_extra.clone();
+        let item = if node_state.is_shared_message_output {
+            let active = active_node_message_output
+                .as_mut()
+                .filter(|active| active.output_index == node_state.output_index)
+                .expect("shared node message output exists");
+            active.envelope_extra = envelope_extra.clone();
+            if let Some(obj) = active.item.as_object_mut() {
+                merge_json_extra_preserving_typed(obj, &active.envelope_extra);
+                merge_json_extra(obj, &node_state.node_extra_body);
+                obj.insert("status".to_string(), json!("in_progress"));
+            }
+            node_state.completed_item = Some(complete_stream_output_item(active.item.clone()));
+            active.item.clone()
+        } else {
+            let item = stream_output_item_start_stub_from_node_header(
+                node_state.zone,
+                header,
+                &node_state.node_extra_body,
+                &envelope_extra,
+            );
+            node_state.completed_item = Some(complete_stream_output_item(item.clone()));
+            item
+        };
+        node_state.item_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if node_state.is_shared_message_output
+            && let Some(active) = active_node_message_output.as_mut()
+            && active.output_index == node_state.output_index
+        {
+            active.item = item.clone();
+            active.item_id = node_state.item_id.clone();
+        }
+        let first_visible_item_for_output = streamed_output_indices.insert(node_state.output_index);
+        if first_visible_item_for_output {
+            send_responses_event(
+                tx,
+                seq,
+                "response.output_item.added",
+                json!({
+                    "output_index": node_state.output_index,
+                    "item": item,
+                }),
+            )
+            .await?;
+        }
+        send_responses_event(
+            tx,
+            seq,
+            "response.content_part.added",
+            json!({
+                "output_index": node_state.output_index,
+                "content_index": node_state.content_index.unwrap_or(0),
+                "item_id": node_state.item_id,
+                "part": encode_node_start_content_part(header),
+            }),
+        )
+        .await?;
+        pending_envelope_extra.clear();
+        node_state.message_start_emitted = true;
+        let _ = sse_max_frame_length;
+        Ok(())
+    }
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -358,12 +593,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 header,
                 extra_body,
             } => match header {
-                ItemHeader::Message { role } => {
+                ItemHeader::Message { role, id } => {
+                    merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
+                    let mut item_extra_body = extra_body;
+                    if let Some(id) = id {
+                        item_extra_body
+                            .entry("id".to_string())
+                            .or_insert(Value::String(id));
+                    }
                     pending_assistant_items.insert(
                         item_index,
                         PendingResponsesAssistantItem {
                             role,
-                            item_extra_body: extra_body,
+                            item_extra_body,
                             active_output: None,
                             staged_outputs: Vec::new(),
                             streamed_any_output: false,
@@ -393,6 +635,9 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 header,
                 extra_body,
             } => {
+                if node_states.contains_key(&part_index) {
+                    continue;
+                }
                 if let Some(pending_item) = pending_assistant_items.get_mut(&item_index) {
                     let zone = zone_from_part_header(&header);
                     let content_index = if zone == ResponsesOutputZone::Message {
@@ -420,7 +665,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         if entering_reasoning && leaving_message {
                             if let Some(active) = pending_item.active_output.take() {
                                 flushed_output_indices.insert(active.output_index);
-                                had_early_flush = true;
                                 let flushed = flush_stream_output(
                                     tx.clone(),
                                     &mut seq,
@@ -428,6 +672,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     sse_max_frame_length,
                                 )
                                 .await?;
+                                completed_output_indices.insert(flushed.0);
                                 completed_output_items.push(flushed);
                             }
                         } else {
@@ -459,6 +704,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             item,
                             next_content_index: 0,
                             summary_part_added_sent: false,
+                            envelope_extra: HashMap::new(),
                         }
                     });
 
@@ -474,6 +720,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             }),
                         )
                         .await?;
+                        streamed_output_indices.insert(active_output.output_index);
                     }
 
                     if zone == ResponsesOutputZone::Message {
@@ -490,6 +737,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             }),
                         )
                         .await?;
+                        streamed_output_indices.insert(active_output.output_index);
                     }
 
                     part_states.insert(
@@ -508,21 +756,97 @@ pub(crate) async fn encode_urp_stream_as_responses(
             }
             UrpStreamEvent::Delta {
                 part_index, delta, ..
-            } => match delta {
+            } => {
+                if node_states.contains_key(&part_index) {
+                    continue;
+                }
+                match delta {
                 PartDelta::Text { ref content } => {
-                    let mut part_state =
-                        part_states
-                            .get(&part_index)
-                            .cloned()
-                            .unwrap_or(StreamedPartState {
-                                item_index: 0,
-                                output_index: 0,
-                                zone: ResponsesOutputZone::Message,
-                                content_index: Some(part_index),
-                                item_id: String::new(),
-                                call_id: None,
-                                name: None,
+                    let mut part_state = if let Some(existing) = part_states.get(&part_index).cloned() {
+                        existing
+                    } else {
+                        let orphan_item_index = pending_assistant_items
+                            .iter()
+                            .find(|(_, pending)| pending.active_output.is_some())
+                            .map(|(item_index, _)| *item_index)
+                            .or_else(|| {
+                                pending_assistant_items
+                                    .iter()
+                                    .find(|(_, pending)| !pending.streamed_any_output)
+                                    .map(|(item_index, _)| *item_index)
                             });
+                        let Some(orphan_item_index) = orphan_item_index else {
+                            continue;
+                        };
+                        let Some(pending_item) = pending_assistant_items.get_mut(&orphan_item_index) else {
+                            continue;
+                        };
+                        let output_index = next_output_index;
+                        next_output_index += 1;
+                        let item = stream_output_item_start_stub(
+                            ResponsesOutputZone::Message,
+                            pending_item.role,
+                            &pending_item.item_extra_body,
+                            &PartHeader::Text,
+                            &pending_envelope_extra,
+                        );
+                        pending_envelope_extra.clear();
+                        let item_id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let new_output = ActiveResponsesOutputItem {
+                            zone: ResponsesOutputZone::Message,
+                            output_index,
+                            item_id: item_id.clone(),
+                            item,
+                            next_content_index: 1,
+                            summary_part_added_sent: false,
+                            envelope_extra: pending_envelope_extra.clone(),
+                        };
+                        send_responses_event(
+                            &tx,
+                            &mut seq,
+                            "response.output_item.added",
+                            json!({
+                                "output_index": new_output.output_index,
+                                "item": new_output.item.clone(),
+                            }),
+                        )
+                        .await?;
+                        streamed_output_indices.insert(new_output.output_index);
+                        send_responses_event(
+                            &tx,
+                            &mut seq,
+                            "response.content_part.added",
+                            json!({
+                                "output_index": new_output.output_index,
+                                "content_index": 0,
+                                "item_id": item_id,
+                                "part": json!({"type": "output_text", "text": "", "annotations": [], "logprobs": []}),
+                            }),
+                        )
+                        .await?;
+                        streamed_output_indices.insert(new_output.output_index);
+                        stage_active_stream_output(
+                            &mut pending_item.active_output,
+                            &mut pending_item.staged_outputs,
+                        );
+                        pending_item.active_output = Some(new_output.clone());
+                        pending_item.streamed_any_output = true;
+                        let synthesized = StreamedPartState {
+                            item_index: orphan_item_index,
+                            output_index: new_output.output_index,
+                            zone: ResponsesOutputZone::Message,
+                            content_index: Some(0),
+                            item_id: new_output.item_id.clone(),
+                            call_id: None,
+                            name: None,
+                        };
+                        part_states.insert(part_index, synthesized.clone());
+                        synthesized
+                    };
 
                     if flushed_output_indices.contains(&part_state.output_index) {
                         if let Some(pending_item) =
@@ -548,6 +872,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 item,
                                 next_content_index: 1,
                                 summary_part_added_sent: false,
+                                envelope_extra: HashMap::new(),
                             };
                             send_responses_event(
                                 &tx,
@@ -559,6 +884,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 }),
                             )
                             .await?;
+                            streamed_output_indices.insert(new_output.output_index);
                             send_responses_event(
                                 &tx,
                                 &mut seq,
@@ -571,6 +897,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 }),
                             )
                             .await?;
+                            streamed_output_indices.insert(new_output.output_index);
 
                             part_state.output_index = new_output.output_index;
                             part_state.item_id = new_output.item_id.clone();
@@ -635,6 +962,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     }
                     if let Some(content) = content.as_deref().filter(|content| !content.is_empty())
                     {
+                        reasoning_delta_indices.insert(part_state.output_index);
                         send_responses_delta_string(
                             &tx,
                             &mut seq,
@@ -667,6 +995,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             })
                             .unwrap_or(true);
                         if should_emit_added {
+                            reasoning_summary_added_indices.insert(part_state.output_index);
                             send_responses_event(
                                 &tx,
                                 &mut seq,
@@ -680,6 +1009,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             )
                             .await?;
                         }
+                        reasoning_summary_delta_indices.insert(part_state.output_index);
                         send_responses_delta_string(
                             &tx,
                             &mut seq,
@@ -733,6 +1063,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         sse_max_frame_length,
                     )
                     .await?;
+                    function_args_delta_indices.insert(part_state.output_index);
                 }
                 PartDelta::Refusal { ref content } => {
                     let part_state =
@@ -775,10 +1106,519 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 | PartDelta::Audio { .. }
                 | PartDelta::File { .. }
                 | PartDelta::ProviderItem { .. } => {}
+            }
             },
+            UrpStreamEvent::NodeStart {
+                node_index,
+                header,
+                extra_body,
+            } => {
+                if matches!(header, urp::NodeHeader::NextDownstreamEnvelopeExtra) {
+                    merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
+                    continue;
+                }
+                let zone = zone_from_node_header(&header);
+                let phase = node_header_phase(&header);
+                let starts_new_shared_message = zone == ResponsesOutputZone::Message
+                    && active_node_message_output.as_ref().is_none_or(|active| {
+                        active.zone != ResponsesOutputZone::Message
+                            || active
+                                .item
+                                .get("phase")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                != phase
+                    });
+                if zone == ResponsesOutputZone::Message && starts_new_shared_message {
+                    let item = stream_output_item_start_stub_from_node_header(
+                        zone,
+                        &header,
+                        &extra_body,
+                        &HashMap::new(),
+                    );
+                    let item_id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    active_node_message_output = Some(ActiveResponsesOutputItem {
+                        zone,
+                        output_index: next_output_index,
+                        item_id,
+                        item,
+                        next_content_index: 0,
+                        summary_part_added_sent: false,
+                        envelope_extra: HashMap::new(),
+                    });
+                    next_output_index += 1;
+                } else if zone != ResponsesOutputZone::Message {
+                    let output_index = next_output_index;
+                    next_output_index += 1;
+                    let item = stream_output_item_start_stub_from_node_header(
+                        zone,
+                        &header,
+                        &extra_body,
+                        &pending_envelope_extra,
+                    );
+                    pending_envelope_extra.clear();
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.output_item.added",
+                        json!({
+                            "output_index": output_index,
+                            "item": item.clone(),
+                        }),
+                    )
+                    .await?;
+                    streamed_output_indices.insert(output_index);
+                    let item_id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    output_indices.insert(node_index, output_index);
+                    node_states.insert(
+                        node_index,
+                        StreamedNodeState {
+                            output_index,
+                            zone,
+                            content_index: None,
+                            item_id,
+                            phase,
+                            call_id: node_header_call_id(&header),
+                            name: node_header_name(&header),
+                            reasoning_summary_part_added_sent: false,
+                            message_start_emitted: true,
+                            header: Some(header.clone()),
+                            node_extra_body: extra_body.clone(),
+                            completed_item: Some(complete_stream_output_item(item)),
+                            is_shared_message_output: false,
+                        },
+                    );
+                    continue;
+                }
+                let active = active_node_message_output
+                    .as_mut()
+                    .expect("message node stream output exists");
+                let output_index = active.output_index;
+                let content_index = Some(active.next_content_index as u32);
+                active.next_content_index += 1;
+                let item_id = active.item_id.clone();
+                let message_start_emitted = false;
+                let completed_item = None;
+                let is_shared_message_output = true;
+                if let Some(provider_id) = extra_body.get("id").and_then(Value::as_str) {
+                    output_indices.insert(node_index, output_index);
+                    output_indices.insert(provider_id.parse::<u32>().unwrap_or(node_index), output_index);
+                } else {
+                    output_indices.insert(node_index, output_index);
+                }
+                node_states.insert(
+                    node_index,
+                    StreamedNodeState {
+                        output_index,
+                        zone,
+                        content_index,
+                        item_id,
+                        phase,
+                        call_id: node_header_call_id(&header),
+                        name: node_header_name(&header),
+                        reasoning_summary_part_added_sent: false,
+                        message_start_emitted,
+                        header: Some(header.clone()),
+                        node_extra_body: extra_body.clone(),
+                        completed_item,
+                        is_shared_message_output,
+                    },
+                );
+            }
+            UrpStreamEvent::NodeDelta {
+                node_index,
+                delta,
+                ..
+            } => {
+                let Some(node_state) = node_states.get_mut(&node_index) else {
+                    continue;
+                };
+                if node_state.zone == ResponsesOutputZone::Message {
+                    ensure_node_message_start_emitted(
+                        &tx,
+                        &mut seq,
+                        node_state,
+                        &mut pending_envelope_extra,
+                        &pending_assistant_items,
+                        &mut active_node_message_output,
+                        &mut streamed_output_indices,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                match delta {
+                    urp::NodeDelta::Text { content } => {
+                        append_node_delta_to_completed_item(
+                            node_state,
+                            &urp::NodeDelta::Text {
+                                content: content.clone(),
+                            },
+                            None,
+                        );
+                        send_responses_delta_string(
+                            &tx,
+                            &mut seq,
+                            "response.output_text.delta",
+                            responses_text_delta_payload(
+                                node_state.phase.as_deref(),
+                                &json!({ "id": node_state.item_id }),
+                                node_state.output_index as u64,
+                                node_state.content_index.unwrap_or(0) as u64,
+                            ),
+                            "delta",
+                            &content,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                    urp::NodeDelta::Refusal { content } => {
+                        append_node_delta_to_completed_item(
+                            node_state,
+                            &urp::NodeDelta::Refusal {
+                                content: content.clone(),
+                            },
+                            None,
+                        );
+                        send_responses_delta_string(
+                            &tx,
+                            &mut seq,
+                            "response.output_text.delta",
+                            json!({
+                                "item_id": node_state.item_id,
+                                "output_index": node_state.output_index,
+                                "content_index": node_state.content_index.unwrap_or(0),
+                                "logprobs": Value::Null,
+                                "type": "refusal"
+                            }),
+                            "delta",
+                            &content,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                    urp::NodeDelta::Reasoning {
+                        content,
+                        encrypted,
+                        summary,
+                        source,
+                    } => {
+                        append_node_delta_to_completed_item(
+                            node_state,
+                            &urp::NodeDelta::Reasoning {
+                                content: content.clone(),
+                                encrypted: encrypted.clone(),
+                                summary: summary.clone(),
+                                source: source.clone(),
+                            },
+                            None,
+                        );
+                        if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                            if !node_state.reasoning_summary_part_added_sent {
+                                node_state.reasoning_summary_part_added_sent = true;
+                                reasoning_summary_added_indices.insert(node_state.output_index);
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.reasoning_summary_part.added",
+                                    json!({
+                                        "item_id": node_state.item_id,
+                                        "output_index": node_state.output_index,
+                                        "summary_index": 0,
+                                        "part": { "type": "summary_text", "text": "" },
+                                    }),
+                                )
+                                .await?;
+                            }
+                            reasoning_summary_delta_indices.insert(node_state.output_index);
+                            send_responses_delta_string(
+                                &tx,
+                                &mut seq,
+                                "response.reasoning_summary_text.delta",
+                                insert_reasoning_source(
+                                    json!({
+                                        "item_id": node_state.item_id,
+                                        "output_index": node_state.output_index,
+                                        "summary_index": 0,
+                                    }),
+                                    source.as_deref(),
+                                ),
+                                "delta",
+                                summary,
+                                sse_max_frame_length,
+                            )
+                            .await?;
+                        }
+                        if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                            reasoning_delta_indices.insert(node_state.output_index);
+                            send_responses_delta_string(
+                                &tx,
+                                &mut seq,
+                                "response.reasoning.delta",
+                                insert_reasoning_source(
+                                    json!({
+                                        "item_id": node_state.item_id,
+                                        "output_index": node_state.output_index,
+                                    }),
+                                    source.as_deref(),
+                                ),
+                                "delta",
+                                content,
+                                sse_max_frame_length,
+                            )
+                            .await?;
+                        }
+                    }
+                    urp::NodeDelta::ToolCallArguments { arguments } => {
+                        append_node_delta_to_completed_item(
+                            node_state,
+                            &urp::NodeDelta::ToolCallArguments {
+                                arguments: arguments.clone(),
+                            },
+                            None,
+                        );
+                        send_responses_delta_string(
+                            &tx,
+                            &mut seq,
+                            "response.function_call_arguments.delta",
+                            json!({
+                                "item_id": node_state.item_id,
+                                "output_index": node_state.output_index,
+                            }),
+                            "delta",
+                            &arguments,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                        function_args_delta_indices.insert(node_state.output_index);
+                    }
+                    urp::NodeDelta::Image { .. }
+                    | urp::NodeDelta::Audio { .. }
+                    | urp::NodeDelta::File { .. }
+                    | urp::NodeDelta::ProviderItem { .. } => {}
+                }
+            }
+            UrpStreamEvent::NodeDone {
+                node_index,
+                node,
+                ..
+            } => {
+                if matches!(node, urp::Node::NextDownstreamEnvelopeExtra { .. }) {
+                    continue;
+                }
+                let Some(mut node_state) = node_states.remove(&node_index) else {
+                    continue;
+                };
+                if node_state.zone == ResponsesOutputZone::Message {
+                    ensure_node_message_start_emitted(
+                        &tx,
+                        &mut seq,
+                        &mut node_state,
+                        &mut pending_envelope_extra,
+                        &pending_assistant_items,
+                        &mut active_node_message_output,
+                        &mut streamed_output_indices,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                match &node {
+                    urp::Node::Text { content, .. } => {
+                        apply_node_done_to_stream_output_item_state(&mut node_state, &node);
+                        let mut done_payload = responses_text_delta_payload(
+                            node_state.phase.as_deref(),
+                            &json!({ "id": node_state.item_id }),
+                            node_state.output_index as u64,
+                            node_state.content_index.unwrap_or(0) as u64,
+                        );
+                        if let Some(obj) = done_payload.as_object_mut() {
+                            obj.insert("text".to_string(), json!(content));
+                        }
+                        send_responses_event(&tx, &mut seq, "response.output_text.done", done_payload)
+                            .await?;
+                    }
+                    urp::Node::Reasoning {
+                        content,
+                        encrypted,
+                        summary,
+                        source,
+                        extra_body,
+                        ..
+                    } => {
+                        append_node_delta_to_completed_item(
+                            &mut node_state,
+                            &urp::NodeDelta::Reasoning {
+                                content: content.clone(),
+                                encrypted: encrypted.clone(),
+                                summary: summary.clone(),
+                                source: source.clone(),
+                            },
+                            Some(extra_body),
+                        );
+                        apply_node_done_to_stream_output_item_state(&mut node_state, &node);
+                        if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                            if reasoning_summary_text_done_indices.insert(node_state.output_index) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.reasoning_summary_text.done",
+                                    insert_reasoning_source(
+                                        json!({
+                                            "item_id": node_state.item_id,
+                                            "output_index": node_state.output_index,
+                                            "summary_index": 0,
+                                            "text": summary,
+                                        }),
+                                        source.as_deref(),
+                                    ),
+                                )
+                                .await?;
+                            }
+                            if reasoning_summary_part_done_indices.insert(node_state.output_index) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.reasoning_summary_part.done",
+                                    json!({
+                                        "item_id": node_state.item_id,
+                                        "output_index": node_state.output_index,
+                                        "summary_index": 0,
+                                        "part": { "type": "summary_text", "text": summary },
+                                    }),
+                                )
+                                .await?;
+                            }
+                        }
+                        if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                            if reasoning_done_indices.insert(node_state.output_index) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.reasoning.done",
+                                    insert_reasoning_source(
+                                        json!({
+                                            "item_id": node_state.item_id,
+                                            "output_index": node_state.output_index,
+                                            "text": content,
+                                        }),
+                                        source.as_deref(),
+                                    ),
+                                )
+                                .await?;
+                            }
+                        }
+                    }
+                    urp::Node::ToolCall {
+                        arguments,
+                        extra_body,
+                        ..
+                    } => {
+                        append_node_delta_to_completed_item(
+                            &mut node_state,
+                            &urp::NodeDelta::ToolCallArguments {
+                                arguments: arguments.clone(),
+                            },
+                            Some(extra_body),
+                        );
+                        apply_node_done_to_stream_output_item_state(&mut node_state, &node);
+                        if function_args_done_indices.insert(node_state.output_index) {
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.function_call_arguments.done",
+                                json!({
+                                    "arguments": arguments,
+                                    "call_id": node_state.call_id.clone().unwrap_or_default(),
+                                    "item_id": node_state.item_id,
+                                    "name": node_state.name.clone().unwrap_or_default(),
+                                    "output_index": node_state.output_index,
+                                }),
+                            )
+                            .await?;
+                        }
+                    }
+                    _ => {
+                        apply_node_done_to_stream_output_item_state(&mut node_state, &node);
+                    }
+                }
+                if node_state.zone == ResponsesOutputZone::Message {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.content_part.done",
+                        json!({
+                            "output_index": node_state.output_index,
+                            "content_index": node_state.content_index.unwrap_or(0),
+                            "item_id": node_state.item_id,
+                            "part": encode_node_done_content_part(&node),
+                        }),
+                    )
+                    .await?;
+                }
+                if node_state.is_shared_message_output
+                    && let Some(active) = active_node_message_output.as_mut()
+                    && active.output_index == node_state.output_index
+                {
+                    if active.item_id.is_empty() {
+                        active.item_id = node_state.item_id.clone();
+                    }
+                    apply_node_done_to_stream_output_item(active, &node);
+                }
+                let completed_item = if node_state.is_shared_message_output {
+                    sanitize_responses_output_item_for_frame_limit(
+                        &active_node_message_output
+                            .as_ref()
+                            .filter(|active| active.output_index == node_state.output_index)
+                            .map(|active| complete_stream_output_item(active.item.clone()))
+                            .unwrap_or_else(|| {
+                                node_state
+                                    .completed_item
+                                    .clone()
+                                    .unwrap_or_else(|| complete_stream_output_item(encode_stream_output_item_from_node(&node)))
+                            }),
+                        sse_max_frame_length,
+                    )
+                } else {
+                    sanitize_responses_output_item_for_frame_limit(
+                        &node_state
+                            .completed_item
+                            .take()
+                            .unwrap_or_else(|| complete_stream_output_item(encode_stream_output_item_from_node(&node))),
+                        sse_max_frame_length,
+                    )
+                };
+                if completed_output_indices.insert(node_state.output_index) {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.output_item.done",
+                        json!({
+                            "output_index": node_state.output_index,
+                            "item": completed_item.clone(),
+                        }),
+                    )
+                    .await?;
+                }
+                let should_record_terminal_item = !completed_output_items
+                    .iter()
+                    .any(|(idx, _)| *idx == node_state.output_index);
+                if should_record_terminal_item {
+                    completed_output_items.push((node_state.output_index, completed_item));
+                }
+            }
             UrpStreamEvent::PartDone {
                 part_index, part, ..
             } => {
+                if node_states.contains_key(&part_index) {
+                    continue;
+                }
                 if let Some(part_state) = part_states.get(&part_index).cloned() {
                     let is_staged_message = pending_assistant_items
                         .get(&part_state.item_index)
@@ -837,23 +1677,26 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         {
                             let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
                                 .await?;
+                            completed_output_indices.insert(flushed.0);
                             completed_output_items.push(flushed);
                         }
                     } else if part_state.zone == ResponsesOutputZone::FunctionCall {
                         if let Part::ToolCall { arguments, .. } = &part {
-                            send_responses_event(
-                                &tx,
-                                &mut seq,
-                                "response.function_call_arguments.done",
-                                json!({
-                                    "arguments": arguments,
-                                    "call_id": part_state.call_id.clone().unwrap_or_default(),
-                                    "item_id": part_state.item_id,
-                                    "name": part_state.name.clone().unwrap_or_default(),
-                                    "output_index": part_state.output_index,
-                                }),
-                            )
-                            .await?;
+                            if function_args_done_indices.insert(part_state.output_index) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.function_call_arguments.done",
+                                    json!({
+                                        "arguments": arguments,
+                                        "call_id": part_state.call_id.clone().unwrap_or_default(),
+                                        "item_id": part_state.item_id,
+                                        "name": part_state.name.clone().unwrap_or_default(),
+                                        "output_index": part_state.output_index,
+                                    }),
+                                )
+                                .await?;
+                            }
                         }
                         if let Some(output) = pending_assistant_items
                             .get_mut(&part_state.item_index)
@@ -863,6 +1706,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         {
                             let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
                                 .await?;
+                            completed_output_indices.insert(flushed.0);
                             completed_output_items.push(flushed);
                         }
                     } else if part_state.zone == ResponsesOutputZone::Reasoning {
@@ -876,52 +1720,58 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             if let Some(summary) =
                                 summary.as_deref().filter(|summary| !summary.is_empty())
                             {
-                                send_responses_event(
-                                    &tx,
-                                    &mut seq,
-                                    "response.reasoning_summary_text.done",
-                                    insert_reasoning_source(
+                                if reasoning_summary_text_done_indices.insert(part_state.output_index) {
+                                    send_responses_event(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning_summary_text.done",
+                                        insert_reasoning_source(
+                                            json!({
+                                                "item_id": part_state.item_id,
+                                                "output_index": part_state.output_index,
+                                                "summary_index": 0,
+                                                "text": summary,
+                                            }),
+                                            source.as_deref(),
+                                        ),
+                                    )
+                                    .await?;
+                                }
+                                if reasoning_summary_part_done_indices.insert(part_state.output_index) {
+                                    send_responses_event(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning_summary_part.done",
                                         json!({
                                             "item_id": part_state.item_id,
                                             "output_index": part_state.output_index,
                                             "summary_index": 0,
-                                            "text": summary,
+                                            "part": { "type": "summary_text", "text": summary },
                                         }),
-                                        source.as_deref(),
-                                    ),
-                                )
-                                .await?;
-                                send_responses_event(
-                                    &tx,
-                                    &mut seq,
-                                    "response.reasoning_summary_part.done",
-                                    json!({
-                                        "item_id": part_state.item_id,
-                                        "output_index": part_state.output_index,
-                                        "summary_index": 0,
-                                        "part": { "type": "summary_text", "text": summary },
-                                    }),
-                                )
-                                .await?;
+                                    )
+                                    .await?;
+                                }
                             }
                             if content
                                 .as_deref()
                                 .is_some_and(|content| !content.is_empty())
                             {
-                                send_responses_event(
-                                    &tx,
-                                    &mut seq,
-                                    "response.reasoning.done",
-                                    insert_reasoning_source(
-                                        json!({
-                                            "item_id": part_state.item_id,
-                                            "output_index": part_state.output_index,
-                                            "text": content,
-                                        }),
-                                        source.as_deref(),
-                                    ),
-                                )
-                                .await?;
+                                if reasoning_done_indices.insert(part_state.output_index) {
+                                    send_responses_event(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning.done",
+                                        insert_reasoning_source(
+                                            json!({
+                                                "item_id": part_state.item_id,
+                                                "output_index": part_state.output_index,
+                                                "text": content,
+                                            }),
+                                            source.as_deref(),
+                                        ),
+                                    )
+                                    .await?;
+                                }
                             }
                         }
                         if let Some(output) = pending_assistant_items
@@ -932,6 +1782,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         {
                             let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
                                 .await?;
+                            completed_output_indices.insert(flushed.0);
                             completed_output_items.push(flushed);
                         }
                     }
@@ -940,6 +1791,11 @@ pub(crate) async fn encode_urp_stream_as_responses(
             UrpStreamEvent::ItemDone {
                 item_index, item, ..
             } => {
+                if let Some(output_index) = output_indices.get(&item_index) {
+                    if completed_output_indices.contains(output_index) {
+                        continue;
+                    }
+                }
                 if let Some(mut pending_item) = pending_assistant_items.remove(&item_index) {
                     if pending_item.active_output.is_some()
                         || !pending_item.staged_outputs.is_empty()
@@ -951,18 +1807,24 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             sse_max_frame_length,
                         )
                         .await?;
+                        completed_output_indices.extend(flushed.iter().map(|(idx, _)| *idx));
                         completed_output_items.extend(flushed);
                     } else if !pending_item.streamed_any_output {
                         for encoded_item in encode_stream_output_item(&item) {
                             let output_index = next_output_index;
                             next_output_index += 1;
+                            let mut added_item = mark_stream_output_item_in_progress(&encoded_item);
+                            if let Some(obj) = added_item.as_object_mut() {
+                                merge_json_extra_preserving_typed(obj, &pending_envelope_extra);
+                            }
+                            pending_envelope_extra.clear();
                             send_responses_event(
                                 &tx,
                                 &mut seq,
                                 "response.output_item.added",
                                 json!({
                                     "output_index": output_index,
-                                    "item": mark_stream_output_item_in_progress(&encoded_item),
+                                    "item": added_item,
                                 }),
                             )
                             .await?;
@@ -970,17 +1832,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 &encoded_item,
                                 sse_max_frame_length,
                             );
-                            send_responses_event(
-                                &tx,
-                                &mut seq,
-                                "response.output_item.done",
-                                json!({
-                                    "output_index": output_index,
-                                    "item": done_item,
-                                }),
-                            )
-                            .await?;
-                            completed_output_items.push((output_index, done_item.clone()));
+                            if completed_output_indices.insert(output_index) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.output_item.done",
+                                    json!({
+                                        "output_index": output_index,
+                                        "item": done_item,
+                                    }),
+                                )
+                                .await?;
+                                completed_output_items.push((output_index, done_item.clone()));
+                            }
                         }
                     }
                 } else {
@@ -998,30 +1862,337 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             }),
                         sse_max_frame_length,
                     );
-                    send_responses_event(
-                        &tx,
-                        &mut seq,
-                        "response.output_item.done",
-                        json!({
-                            "output_index": output_index,
-                            "item": done_item,
-                        }),
-                    )
-                    .await?;
-                    completed_output_items.push((output_index, done_item.clone()));
+                    if completed_output_indices.insert(output_index) {
+                        send_responses_event(
+                            &tx,
+                            &mut seq,
+                            "response.output_item.done",
+                            json!({
+                                "output_index": output_index,
+                                "item": done_item,
+                            }),
+                        )
+                        .await?;
+                        completed_output_items.push((output_index, done_item.clone()));
+                    }
                 }
             }
             UrpStreamEvent::ResponseDone {
                 finish_reason,
                 usage,
-                outputs,
+                output,
                 ..
             } => {
+                let mut remaining_node_indices: Vec<u32> = node_states.keys().copied().collect();
+                remaining_node_indices.sort_unstable();
+                let mut used_terminal_output_positions = HashSet::new();
+                for node_index in remaining_node_indices {
+                    let Some(mut node_state) = node_states.remove(&node_index) else {
+                        continue;
+                    };
+                    let node = if let Some((matched_output_position, node)) =
+                        find_terminal_output_node_for_state(
+                            &output,
+                            node_index as usize,
+                            &node_state,
+                            &used_terminal_output_positions,
+                        )
+                    {
+                        used_terminal_output_positions.insert(matched_output_position);
+                        node
+                    } else if let Some(node) = synthesize_terminal_node_from_state(&node_state) {
+                        node
+                    } else {
+                        continue;
+                    };
+                    if node_state.zone == ResponsesOutputZone::Message {
+                        ensure_node_message_start_emitted(
+                            &tx,
+                            &mut seq,
+                            &mut node_state,
+                            &mut pending_envelope_extra,
+                            &pending_assistant_items,
+                            &mut active_node_message_output,
+                            &mut streamed_output_indices,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                    match &node {
+                        urp::Node::Text { content, .. } => {
+                            append_node_delta_to_completed_item(
+                                &mut node_state,
+                                &urp::NodeDelta::Text {
+                                    content: content.clone(),
+                                },
+                                None,
+                            );
+                            let mut done_payload = responses_text_delta_payload(
+                                node_state.phase.as_deref(),
+                                &json!({ "id": node_state.item_id }),
+                                node_state.output_index as u64,
+                                node_state.content_index.unwrap_or(0) as u64,
+                            );
+                            if let Some(obj) = done_payload.as_object_mut() {
+                                obj.insert("text".to_string(), json!(content));
+                            }
+                            send_responses_event(
+                                &tx,
+                                &mut seq,
+                                "response.output_text.done",
+                                done_payload,
+                            )
+                            .await?;
+                        }
+                        urp::Node::Refusal { content, .. } => {
+                            append_node_delta_to_completed_item(
+                                &mut node_state,
+                                &urp::NodeDelta::Refusal {
+                                    content: content.clone(),
+                                },
+                                None,
+                            );
+                        }
+                        urp::Node::Reasoning {
+                            content,
+                            encrypted,
+                            summary,
+                            source,
+                            extra_body,
+                            ..
+                        } => {
+                            append_node_delta_to_completed_item(
+                                &mut node_state,
+                                &urp::NodeDelta::Reasoning {
+                                    content: content.clone(),
+                                    encrypted: encrypted.clone(),
+                                    summary: summary.clone(),
+                                    source: source.clone(),
+                                },
+                                Some(extra_body),
+                            );
+                            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                                if !node_state.reasoning_summary_part_added_sent {
+                                    node_state.reasoning_summary_part_added_sent = true;
+                                    reasoning_summary_added_indices.insert(node_state.output_index);
+                                    send_responses_event(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning_summary_part.added",
+                                        json!({
+                                            "item_id": node_state.item_id,
+                                            "output_index": node_state.output_index,
+                                            "summary_index": 0,
+                                            "part": { "type": "summary_text", "text": "" },
+                                        }),
+                                    )
+                                    .await?;
+                                }
+                                if reasoning_summary_delta_indices.insert(node_state.output_index) {
+                                    send_responses_delta_string(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning_summary_text.delta",
+                                        insert_reasoning_source(
+                                            json!({
+                                                "item_id": node_state.item_id,
+                                                "output_index": node_state.output_index,
+                                                "summary_index": 0,
+                                            }),
+                                            source.as_deref(),
+                                        ),
+                                        "delta",
+                                        summary,
+                                        sse_max_frame_length,
+                                    )
+                                    .await?;
+                                }
+                                if reasoning_summary_text_done_indices.insert(node_state.output_index) {
+                                    send_responses_event(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning_summary_text.done",
+                                        insert_reasoning_source(
+                                            json!({
+                                                "item_id": node_state.item_id,
+                                                "output_index": node_state.output_index,
+                                                "summary_index": 0,
+                                                "text": summary,
+                                            }),
+                                            source.as_deref(),
+                                        ),
+                                    )
+                                    .await?;
+                                }
+                                if reasoning_summary_part_done_indices.insert(node_state.output_index) {
+                                    send_responses_event(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning_summary_part.done",
+                                        json!({
+                                            "item_id": node_state.item_id,
+                                            "output_index": node_state.output_index,
+                                            "summary_index": 0,
+                                            "part": { "type": "summary_text", "text": summary },
+                                        }),
+                                    )
+                                    .await?;
+                                }
+                            }
+                            if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                                if reasoning_delta_indices.insert(node_state.output_index) {
+                                    send_responses_delta_string(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning.delta",
+                                        insert_reasoning_source(
+                                            json!({
+                                                "item_id": node_state.item_id,
+                                                "output_index": node_state.output_index,
+                                            }),
+                                            source.as_deref(),
+                                        ),
+                                        "delta",
+                                        content,
+                                        sse_max_frame_length,
+                                    )
+                                    .await?;
+                                }
+                                if reasoning_done_indices.insert(node_state.output_index) {
+                                    send_responses_event(
+                                        &tx,
+                                        &mut seq,
+                                        "response.reasoning.done",
+                                        insert_reasoning_source(
+                                            json!({
+                                                "item_id": node_state.item_id,
+                                                "output_index": node_state.output_index,
+                                                "text": content,
+                                            }),
+                                            source.as_deref(),
+                                        ),
+                                    )
+                                    .await?;
+                                }
+                            }
+                        }
+                        urp::Node::ToolCall {
+                            arguments,
+                            extra_body,
+                            ..
+                        } => {
+                            append_node_delta_to_completed_item(
+                                &mut node_state,
+                                &urp::NodeDelta::ToolCallArguments {
+                                    arguments: arguments.clone(),
+                                },
+                                Some(extra_body),
+                            );
+                            if function_args_delta_indices.insert(node_state.output_index) {
+                                send_responses_delta_string(
+                                    &tx,
+                                    &mut seq,
+                                    "response.function_call_arguments.delta",
+                                    json!({
+                                        "item_id": node_state.item_id,
+                                        "output_index": node_state.output_index,
+                                    }),
+                                    "delta",
+                                    arguments,
+                                    sse_max_frame_length,
+                                )
+                                .await?;
+                            }
+                            if function_args_done_indices.insert(node_state.output_index) {
+                                send_responses_event(
+                                    &tx,
+                                    &mut seq,
+                                    "response.function_call_arguments.done",
+                                    json!({
+                                        "arguments": arguments,
+                                        "call_id": node_state.call_id.clone().unwrap_or_default(),
+                                        "item_id": node_state.item_id,
+                                        "name": node_state.name.clone().unwrap_or_default(),
+                                        "output_index": node_state.output_index,
+                                    }),
+                                )
+                                .await?;
+                            }
+                        }
+                        _ => {}
+                    }
+                    apply_node_done_to_stream_output_item_state(&mut node_state, &node);
+                    if node_state.zone == ResponsesOutputZone::Message {
+                        send_responses_event(
+                            &tx,
+                            &mut seq,
+                            "response.content_part.done",
+                            json!({
+                                "output_index": node_state.output_index,
+                                "content_index": node_state.content_index.unwrap_or(0),
+                                "item_id": node_state.item_id,
+                                "part": encode_node_done_content_part(&node),
+                            }),
+                        )
+                        .await?;
+                    }
+                    if node_state.is_shared_message_output
+                        && let Some(active) = active_node_message_output.as_mut()
+                        && active.output_index == node_state.output_index
+                    {
+                        if active.item_id.is_empty() {
+                            active.item_id = node_state.item_id.clone();
+                        }
+                        apply_node_done_to_stream_output_item(active, &node);
+                    }
+                    let completed_item = if node_state.is_shared_message_output {
+                        sanitize_responses_output_item_for_frame_limit(
+                            &active_node_message_output
+                                .as_ref()
+                                .filter(|active| active.output_index == node_state.output_index)
+                                .map(|active| complete_stream_output_item(active.item.clone()))
+                                .unwrap_or_else(|| {
+                                    node_state
+                                        .completed_item
+                                        .clone()
+                                        .unwrap_or_else(|| complete_stream_output_item(encode_stream_output_item_from_node(&node)))
+                                }),
+                            sse_max_frame_length,
+                        )
+                    } else {
+                        sanitize_responses_output_item_for_frame_limit(
+                            &node_state
+                                .completed_item
+                                .take()
+                                .unwrap_or_else(|| complete_stream_output_item(encode_stream_output_item_from_node(&node))),
+                            sse_max_frame_length,
+                        )
+                    };
+                    if completed_output_indices.insert(node_state.output_index) {
+                        send_responses_event(
+                            &tx,
+                            &mut seq,
+                            "response.output_item.done",
+                            json!({
+                                "output_index": node_state.output_index,
+                                "item": completed_item.clone(),
+                            }),
+                        )
+                        .await?;
+                    }
+                    if !completed_output_items
+                        .iter()
+                        .any(|(idx, _)| *idx == node_state.output_index)
+                    {
+                        completed_output_items.push((node_state.output_index, completed_item));
+                    }
+                }
                 let mut response = urp::encode::openai_responses::encode_response(
                     &urp::UrpResponse {
                         id: response_id.clone(),
                         model: logical_model.to_string(),
-                        outputs,
+                        created_at: created,
+                        output,
                         finish_reason,
                         usage,
                         extra_body: HashMap::new(),
@@ -1031,15 +2202,91 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 if let Some(created) = created {
                     response["created_at"] = json!(created);
                 }
-                if had_early_flush && !completed_output_items.is_empty() {
-                    completed_output_items.sort_by_key(|(idx, _)| *idx);
-                    response["output"] = Value::Array(
-                        completed_output_items
-                            .iter()
-                            .map(|(_, item)| item.clone())
-                            .collect(),
+                let mut terminal_output = response
+                    .get("output")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let shared_terminal_extra = active_node_message_output
+                    .as_ref()
+                    .and_then(|active| (!active.envelope_extra.is_empty()).then_some(active.envelope_extra.clone()));
+                if let Some(active) = active_node_message_output.take()
+                    && active.item.is_object()
+                    && completed_output_indices.insert(active.output_index)
+                {
+                    let done_item = sanitize_responses_output_item_for_frame_limit(
+                        &complete_stream_output_item(active.item.clone()),
+                        sse_max_frame_length,
                     );
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.output_item.done",
+                        json!({
+                            "output_index": active.output_index,
+                            "item": done_item,
+                        }),
+                    )
+                    .await?;
+                    completed_output_items.push((active.output_index, done_item));
                 }
+                let mut rebuild_output_items = completed_output_items.clone();
+                for (output_index, item) in terminal_output.iter().enumerate() {
+                    if rebuild_output_items
+                        .iter()
+                        .any(|(existing_index, _)| *existing_index == output_index)
+                    {
+                        continue;
+                    }
+                    rebuild_output_items.push((output_index, item.clone()));
+                }
+                if !completed_output_items.is_empty() && !streamed_output_indices.is_empty() {
+                    rebuild_output_items.sort_by_key(|(idx, _)| *idx);
+                    response["output"] =
+                        Value::Array(rebuild_completed_response_output(&rebuild_output_items));
+                } else if terminal_output.is_empty() {
+                    if !completed_output_items.is_empty() {
+                        completed_output_items.sort_by_key(|(idx, _)| *idx);
+                        response["output"] = Value::Array(rebuild_completed_response_output(&completed_output_items));
+                    }
+                } else {
+                    if let Some(extra) = shared_terminal_extra.as_ref()
+                        && let Some(first_message) = terminal_output.iter_mut().find(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+                        && let Some(obj) = first_message.as_object_mut()
+                    {
+                        merge_json_extra_preserving_typed(obj, extra);
+                    }
+                    response["output"] = Value::Array(terminal_output);
+                }
+                terminal_output = response
+                    .get("output")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                emit_missing_terminal_output_done_events(
+                    &tx,
+                    &mut seq,
+                    &mut completed_output_indices,
+                    &mut completed_output_items,
+                    &terminal_output,
+                    sse_max_frame_length,
+                )
+                .await?;
+                emit_missing_terminal_sub_lifecycles(
+                    &tx,
+                    &mut seq,
+                    &completed_output_items,
+                    &mut reasoning_delta_indices,
+                    &mut reasoning_done_indices,
+                    &mut reasoning_summary_added_indices,
+                    &mut reasoning_summary_delta_indices,
+                    &mut reasoning_summary_text_done_indices,
+                    &mut reasoning_summary_part_done_indices,
+                    &mut function_args_delta_indices,
+                    &mut function_args_done_indices,
+                    sse_max_frame_length,
+                )
+                .await?;
                 let completed_response =
                     sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length);
                 send_responses_event(
@@ -1069,20 +2316,357 @@ pub(crate) async fn encode_urp_stream_as_responses(
     Ok(())
 }
 
+fn zone_from_node_header(header: &urp::NodeHeader) -> ResponsesOutputZone {
+    match header {
+        urp::NodeHeader::Reasoning { .. } => ResponsesOutputZone::Reasoning,
+        urp::NodeHeader::ToolCall { .. } => ResponsesOutputZone::FunctionCall,
+        _ => ResponsesOutputZone::Message,
+    }
+}
+
+fn node_header_id(header: &urp::NodeHeader) -> Option<String> {
+    match header {
+        urp::NodeHeader::Text { id, .. }
+        | urp::NodeHeader::Image { id, .. }
+        | urp::NodeHeader::Audio { id, .. }
+        | urp::NodeHeader::File { id, .. }
+        | urp::NodeHeader::Refusal { id }
+        | urp::NodeHeader::Reasoning { id }
+        | urp::NodeHeader::ToolCall { id, .. }
+        | urp::NodeHeader::ProviderItem { id, .. }
+        | urp::NodeHeader::ToolResult { id, .. } => id.clone(),
+        urp::NodeHeader::NextDownstreamEnvelopeExtra => None,
+    }
+}
+
+fn node_header_phase(header: &urp::NodeHeader) -> Option<String> {
+    match header {
+        urp::NodeHeader::Text { phase, .. } => phase.clone(),
+        _ => None,
+    }
+}
+
+fn node_header_call_id(header: &urp::NodeHeader) -> Option<String> {
+    match header {
+        urp::NodeHeader::ToolCall { call_id, .. }
+        | urp::NodeHeader::ToolResult { call_id, .. } => {
+            Some(call_id.clone())
+        }
+        _ => None,
+    }
+}
+
+fn node_header_name(header: &urp::NodeHeader) -> Option<String> {
+    match header {
+        urp::NodeHeader::ToolCall { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+fn ordinary_role_to_str(role: urp::OrdinaryRole) -> &'static str {
+    match role {
+        urp::OrdinaryRole::System => "system",
+        urp::OrdinaryRole::Developer => "developer",
+        urp::OrdinaryRole::User => "user",
+        urp::OrdinaryRole::Assistant => "assistant",
+    }
+}
+
+fn stream_output_item_start_stub_from_node_header(
+    zone: ResponsesOutputZone,
+    header: &urp::NodeHeader,
+    extra_body: &HashMap<String, Value>,
+    envelope_extra: &HashMap<String, Value>,
+) -> Value {
+    match zone {
+        ResponsesOutputZone::Message => {
+            let role = match header {
+                urp::NodeHeader::Text { role, .. }
+                | urp::NodeHeader::Image { role, .. }
+                | urp::NodeHeader::Audio { role, .. }
+                | urp::NodeHeader::File { role, .. }
+                | urp::NodeHeader::ProviderItem { role, .. } => ordinary_role_to_str(*role),
+                urp::NodeHeader::Refusal { .. } => "assistant",
+                _ => "assistant",
+            };
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!(role));
+            obj.insert("content".to_string(), json!([]));
+            let id = node_header_id(header)
+                .or_else(|| extra_body.get("id").and_then(Value::as_str).map(|s| s.to_string()))
+                .or_else(|| envelope_extra.get("id").and_then(Value::as_str).map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("in_progress"));
+            if let Some(phase) = node_header_phase(header) {
+                obj.insert("phase".to_string(), json!(phase));
+            }
+            merge_json_extra_preserving_typed(&mut obj, envelope_extra);
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        ResponsesOutputZone::Reasoning => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("reasoning"));
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("in_progress"));
+            obj.insert("summary".to_string(), json!([]));
+            obj.insert("started_at".to_string(), json!(chrono::Utc::now().timestamp()));
+            merge_json_extra_preserving_typed(&mut obj, envelope_extra);
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        ResponsesOutputZone::FunctionCall => {
+            let (call_id, name) = match header {
+                urp::NodeHeader::ToolCall { call_id, name, .. } => (call_id.clone(), name.clone()),
+                _ => (String::new(), String::new()),
+            };
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("function_call"));
+            obj.insert("call_id".to_string(), json!(call_id));
+            obj.insert("name".to_string(), json!(name));
+            obj.insert("arguments".to_string(), json!(""));
+            let id = node_header_id(header)
+                .or_else(|| extra_body.get("id").and_then(Value::as_str).map(|s| s.to_string()))
+                .or_else(|| envelope_extra.get("id").and_then(Value::as_str).map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("fc_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("in_progress"));
+            merge_json_extra_preserving_typed(&mut obj, envelope_extra);
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+    }
+}
+
+fn encode_node_start_content_part(header: &urp::NodeHeader) -> Value {
+    match header {
+        urp::NodeHeader::Text { .. } => json!({ "type": "output_text", "text": "", "annotations": [], "logprobs": [] }),
+        urp::NodeHeader::Refusal { .. } => json!({ "type": "refusal", "refusal": "" }),
+        urp::NodeHeader::Image { .. } => json!({ "type": "output_image" }),
+        urp::NodeHeader::Audio { .. } => json!({ "type": "audio" }),
+        urp::NodeHeader::File { .. } => json!({ "type": "output_file" }),
+        urp::NodeHeader::ProviderItem { item_type, .. } => json!({ "type": item_type }),
+        _ => Value::Null,
+    }
+}
+
+fn encode_node_done_content_part(node: &urp::Node) -> Value {
+    match node {
+        urp::Node::Text { content, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("output_text"));
+            obj.insert("text".to_string(), json!(content));
+            obj.insert("annotations".to_string(), json!([]));
+            obj.insert("logprobs".to_string(), json!([]));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::Refusal { content, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("refusal"));
+            obj.insert("refusal".to_string(), json!(content));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::Image { source, extra_body, .. } => encode_image_part(source, extra_body),
+        urp::Node::Audio { source, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("audio"));
+            obj.insert("source".to_string(), encode_audio_source(source));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::File { source, extra_body, .. } => encode_file_part(source, extra_body),
+        urp::Node::ProviderItem { item_type, body, extra_body, .. } => {
+            let mut obj = match body {
+                Value::Object(map) => map.clone(),
+                other => {
+                    let mut map = Map::new();
+                    map.insert("body".to_string(), other.clone());
+                    map
+                }
+            };
+            obj.entry("type".to_string())
+                .or_insert_with(|| Value::String(item_type.clone()));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        _ => Value::Null,
+    }
+}
+
+fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
+    match node {
+        urp::Node::Text { role, content, phase, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
+            obj.insert("content".to_string(), json!([{ "type": "output_text", "text": content, "annotations": [], "logprobs": [] }]));
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| node.id().cloned())
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("completed"));
+            if let Some(phase) = phase {
+                obj.insert("phase".to_string(), json!(phase));
+            }
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::Refusal { content, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!("assistant"));
+            obj.insert("content".to_string(), json!([{ "type": "refusal", "refusal": content }]));
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| node.id().cloned())
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::Reasoning { id, content, encrypted, summary, source, extra_body } => {
+            encode_reasoning_output_item(&Part::Reasoning {
+                id: id.clone(),
+                content: content.clone(),
+                encrypted: encrypted.clone(),
+                summary: summary.clone(),
+                source: source.clone(),
+                extra_body: extra_body.clone(),
+            }).unwrap_or_else(|| json!({ "type": "reasoning" }))
+        }
+        urp::Node::ToolCall { id, call_id, name, arguments, extra_body } => {
+            encode_function_call_output_item(&Part::ToolCall {
+                id: id.clone(),
+                call_id: call_id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+                extra_body: extra_body.clone(),
+            }).unwrap_or_else(|| json!({ "type": "function_call" }))
+        }
+        urp::Node::Image { role, source, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
+            obj.insert("content".to_string(), json!([encode_image_part(source, extra_body)]));
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| node.id().cloned())
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::Audio { role, source, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
+            obj.insert("content".to_string(), json!([{ "type": "audio", "source": encode_audio_source(source) }]));
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| node.id().cloned())
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::File { role, source, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
+            obj.insert("content".to_string(), json!([encode_file_part(source, extra_body)]));
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| node.id().cloned())
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::ProviderItem { role, item_type, body, extra_body, .. } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("message"));
+            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
+            obj.insert("content".to_string(), json!([{
+                "type": item_type,
+                "body": body,
+            }]));
+            let id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .or_else(|| node.id().cloned())
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::ToolResult { id, call_id, is_error, content, extra_body } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("function_call_output"));
+            obj.insert("call_id".to_string(), json!(call_id));
+            obj.insert(
+                "id".to_string(),
+                json!(
+                    id.clone()
+                        .or_else(|| extra_body.get("id").and_then(Value::as_str).map(|s| s.to_string()))
+                        .unwrap_or_else(|| format!("tr_{}", uuid::Uuid::new_v4()))
+                ),
+            );
+            obj.insert("status".to_string(), json!("completed"));
+            obj.insert("output".to_string(), encode_tool_result_output(content));
+            if *is_error {
+                obj.insert("is_error".to_string(), Value::Bool(true));
+            }
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+        urp::Node::NextDownstreamEnvelopeExtra { extra_body } => {
+            let mut obj = Map::new();
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
+    }
+}
+
 fn encode_item_start_stub(header: &ItemHeader) -> Value {
     match header {
-        ItemHeader::Message { role } => json!({
+        ItemHeader::Message { id, role } => json!({
             "type": "message",
             "role": role_to_str(*role),
             "content": [],
-            "id": format!("msg_{}", uuid::Uuid::new_v4()),
+            "id": id.clone().unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4())),
             "status": "in_progress",
         }),
-        ItemHeader::ToolResult { call_id } => json!({
+        ItemHeader::ToolResult { id, call_id } => json!({
             "type": "tool_result",
             "call_id": call_id,
             "output": "",
-            "id": format!("tr_{}", uuid::Uuid::new_v4()),
+            "id": id.clone().unwrap_or_else(|| format!("tr_{}", uuid::Uuid::new_v4())),
             "status": "in_progress",
         }),
     }
@@ -1090,8 +2674,9 @@ fn encode_item_start_stub(header: &ItemHeader) -> Value {
 
 fn item_header_from_item(item: &Item) -> ItemHeader {
     match item {
-        Item::Message { role, .. } => ItemHeader::Message { role: *role },
-        Item::ToolResult { call_id, .. } => ItemHeader::ToolResult {
+        Item::Message { id, role, .. } => ItemHeader::Message { id: id.clone(), role: *role },
+        Item::ToolResult { id, call_id, .. } => ItemHeader::ToolResult {
+            id: id.clone(),
             call_id: call_id.clone(),
         },
     }
@@ -1099,7 +2684,7 @@ fn item_header_from_item(item: &Item) -> ItemHeader {
 
 fn zone_from_part_header(header: &PartHeader) -> ResponsesOutputZone {
     match header {
-        PartHeader::Reasoning => ResponsesOutputZone::Reasoning,
+        PartHeader::Reasoning { .. } => ResponsesOutputZone::Reasoning,
         PartHeader::ToolCall { .. } => ResponsesOutputZone::FunctionCall,
         _ => ResponsesOutputZone::Message,
     }
@@ -1108,6 +2693,15 @@ fn zone_from_part_header(header: &PartHeader) -> ResponsesOutputZone {
 fn part_call_id_from_header(header: &PartHeader) -> Option<String> {
     match header {
         PartHeader::ToolCall { call_id, .. } => Some(call_id.clone()),
+        _ => None,
+    }
+}
+
+fn part_header_id(header: &PartHeader) -> Option<String> {
+    match header {
+        PartHeader::Reasoning { id }
+        | PartHeader::ToolCall { id, .. }
+        | PartHeader::ProviderItem { id, .. } => id.clone(),
         _ => None,
     }
 }
@@ -1132,10 +2726,12 @@ fn stream_output_item_start_stub(
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(role_to_str(role)));
             obj.insert("content".to_string(), json!([]));
-            obj.insert(
-                "id".to_string(),
-                json!(format!("msg_{}", uuid::Uuid::new_v4())),
-            );
+            let id = item_extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
             obj.insert("status".to_string(), json!("in_progress"));
             if let Some(phase) = part_extra_body
                 .get("phase")
@@ -1149,10 +2745,8 @@ fn stream_output_item_start_stub(
         ResponsesOutputZone::Reasoning => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("reasoning"));
-            let id = part_extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
+            let id = part_header_id(header)
+                .or_else(|| part_extra_body.get("id").and_then(Value::as_str).map(|s| s.to_string()))
                 .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()));
             obj.insert("id".to_string(), json!(id));
             obj.insert("status".to_string(), json!("in_progress"));
@@ -1168,7 +2762,7 @@ fn stream_output_item_start_stub(
             Value::Object(obj)
         }
         ResponsesOutputZone::FunctionCall => {
-            let PartHeader::ToolCall { call_id, name } = header else {
+            let PartHeader::ToolCall { call_id, name, .. } = header else {
                 unreachable!("function-call zone requires tool-call header");
             };
             let mut obj = Map::new();
@@ -1176,10 +2770,10 @@ fn stream_output_item_start_stub(
             obj.insert("call_id".to_string(), json!(call_id));
             obj.insert("name".to_string(), json!(name));
             obj.insert("arguments".to_string(), json!(""));
-            obj.insert(
-                "id".to_string(),
-                json!(format!("fc_{}", uuid::Uuid::new_v4())),
-            );
+            let id = part_header_id(header)
+                .or_else(|| part_extra_body.get("id").and_then(Value::as_str).map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("fc_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
             obj.insert("status".to_string(), json!("in_progress"));
             merge_json_extra(&mut obj, part_extra_body);
             Value::Object(obj)
@@ -1306,6 +2900,119 @@ fn append_reasoning_summary_field(item: &mut Value, delta: &str) {
     last.insert("text".to_string(), json!(format!("{current}{delta}")));
 }
 
+fn append_node_delta_to_completed_item(
+    node_state: &mut StreamedNodeState,
+    delta: &urp::NodeDelta,
+    extra_body: Option<&HashMap<String, Value>>,
+) {
+    let Some(mut item) = node_state.completed_item.take() else {
+        return;
+    };
+    match (node_state.zone, delta) {
+        (ResponsesOutputZone::Message, urp::NodeDelta::Text { content }) => {
+            append_string_field_to_message_content(
+                &mut item,
+                "output_text",
+                "text",
+                content,
+            );
+        }
+        (ResponsesOutputZone::Message, urp::NodeDelta::Refusal { content }) => {
+            append_string_field_to_message_content(&mut item, "refusal", "refusal", content);
+        }
+        (
+            ResponsesOutputZone::Reasoning,
+            urp::NodeDelta::Reasoning {
+                content,
+                encrypted,
+                summary,
+                source,
+            },
+        ) => {
+            if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                append_string_field(&mut item, "text", content);
+            }
+            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                append_reasoning_summary_field(&mut item, summary);
+            }
+            if let Some(encrypted) = encrypted.as_ref().filter(|encrypted| !encrypted.is_null())
+                && let Some(obj) = item.as_object_mut()
+            {
+                obj.insert("encrypted_content".to_string(), encrypted.clone());
+            }
+            if let Some(source) = source.as_deref().filter(|source| !source.is_empty()) {
+                item = insert_reasoning_source(item, Some(source));
+            }
+        }
+        (ResponsesOutputZone::FunctionCall, urp::NodeDelta::ToolCallArguments { arguments }) => {
+            append_string_field(&mut item, "arguments", arguments);
+        }
+        _ => {}
+    }
+    if let Some(extra_body) = extra_body
+        && let Some(obj) = item.as_object_mut()
+    {
+        merge_json_extra(obj, extra_body);
+    }
+    node_state.completed_item = Some(item);
+}
+
+fn apply_node_done_to_stream_output_item_state(
+    node_state: &mut StreamedNodeState,
+    node: &urp::Node,
+) {
+    let Some(item) = node_state.completed_item.as_mut() else {
+        return;
+    };
+    match node_state.zone {
+        ResponsesOutputZone::Message => {
+            if item.get("content").and_then(Value::as_array).is_none()
+                && let Some(obj) = item.as_object_mut()
+            {
+                obj.insert("content".to_string(), json!([]));
+            }
+            if let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) {
+                let encoded_part = encode_node_done_content_part(node);
+                let encoded_type = encoded_part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let matches_last_type = content.last().is_some_and(|last| {
+                    last.get("type").and_then(Value::as_str) == Some(encoded_type.as_str())
+                });
+                if content.is_empty() {
+                    content.push(encoded_part);
+                } else if matches_last_type {
+                    if let Some(last_part) = content.last_mut() {
+                        *last_part = encoded_part;
+                    }
+                } else {
+                    content.push(encoded_part);
+                }
+            }
+        }
+        ResponsesOutputZone::Reasoning => {
+            let existing_id = item.get("id").cloned();
+            *item = complete_stream_output_item(encode_stream_output_item_from_node(node));
+            if let Some(existing_id) = existing_id
+                && let Some(obj) = item.as_object_mut()
+            {
+                obj.insert("id".to_string(), existing_id);
+            }
+        }
+        ResponsesOutputZone::FunctionCall => {
+            let existing_id = item.get("id").cloned();
+            *item = complete_stream_output_item(encode_stream_output_item_from_node(node));
+            if let Some(existing_id) = existing_id
+                && let Some(obj) = item.as_object_mut()
+            {
+                obj.insert("id".to_string(), existing_id);
+            }
+        }
+    }
+}
+
 fn insert_reasoning_source(mut payload: Value, source: Option<&str>) -> Value {
     let Some(source) = source.filter(|source| !source.is_empty()) else {
         return payload;
@@ -1315,6 +3022,46 @@ fn insert_reasoning_source(mut payload: Value, source: Option<&str>) -> Value {
     };
     obj.insert("source".to_string(), Value::String(source.to_string()));
     payload
+}
+
+fn apply_node_done_to_stream_output_item(
+    active_output: &mut ActiveResponsesOutputItem,
+    node: &urp::Node,
+) {
+    match active_output.zone {
+        ResponsesOutputZone::Message => {
+            if active_output.item.get("content").and_then(Value::as_array).is_none()
+                && let Some(obj) = active_output.item.as_object_mut()
+            {
+                obj.insert("content".to_string(), json!([]));
+            }
+            if let Some(content) = active_output
+                .item
+                .get_mut("content")
+                .and_then(Value::as_array_mut)
+            {
+                let encoded_part = encode_node_done_content_part(node);
+                let encoded_type = encoded_part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let matches_last_type = content.last().is_some_and(|last| {
+                    last.get("type").and_then(Value::as_str) == Some(encoded_type.as_str())
+                });
+                if content.is_empty() {
+                    content.push(encoded_part);
+                } else if matches_last_type {
+                    if let Some(last_part) = content.last_mut() {
+                        *last_part = encoded_part;
+                    }
+                } else {
+                    content.push(encoded_part);
+                }
+            }
+        }
+        ResponsesOutputZone::Reasoning | ResponsesOutputZone::FunctionCall => {}
+    }
 }
 
 fn apply_part_done_to_stream_output_item(
@@ -1534,6 +3281,237 @@ fn text_part_phase(part: &Part) -> Option<&str> {
     }
 }
 
+fn rebuild_completed_response_output(completed_output_items: &[(usize, Value)]) -> Vec<Value> {
+    completed_output_items
+        .iter()
+        .map(|(_, item)| item.clone())
+        .collect()
+}
+
+async fn emit_missing_terminal_output_done_events(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    completed_output_indices: &mut HashSet<usize>,
+    completed_output_items: &mut Vec<(usize, Value)>,
+    terminal_output: &[Value],
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    for (output_index, item) in terminal_output.iter().enumerate() {
+        if completed_output_indices.contains(&output_index) {
+            continue;
+        }
+        let done_item = sanitize_responses_output_item_for_frame_limit(item, sse_max_frame_length);
+        send_responses_event(
+            tx,
+            seq,
+            "response.output_item.done",
+            json!({
+                "output_index": output_index,
+                "item": done_item,
+            }),
+        )
+        .await?;
+        completed_output_indices.insert(output_index);
+        completed_output_items.push((output_index, item.clone()));
+    }
+    Ok(())
+}
+
+async fn emit_missing_terminal_sub_lifecycles(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    completed_output_items: &[(usize, Value)],
+    reasoning_delta_indices: &mut HashSet<usize>,
+    reasoning_done_indices: &mut HashSet<usize>,
+    reasoning_summary_added_indices: &mut HashSet<usize>,
+    reasoning_summary_delta_indices: &mut HashSet<usize>,
+    reasoning_summary_text_done_indices: &mut HashSet<usize>,
+    reasoning_summary_part_done_indices: &mut HashSet<usize>,
+    function_args_delta_indices: &mut HashSet<usize>,
+    function_args_done_indices: &mut HashSet<usize>,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    for (output_index, item) in completed_output_items {
+        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "reasoning" => {
+                let item_id = item.get("id").cloned().unwrap_or(Value::Null);
+                let source = item.get("source").and_then(Value::as_str);
+                if let Some(summary_entries) = item.get("summary").and_then(Value::as_array)
+                    && let Some(summary_text) = summary_entries
+                        .iter()
+                        .find_map(|entry| entry.get("text").and_then(Value::as_str))
+                    && !summary_text.is_empty()
+                {
+                    if reasoning_summary_added_indices.insert(*output_index) {
+                        send_responses_event(
+                            tx,
+                            seq,
+                            "response.reasoning_summary_part.added",
+                            json!({
+                                "item_id": item_id,
+                                "output_index": output_index,
+                                "summary_index": 0,
+                                "part": { "type": "summary_text", "text": "" },
+                            }),
+                        )
+                        .await?;
+                    }
+                    if reasoning_summary_delta_indices.insert(*output_index) {
+                        send_responses_delta_string(
+                            tx,
+                            seq,
+                            "response.reasoning_summary_text.delta",
+                            insert_reasoning_source(
+                                json!({
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "summary_index": 0,
+                                }),
+                                source,
+                            ),
+                            "delta",
+                            summary_text,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                    if reasoning_summary_text_done_indices.insert(*output_index) {
+                        send_responses_event(
+                            tx,
+                            seq,
+                            "response.reasoning_summary_text.done",
+                            insert_reasoning_source(
+                                json!({
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "summary_index": 0,
+                                    "text": summary_text,
+                                }),
+                                source,
+                            ),
+                        )
+                        .await?;
+                    }
+                    if reasoning_summary_part_done_indices.insert(*output_index) {
+                        send_responses_event(
+                            tx,
+                            seq,
+                            "response.reasoning_summary_part.done",
+                            json!({
+                                "item_id": item_id,
+                                "output_index": output_index,
+                                "summary_index": 0,
+                                "part": { "type": "summary_text", "text": summary_text },
+                            }),
+                        )
+                        .await?;
+                    }
+                }
+                if let Some(text) = item.get("text").and_then(Value::as_str)
+                    && !text.is_empty()
+                {
+                    if reasoning_delta_indices.insert(*output_index) {
+                        send_responses_delta_string(
+                            tx,
+                            seq,
+                            "response.reasoning.delta",
+                            insert_reasoning_source(
+                                json!({
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                }),
+                                source,
+                            ),
+                            "delta",
+                            text,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                    if reasoning_done_indices.insert(*output_index) {
+                        send_responses_event(
+                            tx,
+                            seq,
+                            "response.reasoning.done",
+                            insert_reasoning_source(
+                                json!({
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "text": text,
+                                }),
+                                source,
+                            ),
+                        )
+                        .await?;
+                    }
+                }
+            }
+            "function_call" => {
+                let arguments = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if function_args_delta_indices.insert(*output_index) && !arguments.is_empty() {
+                    send_responses_delta_string(
+                        tx,
+                        seq,
+                        "response.function_call_arguments.delta",
+                        json!({
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                        }),
+                        "delta",
+                        arguments,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                if function_args_done_indices.insert(*output_index) {
+                    send_responses_event(
+                        tx,
+                        seq,
+                        "response.function_call_arguments.done",
+                        json!({
+                            "arguments": item.get("arguments").cloned().unwrap_or(Value::String(String::new())),
+                            "call_id": item.get("call_id").cloned().unwrap_or(Value::Null),
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "name": item.get("name").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                        }),
+                    )
+                    .await?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn role_from_responses_item_value(item: &Value) -> Role {
+    match item.get("role").and_then(Value::as_str).unwrap_or("assistant") {
+        "system" => Role::System,
+        "developer" => Role::Developer,
+        "user" => Role::User,
+        "tool" => Role::Tool,
+        _ => Role::Assistant,
+    }
+}
+
+fn item_extra_body_from_responses_item_value(item: &Value) -> HashMap<String, Value> {
+    let mut extra = HashMap::new();
+    let Some(obj) = item.as_object() else {
+        return extra;
+    };
+    for (key, value) in obj {
+        if matches!(key.as_str(), "type" | "status" | "role" | "content" | "phase") {
+            continue;
+        }
+        extra.insert(key.clone(), value.clone());
+    }
+    extra
+}
+
 fn flush_pending_message_item(
     pending: &mut Option<PendingResponsesMessageItem>,
     out: &mut Vec<Value>,
@@ -1545,14 +3523,18 @@ fn flush_pending_message_item(
         return;
     }
 
+    let message_id = pending_item
+        .extra_body
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
+
     let mut obj = Map::new();
     obj.insert("type".to_string(), json!("message"));
     obj.insert("role".to_string(), json!(role_to_str(pending_item.role)));
     obj.insert("content".to_string(), Value::Array(pending_item.content));
-    obj.insert(
-        "id".to_string(),
-        json!(format!("msg_{}", uuid::Uuid::new_v4())),
-    );
+    obj.insert("id".to_string(), json!(message_id));
     obj.insert("status".to_string(), json!("completed"));
     if let Some(phase) = pending_item.phase {
         obj.insert("phase".to_string(), Value::String(phase));
@@ -1619,12 +3601,17 @@ fn encode_message_content_part(part: &Part) -> Option<Value> {
 fn encode_stream_output_item(item: &Item) -> Vec<Value> {
     match item {
         Item::Message {
+            id,
             role,
             parts,
             extra_body,
         } => {
             let mut output = Vec::new();
             let mut pending_message: Option<PendingResponsesMessageItem> = None;
+            let mut message_extra = extra_body.clone();
+            if let Some(id) = id.clone() {
+                message_extra.entry("id".to_string()).or_insert(Value::String(id));
+            }
 
             for part in parts {
                 if let Some(content_part) = encode_message_content_part(part) {
@@ -1633,7 +3620,7 @@ fn encode_stream_output_item(item: &Item) -> Vec<Value> {
                         &mut output,
                         *role,
                         text_part_phase(part),
-                        extra_body,
+                        &message_extra,
                         content_part,
                     );
                     continue;
@@ -1655,6 +3642,7 @@ fn encode_stream_output_item(item: &Item) -> Vec<Value> {
             output
         }
         Item::ToolResult {
+            id,
             call_id,
             content,
             is_error,
@@ -1665,7 +3653,7 @@ fn encode_stream_output_item(item: &Item) -> Vec<Value> {
             obj.insert("call_id".to_string(), json!(call_id));
             obj.insert(
                 "id".to_string(),
-                json!(format!("tr_{}", uuid::Uuid::new_v4())),
+                json!(id.clone().unwrap_or_else(crate::urp::synthetic_tool_result_id)),
             );
             obj.insert("status".to_string(), json!("completed"));
             obj.insert("output".to_string(), encode_tool_result_output(content));
@@ -1680,6 +3668,7 @@ fn encode_stream_output_item(item: &Item) -> Vec<Value> {
 
 fn encode_reasoning_output_item(part: &Part) -> Option<Value> {
     let Part::Reasoning {
+        id,
         content,
         encrypted,
         summary,
@@ -1692,6 +3681,10 @@ fn encode_reasoning_output_item(part: &Part) -> Option<Value> {
 
     let mut obj = Map::new();
     obj.insert("type".to_string(), json!("reasoning"));
+    obj.insert(
+        "id".to_string(),
+        json!(id.clone().unwrap_or_else(crate::urp::synthetic_reasoning_id)),
+    );
     if let Some(text) = summary.as_ref() {
         obj.insert(
             "summary".to_string(),
@@ -1713,6 +3706,7 @@ fn encode_reasoning_output_item(part: &Part) -> Option<Value> {
 
 fn encode_function_call_output_item(part: &Part) -> Option<Value> {
     let Part::ToolCall {
+        id,
         call_id,
         name,
         arguments,
@@ -1729,7 +3723,7 @@ fn encode_function_call_output_item(part: &Part) -> Option<Value> {
     obj.insert("arguments".to_string(), json!(arguments));
     obj.insert(
         "id".to_string(),
-        json!(format!("fc_{}", uuid::Uuid::new_v4())),
+        json!(id.clone().unwrap_or_else(crate::urp::synthetic_tool_call_id)),
     );
     obj.insert("status".to_string(), json!("completed"));
     merge_json_extra(&mut obj, extra_body);
@@ -1739,9 +3733,9 @@ fn encode_function_call_output_item(part: &Part) -> Option<Value> {
 fn encode_part_start_header(header: &PartHeader) -> Value {
     match header {
         PartHeader::Text => json!({ "type": "output_text", "text": "", "annotations": [], "logprobs": [] }),
-        PartHeader::Reasoning => json!({ "type": "reasoning", "text": "" }),
+        PartHeader::Reasoning { .. } => json!({ "type": "reasoning", "text": "" }),
         PartHeader::Refusal => json!({ "type": "refusal", "refusal": "" }),
-        PartHeader::ToolCall { call_id, name } => json!({
+        PartHeader::ToolCall { call_id, name, .. } => json!({
             "type": "function_call",
             "call_id": call_id,
             "name": name,
@@ -1765,7 +3759,7 @@ fn encode_part_start_header(header: &PartHeader) -> Value {
             merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }
-        PartHeader::ProviderItem { item_type, body } => {
+        PartHeader::ProviderItem { item_type, body, .. } => {
             let mut obj = match body {
                 Value::Object(map) => map.clone(),
                 other => {
@@ -1798,6 +3792,7 @@ fn encode_part_value(part: &Part) -> Value {
             Value::Object(obj)
         }
         Part::Reasoning {
+            id: _,
             content,
             encrypted,
             summary,
@@ -1825,6 +3820,7 @@ fn encode_part_value(part: &Part) -> Value {
             Value::Object(obj)
         }
         Part::ToolCall {
+            id: _,
             call_id,
             name,
             arguments,
@@ -1858,6 +3854,7 @@ fn encode_part_value(part: &Part) -> Value {
         }
         Part::File { source, extra_body } => encode_file_part(source, extra_body),
         Part::ProviderItem {
+            id: _,
             item_type,
             body,
             extra_body,
@@ -1966,6 +3963,25 @@ fn merge_json_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>
     }
 }
 
+fn merge_hashmap_extra_preserving_typed(
+    dst: &mut HashMap<String, Value>,
+    extra: &HashMap<String, Value>,
+) {
+    for (k, v) in extra {
+        if !dst.contains_key(k) {
+            dst.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+fn merge_json_extra_preserving_typed(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
+    for (k, v) in extra {
+        if !obj.contains_key(k) {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+}
+
 fn role_to_str(role: Role) -> &'static str {
     match role {
         Role::System => "system",
@@ -1987,10 +4003,12 @@ mod tests {
 
     #[test]
     fn streamed_completion_uses_nonstream_response_output_shape_for_merged_items() {
-        let outputs = vec![Item::Message {
+        let output = urp::items_to_nodes(vec![Item::Message {
+            id: None,
             role: Role::Assistant,
             parts: vec![
                 Part::Reasoning {
+                    id: None,
                     content: Some("think".to_string()),
                     encrypted: Some(json!("sig_1")),
                     summary: None,
@@ -2006,6 +4024,7 @@ mod tests {
                     },
                 },
                 Part::ToolCall {
+                    id: None,
                     call_id: "call_1".to_string(),
                     name: "lookup".to_string(),
                     arguments: "{}".to_string(),
@@ -2017,13 +4036,14 @@ mod tests {
                 map.insert("custom_message_field".to_string(), json!(true));
                 map
             },
-        }];
+        }]);
 
         let encoded = urp::encode::openai_responses::encode_response(
             &UrpResponse {
                 id: "resp_1".to_string(),
                 model: "gpt-5.4".to_string(),
-                outputs,
+                created_at: None,
+                output,
                 finish_reason: Some(FinishReason::ToolCalls),
                 usage: None,
                 extra_body: empty_map(),
