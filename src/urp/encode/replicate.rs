@@ -1,15 +1,17 @@
 use crate::urp::encode::merge_extra;
 use crate::urp::{
-    FinishReason, ImageSource, Item, Part, Role, ToolResultContent, UrpRequest, UrpResponse,
+    nodes_to_items, FinishReason, ImageSource, Item, Part, Role, ToolResultContent, UrpRequest,
+    UrpResponse,
 };
 use serde_json::{json, Map, Value};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+    let request_items = nodes_to_items(&req.input);
     let mut input = Map::new();
     let mut prompt_parts: Vec<String> = Vec::new();
     let mut images: Vec<Value> = Vec::new();
 
-    for item in &req.inputs {
+    for item in &request_items {
         match item {
             Item::Message { role, parts, .. } => match role {
                 Role::System | Role::Developer => {
@@ -190,10 +192,11 @@ fn collect_text(parts: &[Part]) -> String {
 }
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
+    let response_items = nodes_to_items(&resp.output);
     let mut text_parts: Vec<String> = Vec::new();
     let mut image_urls: Vec<String> = Vec::new();
 
-    for item in &resp.outputs {
+    for item in &response_items {
         if let Item::Message { parts, .. } = item {
             for part in parts {
                 match part {

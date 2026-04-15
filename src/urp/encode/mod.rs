@@ -5,7 +5,7 @@ pub mod openai_image;
 pub mod openai_responses;
 pub mod replicate;
 
-use crate::urp::{InputDetails, OutputDetails, Part, Role, ToolChoice, Usage};
+use crate::urp::{InputDetails, Node, OrdinaryRole, OutputDetails, Part, Role, ToolChoice, Usage};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
@@ -112,4 +112,85 @@ pub fn usage_input_details(usage: &Usage) -> InputDetails {
 
 pub fn usage_output_details(usage: &Usage) -> OutputDetails {
     usage.output_details.clone().unwrap_or_default()
+}
+
+pub fn ordinary_role_to_str(role: OrdinaryRole) -> &'static str {
+    match role {
+        OrdinaryRole::System => "system",
+        OrdinaryRole::Developer => "developer",
+        OrdinaryRole::User => "user",
+        OrdinaryRole::Assistant => "assistant",
+    }
+}
+
+pub fn text_from_nodes(nodes: &[Node]) -> String {
+    let mut out = String::new();
+    for n in nodes {
+        if let Node::Text { content, .. } = n {
+            out.push_str(content);
+        }
+    }
+    out
+}
+
+pub fn extract_tool_calls_from_nodes(nodes: &[Node]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for n in nodes {
+        if let Node::ToolCall {
+            call_id,
+            name,
+            arguments,
+            ..
+        } = n
+        {
+            out.push(json!({
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments
+                }
+            }));
+        }
+    }
+    out
+}
+
+pub fn has_encrypted_reasoning_in_nodes(nodes: &[Node]) -> bool {
+    nodes.iter().any(|n| {
+        matches!(
+            n,
+            Node::Reasoning {
+                encrypted: Some(_),
+                ..
+            }
+        )
+    })
+}
+
+pub fn extract_reasoning_plain_from_nodes(nodes: &[Node]) -> String {
+    let mut out = String::new();
+    for n in nodes {
+        if let Node::Reasoning {
+            content, summary, ..
+        } = n
+        {
+            if let Some(content) = content {
+                out.push_str(content);
+            } else if let Some(summary) = summary {
+                out.push_str(summary);
+            }
+        }
+    }
+    out
+}
+
+pub fn extract_reasoning_encrypted_from_nodes(nodes: &[Node]) -> Option<Value> {
+    nodes.iter().find_map(|n| match n {
+        Node::Reasoning {
+            encrypted: Some(data),
+            ..
+        } => Some(data.clone()),
+        _ => None,
+    })
 }
