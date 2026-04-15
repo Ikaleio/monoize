@@ -1,10 +1,11 @@
-use crate::urp::{Item, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent, output_items_mut};
+use crate::urp::{Item, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent, nodes_to_items};
 use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 pub mod append_empty_user_message;
@@ -352,12 +353,14 @@ pub fn merge_same_role_items(items: &[Item]) -> Vec<Item> {
             role,
             parts,
             extra_body,
+            ..
         } = item
         {
             if let Some(Item::Message {
                 role: last_role,
                 parts: last_parts,
                 extra_body: last_extra,
+                ..
             }) = merged.last_mut()
             {
                 if last_role == role {
@@ -384,33 +387,71 @@ pub fn strip_reasoning_parts(parts: &[Part]) -> Vec<Part> {
         .collect()
 }
 
-pub fn request_messages(req: &UrpRequest) -> &[Item] {
-    &req.inputs
+pub fn request_messages(req: &UrpRequest) -> Vec<Item> {
+    nodes_to_items(&req.input)
 }
 
-pub fn request_messages_mut(req: &mut UrpRequest) -> &mut Vec<Item> {
-    &mut req.inputs
+pub struct ItemVecGuard<'a> {
+    target: &'a mut Vec<crate::urp::Node>,
+    items: Vec<Item>,
 }
 
-pub fn response_output_items_mut(resp: &mut UrpResponse) -> impl Iterator<Item = &mut Item> {
-    output_items_mut(&mut resp.outputs)
-}
-
-pub fn ensure_assistant_output_message(resp: &mut UrpResponse) -> &mut Item {
-    if !matches!(
-        resp.outputs.first(),
-        Some(Item::Message {
-            role: Role::Assistant,
-            ..
-        })
-    ) {
-        resp.outputs.insert(0, Item::new_message(Role::Assistant));
+impl<'a> ItemVecGuard<'a> {
+    fn new(target: &'a mut Vec<crate::urp::Node>) -> Self {
+        Self {
+            items: nodes_to_items(target),
+            target,
+        }
     }
+}
 
-    match resp.outputs.first_mut() {
-        Some(message) => message,
-        _ => unreachable!("first output should be an item"),
+impl Deref for ItemVecGuard<'_> {
+    type Target = Vec<Item>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.items
     }
+}
+
+impl DerefMut for ItemVecGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.items
+    }
+}
+
+impl Drop for ItemVecGuard<'_> {
+    fn drop(&mut self) {
+        *self.target = crate::urp::items_to_nodes_with_envelope_control(std::mem::take(&mut self.items));
+    }
+}
+
+pub fn request_messages_mut(req: &mut UrpRequest) -> ItemVecGuard<'_> {
+    ItemVecGuard::new(&mut req.input)
+}
+
+pub fn with_request_messages_mut<R>(req: &mut UrpRequest, f: impl FnOnce(&mut Vec<Item>) -> R) -> R {
+    let mut items = nodes_to_items(&req.input);
+    let result = f(&mut items);
+    req.input = crate::urp::items_to_nodes_with_envelope_control(items);
+    result
+}
+
+pub fn response_output_items(resp: &UrpResponse) -> Vec<Item> {
+    nodes_to_items(&resp.output)
+}
+
+pub fn response_output_items_mut(resp: &mut UrpResponse) -> ItemVecGuard<'_> {
+    ItemVecGuard::new(&mut resp.output)
+}
+
+pub fn with_response_output_items_mut<R>(
+    resp: &mut UrpResponse,
+    f: impl FnOnce(&mut Vec<Item>) -> R,
+) -> R {
+    let mut items = nodes_to_items(&resp.output);
+    let result = f(&mut items);
+    resp.output = crate::urp::items_to_nodes_with_envelope_control(items);
+    result
 }
 
 pub fn set_extra_path(extra: &mut HashMap<String, Value>, path: &str, value: Value) {

@@ -66,15 +66,14 @@ impl Transform for RemoveFieldTransform {
             UrpData::Response(resp) => remove_extra_path(&mut resp.extra_body, &cfg.path),
             UrpData::Stream(event) => match event {
                 crate::urp::UrpStreamEvent::ResponseStart { extra_body, .. }
-                | crate::urp::UrpStreamEvent::ItemStart { extra_body, .. }
-                | crate::urp::UrpStreamEvent::PartStart { extra_body, .. }
-                | crate::urp::UrpStreamEvent::Delta { extra_body, .. }
-                | crate::urp::UrpStreamEvent::PartDone { extra_body, .. }
-                | crate::urp::UrpStreamEvent::ItemDone { extra_body, .. }
                 | crate::urp::UrpStreamEvent::ResponseDone { extra_body, .. }
+                | crate::urp::UrpStreamEvent::NodeStart { extra_body, .. }
+                | crate::urp::UrpStreamEvent::NodeDelta { extra_body, .. }
+                | crate::urp::UrpStreamEvent::NodeDone { extra_body, .. }
                 | crate::urp::UrpStreamEvent::Error { extra_body, .. } => {
                     remove_extra_path(extra_body, &cfg.path);
                 }
+                _ => {}
             },
         }
         Ok(())
