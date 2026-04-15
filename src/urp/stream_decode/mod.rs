@@ -9,11 +9,14 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest};
 use crate::urp::UrpStreamEvent;
 use axum::http::StatusCode;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
 pub(crate) async fn stream_upstream_to_urp_events(
     urp: &UrpRequest,
+    pending_request_envelope_extra: Option<HashMap<String, Value>>,
     provider_type: ProviderType,
     upstream_resp: reqwest::Response,
     tx: mpsc::Sender<UrpStreamEvent>,
@@ -24,6 +27,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
         ProviderType::Responses => {
             openai_responses::stream_responses_to_urp_events(
                 urp,
+                pending_request_envelope_extra,
                 upstream_resp,
                 tx,
                 started_at,
