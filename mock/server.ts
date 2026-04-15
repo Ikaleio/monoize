@@ -1,3 +1,11 @@
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
+declare const Bun: {
+  serve(options: { port: number; fetch: (req: Request) => Response | Promise<Response> }): void;
+};
+
 const port = Number(process.env.PORT ?? 4010);
 
 function jsonResponse(body: unknown, status = 200) {
@@ -54,6 +62,117 @@ function collectChatText(messages: any[]): string {
   return out;
 }
 
+function collectToolMessages(messages: any[]): Array<{ toolCallId: string; content: string }> {
+  const toolMessages: Array<{ toolCallId: string; content: string }> = [];
+  for (const msg of messages) {
+    if (msg?.role !== "tool") {
+      continue;
+    }
+    toolMessages.push({
+      toolCallId: typeof msg?.tool_call_id === "string" ? msg.tool_call_id : "",
+      content: typeof msg?.content === "string" ? msg.content : "",
+    });
+  }
+  return toolMessages;
+}
+
+function chatToolCall(id: string, name: string, args: Record<string, unknown>) {
+  return {
+    id,
+    type: "function",
+    function: {
+      name,
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
+function toolAwareChatResponse(model: string, messages: any[], body: any) {
+  const toolMessages = collectToolMessages(messages);
+  const toolNames = Array.isArray(body.tools)
+    ? body.tools
+        .map((tool: any) => tool?.function?.name)
+        .filter((name: unknown): name is string => typeof name === "string")
+    : [];
+
+  if (toolNames.includes("weather") && toolNames.includes("websearch")) {
+    if (toolMessages.length === 0) {
+      return {
+        id: `chatcmpl_mock_${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [chatToolCall("call_weather_1", "weather", { city: "Taipei" })],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      };
+    }
+
+    if (toolMessages.length === 1) {
+      return {
+        id: `chatcmpl_mock_${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [chatToolCall("call_websearch_1", "websearch", { query: "Monoize" })],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      };
+    }
+
+    const weatherResult = toolMessages.find((message) => message.toolCallId === "call_weather_1")?.content ?? "missing-weather";
+    const websearchResult = toolMessages.find((message) => message.toolCallId === "call_websearch_1")?.content ?? "missing-websearch";
+
+    return {
+      id: `chatcmpl_mock_${Date.now()}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: `PASS weather=${weatherResult}; websearch=${websearchResult}`,
+          },
+          finish_reason: "stop",
+        },
+      ],
+    };
+  }
+
+  const text = `${collectChatText(messages)}${echoSuffix(body)}`;
+  return {
+    id: `chatcmpl_mock_${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: text },
+        finish_reason: "stop",
+      },
+    ],
+  };
+}
+
 function collectAnthropicText(messages: any[]): string {
   let out = "";
   for (const msg of messages) {
@@ -95,7 +214,7 @@ function responsesObject(model: string, text: string) {
 
 Bun.serve({
   port,
-  fetch: async (req) => {
+  fetch: async (req: Request) => {
     const url = new URL(req.url);
 
     if (url.pathname === "/health") return jsonResponse({ ok: true });
@@ -121,9 +240,9 @@ Bun.serve({
       const body = await req.json();
       const model = String(body.model ?? "mock-chat-model");
       const messages = Array.isArray(body.messages) ? body.messages : [];
-      const text = `${collectChatText(messages)}${echoSuffix(body)}`;
 
       if (body.stream === true) {
+        const text = `${collectChatText(messages)}${echoSuffix(body)}`;
         const chunk = {
           id: `chatcmpl_mock_${Date.now()}`,
           object: "chat.completion.chunk",
@@ -135,19 +254,7 @@ Bun.serve({
         return sseResponse(chunks);
       }
 
-      return jsonResponse({
-        id: `chatcmpl_mock_${Date.now()}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [
-          {
-            index: 0,
-            message: { role: "assistant", content: text },
-            finish_reason: "stop",
-          },
-        ],
-      });
+      return jsonResponse(toolAwareChatResponse(model, messages, body));
     }
 
     if (req.method === "POST" && url.pathname === "/v1/messages") {
@@ -195,4 +302,3 @@ Bun.serve({
 });
 
 console.log(`mock upstream listening on ${port}`);
-

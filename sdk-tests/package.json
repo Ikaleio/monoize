@@ -3,6 +3,10 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "openai-smoke": "bun run openai-smoke.ts",
+    "openai-agent-tool-smoke": "bun run openai-agent-tool-smoke.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
@@ -10,6 +14,9 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "openai": "^6.15.0"
+    "@ai-sdk/openai-compatible": "^2.0.41",
+    "ai": "^6.0.161",
+    "openai": "^6.15.0",
+    "zod": "^4.3.6"
   }
 }

@@ -1,6 +1,8 @@
-import OpenAI from "openai";
+import { stepCountIs, generateText, tool } from "ai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { z } from "zod";
 
 const sdkDir = resolve(import.meta.dir);
 const rootDir = resolve(sdkDir, "..");
@@ -32,6 +34,14 @@ interface RegisterResponseBody {
 
 interface ApiKeyResponseBody {
   key?: string;
+}
+
+interface StepSummary {
+  index: number;
+  text: string;
+  toolCalls: number;
+  toolResults: number;
+  finishReason: string;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -159,7 +169,7 @@ async function bootstrapMonoizeRouting() {
     },
     body: JSON.stringify({
       name: "sdk-mock-provider",
-      provider_type: "responses",
+      provider_type: "chat_completion",
       models: {
         "gpt-4o-mini": { multiplier: 1.0 },
       },
@@ -196,26 +206,90 @@ async function bootstrapMonoizeRouting() {
   return forwardApiKey;
 }
 
+function summarizeSteps(steps: unknown[]): StepSummary[] {
+  return steps.map((step, index) => {
+    const record = asObject(step);
+    const toolCalls = Array.isArray(record?.toolCalls) ? record.toolCalls.length : 0;
+    const toolResults = Array.isArray(record?.toolResults) ? record.toolResults.length : 0;
+    const text = typeof record?.text === "string" ? record.text : "";
+    const finishReason = typeof record?.finishReason === "string" ? record.finishReason : "unknown";
+    return {
+      index,
+      text,
+      toolCalls,
+      toolResults,
+      finishReason,
+    };
+  });
+}
+
+function assertMultiStepToolLoop(steps: unknown[]) {
+  if (steps.length < 3) {
+    throw new Error(`Expected at least 3 steps, got ${steps.length}`);
+  }
+
+  const summaries = summarizeSteps(steps);
+  const toolCallSteps = summaries.filter((step) => step.toolCalls > 0);
+  const toolResultSteps = summaries.filter((step) => step.toolResults > 0);
+
+  if (toolCallSteps.length < 2) {
+    throw new Error(`Expected at least 2 tool-call steps, got ${toolCallSteps.length}: ${JSON.stringify(summaries)}`);
+  }
+  if (toolResultSteps.length < 2) {
+    throw new Error(`Expected at least 2 tool-result steps, got ${toolResultSteps.length}: ${JSON.stringify(summaries)}`);
+  }
+  if (toolCallSteps[0]?.toolCalls !== 1 || toolCallSteps[1]?.toolCalls !== 1) {
+    throw new Error(`Expected one tool call in each tool step: ${JSON.stringify(summaries)}`);
+  }
+}
+
 async function main() {
   const mockProcess = await ensureMockServer();
   let monoizeProcess: SpawnedProcess | null = null;
   try {
     monoizeProcess = await startMonoizeServer();
     const forwardApiKey = await bootstrapMonoizeRouting();
-    const client = new OpenAI({
+    const provider = createOpenAICompatible({
+      name: "monoize-local",
       apiKey: forwardApiKey,
       baseURL: `${monoizeBase}/v1`,
     });
 
-    const response = await client.responses.create({
-      model: "gpt-4o-mini",
-      input: "hello from sdk",
+    const result = await generateText({
+      model: provider.chatModel("gpt-4o-mini"),
+      prompt:
+        "Use the weather tool for Taipei, then use the websearch tool for Monoize, then answer with the tool results.",
+      tools: {
+        weather: tool({
+          description: "Get weather information for a city.",
+          inputSchema: z.object({
+            city: z.string().min(1),
+          }),
+          execute: async ({ city }) => `WEATHER_RESULT:${city}:sunny 25C`,
+        }),
+        websearch: tool({
+          description: "Search for public facts about a topic.",
+          inputSchema: z.object({
+            query: z.string().min(1),
+          }),
+          execute: async ({ query }) => `WEBSEARCH_RESULT:${query}:Monoize proxy`,
+        }),
+      },
+      stopWhen: stepCountIs(5),
     });
-    if (!Array.isArray(response.output) || response.output.length === 0) {
-      throw new Error("responses.create returned empty output");
+
+    const steps = Array.isArray(result.steps) ? result.steps : [];
+    assertMultiStepToolLoop(steps);
+
+    if (!result.text.includes("WEATHER_RESULT:Taipei:sunny 25C")) {
+      throw new Error(`Final text missing weather result: ${result.text}`);
+    }
+    if (!result.text.includes("WEBSEARCH_RESULT:Monoize:Monoize proxy")) {
+      throw new Error(`Final text missing websearch result: ${result.text}`);
     }
 
-    console.log("OpenAI SDK smoke test passed.");
+    console.log("PASS openai-agent-tool-smoke");
+    console.log(JSON.stringify(summarizeSteps(steps), null, 2));
   } finally {
     if (monoizeProcess) {
       monoizeProcess.kill();
@@ -234,6 +308,7 @@ async function main() {
 }
 
 main().catch((err) => {
+  console.error("FAIL openai-agent-tool-smoke");
   console.error(err);
   process.exitCode = 1;
 });
