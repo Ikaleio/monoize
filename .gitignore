@@ -8,3 +8,4 @@ frontend/test-results/
 deploy.sh
 .Sisyphus/
 .sisyphus/
+tests/e2e/.out/
