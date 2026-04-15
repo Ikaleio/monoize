@@ -72,7 +72,7 @@ pub(super) async fn forward_stream_typed(
             if attempt.strip_cross_protocol_nested_extra
                 && !downstream.is_same_family(attempt.provider_type)
             {
-                urp::strip_nested_extra_body(&mut req_attempt.inputs);
+                urp::strip_nested_extra_body(&mut req_attempt.input);
             }
             apply_transform_rules_request(
                 &state,
@@ -296,6 +296,17 @@ pub(super) async fn forward_stream_typed(
                     .await;
                     mark_channel_success(&state, &attempt).await;
                     let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
+                    let pending_request_envelope_extra = req.input
+                    .clone()
+                    .into_iter()
+                    .find_map(|node| match node {
+                        crate::urp::Node::NextDownstreamEnvelopeExtra { extra_body }
+                            if !extra_body.is_empty() =>
+                        {
+                            Some(extra_body)
+                        }
+                        _ => None,
+                    });
                     let provider_type = attempt.provider_type;
                     let (tx, rx) = mpsc::channel::<Event>(64);
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
@@ -338,6 +349,7 @@ pub(super) async fn forward_stream_typed(
                                 tokio::spawn(async move {
                                     stream_upstream_to_urp_events(
                                         &legacy,
+                                        pending_request_envelope_extra,
                                         provider_type,
                                         upstream_resp,
                                         decoded_tx,

@@ -52,14 +52,15 @@ pub async fn create_image_generation(
 
     let extra_body = build_extra_body(obj, &["prompt", "model", "n", "max_multiplier"]);
 
-    let inputs = vec![urp::Item::Message {
+    let inputs = urp::items_to_nodes(vec![urp::Item::Message {
+        id: None,
         role: urp::Role::User,
         parts: vec![urp::Part::Text {
             content: prompt,
             extra_body: HashMap::new(),
         }],
         extra_body: HashMap::new(),
-    }];
+    }]);
 
     tracing::info!(
         model = %model,
@@ -241,11 +242,12 @@ pub async fn create_image_edit(
         extra_body: HashMap::new(),
     });
 
-    let inputs = vec![urp::Item::Message {
+    let inputs = urp::items_to_nodes(vec![urp::Item::Message {
+        id: None,
         role: urp::Role::User,
         parts,
         extra_body: HashMap::new(),
-    }];
+    }]);
 
     tracing::info!(
         model = %model,
@@ -380,7 +382,7 @@ async fn fan_out_subrequests(
     state: &AppState,
     auth: &crate::auth::AuthResult,
     model: &str,
-    inputs: &[urp::Item],
+    input: &[urp::Node],
     extra_body: &HashMap<String, Value>,
     max_multiplier: Option<f64>,
     n: usize,
@@ -394,7 +396,7 @@ async fn fan_out_subrequests(
         let auth = auth.clone();
         let req = urp::UrpRequest {
             model: model.to_string(),
-            inputs: inputs.to_vec(),
+            input: input.to_vec(),
             stream: Some(false),
             temperature: None,
             top_p: None,
@@ -433,20 +435,14 @@ async fn fan_out_subrequests(
 /// Represents one extracted image from a URP response.
 fn collect_response_text(resp: &urp::UrpResponse) -> String {
     let mut parts = Vec::new();
-    for item in &resp.outputs {
-        let urp::Item::Message { parts: msg_parts, .. } = item else {
-            continue;
-        };
-        for part in msg_parts {
-            match part {
-                urp::Part::Text { content, .. } if !content.trim().is_empty() => {
-                    parts.push(content.as_str());
-                }
-                urp::Part::Refusal { content, .. } if !content.trim().is_empty() => {
-                    parts.push(content.as_str());
-                }
-                _ => {}
+    for item in &resp.output {
+        match item {
+            urp::Node::Text { content, .. } | urp::Node::Refusal { content, .. }
+                if !content.trim().is_empty() =>
+            {
+                parts.push(content.as_str());
             }
+            _ => {}
         }
     }
     parts.join("\n")
@@ -462,38 +458,32 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
     let mut images = Vec::new();
     let mut text_parts = Vec::new();
 
-    for item in &resp.outputs {
-        let urp::Item::Message { role, parts, .. } = item else {
-            continue;
-        };
-        if *role != urp::Role::Assistant {
-            continue;
-        }
-        for part in parts {
-            match part {
-                urp::Part::Image { source, .. } => match source {
-                    urp::ImageSource::Base64 { data, .. } => {
-                        images.push(ExtractedImage {
-                            b64_json: Some(data.clone()),
-                            url: None,
-                            revised_prompt: None,
-                        });
-                    }
-                    urp::ImageSource::Url { url, .. } => {
-                        images.push(ExtractedImage {
-                            b64_json: None,
-                            url: Some(url.clone()),
-                            revised_prompt: None,
-                        });
-                    }
-                },
-                urp::Part::Text { content, .. } => {
-                    if !content.trim().is_empty() {
-                        text_parts.push(content.clone());
-                    }
+    for item in &resp.output {
+        match item {
+            urp::Node::Image { source, .. } => match source {
+                urp::ImageSource::Base64 { data, .. } => {
+                    images.push(ExtractedImage {
+                        b64_json: Some(data.clone()),
+                        url: None,
+                        revised_prompt: None,
+                    });
                 }
-                _ => {}
+                urp::ImageSource::Url { url, .. } => {
+                    images.push(ExtractedImage {
+                        b64_json: None,
+                        url: Some(url.clone()),
+                        revised_prompt: None,
+                    });
+                }
+            },
+            urp::Node::Text {
+                role: urp::OrdinaryRole::Assistant,
+                content,
+                ..
+            } if !content.trim().is_empty() => {
+                text_parts.push(content.clone());
             }
+            _ => {}
         }
     }
 

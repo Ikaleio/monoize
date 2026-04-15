@@ -101,32 +101,27 @@ pub(super) fn summarize_user_image_request_metrics(
     req: &urp::UrpRequest,
 ) -> UserImageRequestMetrics {
     let mut metrics = UserImageRequestMetrics::default();
-    for item in &req.inputs {
-        let urp::Item::Message { role, parts, .. } = item else {
+    for node in &req.input {
+        let urp::Node::Image { role, source, .. } = node else {
             continue;
         };
-        if *role != urp::Role::User {
+        if *role != urp::OrdinaryRole::User {
             continue;
         }
-        for part in parts {
-            let urp::Part::Image { source, .. } = part else {
-                continue;
-            };
-            metrics.image_parts += 1;
-            match source {
-                urp::ImageSource::Base64 { data, .. } => {
+        metrics.image_parts += 1;
+        match source {
+            urp::ImageSource::Base64 { data, .. } => {
+                metrics.base64_parts += 1;
+                metrics.base64_chars += data.len();
+                metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
+            }
+            urp::ImageSource::Url { url, .. } => {
+                if let Some(data) = extract_base64_data_url_payload(url) {
                     metrics.base64_parts += 1;
                     metrics.base64_chars += data.len();
                     metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
-                }
-                urp::ImageSource::Url { url, .. } => {
-                    if let Some(data) = extract_base64_data_url_payload(url) {
-                        metrics.base64_parts += 1;
-                        metrics.base64_chars += data.len();
-                        metrics.estimated_decoded_bytes += estimate_base64_decoded_bytes(data);
-                    } else {
-                        metrics.url_parts += 1;
-                    }
+                } else {
+                    metrics.url_parts += 1;
                 }
             }
         }
@@ -505,11 +500,17 @@ pub(super) fn requires_buffered_response_stream(
 }
 
 pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) {
-    for item in &mut resp.outputs {
-        let Item::Message { role, parts, .. } = item else {
+    let response_items = urp::nodes_to_items(&resp.output);
+    let mut rewritten = Vec::with_capacity(response_items.len());
+
+    for item in response_items {
+        let mut item = item;
+        let Item::Message { role, parts, .. } = &mut item else {
+            rewritten.push(item);
             continue;
         };
         if *role != Role::Assistant {
+            rewritten.push(item);
             continue;
         }
         let appended: String = parts
@@ -525,6 +526,7 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
             })
             .collect();
         if appended.is_empty() {
+            rewritten.push(item);
             continue;
         }
         if let Some(Part::Text { content, .. }) = parts
@@ -540,7 +542,10 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
             });
         }
         parts.retain(|part| !matches!(part, Part::Image { .. }));
+        rewritten.push(item);
     }
+
+    resp.output = urp::items_to_nodes_with_envelope_control(rewritten);
 }
 
 pub(super) fn model_glob_match(pattern: &str, model: &str) -> bool {
@@ -741,7 +746,9 @@ mod tests {
         let mut resp = urp::UrpResponse {
             id: "resp_1".to_string(),
             model: "gpt-image-1".to_string(),
-            outputs: vec![urp::Item::Message {
+            created_at: None,
+            output: urp::items_to_nodes(vec![urp::Item::Message {
+                id: None,
                 role: urp::Role::Assistant,
                 parts: vec![
                     urp::Part::Text {
@@ -764,7 +771,7 @@ mod tests {
                     },
                 ],
                 extra_body: std::collections::HashMap::new(),
-            }],
+            }]),
             finish_reason: Some(urp::FinishReason::Stop),
             usage: None,
             extra_body: std::collections::HashMap::new(),
@@ -772,7 +779,8 @@ mod tests {
 
         convert_assistant_images_to_markdown(&mut resp);
 
-        let urp::Item::Message { parts, .. } = &resp.outputs[0] else {
+        let outputs = urp::nodes_to_items(&resp.output);
+        let urp::Item::Message { parts, .. } = &outputs[0] else {
             panic!("expected assistant message");
         };
         assert_eq!(parts.len(), 1);

@@ -35,14 +35,15 @@ fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {
 fn build_test_urp_request(model: &str) -> urp::UrpRequest {
     urp::UrpRequest {
         model: model.to_string(),
-        inputs: vec![urp::Item::Message {
+        input: urp::items_to_nodes(vec![urp::Item::Message {
+            id: None,
             role: urp::Role::User,
             parts: vec![urp::Part::Text {
                 content: "hello".to_string(),
                 extra_body: HashMap::new(),
             }],
             extra_body: HashMap::new(),
-        }],
+        }]),
         stream: Some(false),
         temperature: None,
         top_p: None,
