@@ -1,6 +1,6 @@
 use crate::urp::{
-    FinishReason, ImageSource, InputDetails, Item, ModalityBreakdown, OutputDetails, Part, Role,
-    UrpResponse, Usage,
+    items_to_nodes, FinishReason, ImageSource, InputDetails, Item, ModalityBreakdown,
+    OutputDetails, Part, Role, UrpResponse, Usage,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -63,11 +63,12 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
     }
     all_parts.extend(parts);
 
-    let outputs = vec![Item::Message {
+    let outputs = items_to_nodes(vec![Item::Message {
+        id: None,
         role: Role::Assistant,
         parts: all_parts,
         extra_body: HashMap::new(),
-    }];
+    }]);
 
     let usage = obj.get("usage").and_then(|u| {
         let usage_obj = u.as_object()?;
@@ -120,7 +121,8 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
     Ok(UrpResponse {
         id,
         model: model.to_string(),
-        outputs,
+        created_at: obj.get("created").and_then(|v| v.as_i64()),
+        output: outputs,
         finish_reason: Some(FinishReason::Stop),
         usage,
         extra_body: HashMap::new(),
@@ -181,7 +183,8 @@ mod tests {
         assert_eq!(resp.model, "gpt-image-1");
         assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
 
-        let Item::Message { role, parts, .. } = &resp.outputs[0] else {
+        let outputs = crate::urp::nodes_to_items(&resp.output);
+        let Item::Message { role, parts, .. } = &outputs[0] else {
             panic!("expected assistant message");
         };
         assert_eq!(*role, Role::Assistant);

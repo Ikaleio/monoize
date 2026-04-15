@@ -1,5 +1,7 @@
 use crate::urp::decode::split_extra;
-use crate::urp::{FinishReason, ImageSource, Item, Part, Role, UrpRequest, UrpResponse, Usage};
+use crate::urp::{
+    items_to_nodes, FinishReason, ImageSource, Item, Part, Role, UrpRequest, UrpResponse, Usage,
+};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -14,14 +16,14 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .unwrap_or_default()
         .to_string();
 
-    let mut inputs = Vec::new();
+    let mut input_items = Vec::new();
 
     let input = obj.get("input").and_then(|v| v.as_object());
 
     if let Some(input_obj) = input {
         if let Some(system_prompt) = input_obj.get("system_prompt").and_then(|v| v.as_str()) {
             if !system_prompt.is_empty() {
-                inputs.push(Item::text(Role::System, system_prompt));
+                input_items.push(Item::text(Role::System, system_prompt));
             }
         }
 
@@ -47,7 +49,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
 
         if !user_parts.is_empty() {
-            inputs.push(Item::Message {
+            input_items.push(Item::Message {
+                id: None,
                 role: Role::User,
                 parts: user_parts,
                 extra_body: HashMap::new(),
@@ -68,7 +71,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        inputs,
+        input: items_to_nodes(input_items),
         stream,
         temperature,
         top_p,
@@ -125,11 +128,12 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     let outputs = if output_parts.is_empty() {
         Vec::new()
     } else {
-        vec![Item::Message {
+        items_to_nodes(vec![Item::Message {
+            id: None,
             role: Role::Assistant,
             parts: output_parts,
             extra_body: HashMap::new(),
-        }]
+        }])
     };
 
     let usage = parse_replicate_usage(obj);
@@ -137,7 +141,8 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     Ok(UrpResponse {
         id,
         model,
-        outputs,
+        created_at: None,
+        output: outputs,
         finish_reason,
         usage,
         extra_body: split_extra(

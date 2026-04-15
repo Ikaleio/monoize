@@ -5,7 +5,9 @@ pub mod openai_image;
 pub mod openai_responses;
 pub mod replicate;
 
-use crate::urp::{FileSource, FunctionDefinition, ImageSource, Part, ToolDefinition};
+use crate::urp::{
+    FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole, Part, ToolDefinition,
+};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -177,6 +179,10 @@ pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     }
 
     Some(Part::ToolCall {
+        id: obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         call_id,
         name,
         arguments,
@@ -384,4 +390,16 @@ pub fn value_to_text(v: &Value) -> String {
         return out;
     }
     serde_json::to_string(v).unwrap_or_default()
+}
+
+pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
+    parse_tool_call_part_from_obj(obj).map(|p| p.into_node(OrdinaryRole::Assistant))
+}
+
+pub fn parse_image_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
+    parse_image_part_from_obj(obj).map(|p| p.into_node(role))
+}
+
+pub fn parse_file_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
+    parse_file_part_from_obj(obj).map(|p| p.into_node(role))
 }
