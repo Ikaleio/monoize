@@ -128,6 +128,8 @@ RL14. For failed requests (`status = "error"`):
 
 RL15. For successful requests where usage exists, `usage_breakdown_json` MUST persist a request-time snapshot of usage details. The snapshot MUST include `input.total_tokens` and `output.total_tokens`, and SHOULD include subtype token counts when present (for example: cached, cache creation/read, reasoning, audio, image, text).
 
+RL15a. `usage_breakdown_json.input.total_tokens` MUST be the aggregate/inclusive prompt token total as defined in `user-billing-and-model-metadata.spec.md` § 5 C3 — i.e. it MUST include cache-read tokens and cache-creation tokens. `usage_breakdown_json.input.uncached_tokens` MUST equal `input.total_tokens - cached_tokens - cache_creation_tokens` clamped at zero (the base-rate billable bucket). These fields MUST be computed uniformly across all upstream provider types, because upstream usage is normalized at decode time per C3-ii of the billing spec. Provider-type branching in usage-breakdown construction MUST NOT exist.
+
 RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the request-time pricing snapshot used for billing. The snapshot MUST include at least:
 
 - unit prices used for each billed token class,

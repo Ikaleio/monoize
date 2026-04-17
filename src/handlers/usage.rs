@@ -472,8 +472,13 @@ pub(crate) fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let extra_body = split_usage_extra(usage, &["input_tokens", "output_tokens"]);
+    // Normalize Anthropic's disjoint-bucket usage to internal aggregate/inclusive invariant.
+    // See user-billing-and-model-metadata.spec.md § 5 C3-ii; mirrors urp::decode::anthropic.
+    let normalized_input_tokens = input_tokens
+        .saturating_add(cache_read_tokens)
+        .saturating_add(cache_creation_tokens);
     Some(urp::Usage {
-        input_tokens,
+        input_tokens: normalized_input_tokens,
         output_tokens,
         input_details: make_input_details(
             0,
