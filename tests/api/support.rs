@@ -1022,7 +1022,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 ]
             };
             let mut output = vec![
-                json!({ "type": "reasoning", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
+                json!({ "type": "reasoning", "id": "rs_mock", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
             ];
             output.extend(calls);
             return Json(json!({
@@ -1056,7 +1056,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         let mut output = Vec::new();
         if reasoning_enabled {
             output.push(
-                json!({ "type": "reasoning", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
+                json!({ "type": "reasoning", "id": "rs_mock", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
             );
         }
         output.push(json!({

@@ -1202,3 +1202,66 @@ async fn messages_stream_message_start_envelope_fields() {
     );
     assert!(msg["usage"].is_object(), "must have usage at start");
 }
+
+#[tokio::test]
+async fn messages_stream_signature_delta_carries_sigil_from_responses_upstream() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "think and answer" }] }],
+            "stream": true,
+            "stream_mode": "reasoning_text_tool",
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }]
+        }),
+    )
+    .await;
+
+    let signature_payload: String = events
+        .iter()
+        .filter_map(|event| {
+            if event.get("type").and_then(|v| v.as_str())? != "content_block_delta" {
+                return None;
+            }
+            let delta = event.get("delta")?;
+            if delta.get("type").and_then(|v| v.as_str())? != "signature_delta" {
+                return None;
+            }
+            delta.get("signature").and_then(|v| v.as_str()).map(str::to_owned)
+        })
+        .collect();
+
+    let start_signature: Option<String> = events
+        .iter()
+        .find_map(|event| {
+            if event.get("type").and_then(|v| v.as_str())? != "content_block_start" {
+                return None;
+            }
+            let block = event.get("content_block")?;
+            if block.get("type").and_then(|v| v.as_str())? != "thinking" {
+                return None;
+            }
+            block.get("signature").and_then(|v| v.as_str()).map(str::to_owned)
+        });
+
+    let combined = match start_signature {
+        Some(prefix) if !prefix.is_empty() => prefix + &signature_payload,
+        _ => signature_payload,
+    };
+
+    assert!(
+        !combined.is_empty(),
+        "expected at least one signature_delta carrying the upstream encrypted reasoning payload"
+    );
+    assert!(
+        combined.starts_with("mz1.rs_mock."),
+        "signature emitted to downstream MUST carry the sigil `mz1.<item_id>.<original_signature>` so that history round-trip preserves the OpenAI Responses item id; got `{combined}`"
+    );
+    assert!(
+        combined.ends_with("mock_sig"),
+        "the original mock signature payload must be present after the sigil prefix; got `{combined}`"
+    );
+}
