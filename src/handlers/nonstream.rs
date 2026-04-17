@@ -29,6 +29,12 @@ pub(super) async fn execute_nonstream_typed(
     let requested_model = req.model.clone();
     let transform_match_model =
         normalized_logical_model_for_matching(state, &requested_model).await;
+    // Preserve the originally-decoded URP request so each per-attempt iteration
+    // can re-derive the transformed request from a pristine base. This matters
+    // because cross-family strip runs BEFORE all transforms per-attempt
+    // (auto_cache_* etc. must observe the stripped request so their cache
+    // breakpoints actually survive into the upstream encoding).
+    let original_req = req.clone();
     inject_monoize_context(auth, &mut req);
     apply_transform_rules_request(state, &mut req, &auth.transforms, &transform_match_model)
         .await?;
@@ -64,13 +70,29 @@ pub(super) async fn execute_nonstream_typed(
             }
 
             let attempt_number = execution_state.record_upstream_attempt();
-            let mut req_attempt = req.clone();
-            req_attempt.model = attempt.upstream_model.clone();
+            // Clone from the pristine original request (pre-transforms) so
+            // that the cross-family strip can run BEFORE both api-key and
+            // provider transforms. This guarantees that transforms which
+            // inject upstream-specific part-level metadata (e.g.
+            // `auto_cache_system`, `auto_cache_tool_use`) survive into the
+            // encoded upstream request even when the downstream and upstream
+            // protocol families differ.
+            let mut req_attempt = original_req.clone();
             if attempt.strip_cross_protocol_nested_extra
                 && !downstream.is_same_family(attempt.provider_type)
             {
                 urp::strip_nested_extra_body(&mut req_attempt.input);
             }
+            inject_monoize_context(auth, &mut req_attempt);
+            apply_transform_rules_request(
+                state,
+                &mut req_attempt,
+                &auth.transforms,
+                &transform_match_model,
+            )
+            .await?;
+            strip_monoize_context(&mut req_attempt);
+            req_attempt.model = attempt.upstream_model.clone();
             apply_transform_rules_request(
                 state,
                 &mut req_attempt,
