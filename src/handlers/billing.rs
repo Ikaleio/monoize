@@ -52,7 +52,6 @@ pub(super) fn calculate_charge_components(
     usage: &urp::Usage,
     pricing: &ModelPricing,
     provider_multiplier: f64,
-    provider_type: crate::config::ProviderType,
 ) -> Option<ChargeComponents> {
     let prompt_tokens = i128::from(usage.input_tokens);
     let completion_tokens = i128::from(usage.output_tokens);
@@ -66,10 +65,7 @@ pub(super) fn calculate_charge_components(
     );
     let reasoning_tokens = i128::from(usage.reasoning_tokens().unwrap_or(0));
 
-    let uncached_prompt_tokens = match provider_type {
-        ProviderType::Messages => prompt_tokens.max(0),
-        _ => (prompt_tokens - cached_tokens - cache_creation_tokens).max(0),
-    };
+    let uncached_prompt_tokens = (prompt_tokens - cached_tokens - cache_creation_tokens).max(0);
     let non_reasoning_completion_tokens = (completion_tokens - reasoning_tokens).max(0);
 
     let (
@@ -88,10 +84,12 @@ pub(super) fn calculate_charge_components(
             cached_charge,
         )
     } else {
+        // No cache-read pricing, but cache_creation tokens still MUST be excluded from
+        // the base input bucket to avoid double-billing (spec § 5 C3a).
         (
-            prompt_tokens.max(0),
+            uncached_prompt_tokens,
             0,
-            prompt_tokens.checked_mul(pricing.input_cost_per_token_nano)?,
+            uncached_prompt_tokens.checked_mul(pricing.input_cost_per_token_nano)?,
             0,
         )
     };
@@ -165,9 +163,8 @@ pub(super) fn calculate_charge_nano(
     usage: &urp::Usage,
     pricing: &ModelPricing,
     provider_multiplier: f64,
-    provider_type: crate::config::ProviderType,
 ) -> Option<i128> {
-    calculate_charge_components(usage, pricing, provider_multiplier, provider_type)
+    calculate_charge_components(usage, pricing, provider_multiplier)
         .map(|parts| parts.final_charge)
 }
 
@@ -365,7 +362,6 @@ pub(super) async fn maybe_charge_usage(
         usage,
         &pricing,
         attempt.model_multiplier,
-        attempt.provider_type,
     ) else {
         tracing::error!(
             "billing error: charge overflow for model={}",

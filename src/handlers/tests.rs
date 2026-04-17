@@ -1,7 +1,6 @@
 use super::*;
 use crate::app::{RuntimeConfig, load_state_with_runtime};
 use crate::auth::AuthResult;
-use crate::config::ProviderType;
 use crate::model_registry_store::ModelPricing;
 use crate::monoize_routing::{
     CreateMonoizeChannelInput, CreateMonoizeProviderInput, MonoizeModelEntry, MonoizeProviderType,
@@ -152,7 +151,7 @@ fn calculate_charge_nano_uses_model_price_and_multiplier() {
         output_cost_per_reasoning_token_nano: None,
     };
 
-    let charged = calculate_charge_nano(&usage, &pricing, 1.234_567_891, ProviderType::Responses);
+    let charged = calculate_charge_nano(&usage, &pricing, 1.234_567_891);
 
     assert_eq!(charged, Some(108_024));
 }
@@ -186,15 +185,18 @@ fn calculate_charge_nano_handles_cached_and_reasoning_tokens() {
         output_cost_per_reasoning_token_nano: Some(3000),
     };
 
-    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Responses);
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0);
 
     assert_eq!(charged, Some(236_000));
 }
 
 #[test]
 fn calculate_charge_nano_messages_treats_cache_creation_as_disjoint_bucket() {
+    // Post-decode normalization: Anthropic wire input_tokens=100 + cache_creation=40
+    // becomes internal input_tokens=140. Billing uniformly subtracts cache buckets.
+    // See user-billing-and-model-metadata.spec.md § 5 C3-ii, C3a.
     let usage = urp::Usage {
-        input_tokens: 100,
+        input_tokens: 140,
         output_tokens: 20,
         input_details: Some(urp::InputDetails {
             standard_tokens: 0,
@@ -214,7 +216,7 @@ fn calculate_charge_nano_messages_treats_cache_creation_as_disjoint_bucket() {
         output_cost_per_reasoning_token_nano: None,
     };
 
-    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Messages);
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0);
 
     assert_eq!(charged, Some(150_000));
 }
@@ -242,7 +244,7 @@ fn calculate_charge_nano_responses_excludes_cache_creation_from_inclusive_input_
         output_cost_per_reasoning_token_nano: None,
     };
 
-    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Responses);
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0);
 
     assert_eq!(charged, Some(110_000));
 }
@@ -271,7 +273,7 @@ fn calculate_charge_nano_responses_avoids_double_count_when_cache_read_and_creat
         output_cost_per_reasoning_token_nano: None,
     };
 
-    let charged = calculate_charge_nano(&usage, &pricing, 1.0, ProviderType::Responses);
+    let charged = calculate_charge_nano(&usage, &pricing, 1.0);
 
     assert_eq!(charged, Some(78_000));
 }
