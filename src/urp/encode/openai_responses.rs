@@ -214,6 +214,21 @@ fn encode_reasoning_item(part: &Part) -> Option<Value> {
                         .map(|s| s.to_string())
                 })
                 .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4().simple()));
+            let encrypted_len = encrypted
+                .as_ref()
+                .map(|value| match value {
+                    Value::String(s) => s.len(),
+                    other => other.to_string().len(),
+                })
+                .unwrap_or(0);
+            tracing::info!(
+                target: "monoize::urp::reasoning_trace",
+                item_id = %id,
+                encrypted_len,
+                has_content = content.as_ref().is_some_and(|v| !v.is_empty()),
+                has_summary = summary.as_ref().is_some_and(|v| !v.is_empty()),
+                "encoding responses reasoning request item"
+            );
             obj.insert("id".to_string(), Value::String(id));
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
             obj.insert(

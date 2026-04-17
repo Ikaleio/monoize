@@ -21,6 +21,63 @@ pub fn synthetic_tool_call_id() -> String {
     format!("fc_urp_{}", uuid::Uuid::new_v4().simple())
 }
 
+/// Prefix for the signature sigil used to smuggle a reasoning item id through an
+/// Anthropic `thinking` / `redacted_thinking` block when the downstream client (Claude Code, etc.)
+/// is known to strip unknown content-block fields. Format:
+///   `mz1.<item_id>.<original_signature>`
+/// The sigil is only attached when encoding reasoning toward the **downstream** (response encode).
+/// When encoding toward an **upstream** request, a sigil-encoded signature is unwrapped so that the
+/// upstream receives only the original opaque payload. See
+/// `spec/unified_responses_proxy.spec.md` DM5.2 / PM5b.
+pub const REASONING_SIGNATURE_SIGIL_PREFIX: &str = "mz1.";
+
+/// Marker stored in `Node::Reasoning.extra_body` to record that the node originated from an
+/// Anthropic `redacted_thinking` block, so that the Anthropic encoder can reconstruct the
+/// original block type. See `spec/unified_responses_proxy.spec.md` PM5 / DM5.1.
+pub const REASONING_KIND_EXTRA_KEY: &str = "_monoize_reasoning_kind";
+pub const REASONING_KIND_REDACTED_THINKING: &str = "redacted_thinking";
+
+/// Wrap `(item_id, signature)` into a sigil string suitable for smuggling through a downstream
+/// Anthropic `thinking.signature` or `redacted_thinking.data` field. Returns `None` when either
+/// input is empty.
+pub fn wrap_reasoning_signature_with_item_id(item_id: &str, signature: &str) -> Option<String> {
+    if item_id.is_empty() || signature.is_empty() {
+        return None;
+    }
+    if is_reasoning_signature_sigil(signature) {
+        return Some(signature.to_string());
+    }
+    Some(format!(
+        "{REASONING_SIGNATURE_SIGIL_PREFIX}{item_id}.{signature}"
+    ))
+}
+
+pub fn is_reasoning_signature_sigil(signature: &str) -> bool {
+    signature.starts_with(REASONING_SIGNATURE_SIGIL_PREFIX)
+}
+
+/// Parse a sigil-encoded signature string into `(item_id, original_signature)`. Returns `None`
+/// when the input is not sigil-encoded or is malformed. The item id segment is the substring
+/// between the prefix and the first `.`; everything after that `.` is the original signature
+/// returned verbatim.
+pub fn unwrap_reasoning_signature_sigil(signature: &str) -> Option<(String, String)> {
+    let rest = signature.strip_prefix(REASONING_SIGNATURE_SIGIL_PREFIX)?;
+    let dot = rest.find('.')?;
+    let id = &rest[..dot];
+    let original = &rest[dot + 1..];
+    if id.is_empty() || original.is_empty() {
+        return None;
+    }
+    Some((id.to_string(), original.to_string()))
+}
+
+/// If `signature` is sigil-encoded, return the original signature. Otherwise return it unchanged.
+pub fn strip_reasoning_signature_sigil(signature: &str) -> String {
+    unwrap_reasoning_signature_sigil(signature)
+        .map(|(_, original)| original)
+        .unwrap_or_else(|| signature.to_string())
+}
+
 pub fn synthetic_tool_result_id() -> String {
     format!("fco_urp_{}", uuid::Uuid::new_v4().simple())
 }
@@ -714,6 +771,95 @@ mod tests {
     }
 
     #[test]
+    fn items_to_nodes_preserves_reasoning_part_id_when_first_in_message() {
+        let items = vec![Item::Message {
+            id: None,
+            role: Role::Assistant,
+            parts: vec![
+                Part::Reasoning {
+                    id: Some("rs_authoritative".into()),
+                    content: Some("thinking".into()),
+                    encrypted: Some(serde_json::json!("ciphertext")),
+                    summary: None,
+                    source: None,
+                    extra_body: HashMap::new(),
+                },
+                Part::Text {
+                    content: "done".into(),
+                    extra_body: HashMap::new(),
+                },
+            ],
+            extra_body: HashMap::new(),
+        }];
+
+        let nodes = items_to_nodes(items);
+        assert!(matches!(
+            &nodes[0],
+            Node::Reasoning { id: Some(id), .. } if id == "rs_authoritative"
+        ));
+    }
+
+    #[test]
+    fn items_to_nodes_with_envelope_control_preserves_reasoning_part_id_when_first_in_message() {
+        let items = vec![Item::Message {
+            id: None,
+            role: Role::Assistant,
+            parts: vec![
+                Part::Reasoning {
+                    id: Some("rs_authoritative".into()),
+                    content: Some("thinking".into()),
+                    encrypted: Some(serde_json::json!("ciphertext")),
+                    summary: None,
+                    source: None,
+                    extra_body: HashMap::new(),
+                },
+                Part::Text {
+                    content: "done".into(),
+                    extra_body: HashMap::new(),
+                },
+            ],
+            extra_body: [("message_meta".into(), serde_json::json!(true))]
+                .into_iter()
+                .collect(),
+        }];
+
+        let nodes = items_to_nodes_with_envelope_control(items);
+        assert!(matches!(
+            &nodes[1],
+            Node::Reasoning { id: Some(id), .. } if id == "rs_authoritative"
+        ));
+    }
+
+    #[test]
+    fn nodes_to_items_then_back_preserves_reasoning_id_for_replayable_messages() {
+        let original_nodes = vec![
+            Node::Reasoning {
+                id: Some("rs_authoritative".into()),
+                content: Some("thinking".into()),
+                encrypted: Some(serde_json::json!("ciphertext")),
+                summary: None,
+                source: None,
+                extra_body: HashMap::new(),
+            },
+            Node::Text {
+                id: None,
+                role: OrdinaryRole::Assistant,
+                content: "answer".into(),
+                phase: None,
+                extra_body: HashMap::new(),
+            },
+        ];
+
+        let items = nodes_to_items(&original_nodes);
+        let round_tripped = items_to_nodes(items);
+
+        assert!(matches!(
+            &round_tripped[0],
+            Node::Reasoning { id: Some(id), .. } if id == "rs_authoritative"
+        ));
+    }
+
+    #[test]
     fn nodes_to_items_groups_by_role() {
         let nodes = vec![
             Node::text(OrdinaryRole::User, "a"),
@@ -1207,7 +1353,7 @@ impl Item {
                         if idx == 0 && !extra_body.is_empty() {
                             node.extra_body_mut().extend(extra_body.clone());
                         }
-                        if idx == 0 {
+                        if idx == 0 && node.id().is_none() {
                             node.set_id(id.clone());
                         }
                         node
@@ -1238,7 +1384,7 @@ impl Item {
                 }
                 for (idx, part) in parts.into_iter().enumerate() {
                     let mut node = part.into_node(ordinary_role);
-                    if idx == 0 {
+                    if idx == 0 && node.id().is_none() {
                         node.set_id(id.clone());
                     }
                     nodes.push(node);

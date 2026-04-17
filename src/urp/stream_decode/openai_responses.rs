@@ -34,6 +34,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut message_phases_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut message_item_extra_by_output_index: HashMap<u64, HashMap<String, Value>> =
         HashMap::new();
+    let mut item_ids_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut reasoning_text = String::new();
     let mut reasoning_summary_text = String::new();
     let mut reasoning_sig = String::new();
@@ -114,6 +115,14 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if ev.event == "response.reasoning.delta" {
+            tracing::info!(
+                target: "monoize::urp::reasoning_trace",
+                event = %ev.event,
+                output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
+                item_id = data_val.get("item_id").and_then(|v| v.as_str()).unwrap_or(""),
+                has_text = data_val.get("delta").and_then(|v| v.as_str()).is_some_and(|v| !v.is_empty()),
+                "responses reasoning delta observed"
+            );
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -134,6 +143,14 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if ev.event == "response.reasoning_summary_text.delta" {
+            tracing::info!(
+                target: "monoize::urp::reasoning_trace",
+                event = %ev.event,
+                output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
+                item_id = data_val.get("item_id").and_then(|v| v.as_str()).unwrap_or(""),
+                has_text = data_val.get("delta").and_then(|v| v.as_str()).is_some_and(|v| !v.is_empty()),
+                "responses reasoning summary delta observed"
+            );
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -141,9 +158,41 @@ pub(crate) async fn stream_responses_to_urp_events(
             {
                 reasoning_summary_text.push_str(delta);
             }
+            if let (Some(idx), Some(id)) = (
+                data_val.get("output_index").and_then(|v| v.as_u64()),
+                data_val.get("item_id").and_then(|v| v.as_str()),
+            ) {
+                if !id.is_empty() {
+                    item_ids_by_output_index.insert(idx, id.to_string());
+                }
+            }
         }
         if ev.event == "response.output_item.added" {
             let item = data_val.get("item").unwrap_or(&data_val);
+            if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
+                tracing::info!(
+                    target: "monoize::urp::reasoning_trace",
+                    event = %ev.event,
+                    output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
+                    item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                    encrypted_len = item
+                        .get("encrypted_content")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.len())
+                        .unwrap_or(0),
+                    "responses reasoning output item added"
+                );
+            }
+            if let (Some(idx), Some(id)) = (
+                data_val.get("output_index").and_then(|v| v.as_u64()),
+                item.get("id").and_then(|v| v.as_str()),
+            ) {
+                if !id.is_empty() {
+                    item_ids_by_output_index
+                        .entry(idx)
+                        .or_insert_with(|| id.to_string());
+                }
+            }
             if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
                 if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
                     if !calls.contains_key(call_id) {
@@ -250,6 +299,31 @@ pub(crate) async fn stream_responses_to_urp_events(
         }
         if ev.event == "response.output_item.done" {
             let item = data_val.get("item").unwrap_or(&data_val);
+            if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
+                tracing::info!(
+                    target: "monoize::urp::reasoning_trace",
+                    event = %ev.event,
+                    output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
+                    item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                    encrypted_len = item
+                        .get("encrypted_content")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.len())
+                        .unwrap_or(0),
+                    text_len = item.get("text").and_then(|v| v.as_str()).map(|v| v.len()).unwrap_or(0),
+                    "responses reasoning output item done"
+                );
+            }
+            if let (Some(idx), Some(id)) = (
+                data_val.get("output_index").and_then(|v| v.as_u64()),
+                item.get("id").and_then(|v| v.as_str()),
+            ) {
+                if !id.is_empty() {
+                    item_ids_by_output_index
+                        .entry(idx)
+                        .or_insert_with(|| id.to_string());
+                }
+            }
             if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
                 if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
                     let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -275,13 +349,13 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
                 merge_reasoning_source(&mut reasoning_source, reasoning_source_from_value(item));
                 let (text, summary, sig) = extract_reasoning_parts(item);
-                if reasoning_text.is_empty() && !text.is_empty() {
+                if !text.is_empty() {
                     reasoning_text = text;
                 }
-                if reasoning_summary_text.is_empty() && !summary.is_empty() {
+                if !summary.is_empty() {
                     reasoning_summary_text = summary;
                 }
-                if reasoning_sig.is_empty() && !sig.is_empty() {
+                if !sig.is_empty() {
                     reasoning_sig = sig;
                 }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("message")
@@ -326,6 +400,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 &output_texts_by_output_index,
                 &message_phases_by_output_index,
                 &message_item_extra_by_output_index,
+                &item_ids_by_output_index,
                 &call_order,
                 &calls,
                 &call_ids_by_output_index,
@@ -359,6 +434,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             &output_texts_by_output_index,
             &message_phases_by_output_index,
             &message_item_extra_by_output_index,
+            &item_ids_by_output_index,
             &call_order,
             &calls,
             &call_ids_by_output_index,
@@ -658,6 +734,11 @@ fn map_responses_event_to_urp_events_with_state(
                         .output_state_by_index
                         .entry(output_index)
                         .or_default();
+                    if let Some(item_id) = data_val.get("item_id").and_then(|v| v.as_str())
+                        && !item_id.is_empty()
+                    {
+                        output_state.item_id = Some(item_id.to_string());
+                    }
                     merge_reasoning_source(
                         &mut output_state.reasoning_source,
                         reasoning_source_from_value(&data_val),
@@ -2168,6 +2249,7 @@ fn build_accumulated_output_nodes(
     output_texts_by_output_index: &HashMap<u64, String>,
     message_phases_by_output_index: &HashMap<u64, String>,
     message_item_extra_by_output_index: &HashMap<u64, HashMap<String, Value>>,
+    item_ids_by_output_index: &HashMap<u64, String>,
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
     call_ids_by_output_index: &HashMap<u64, String>,
@@ -2223,11 +2305,16 @@ fn build_accumulated_output_nodes(
             FallbackOutputKind::Reasoning(_) => {
                 nodes.push(Node::Reasoning {
                     id: reasoning_output_index.and_then(|idx| {
-                        message_item_extra_by_output_index
+                        item_ids_by_output_index
                             .get(&idx)
-                            .and_then(|extra| extra.get("id"))
-                            .and_then(Value::as_str)
-                            .map(|s| s.to_string())
+                            .cloned()
+                            .or_else(|| {
+                                message_item_extra_by_output_index
+                                    .get(&idx)
+                                    .and_then(|extra| extra.get("id"))
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.to_string())
+                            })
                     }),
                     content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
                     summary: (!reasoning_summary_text.is_empty())
@@ -2363,18 +2450,19 @@ mod tests {
         )]);
 
         let outputs = build_accumulated_output_nodes(
-            "think",
-            "summary",
-            "sig_1",
-            Some("anthropic"),
-            Some(0),
-            &HashMap::from([(0, "answer".to_string())]),
-            &HashMap::from([(0, "analysis".to_string())]),
-            &HashMap::new(),
-            &["call_1".to_string()],
-            &calls,
-            &HashMap::from([(1, "call_1".to_string())]),
-        );
+                    "think",
+                    "summary",
+                    "sig_1",
+                    Some("anthropic"),
+                    Some(0),
+                    &HashMap::from([(0, "answer".to_string())]),
+                    &HashMap::from([(0, "analysis".to_string())]),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &["call_1".to_string()],
+                    &calls,
+                    &HashMap::from([(1, "call_1".to_string())]),
+                );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 2);
@@ -2422,18 +2510,19 @@ mod tests {
     #[test]
     fn build_accumulated_output_nodes_omit_empty_text_message() {
         let outputs = build_accumulated_output_nodes(
-            "",
-            "",
-            "sig_only",
-            None,
-            Some(0),
-            &HashMap::new(),
-            &HashMap::from([(0, "analysis".to_string())]),
-            &HashMap::new(),
-            &[],
-            &HashMap::new(),
-            &HashMap::new(),
-        );
+                    "",
+                    "",
+                    "sig_only",
+                    None,
+                    Some(0),
+                    &HashMap::new(),
+                    &HashMap::from([(0, "analysis".to_string())]),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &[],
+                    &HashMap::new(),
+                    &HashMap::new(),
+                );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 1);
@@ -2458,21 +2547,22 @@ mod tests {
     #[test]
     fn build_accumulated_output_nodes_preserve_multiple_output_text_phases() {
         let outputs = build_accumulated_output_nodes(
-            "",
-            "",
-            "",
-            None,
-            None,
-            &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
-            &HashMap::from([
-                (0, "commentary".to_string()),
-                (2, "final_answer".to_string()),
-            ]),
-            &HashMap::new(),
-            &[],
-            &HashMap::new(),
-            &HashMap::new(),
-        );
+                    "",
+                    "",
+                    "",
+                    None,
+                    None,
+                    &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
+                    &HashMap::from([
+                        (0, "commentary".to_string()),
+                        (2, "final_answer".to_string()),
+                    ]),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &[],
+                    &HashMap::new(),
+                    &HashMap::new(),
+                );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 2);
@@ -2506,18 +2596,19 @@ mod tests {
         )]);
 
         let outputs = build_accumulated_output_nodes(
-            "think",
-            "summary",
-            "",
-            Some("upstream-reasoner"),
-            Some(2),
-            &HashMap::from([(5, "answer".to_string())]),
-            &HashMap::new(),
-            &HashMap::new(),
-            &["call_1".to_string()],
-            &calls,
-            &HashMap::from([(9, "call_1".to_string())]),
-        );
+                    "think",
+                    "summary",
+                    "",
+                    Some("upstream-reasoner"),
+                    Some(2),
+                    &HashMap::from([(5, "answer".to_string())]),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &["call_1".to_string()],
+                    &calls,
+                    &HashMap::from([(9, "call_1".to_string())]),
+                );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 2);
@@ -2819,23 +2910,118 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_text_fallback_preserves_multiple_phases_and_allocates_distinct_part_indices() {
-        let output_items = nodes_to_items(&build_accumulated_output_nodes(
-            "",
-            "",
-            "",
-            None,
-            None,
-            &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
-            &HashMap::from([
-                (0, "commentary".to_string()),
-                (2, "final_answer".to_string()),
-            ]),
+    fn reasoning_delta_item_id_overrides_added_item_id() {
+        let mut state = ResponsesStreamIndexState::default();
+
+        let added = map_responses_event_to_urp_events_with_state(
+            "response.output_item.added",
+            json!({
+                "output_index": 0,
+                "item": {
+                    "type": "reasoning",
+                    "id": "rs_added",
+                    "summary": [{ "type": "summary_text", "text": "" }],
+                    "text": ""
+                }
+            }),
             &HashMap::new(),
+            &mut state,
+        );
+        assert!(added.iter().any(|event| matches!(
+            event,
+            UrpStreamEvent::NodeStart {
+                header: NodeHeader::Reasoning { id },
+                ..
+            } if id.as_deref() == Some("rs_added")
+        )));
+
+        let delta = map_responses_event_to_urp_events_with_state(
+            "response.reasoning_summary_text.delta",
+            json!({
+                "output_index": 0,
+                "item_id": "rs_authoritative",
+                "summary_index": 0,
+                "delta": "summary"
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(matches!(
+            &delta[0],
+            UrpStreamEvent::NodeDelta {
+                delta: NodeDelta::Reasoning { summary: Some(summary), .. },
+                extra_body,
+                ..
+            } if summary == "summary" && extra_body.get("reasoning_item_id") == Some(&json!("rs_authoritative"))
+        ));
+        assert_eq!(
+            state
+                .output_state_by_index
+                .get(&0)
+                .and_then(|output| output.item_id.as_deref()),
+            Some("rs_authoritative")
+        );
+
+        let _done = map_responses_event_to_urp_events_with_state(
+            "response.output_item.done",
+            json!({
+                "output_index": 0,
+                "item": {
+                    "type": "reasoning",
+                    "id": "rs_authoritative",
+                    "summary": [{ "type": "summary_text", "text": "summary" }],
+                    "text": "",
+                    "encrypted_content": "sig_1"
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+
+        let accumulated = build_accumulated_output_nodes(
+            "",
+            "summary",
+            "sig_1",
+            None,
+            Some(0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::from([(0, "rs_authoritative".to_string())]),
             &[],
             &HashMap::new(),
             &HashMap::new(),
+        );
+        assert!(matches!(
+            accumulated.first(),
+            Some(Node::Reasoning {
+                id,
+                encrypted: Some(Value::String(sig)),
+                summary: Some(summary),
+                ..
+            }) if id.as_deref() == Some("rs_authoritative") && sig == "sig_1" && summary == "summary"
         ));
+    }
+
+    #[test]
+    fn synthetic_text_fallback_preserves_multiple_phases_and_allocates_distinct_part_indices() {
+        let output_items = nodes_to_items(&build_accumulated_output_nodes(
+                    "",
+                    "",
+                    "",
+                    None,
+                    None,
+                    &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
+                    &HashMap::from([
+                        (0, "commentary".to_string()),
+                        (2, "final_answer".to_string()),
+                    ]),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &[],
+                    &HashMap::new(),
+                    &HashMap::new(),
+                ));
         let mut state = ResponsesStreamIndexState::default();
         assert_eq!(state.allocate_fresh_item_index(), 0);
         assert_eq!(state.node_index_for_content(11, 4), 0);
@@ -2905,18 +3091,19 @@ mod tests {
     #[test]
     fn build_accumulated_output_nodes_omit_reasoning_source_when_missing() {
         let outputs = build_accumulated_output_nodes(
-            "think",
-            "",
-            "",
-            None,
-            Some(0),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &[],
-            &HashMap::new(),
-            &HashMap::new(),
-        );
+                    "think",
+                    "",
+                    "",
+                    None,
+                    Some(0),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &[],
+                    &HashMap::new(),
+                    &HashMap::new(),
+                );
 
         let outputs = nodes_to_items(&outputs);
         let Item::Message { parts, .. } = &outputs[0] else {
@@ -3059,21 +3246,22 @@ mod tests {
     #[test]
     fn accumulated_output_nodes_drive_response_done_before_grouped_projection() {
         let output_nodes = build_accumulated_output_nodes(
-            "think",
-            "summary",
-            "sig_1",
-            Some("anthropic"),
-            Some(0),
-            &HashMap::from([(0, "answer".to_string())]),
-            &HashMap::from([(0, "analysis".to_string())]),
-            &HashMap::new(),
-            &["call_1".to_string()],
-            &HashMap::from([(
-                "call_1".to_string(),
-                ("lookup".to_string(), "{}".to_string()),
-            )]),
-            &HashMap::from([(1, "call_1".to_string())]),
-        );
+                    "think",
+                    "summary",
+                    "sig_1",
+                    Some("anthropic"),
+                    Some(0),
+                    &HashMap::from([(0, "answer".to_string())]),
+                    &HashMap::from([(0, "analysis".to_string())]),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &["call_1".to_string()],
+                    &HashMap::from([(
+                        "call_1".to_string(),
+                        ("lookup".to_string(), "{}".to_string()),
+                    )]),
+                    &HashMap::from([(1, "call_1".to_string())]),
+                );
 
         assert_eq!(output_nodes.len(), 4);
         assert!(matches!(
