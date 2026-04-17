@@ -3,12 +3,71 @@ use crate::urp::decode::{
     parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, Part, ReasoningConfig,
-    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    unwrap_reasoning_signature_sigil, FinishReason, InputDetails, Node, OrdinaryRole,
+    OutputDetails, Part, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse,
+    Usage, REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
+
+fn decode_anthropic_thinking_block(bobj: &Map<String, Value>) -> Option<Node> {
+    let thinking = bobj
+        .get("thinking")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+    let raw_signature = bobj
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if thinking.is_none() && raw_signature.is_none() {
+        return None;
+    }
+    let (id, encrypted) = match raw_signature {
+        Some(sig) => match unwrap_reasoning_signature_sigil(sig) {
+            Some((id, original)) => (Some(id), Some(Value::String(original))),
+            None => (None, Some(Value::String(sig.to_string()))),
+        },
+        None => (None, None),
+    };
+    Some(Node::Reasoning {
+        id,
+        content: thinking,
+        encrypted,
+        summary: None,
+        source: None,
+        extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
+    })
+}
+
+fn decode_anthropic_redacted_thinking_block(bobj: &Map<String, Value>) -> Option<Node> {
+    let raw_data = bobj.get("data").cloned().filter(|v| match v {
+        Value::String(s) => !s.is_empty(),
+        Value::Null => false,
+        _ => true,
+    })?;
+    let (id, encrypted) = match raw_data.as_str() {
+        Some(sig) => match unwrap_reasoning_signature_sigil(sig) {
+            Some((id, original)) => (Some(id), Value::String(original)),
+            None => (None, raw_data.clone()),
+        },
+        None => (None, raw_data.clone()),
+    };
+    let mut extra_body = split_extra(bobj, &["type", "data"]);
+    extra_body.insert(
+        REASONING_KIND_EXTRA_KEY.to_string(),
+        Value::String(REASONING_KIND_REDACTED_THINKING.to_string()),
+    );
+    Some(Node::Reasoning {
+        id,
+        content: None,
+        encrypted: Some(encrypted),
+        summary: None,
+        source: None,
+        extra_body,
+    })
+}
 
 #[derive(Debug, Deserialize)]
 struct AnthropicUsage {
@@ -98,8 +157,17 @@ impl From<AnthropicUsage> for Usage {
             None
         };
 
+        // Normalize Anthropic's disjoint-bucket usage semantics to the internal
+        // aggregate/inclusive invariant (spec: user-billing-and-model-metadata.spec.md § 5 C3-ii):
+        // wire `input_tokens` excludes cache buckets; internal `input_tokens` MUST include them.
+        // The stream/non-stream Anthropic encoders invert this by subtracting cache buckets back out.
+        let normalized_input_tokens = value
+            .input_tokens
+            .saturating_add(value.cache_read_input_tokens)
+            .saturating_add(value.cache_creation_input_tokens);
+
         Usage {
-            input_tokens: value.input_tokens,
+            input_tokens: normalized_input_tokens,
             output_tokens: value.output_tokens,
             input_details,
             output_details,
@@ -242,25 +310,13 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                         }
                     }
                     "thinking" => {
-                        let thinking = bobj
-                            .get("thinking")
-                            .and_then(|v| v.as_str())
-                            .filter(|thinking| !thinking.is_empty())
-                            .map(str::to_string);
-                        let encrypted = bobj
-                            .get("signature")
-                            .and_then(|v| v.as_str())
-                            .filter(|signature| !signature.is_empty())
-                            .map(|signature| Value::String(signature.to_string()));
-                        if thinking.is_some() || encrypted.is_some() {
-                            message_nodes.push(Node::Reasoning {
-                                id: None,
-                                content: thinking,
-                                encrypted,
-                                summary: None,
-                                source: None,
-                                extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
-                            });
+                        if let Some(node) = decode_anthropic_thinking_block(bobj) {
+                            message_nodes.push(node);
+                        }
+                    }
+                    "redacted_thinking" => {
+                        if let Some(node) = decode_anthropic_redacted_thinking_block(bobj) {
+                            message_nodes.push(node);
                         }
                     }
                     "tool_use" => {
@@ -385,39 +441,43 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
     };
 
-    Ok(UrpRequest { model, input: input_nodes, stream: obj.get("stream").and_then(|v| v.as_bool()),
-    temperature: obj.get("temperature").and_then(|v| v.as_f64()),
-    top_p: obj.get("top_p").and_then(|v| v.as_f64()),
-    max_output_tokens: obj.get("max_tokens").and_then(|v| v.as_u64()),
-    reasoning,
-    tools,
-    tool_choice: obj
-        .get("tool_choice")
-        .cloned()
-        .map(tool_choice_from_messages_value),
-    response_format: None,
-    user: obj
-        .get("metadata")
-        .and_then(|v| v.get("user_id"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string()),
-    extra_body: split_extra(
-        obj,
-        &[
-            "model",
-            "messages",
-            "system",
-            "stream",
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "thinking",
-            "output_config",
-            "tools",
-            "tool_choice",
-            "metadata",
-        ],
-    ), })
+    Ok(UrpRequest {
+        model,
+        input: input_nodes,
+        stream: obj.get("stream").and_then(|v| v.as_bool()),
+        temperature: obj.get("temperature").and_then(|v| v.as_f64()),
+        top_p: obj.get("top_p").and_then(|v| v.as_f64()),
+        max_output_tokens: obj.get("max_tokens").and_then(|v| v.as_u64()),
+        reasoning,
+        tools,
+        tool_choice: obj
+            .get("tool_choice")
+            .cloned()
+            .map(tool_choice_from_messages_value),
+        response_format: None,
+        user: obj
+            .get("metadata")
+            .and_then(|v| v.get("user_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        extra_body: split_extra(
+            obj,
+            &[
+                "model",
+                "messages",
+                "system",
+                "stream",
+                "temperature",
+                "top_p",
+                "max_tokens",
+                "thinking",
+                "output_config",
+                "tools",
+                "tool_choice",
+                "metadata",
+            ],
+        ),
+    })
 }
 
 pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
@@ -445,30 +505,12 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         Vec::new()
                     }
                 }
-                "thinking" => {
-                    let thinking = bobj
-                        .get("thinking")
-                        .and_then(|v| v.as_str())
-                        .filter(|thinking| !thinking.is_empty())
-                        .map(|thinking| thinking.to_string());
-                    let encrypted = bobj
-                        .get("signature")
-                        .and_then(|v| v.as_str())
-                        .filter(|signature| !signature.is_empty())
-                        .map(|signature| Value::String(signature.to_string()));
-                    if thinking.is_some() || encrypted.is_some() {
-                        vec![Node::Reasoning {
-                            id: None,
-                            content: thinking,
-                            encrypted,
-                            summary: None,
-                            source: None,
-                            extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
-                        }]
-                    } else {
-                        Vec::new()
-                    }
-                }
+                "thinking" => decode_anthropic_thinking_block(bobj)
+                    .map(|node| vec![node])
+                    .unwrap_or_default(),
+                "redacted_thinking" => decode_anthropic_redacted_thinking_block(bobj)
+                    .map(|node| vec![node])
+                    .unwrap_or_default(),
                 "tool_use" => {
                     let call_id = bobj
                         .get("id")
@@ -545,30 +587,34 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .and_then(|v| serde_json::from_value::<AnthropicUsage>(v).ok())
         .map(Usage::from);
 
-    Ok(UrpResponse { id: obj
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("msg")
-        .to_string(),
-    model: obj
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string(),
-    created_at: None, output: output_nodes, finish_reason,
-    usage,
-    extra_body: split_extra(
-        obj,
-        &[
-            "id",
-            "type",
-            "role",
-            "model",
-            "content",
-            "stop_reason",
-            "usage",
-        ],
-    ), })
+    Ok(UrpResponse {
+        id: obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("msg")
+            .to_string(),
+        model: obj
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        created_at: None,
+        output: output_nodes,
+        finish_reason,
+        usage,
+        extra_body: split_extra(
+            obj,
+            &[
+                "id",
+                "type",
+                "role",
+                "model",
+                "content",
+                "stop_reason",
+                "usage",
+            ],
+        ),
+    })
 }
 
 fn tool_choice_from_messages_value(v: Value) -> ToolChoice {

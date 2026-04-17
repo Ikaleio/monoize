@@ -347,21 +347,43 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
                 extra_body,
             })
         }
-        "thinking" => Some(ActiveNodeState {
-            kind: ActiveNodeKind::Reasoning {
-                content: content_block
-                    .get("thinking")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                encrypted: content_block
-                    .get("signature")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            },
-            extra_body: object_without_keys(content_block, &["type", "thinking", "signature"]),
-        }),
+        "thinking" => {
+            let extra_body =
+                object_without_keys(content_block, &["type", "thinking", "signature"]);
+            Some(ActiveNodeState {
+                kind: ActiveNodeKind::Reasoning {
+                    content: content_block
+                        .get("thinking")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    encrypted: content_block
+                        .get("signature")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                extra_body,
+            })
+        }
+        "redacted_thinking" => {
+            let mut extra_body = object_without_keys(content_block, &["type", "data"]);
+            extra_body.insert(
+                crate::urp::REASONING_KIND_EXTRA_KEY.to_string(),
+                Value::String(crate::urp::REASONING_KIND_REDACTED_THINKING.to_string()),
+            );
+            Some(ActiveNodeState {
+                kind: ActiveNodeKind::Reasoning {
+                    content: String::new(),
+                    encrypted: content_block
+                        .get("data")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                },
+                extra_body,
+            })
+        }
         "tool_use" => Some(ActiveNodeState {
             kind: ActiveNodeKind::ToolCall {
                 call_id: content_block
@@ -392,14 +414,27 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             phase: phase.clone(),
             extra_body: active_node.extra_body.clone(),
         },
-        ActiveNodeKind::Reasoning { content, encrypted } => Node::Reasoning {
-            id: None,
-            content: (!content.is_empty()).then(|| content.clone()),
-            encrypted: (!encrypted.is_empty()).then(|| Value::String(encrypted.clone())),
-            summary: None,
-            source: None,
-            extra_body: active_node.extra_body.clone(),
-        },
+        ActiveNodeKind::Reasoning { content, encrypted } => {
+            let extra_body = active_node.extra_body.clone();
+            let (id, encrypted_value) = if encrypted.is_empty() {
+                (None, None)
+            } else {
+                match crate::urp::unwrap_reasoning_signature_sigil(encrypted) {
+                    Some((item_id, original)) => {
+                        (Some(item_id), Some(Value::String(original)))
+                    }
+                    None => (None, Some(Value::String(encrypted.clone()))),
+                }
+            };
+            Node::Reasoning {
+                id,
+                content: (!content.is_empty()).then(|| content.clone()),
+                encrypted: encrypted_value,
+                summary: None,
+                source: None,
+                extra_body,
+            }
+        }
         ActiveNodeKind::ToolCall {
             call_id,
             name,

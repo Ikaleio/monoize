@@ -299,7 +299,7 @@ TPH5. When Monoize re-encodes URP v2 `Text` nodes to a protocol that supports `p
 
 ### 7.1.3 Reasoning-control normalization
 
-RC1. Monoize MUST normalize reasoning effort to one of `none`, `minimum`, `low`, `medium`, `high`, or `xhigh`. The value `max` MUST be accepted as an alias for `xhigh` at decode time. When the selected upstream provider type is `messages`, `xhigh` MUST be mapped back to `max` for encoding.
+RC1. Monoize MUST normalize reasoning effort to one of `none`, `minimum`, `low`, `medium`, `high`, `xhigh`, or `max`. `xhigh` and `max` are two distinct effort levels; Monoize MUST NOT treat either as an alias of the other, and MUST NOT silently rewrite one to the other in either direction.
 
 RC2. Monoize MUST accept reasoning effort hints from any of the following downstream fields:
 
@@ -319,11 +319,14 @@ RC4. When the selected upstream provider type is:
 - `chat_completion`: If effort is `none`, Monoize MUST omit the `reasoning_effort` field entirely. For any other effort value, Monoize MUST send normalized effort as `reasoning_effort`.
 - `responses`: If effort is `none`, Monoize MUST omit the `effort` key from the `reasoning` object. The object MAY still contain other keys such as `summary`. For any other effort value, Monoize MUST send normalized effort as `reasoning: { "effort": <level> }`.
 - `messages`: Monoize MUST select the encoding based on the upstream model:
-  - For models that support adaptive thinking, Claude Opus 4.6+, Sonnet 4.6+, and any future Claude model with major version >= 5, Monoize MUST send `thinking: { "type": "adaptive" }` combined with `output_config: { "effort": <level> }`.
+  - For models that support adaptive thinking, Monoize MUST send `thinking: { "type": "adaptive" }` combined with `output_config: { "effort": <level> }`, transmitting the normalized effort string as-is (including `"xhigh"` and `"max"` as distinct values). A model supports adaptive thinking iff its identifier contains a `claude-opus-` or `claude-sonnet-` (or bare `opus-` / `sonnet-`) family segment whose (major, minor) version is >= (4, 6). This covers Claude Opus/Sonnet 4.6, 4.7, 4.8, and any 5.x or later release without requiring per-minor-version maintenance.
   - For all other Anthropic models, Monoize MUST send `thinking: { "type": "enabled", "budget_tokens": N }`, where:
+    - `minimum -> N=1024`
     - `low -> N=1024`
     - `medium -> N=4096`
     - `high -> N=16384`
+    - `xhigh -> N=32000`
+    - `max -> N=32000` (identical budget to `xhigh` on non-adaptive models; the distinction between `xhigh` and `max` is only observable on adaptive-thinking models)
 
 RC4a. For upstream provider type `responses`, Monoize MUST include top-level `reasoning.summary = "detailed"` on the encoded upstream request unless the typed downstream request already carries an explicit `reasoning.summary` value.
 
@@ -629,6 +632,43 @@ PM4.4. When encoding a request to an upstream `type=messages` provider, Monoize 
 PM5. Reasoning:
 
 - When the upstream Messages output contains a `thinking` block, Monoize MUST convert it into one URP `Reasoning` node.
+- When the upstream Messages output contains a `redacted_thinking` block, Monoize MUST convert it into one URP `Reasoning` node with:
+  - `content` absent,
+  - `encrypted` set to the block's `data` value (preserved verbatim, as a JSON string when the wire value is a string),
+  - `extra_body["_monoize_reasoning_kind"]` set to the string `"redacted_thinking"` so that a later encode step targeting Messages can reconstruct the original block type.
+
+PM5a. For downstream `POST /v1/messages` request parsing, Monoize MUST accept assistant content blocks of type `thinking` and `redacted_thinking` inside `messages[].content[]` and decode them into URP `Reasoning` nodes using the same field mapping as PM5. An input `thinking` block whose `thinking` string is empty and whose `signature` is present MUST still be decoded into a `Reasoning` node with `content` absent and `encrypted` set from `signature`.
+
+PM5b. Reasoning identifier transport through Anthropic Messages uses a **signature sigil** rather than a custom content-block field. The sigil wraps the opaque payload the upstream attached to a `thinking` or `redacted_thinking` block.
+
+Sigil format:
+
+```
+mz1.<item_id>.<original_signature>
+```
+
+- The literal prefix is `mz1.` (version 1 of the sigil format).
+- `<item_id>` is the reasoning item identifier to transport (for example an OpenAI Responses `rs_...` id). It MUST be non-empty and MUST NOT contain a `.`.
+- `<original_signature>` is the raw opaque payload produced by the originating upstream.
+
+Decoder behavior (for both downstream request parsing and upstream response parsing):
+
+1. If an Anthropic `thinking.signature` or `redacted_thinking.data` field begins with `mz1.`, Monoize MUST split the string on the first `.` after the prefix, set `Reasoning.id` to the left segment, and set `Reasoning.encrypted` to the right segment (the original signature payload).
+2. If either sigil segment is empty, Monoize MUST treat the field as an opaque non-sigil signature: `Reasoning.id` MUST remain `None` and `Reasoning.encrypted` MUST be set to the full original string.
+3. If the field does not begin with `mz1.`, Monoize MUST store the full value in `Reasoning.encrypted` without interpretation.
+
+Encoder behavior uses two directional modes:
+
+- **Downstream response direction** (Monoize → client of `/v1/messages`): When a `Reasoning` node carries both a non-empty `Reasoning.id` and a non-empty `Reasoning.encrypted`, Monoize MUST attach the sigil to the emitted `thinking.signature` (or `redacted_thinking.data`). When `Reasoning.id` is absent or empty, Monoize MUST emit the original signature verbatim.
+- **Upstream request direction** (Monoize → `type=messages` upstream): Monoize MUST detect any sigil-prefixed signature inside the URP node, strip the `mz1.<id>.` prefix, and forward only `<original_signature>`. The real Anthropic API MUST NEVER see a sigil-prefixed signature, because Anthropic's own signature validation would reject it.
+
+A sigil-prefixed signature MUST NOT be wrapped a second time. The sigil helpers are idempotent: wrapping a value that already starts with `mz1.` returns the value unchanged.
+
+PM5c. For every URP `Reasoning` node, Monoize MUST preserve `Reasoning.id` whenever it is present in URP storage. In particular, `Reasoning.id` MUST NOT be dropped by any Anthropic Messages decode step, encode step, or transform unless a spec rule in this file explicitly authorizes that drop.
+
+PM5d. When encoding a URP v2 request to an upstream `type=messages` provider, Monoize MUST render URP `Reasoning` nodes inside `messages[].content[]` using the same decision rule as DM5.1 and the same invariants as DM5.2 and DM5.3. This applies to both non-streaming and streaming upstream request construction. Monoize MUST NOT emit any Anthropic content block that violates DM5.3.
+
+PM5e. When encoding a URP v2 request to an upstream `type=responses` provider, Monoize MUST preserve `Reasoning.id` as the upstream reasoning item `id`. If `Reasoning.id` is a non-empty string, the upstream `reasoning` item `id` MUST equal that string byte-for-byte. Monoize MUST NOT synthesize a fresh `rs_...` identifier solely because the URP node originated from a different protocol family. This rule is required because OpenAI Responses `encrypted_content` is cryptographically bound to the reasoning item `id`, and regenerating the id invalidates the signature.
 
 PM6. Monoize MUST convert Messages streaming deltas into canonical URP v2 stream events.
 
@@ -862,6 +902,26 @@ DM5. Reasoning:
 - If `UrpResponseV2.output` contains `Reasoning` nodes, Monoize MUST render them as Messages `thinking` content blocks with:
   - `thinking` from URP `content` when present, otherwise from URP `summary`;
   - `signature` from URP `encrypted` when the downstream Messages block schema requires that field.
+
+DM5.1. When rendering a URP `Reasoning` node to an Anthropic Messages content block (downstream response, upstream request as assistant history, or streaming equivalents thereof), Monoize MUST select the wire shape by the following ordered decision rule. The same rule applies to both non-streaming and streaming Anthropic encoders.
+
+1. If `Reasoning.content` is a non-empty string, or `Reasoning.summary` is a non-empty string, emit `{"type": "thinking", "thinking": <text>, "signature"?: <encrypted>}` where `<text>` is `Reasoning.content` when present, otherwise `Reasoning.summary`. Include `"signature"` only when `Reasoning.encrypted` is a non-empty string or a non-null JSON value that can be represented as the Anthropic `signature` field.
+2. Otherwise, if `Reasoning.extra_body["_monoize_reasoning_kind"] == "redacted_thinking"` and `Reasoning.encrypted` is present, emit `{"type": "redacted_thinking", "data": <encrypted>}`.
+3. Otherwise the node MUST be omitted from the rendered content array. Monoize MUST NOT emit an Anthropic `thinking` block with an empty `thinking` string, MUST NOT emit a non-standard field name such as `encrypted_thinking`, and MUST NOT emit a `redacted_thinking` block from reasoning data whose kind marker is not present.
+
+DM5.2. Reasoning item id transport through Anthropic Messages uses the signature sigil defined in PM5b. When rendering a URP `Reasoning` node to an Anthropic Messages content block under DM5.1 case 1 or case 2:
+
+- If the encoding direction is **downstream** (the block is part of a response body Monoize returns to a `/v1/messages` client), and `Reasoning.id` and `Reasoning.encrypted` are both non-empty, Monoize MUST wrap the signature payload in the sigil `mz1.<Reasoning.id>.<original_signature>` and write that wrapped value into `thinking.signature` or `redacted_thinking.data`.
+- If the encoding direction is **upstream** (the block is part of a request body Monoize sends to a `type=messages` provider), Monoize MUST strip any sigil prefix from the signature payload before emission so that the upstream receives only `<original_signature>`. Monoize MUST NOT emit any extension field such as `_monoize_item_id` on an upstream-facing block.
+- Monoize MUST NOT attach a sigil when `Reasoning.id` or `Reasoning.encrypted` is absent.
+
+DM5.3. Invariants for Anthropic Messages thinking block encoding, covering both downstream response rendering and upstream request assistant-history rendering, streaming and non-streaming:
+
+1. Every emitted `thinking` block MUST contain a `thinking` field that is a JSON string.
+2. Every emitted `redacted_thinking` block MUST contain a `data` field.
+3. Monoize MUST NOT emit an Anthropic reasoning-related content block whose only reasoning payload is an empty `thinking` string, regardless of whether `signature` is present.
+4. Monoize MUST NOT emit extension field `encrypted_thinking` on any Anthropic content block. The field is not part of the Anthropic wire contract.
+5. Anthropic streaming reasoning lifecycles are only opened for a URP `Reasoning` node that would be emitted under DM5.1 case 1 or case 2. A node that falls into DM5.1 case 3 MUST NOT trigger `content_block_start` for a `thinking` block.
 
 DM5a. For downstream `POST /v1/messages` streaming responses, one URP `Reasoning` node MUST be rendered as one Anthropic `thinking` block lifecycle. If both plaintext reasoning and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index. Monoize MUST preserve upstream delta granularity for reasoning text and signatures. It MUST NOT artificially split one upstream delta into smaller chunks, and it MUST NOT artificially merge multiple upstream deltas into one larger synthetic delta.
 

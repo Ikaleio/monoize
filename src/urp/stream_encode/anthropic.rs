@@ -1,8 +1,10 @@
 use crate::error::AppResult;
+use crate::urp::encode::anthropic::anthropic_native_input_tokens;
 use crate::urp::stream_helpers::*;
 use crate::urp::{
-    self, FinishReason, Node, NodeDelta, NodeHeader, Part, PartDelta, PartHeader, UrpStreamEvent,
-    Usage,
+    self, FinishReason, Node, NodeDelta, NodeHeader, Part, PartDelta, PartHeader,
+    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage,
+    wrap_reasoning_signature_with_item_id,
 };
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
@@ -24,6 +26,8 @@ enum AnthropicBlockPayload {
     Thinking {
         thinking: String,
         signature: Option<String>,
+        item_id: Option<String>,
+        extra: HashMap<String, Value>,
     },
     ToolUse {
         call_id: String,
@@ -39,14 +43,38 @@ struct PendingAnthropicBlock {
 }
 
 impl PendingAnthropicBlock {
+    fn effective_signature(&self) -> Option<String> {
+        let AnthropicBlockPayload::Thinking {
+            signature, item_id, ..
+        } = &self.payload
+        else {
+            return None;
+        };
+        let raw = signature.as_deref().filter(|s| !s.is_empty())?;
+        match item_id.as_deref().filter(|s| !s.is_empty()) {
+            Some(id) => wrap_reasoning_signature_with_item_id(id, raw).or_else(|| Some(raw.to_string())),
+            None => Some(raw.to_string()),
+        }
+    }
+
     fn content_block(&self, saw_tool_use: &mut bool) -> Value {
         match &self.payload {
             AnthropicBlockPayload::Text { .. } => json!({ "type": "text", "text": "" }),
-            AnthropicBlockPayload::Thinking { signature, .. } => json!({
-                "type": "thinking",
-                "thinking": "",
-                "signature": signature.as_deref().unwrap_or("")
-            }),
+            AnthropicBlockPayload::Thinking { extra, .. } => {
+                let sig_for_start = self.effective_signature().unwrap_or_default();
+                if payload_is_redacted(extra) {
+                    json!({
+                        "type": "redacted_thinking",
+                        "data": sig_for_start
+                    })
+                } else {
+                    json!({
+                        "type": "thinking",
+                        "thinking": "",
+                        "signature": sig_for_start
+                    })
+                }
+            }
             AnthropicBlockPayload::ToolUse { call_id, name, .. } => {
                 *saw_tool_use = true;
                 json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })
@@ -60,6 +88,19 @@ impl PendingAnthropicBlock {
         saw_tool_use: &mut bool,
         sse_max_frame_length: Option<usize>,
     ) -> AppResult<()> {
+        if let AnthropicBlockPayload::Thinking {
+            signature, item_id, ..
+        } = &self.payload
+        {
+            tracing::info!(
+                target: "monoize::urp::reasoning_trace",
+                block_index = self.block_index,
+                item_id = item_id.as_deref().unwrap_or(""),
+                raw_signature_len = signature.as_ref().map(|s| s.len()).unwrap_or(0),
+                effective_signature_len = self.effective_signature().as_ref().map(|s| s.len()).unwrap_or(0),
+                "anthropic thinking block emit"
+            );
+        }
         let start = json!({
             "type": "content_block_start",
             "index": self.block_index,
@@ -84,34 +125,44 @@ impl PendingAnthropicBlock {
                     .await?;
                 }
             }
-            AnthropicBlockPayload::Thinking { thinking, signature } => {
-                if !thinking.is_empty() {
-                    send_messages_delta_string(
-                        tx,
-                        json!({
-                            "type": "content_block_delta",
-                            "index": self.block_index,
-                            "delta": { "type": "thinking_delta", "thinking": "" }
-                        }),
-                        messages_delta_path_thinking,
-                        thinking,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
-                if let Some(signature) = signature.as_deref().filter(|signature| !signature.is_empty()) {
-                    send_messages_delta_string(
-                        tx,
-                        json!({
-                            "type": "content_block_delta",
-                            "index": self.block_index,
-                            "delta": { "type": "signature_delta", "signature": "" }
-                        }),
-                        messages_delta_path_signature,
-                        signature,
-                        sse_max_frame_length,
-                    )
-                    .await?;
+            AnthropicBlockPayload::Thinking {
+                thinking, extra, ..
+            } => {
+                // `redacted_thinking` blocks carry their opaque payload in the initial
+                // `content_block_start.content_block.data` field, per Anthropic wire contract.
+                // No `thinking_delta` or `signature_delta` events exist for this block type.
+                if !payload_is_redacted(extra) {
+                    if !thinking.is_empty() {
+                        send_messages_delta_string(
+                            tx,
+                            json!({
+                                "type": "content_block_delta",
+                                "index": self.block_index,
+                                "delta": { "type": "thinking_delta", "thinking": "" }
+                            }),
+                            messages_delta_path_thinking,
+                            thinking,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                    if let Some(signature) = self
+                        .effective_signature()
+                        .filter(|signature| !signature.is_empty())
+                    {
+                        send_messages_delta_string(
+                            tx,
+                            json!({
+                                "type": "content_block_delta",
+                                "index": self.block_index,
+                                "delta": { "type": "signature_delta", "signature": "" }
+                            }),
+                            messages_delta_path_signature,
+                            &signature,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
                 }
             }
             AnthropicBlockPayload::ToolUse { arguments, .. } => {
@@ -136,6 +187,13 @@ impl PendingAnthropicBlock {
         send_named_messages_event(tx, stop).await?;
         Ok(())
     }
+}
+
+fn payload_is_redacted(extra: &HashMap<String, Value>) -> bool {
+    extra
+        .get(REASONING_KIND_EXTRA_KEY)
+        .and_then(Value::as_str)
+        == Some(REASONING_KIND_REDACTED_THINKING)
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +222,25 @@ fn reasoning_signature_value(
         .filter(|signature| !signature.is_empty())
 }
 
+fn reasoning_is_redacted_extra(extra_body: &HashMap<String, Value>) -> bool {
+    payload_is_redacted(extra_body)
+}
+
+fn reasoning_item_id(id: Option<&str>) -> Option<String> {
+    id.map(str::to_owned).filter(|s| !s.is_empty())
+}
+
+fn reasoning_kind_marker(extra_body: &HashMap<String, Value>) -> HashMap<String, Value> {
+    let mut extra = HashMap::new();
+    if payload_is_redacted(extra_body) {
+        extra.insert(
+            REASONING_KIND_EXTRA_KEY.to_string(),
+            Value::String(REASONING_KIND_REDACTED_THINKING.to_string()),
+        );
+    }
+    extra
+}
+
 fn surface_kind_for_payload(payload: &AnthropicBlockPayload) -> MessagesSurfaceKind {
     match payload {
         AnthropicBlockPayload::Text { .. } => MessagesSurfaceKind::Text,
@@ -180,6 +257,7 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
             })
         }
         Node::Reasoning {
+            id,
             content,
             summary,
             encrypted,
@@ -192,12 +270,21 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
                 .or_else(|| summary.as_deref().filter(|summary| !summary.is_empty()))
                 .unwrap_or_default()
                 .to_string();
-            let signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
-            if thinking.is_empty() && signature.is_none() {
-                None
-            } else {
-                Some(AnthropicBlockPayload::Thinking { thinking, signature })
+            let raw_signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
+            let is_redacted = reasoning_is_redacted_extra(extra_body);
+            if thinking.is_empty() && !is_redacted {
+                return None;
             }
+            if is_redacted && raw_signature.is_none() {
+                return None;
+            }
+            let extra = reasoning_kind_marker(extra_body);
+            Some(AnthropicBlockPayload::Thinking {
+                thinking,
+                signature: raw_signature,
+                item_id: reasoning_item_id(id.as_deref()),
+                extra,
+            })
         }
         Node::ToolCall {
             call_id,
@@ -229,6 +316,8 @@ fn anthropic_block_from_node_header(
         NodeHeader::Reasoning { .. } => Some(AnthropicBlockPayload::Thinking {
             thinking: String::new(),
             signature: reasoning_signature_value(None, extra_body),
+            item_id: None,
+            extra: reasoning_kind_marker(extra_body),
         }),
         NodeHeader::ToolCall { call_id, name, .. } => Some(AnthropicBlockPayload::ToolUse {
             call_id: call_id.clone(),
@@ -300,6 +389,7 @@ fn anthropic_block_from_part(part: &Part) -> Option<AnthropicBlockPayload> {
             })
         }
         Part::Reasoning {
+            id,
             summary,
             encrypted,
             extra_body,
@@ -314,12 +404,21 @@ fn anthropic_block_from_part(part: &Part) -> Option<AnthropicBlockPayload> {
                     .to_string(),
                 _ => String::new(),
             };
-            let signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
-            if thinking.is_empty() && signature.is_none() {
-                None
-            } else {
-                Some(AnthropicBlockPayload::Thinking { thinking, signature })
+            let raw_signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
+            let is_redacted = reasoning_is_redacted_extra(extra_body);
+            if thinking.is_empty() && !is_redacted {
+                return None;
             }
+            if is_redacted && raw_signature.is_none() {
+                return None;
+            }
+            let extra = reasoning_kind_marker(extra_body);
+            Some(AnthropicBlockPayload::Thinking {
+                thinking,
+                signature: raw_signature,
+                item_id: reasoning_item_id(id.as_deref()),
+                extra,
+            })
         }
         Part::ToolCall {
             call_id,
@@ -349,6 +448,8 @@ fn anthropic_block_from_part_header(
         PartHeader::Reasoning { .. } => Some(AnthropicBlockPayload::Thinking {
             thinking: String::new(),
             signature: reasoning_signature_value(None, extra_body),
+            item_id: None,
+            extra: reasoning_kind_marker(extra_body),
         }),
         PartHeader::ToolCall { call_id, name, .. } => Some(AnthropicBlockPayload::ToolUse {
             call_id: call_id.clone(),
@@ -369,7 +470,9 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
             content.push_str(delta);
         }
         (
-            AnthropicBlockPayload::Thinking { thinking, signature },
+            AnthropicBlockPayload::Thinking {
+                thinking, signature, ..
+            },
             NodeDelta::Reasoning {
                 content,
                 encrypted,
@@ -409,9 +512,27 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
     }
 }
 
+fn maybe_override_reasoning_item_id(
+    payload: &mut AnthropicBlockPayload,
+    extra_body: &HashMap<String, Value>,
+) {
+    let AnthropicBlockPayload::Thinking { item_id, .. } = payload else {
+        return;
+    };
+    let Some(reasoning_item_id) = extra_body
+        .get("reasoning_item_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    else {
+        return;
+    };
+    *item_id = Some(reasoning_item_id.to_string());
+}
+
 fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &Node) {
     match (payload, node) {
-        (AnthropicBlockPayload::Thinking { thinking, signature }, Node::Reasoning {
+        (AnthropicBlockPayload::Thinking { thinking, signature, item_id, .. }, Node::Reasoning {
+            id,
             content,
             summary,
             encrypted,
@@ -427,6 +548,9 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
             }
             if let Some(sig) = reasoning_signature_value(encrypted.as_ref(), extra_body) {
                 *signature = Some(sig);
+            }
+            if item_id.is_none() {
+                *item_id = reasoning_item_id(id.as_deref());
             }
         }
         (AnthropicBlockPayload::ToolUse { arguments, .. }, Node::ToolCall { arguments: done_args, .. }) => {
@@ -451,7 +575,7 @@ fn apply_part_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &PartDe
             content.push_str(delta);
         }
         (
-            AnthropicBlockPayload::Thinking { thinking, signature },
+            AnthropicBlockPayload::Thinking { thinking, signature, .. },
             PartDelta::Reasoning {
                 content,
                 encrypted,
@@ -534,7 +658,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
     let start = message_start_payload(
         &message_id,
         logical_model,
-        usage.input_tokens,
+        anthropic_native_input_tokens(&usage),
         usage.output_tokens,
         &pending_envelope_extra,
     );
@@ -573,7 +697,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
             "stop_sequence": Value::Null
         },
         "usage": {
-            "input_tokens": usage.input_tokens,
+            "input_tokens": anthropic_native_input_tokens(&usage),
             "output_tokens": usage.output_tokens
         }
     });
@@ -628,7 +752,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
             message_start_payload(
                 response_id,
                 logical_model,
-                usage.input_tokens,
+                anthropic_native_input_tokens(&usage),
                 usage.output_tokens,
                 pending_envelope_extra,
             ),
@@ -684,7 +808,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 node_index,
                 delta,
                 usage,
-                ..
+                extra_body,
             } => {
                 if let Some(usage) = usage {
                     response_usage = Some(usage);
@@ -692,6 +816,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 let Some(block_state) = live_node_blocks.get_mut(&node_index) else {
                     continue;
                 };
+                maybe_override_reasoning_item_id(&mut block_state.payload, &extra_body);
                 apply_node_delta_to_block(&mut block_state.payload, &delta);
             }
             UrpStreamEvent::NodeDone {
@@ -790,7 +915,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 part_index,
                 delta,
                 usage,
-                ..
+                extra_body,
             } => {
                 if let Some(usage) = usage {
                     response_usage = Some(usage);
@@ -798,6 +923,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 let Some(block_state) = live_bridge_blocks.get_mut(&part_index) else {
                     continue;
                 };
+                maybe_override_reasoning_item_id(&mut block_state.payload, &extra_body);
                 apply_part_delta_to_block(&mut block_state.payload, &delta);
             }
             UrpStreamEvent::PartDone {
@@ -933,7 +1059,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         "stop_sequence": Value::Null
                     },
                     "usage": {
-                        "input_tokens": usage.input_tokens,
+                        "input_tokens": anthropic_native_input_tokens(&usage),
                         "output_tokens": usage.output_tokens
                     }
                 });
@@ -988,7 +1114,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 "stop_sequence": Value::Null
             },
             "usage": {
-                "input_tokens": usage.input_tokens,
+                "input_tokens": anthropic_native_input_tokens(&usage),
                 "output_tokens": usage.output_tokens
             }
         });

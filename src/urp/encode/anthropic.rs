@@ -2,13 +2,98 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, ToolDefinition, ToolResultContent,
-    UrpRequest, UrpResponse,
+    strip_reasoning_signature_sigil, wrap_reasoning_signature_with_item_id, FileSource,
+    FinishReason, ImageSource, Node, OrdinaryRole, ToolDefinition, ToolResultContent, UrpRequest,
+    UrpResponse, Usage, REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 64_000;
+
+/// Controls whether the Anthropic encoder should embed a sigil (`mz1.<id>.<sig>`) in
+/// `thinking.signature` / `redacted_thinking.data` to smuggle a reasoning item id through a
+/// downstream client that strips unknown fields. Upstream-facing encoding MUST use `StripSigil`
+/// so that the real Anthropic API receives a clean opaque signature. Downstream-facing encoding
+/// MUST use `EmbedSigil` so that monoize can recover the item id when the client echoes the
+/// history back. See `spec/unified_responses_proxy.spec.md` DM5.2 / PM5b.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningSigilMode {
+    EmbedSigil,
+    StripSigil,
+}
+
+fn reasoning_is_redacted(extra_body: &HashMap<String, Value>) -> bool {
+    extra_body
+        .get(REASONING_KIND_EXTRA_KEY)
+        .and_then(Value::as_str)
+        == Some(REASONING_KIND_REDACTED_THINKING)
+}
+
+fn reasoning_extra_for_wire(extra_body: &HashMap<String, Value>) -> HashMap<String, Value> {
+    extra_body
+        .iter()
+        .filter(|(key, _)| key.as_str() != REASONING_KIND_EXTRA_KEY)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+fn plaintext_from_reasoning<'a>(
+    content: &'a Option<String>,
+    summary: &'a Option<String>,
+) -> Option<&'a str> {
+    content
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| summary.as_deref().filter(|s| !s.is_empty()))
+}
+
+fn encoded_signature_value(
+    encrypted: &Option<Value>,
+    id: &Option<String>,
+    mode: ReasoningSigilMode,
+) -> Option<Value> {
+    let raw = match encrypted {
+        None | Some(Value::Null) => return None,
+        Some(Value::String(s)) if s.is_empty() => return None,
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => return Some(other.clone()),
+    };
+    let processed = match mode {
+        ReasoningSigilMode::EmbedSigil => id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|item_id| wrap_reasoning_signature_with_item_id(item_id, &raw))
+            .unwrap_or(raw),
+        ReasoningSigilMode::StripSigil => strip_reasoning_signature_sigil(&raw),
+    };
+    if processed.is_empty() {
+        None
+    } else {
+        Some(Value::String(processed))
+    }
+}
+
+// Invert the normalization performed in decode/anthropic.rs: internal `Usage.input_tokens`
+// is aggregate/inclusive (spec § 5 C3), but Anthropic's wire format requires `input_tokens`
+// to exclude cache_read and cache_creation buckets. Saturating subtraction guards against
+// malformed upstream data where cache buckets alone exceed the recorded total.
+pub(crate) fn anthropic_native_input_tokens(usage: &Usage) -> u64 {
+    let cache_read = usage
+        .input_details
+        .as_ref()
+        .map(|d| d.cache_read_tokens)
+        .unwrap_or(0);
+    let cache_creation = usage
+        .input_details
+        .as_ref()
+        .map(|d| d.cache_creation_tokens)
+        .unwrap_or(0);
+    usage
+        .input_tokens
+        .saturating_sub(cache_read)
+        .saturating_sub(cache_creation)
+}
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut system_blocks: Vec<Value> = Vec::new();
@@ -60,7 +145,12 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             }
             | Node::Reasoning { .. }
             | Node::ToolCall { .. } => {
-                append_node_to_pending_anthropic_message(&mut pending_message, &mut messages, node);
+                append_node_to_pending_anthropic_message(
+                    &mut pending_message,
+                    &mut messages,
+                    node,
+                    ReasoningSigilMode::StripSigil,
+                );
             }
             Node::Image {
                 role: OrdinaryRole::System | OrdinaryRole::Developer,
@@ -134,42 +224,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let response_nodes = &resp.output;
     let mut content = Vec::new();
-    let mut encrypted = None;
     for node in response_nodes {
-        if encrypted.is_some() {
-            continue;
-        }
-        if let Node::Reasoning {
-            encrypted: Some(data),
-            ..
-        } = node
-        {
-            encrypted = Some(data.clone());
-        }
-    }
-
-    for node in response_nodes {
-        if let Some(block) = encode_assistant_response_block(node, encrypted.as_ref()) {
+        if let Some(block) = encode_assistant_response_block(node) {
             content.push(block);
-        }
-    }
-
-    // When the response contains encrypted reasoning but no plaintext reasoning
-    // (e.g. Gemini returns only thoughtSignature), emit a standalone thinking
-    // block so the downstream receives the encrypted data.
-    let has_reasoning_part = response_nodes.iter().any(|node| {
-        matches!(
-            node,
-            Node::Reasoning {
-                content: Some(_),
-                ..
-            }
-        )
-    });
-    if !has_reasoning_part {
-        if let Some(enc) = &encrypted {
-            let block = json!({ "type": "thinking", "thinking": "", "signature": enc });
-            content.insert(0, block);
         }
     }
 
@@ -196,7 +253,10 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         if let Some(obj) = usage_value.as_object_mut() {
             let input_details = usage_input_details(usage);
             let output_details = usage_output_details(usage);
-            obj.insert("input_tokens".to_string(), Value::from(usage.input_tokens));
+            obj.insert(
+                "input_tokens".to_string(),
+                Value::from(anthropic_native_input_tokens(usage)),
+            );
             obj.insert(
                 "output_tokens".to_string(),
                 Value::from(usage.output_tokens),
@@ -270,6 +330,7 @@ fn append_node_to_pending_anthropic_message(
     pending: &mut Option<AnthropicMessageEnvelope>,
     out: &mut Vec<Value>,
     node: &Node,
+    sigil_mode: ReasoningSigilMode,
 ) {
     let Some(role) = anthropic_message_role_for_node(node) else {
         return;
@@ -281,7 +342,7 @@ fn append_node_to_pending_anthropic_message(
         flush_pending_anthropic_message(pending, out);
     }
 
-    let Some(block) = encode_regular_message_block(node) else {
+    let Some(block) = encode_regular_message_block(node, sigil_mode) else {
         return;
     };
     let entry = pending.get_or_insert_with(|| AnthropicMessageEnvelope {
@@ -353,7 +414,7 @@ fn encode_system_block(node: &Node) -> Option<Value> {
     }
 }
 
-fn encode_regular_message_block(node: &Node) -> Option<Value> {
+fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> Option<Value> {
     match node {
         Node::Text {
             content,
@@ -389,30 +450,34 @@ fn encode_regular_message_block(node: &Node) -> Option<Value> {
             Some(block)
         }
         Node::Reasoning {
-            content: Some(text),
+            id,
+            content,
+            summary,
             encrypted,
             extra_body,
             ..
         } => {
-            let mut block = json!({ "type": "thinking", "thinking": text });
-            if let Some(obj) = block.as_object_mut() {
-                if let Some(signature) = encrypted.clone() {
-                    obj.insert("signature".to_string(), signature);
+            let wire_extra = reasoning_extra_for_wire(extra_body);
+            let signature = encoded_signature_value(encrypted, id, sigil_mode);
+            if let Some(text) = plaintext_from_reasoning(content, summary) {
+                let mut block = json!({ "type": "thinking", "thinking": text });
+                let obj = block.as_object_mut().expect("thinking block object");
+                if let Some(sig) = signature {
+                    obj.insert("signature".to_string(), sig);
                 }
-                merge_extra(obj, extra_body);
+                merge_extra(obj, &wire_extra);
+                Some(block)
+            } else if reasoning_is_redacted(extra_body) {
+                let data = signature?;
+                let mut block = json!({ "type": "redacted_thinking", "data": data });
+                let obj = block
+                    .as_object_mut()
+                    .expect("redacted_thinking block object");
+                merge_extra(obj, &wire_extra);
+                Some(block)
+            } else {
+                None
             }
-            Some(block)
-        }
-        Node::Reasoning {
-            encrypted: Some(signature),
-            extra_body,
-            ..
-        } => {
-            let mut block = json!({ "type": "thinking", "encrypted_thinking": signature });
-            if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
-            }
-            Some(block)
         }
         Node::ToolCall {
             id: _,
@@ -443,15 +508,14 @@ fn encode_regular_message_block(node: &Node) -> Option<Value> {
             }
             Some(block)
         }
-        Node::Reasoning { .. }
-        | Node::Audio { .. }
+        Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ToolResult { .. }
         | Node::NextDownstreamEnvelopeExtra { .. } => None,
     }
 }
 
-fn encode_assistant_response_block(node: &Node, encrypted: Option<&Value>) -> Option<Value> {
+fn encode_assistant_response_block(node: &Node) -> Option<Value> {
     match node {
         Node::Text {
             role: OrdinaryRole::Assistant,
@@ -470,18 +534,37 @@ fn encode_assistant_response_block(node: &Node, encrypted: Option<&Value>) -> Op
             Some(block)
         }
         Node::Reasoning {
-            content: Some(text),
+            id,
+            content,
+            summary,
+            encrypted,
             extra_body,
             ..
         } => {
-            let mut thinking = Map::new();
-            thinking.insert("type".to_string(), Value::String("thinking".to_string()));
-            thinking.insert("thinking".to_string(), Value::String(text.clone()));
-            if let Some(sig) = encrypted.cloned() {
-                thinking.insert("signature".to_string(), sig);
+            let wire_extra = reasoning_extra_for_wire(extra_body);
+            let signature = encoded_signature_value(encrypted, id, ReasoningSigilMode::EmbedSigil);
+            if let Some(text) = plaintext_from_reasoning(content, summary) {
+                let mut thinking = Map::new();
+                thinking.insert("type".to_string(), Value::String("thinking".to_string()));
+                thinking.insert("thinking".to_string(), Value::String(text.to_string()));
+                if let Some(sig) = signature {
+                    thinking.insert("signature".to_string(), sig);
+                }
+                merge_extra(&mut thinking, &wire_extra);
+                Some(Value::Object(thinking))
+            } else if reasoning_is_redacted(extra_body) {
+                let data = signature?;
+                let mut block = Map::new();
+                block.insert(
+                    "type".to_string(),
+                    Value::String("redacted_thinking".to_string()),
+                );
+                block.insert("data".to_string(), data);
+                merge_extra(&mut block, &wire_extra);
+                Some(Value::Object(block))
+            } else {
+                None
             }
-            merge_extra(&mut thinking, extra_body);
-            Some(Value::Object(thinking))
         }
         Node::ToolCall {
             id: _,
@@ -539,8 +622,7 @@ fn encode_assistant_response_block(node: &Node, encrypted: Option<&Value>) -> Op
             }
             Some(block)
         }
-        Node::Reasoning { .. }
-        | Node::Audio { .. }
+        Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ToolResult { .. }
         | Node::NextDownstreamEnvelopeExtra { .. }
@@ -668,25 +750,42 @@ fn encode_anthropic_file(source: &FileSource) -> Value {
     }
 }
 
-/// Claude 4.6+ models use `thinking: {type: "adaptive"}` + `output_config: {effort}`.
-/// Older models require the deprecated `thinking: {type: "enabled", budget_tokens: N}`.
+/// Claude models with adaptive-thinking support use `thinking: {type: "adaptive"}`
+/// + `output_config: {effort}`. Older models require the deprecated
+/// `thinking: {type: "enabled", budget_tokens: N}` shape.
+///
+/// A model supports adaptive thinking iff its identifier contains an
+/// `opus-<major>[.-]<minor>` or `sonnet-<major>[.-]<minor>` family segment whose
+/// (major, minor) version is >= (4, 6). This covers Opus/Sonnet 4.6, 4.7, 4.8
+/// and any 5.x+ release without per-minor-version maintenance.
 fn model_supports_adaptive(model: &str) -> bool {
     let m = model.to_lowercase();
-    if m.contains("opus-4-6")
-        || m.contains("sonnet-4-6")
-        || m.contains("opus-4.6")
-        || m.contains("sonnet-4.6")
-    {
-        return true;
-    }
-    for prefix in ["opus-", "sonnet-"] {
-        if let Some(pos) = m.find(prefix) {
-            let after = &m[pos + prefix.len()..];
-            let major_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if let Ok(major) = major_str.parse::<u32>() {
-                if major >= 5 {
-                    return true;
-                }
+    for family in ["opus-", "sonnet-"] {
+        let Some(pos) = m.find(family) else { continue };
+        let after = &m[pos + family.len()..];
+        let major_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if major_str.is_empty() {
+            continue;
+        }
+        let Ok(major) = major_str.parse::<u32>() else {
+            continue;
+        };
+        if major >= 5 {
+            return true;
+        }
+        if major < 4 {
+            continue;
+        }
+        // major == 4: require minor >= 6. Accept `-` or `.` as the minor separator.
+        let rest = &after[major_str.len()..];
+        let rest = rest
+            .strip_prefix('-')
+            .or_else(|| rest.strip_prefix('.'))
+            .unwrap_or(rest);
+        let minor_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(minor) = minor_str.parse::<u32>() {
+            if minor >= 6 {
+                return true;
             }
         }
     }
@@ -694,9 +793,15 @@ fn model_supports_adaptive(model: &str) -> bool {
 }
 
 fn effort_to_budget(effort: &str) -> u32 {
+    // Non-adaptive Anthropic models use a fixed budget table. `xhigh` and `max`
+    // share the same budget here; their distinction only surfaces on
+    // adaptive-thinking models via `output_config.effort`.
     match effort {
+        "minimum" => 1024,
         "low" => 1024,
+        "medium" => 4096,
         "high" => 16384,
+        "xhigh" | "max" => 32000,
         _ => 4096,
     }
 }
@@ -996,5 +1101,121 @@ mod tests {
             "orphaned tool_use should be stripped"
         );
         assert_eq!(assistant_content[0]["id"], json!("answered"));
+    }
+
+    fn req_with_effort(model: &str, effort: &str) -> UrpRequest {
+        UrpRequest {
+            model: model.to_string(),
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hi".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: Some(crate::urp::ReasoningConfig {
+                effort: Some(effort.to_string()),
+                extra_body: HashMap::new(),
+            }),
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        }
+    }
+
+    #[test]
+    fn adaptive_model_detection_covers_4_6_through_5_and_beyond() {
+        for m in [
+            "claude-opus-4-6",
+            "claude-opus-4.6",
+            "claude-sonnet-4-6-20250101",
+            "claude-opus-4-7-20260101",
+            "claude-opus-4.7",
+            "claude-sonnet-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5-0",
+            "claude-sonnet-6-0",
+            "opus-4-7",
+            "sonnet-4.7",
+        ] {
+            assert!(
+                model_supports_adaptive(m),
+                "{m} must be detected as adaptive-thinking model"
+            );
+        }
+        for m in [
+            "claude-opus-4-5",
+            "claude-opus-4.5",
+            "claude-sonnet-4-0",
+            "claude-sonnet-3-7",
+            "claude-haiku-4-6",
+            "claude-3-5-sonnet",
+        ] {
+            assert!(
+                !model_supports_adaptive(m),
+                "{m} must NOT be detected as adaptive-thinking model"
+            );
+        }
+    }
+
+    #[test]
+    fn adaptive_encoder_passes_xhigh_and_max_through_distinctly() {
+        for effort in ["xhigh", "max"] {
+            let encoded = encode_request(
+                &req_with_effort("claude-opus-4-7", effort),
+                "claude-opus-4-7",
+            );
+            assert_eq!(encoded["thinking"], json!({ "type": "adaptive" }));
+            assert_eq!(
+                encoded["output_config"]["effort"],
+                json!(effort),
+                "adaptive path must forward {effort} as-is"
+            );
+        }
+    }
+
+    #[test]
+    fn non_adaptive_encoder_uses_32000_for_both_xhigh_and_max() {
+        for effort in ["xhigh", "max"] {
+            let encoded = encode_request(
+                &req_with_effort("claude-sonnet-4-5", effort),
+                "claude-sonnet-4-5",
+            );
+            assert_eq!(
+                encoded["thinking"],
+                json!({ "type": "enabled", "budget_tokens": 32000 }),
+                "non-adaptive {effort} must emit budget_tokens=32000"
+            );
+            assert!(
+                encoded.get("output_config").is_none(),
+                "non-adaptive path must not emit output_config"
+            );
+        }
+    }
+
+    #[test]
+    fn non_adaptive_encoder_budget_table_is_stable() {
+        for (effort, expected) in [
+            ("minimum", 1024),
+            ("low", 1024),
+            ("medium", 4096),
+            ("high", 16384),
+            ("xhigh", 32000),
+            ("max", 32000),
+        ] {
+            assert_eq!(
+                effort_to_budget(effort),
+                expected,
+                "effort_to_budget({effort}) regressed"
+            );
+        }
     }
 }
