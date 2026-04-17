@@ -12,6 +12,10 @@ struct Config {
     low: u32,
     med: u32,
     high: u32,
+    #[serde(default)]
+    xhigh: Option<u32>,
+    #[serde(default)]
+    max: Option<u32>,
 }
 
 impl TransformConfig for Config {
@@ -38,7 +42,9 @@ impl Transform for ReasoningEffortToBudgetTransform {
             "properties": {
                 "low": { "type": "integer", "minimum": 0 },
                 "med": { "type": "integer", "minimum": 0 },
-                "high": { "type": "integer", "minimum": 0 }
+                "high": { "type": "integer", "minimum": 0 },
+                "xhigh": { "type": "integer", "minimum": 0 },
+                "max": { "type": "integer", "minimum": 0 }
             },
             "required": ["low", "med", "high"],
             "additionalProperties": false
@@ -80,6 +86,11 @@ impl Transform for ReasoningEffortToBudgetTransform {
             "low" => cfg.low,
             "medium" => cfg.med,
             "high" => cfg.high,
+            // xhigh / max fall back to `high` when not explicitly configured,
+            // matching the Anthropic non-adaptive encoder where xhigh and max
+            // share the same budget tier.
+            "xhigh" => cfg.xhigh.unwrap_or(cfg.high),
+            "max" => cfg.max.unwrap_or_else(|| cfg.xhigh.unwrap_or(cfg.high)),
             _ => return Ok(()),
         };
         set_extra_path(

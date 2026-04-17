@@ -41,7 +41,7 @@ pub const BUILTIN_REASONING_EFFORT_SUFFIXES: &[(&str, &str)] = &[
     ("-medium", "medium"),
     ("-high", "high"),
     ("-xhigh", "xhigh"),
-    ("-max", "xhigh"),
+    ("-max", "max"),
 ];
 
 pub fn normalize_pricing_model_key(

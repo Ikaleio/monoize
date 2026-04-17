@@ -216,9 +216,9 @@ NID4. Dashboard CRUD routes for model metadata MUST use Axum wildcard `{*model_i
 
 ### 8.1 Reasoning effort value domain
 
-RE1. Valid `reasoning_effort` values: `none`, `minimum`, `low`, `medium`, `high`, `xhigh`, `max`.
+RE1. Valid `reasoning_effort` values: `none`, `minimum`, `low`, `medium`, `high`, `xhigh`, `max`. `xhigh` and `max` are two distinct effort levels and MUST NOT be aliased to each other.
 
-RE2. `max` is a URP-level alias: at decode time it MUST be mapped to the suffix `-xhigh` (i.e. the value sent upstream is `xhigh`, but users may specify `max` and the system treats it as equivalent to `xhigh`).
+RE2. The built-in suffix table maps each `-<effort>` suffix to its own identical effort string (e.g. `-max -> max`, `-xhigh -> xhigh`). Monoize MUST NOT collapse `-max` to `xhigh` at suffix-resolution time.
 
 ### 8.2 Global suffix → effort mapping
 
