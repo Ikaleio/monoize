@@ -5,7 +5,8 @@ pub mod openai_image;
 pub mod openai_responses;
 pub mod replicate;
 
-use crate::urp::{InputDetails, Node, OrdinaryRole, OutputDetails, Part, Role, ToolChoice, Usage};
+use crate::urp::internal_legacy_bridge::{Part, Role};
+use crate::urp::{InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 

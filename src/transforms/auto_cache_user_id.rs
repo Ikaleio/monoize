@@ -1,8 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::Item;
+use crate::urp::Node;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -99,25 +99,18 @@ impl Transform for AutoCacheUserIdTransform {
 }
 
 fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
-    request_messages(req).iter().any(|item| match item {
-        Item::Message { parts, .. } => parts
-            .iter()
-            .any(|part| part_extra_body(part).is_some_and(|eb| eb.contains_key("cache_control"))),
-        Item::ToolResult { extra_body, .. } => extra_body.contains_key("cache_control"),
+    req.input.iter().any(|node| match node {
+        Node::Text { extra_body, .. }
+        | Node::Image { extra_body, .. }
+        | Node::Audio { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::Refusal { extra_body, .. }
+        | Node::Reasoning { extra_body, .. }
+        | Node::ToolCall { extra_body, .. }
+        | Node::ProviderItem { extra_body, .. }
+        | Node::ToolResult { extra_body, .. }
+        | Node::NextDownstreamEnvelopeExtra { extra_body } => extra_body.contains_key("cache_control"),
     })
-}
-
-fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap<String, Value>> {
-    match part {
-        crate::urp::Part::Text { extra_body, .. }
-        | crate::urp::Part::Image { extra_body, .. }
-        | crate::urp::Part::Audio { extra_body, .. }
-        | crate::urp::Part::File { extra_body, .. }
-        | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ToolCall { extra_body, .. }
-        | crate::urp::Part::ProviderItem { extra_body, .. }
-        | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
-    }
 }
 
 inventory::submit!(TransformEntry {

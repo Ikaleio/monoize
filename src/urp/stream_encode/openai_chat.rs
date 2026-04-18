@@ -842,7 +842,6 @@ fn chat_reasoning_transform_parity<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::urp::{Item, Part, Role, items_to_nodes};
     use crate::urp::decode::openai_chat::decode_response;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -908,22 +907,17 @@ mod tests {
             id: "resp_1".to_string(),
             model: "gpt-5.4".to_string(),
             created_at: None,
-            output: items_to_nodes(vec![Item::Message {
+            output: vec![urp::Node::Reasoning {
                 id: None,
-                role: Role::Assistant,
-                parts: vec![Part::Reasoning {
-                    id: None,
-                    content: Some("plain_reasoning".to_string()),
-                    encrypted: Some(Value::String("enc_reasoning".to_string())),
-                    summary: Some("brief summary".to_string()),
-                    source: Some("openrouter".to_string()),
-                    extra_body: HashMap::from([(
-                        "inject_reasoning_content".to_string(),
-                        Value::String("plain_reasoning".to_string()),
-                    )]),
-                }],
-                extra_body: HashMap::new(),
-            }]),
+                content: Some("plain_reasoning".to_string()),
+                encrypted: Some(Value::String("enc_reasoning".to_string())),
+                summary: Some("brief summary".to_string()),
+                source: Some("openrouter".to_string()),
+                extra_body: HashMap::from([(
+                    "inject_reasoning_content".to_string(),
+                    Value::String("plain_reasoning".to_string()),
+                )]),
+            }],
             finish_reason: Some(FinishReason::Stop),
             usage: None,
             extra_body: HashMap::new(),

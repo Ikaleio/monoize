@@ -1,8 +1,8 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, response_output_items_mut,
+    TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Item, Node, NodeDelta, Part, UrpStreamEvent};
+use crate::urp::{Node, NodeDelta, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -70,9 +70,8 @@ impl Transform for ReasoningContentDeltaTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                let mut items = response_output_items_mut(resp);
-                for item in items.iter_mut() {
-                    mark_item(item);
+                for node in &mut resp.output {
+                    mark_node(node);
                 }
             }
             UrpData::Stream(event) => mark_stream(event),
@@ -94,28 +93,6 @@ fn extract_reasoning_content(content: &Option<String>, summary: &Option<String>)
         }
     }
     None
-}
-
-fn mark_item(item: &mut Item) {
-    let Item::Message { parts, .. } = item else {
-        return;
-    };
-    for part in parts {
-        let Part::Reasoning {
-            content,
-            encrypted,
-            summary,
-            extra_body,
-            ..
-        } = part
-        else {
-            continue;
-        };
-        let _ = encrypted;
-        if let Some(value) = extract_reasoning_content(content, summary) {
-            extra_body.insert("inject_reasoning_content".to_string(), Value::String(value));
-        }
-    }
 }
 
 fn mark_node(node: &mut Node) {
@@ -187,7 +164,7 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::TransformRuntimeContext;
-    use crate::urp::{Item, Part, items_to_nodes, nodes_to_items};
+    use crate::urp::internal_legacy_bridge::{Item, Part, items_to_nodes, nodes_to_items};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -334,7 +311,7 @@ mod tests {
             created_at: None,
             output: items_to_nodes(vec![Item::Message {
                 id: None,
-                role: crate::urp::Role::Assistant,
+                role: crate::urp::internal_legacy_bridge::Role::Assistant,
                 parts: vec![Part::Reasoning {
                     content: Some("plain_resp".to_string()),
                     encrypted: Some(Value::String("enc_resp".to_string())),

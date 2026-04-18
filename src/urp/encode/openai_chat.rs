@@ -2,10 +2,11 @@ use crate::urp::encode::{
     merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
     usage_output_details,
 };
+use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
 use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
 use crate::urp::{
-    nodes_to_items, FileSource, FinishReason, ImageSource, Item, Node, OrdinaryRole, Part,
-    ResponseFormat, Role, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, ResponseFormat, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -708,9 +709,8 @@ fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::urp::decode::openai_chat as decode_chat;
-    use crate::urp::{
-        items_to_nodes, nodes_to_items, InputDetails, OutputDetails, UrpResponse, Usage,
-    };
+    use crate::urp::internal_legacy_bridge::{items_to_nodes, nodes_to_items};
+    use crate::urp::{InputDetails, OutputDetails, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {

@@ -1,14 +1,10 @@
-use crate::urp::{
-    Item, Node, OrdinaryRole, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent,
-    nodes_to_items,
-};
+use crate::urp::{Node, OrdinaryRole, UrpRequest, UrpResponse, UrpStreamEvent};
 use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 pub mod append_empty_user_message;
@@ -322,13 +318,6 @@ pub fn model_glob_match(pattern: &str, model: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn text_part(content: impl Into<String>) -> Part {
-    Part::Text {
-        content: content.into(),
-        extra_body: HashMap::new(),
-    }
-}
-
 pub fn text_node(role: OrdinaryRole, content: impl Into<String>) -> Node {
     Node::Text {
         id: None,
@@ -337,67 +326,6 @@ pub fn text_node(role: OrdinaryRole, content: impl Into<String>) -> Node {
         phase: None,
         extra_body: HashMap::new(),
     }
-}
-
-pub fn move_system_to_developer(items: &mut [Item]) {
-    for item in items.iter_mut() {
-        if let Item::Message { role, .. } = item {
-            if *role == Role::System {
-                *role = Role::Developer;
-            }
-        }
-    }
-}
-
-pub fn move_developer_to_system(items: &mut [Item]) {
-    for item in items.iter_mut() {
-        if let Item::Message { role, .. } = item {
-            if *role == Role::Developer {
-                *role = Role::System;
-            }
-        }
-    }
-}
-
-pub fn merge_same_role_items(items: &[Item]) -> Vec<Item> {
-    let mut merged: Vec<Item> = Vec::new();
-    for item in items {
-        if let Item::Message {
-            role,
-            parts,
-            extra_body,
-            ..
-        } = item
-        {
-            if let Some(Item::Message {
-                role: last_role,
-                parts: last_parts,
-                extra_body: last_extra,
-                ..
-            }) = merged.last_mut()
-            {
-                if last_role == role {
-                    last_parts.extend(parts.clone());
-                    for (k, v) in extra_body {
-                        if !last_extra.contains_key(k) {
-                            last_extra.insert(k.clone(), v.clone());
-                        }
-                    }
-                    continue;
-                }
-            }
-        }
-        merged.push(item.clone());
-    }
-    merged
-}
-
-pub fn strip_reasoning_parts(parts: &[Part]) -> Vec<Part> {
-    parts
-        .iter()
-        .filter(|part| !matches!(part, Part::Reasoning { .. }))
-        .cloned()
-        .collect()
 }
 
 pub fn move_system_to_developer_nodes(nodes: &mut [Node]) {
@@ -440,73 +368,6 @@ pub fn strip_reasoning_nodes(nodes: &[Node]) -> Vec<Node> {
         .filter(|node| !matches!(node, Node::Reasoning { .. }))
         .cloned()
         .collect()
-}
-
-pub fn request_messages(req: &UrpRequest) -> Vec<Item> {
-    nodes_to_items(&req.input)
-}
-
-pub struct ItemVecGuard<'a> {
-    target: &'a mut Vec<crate::urp::Node>,
-    items: Vec<Item>,
-}
-
-impl<'a> ItemVecGuard<'a> {
-    fn new(target: &'a mut Vec<crate::urp::Node>) -> Self {
-        Self {
-            items: nodes_to_items(target),
-            target,
-        }
-    }
-}
-
-impl Deref for ItemVecGuard<'_> {
-    type Target = Vec<Item>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.items
-    }
-}
-
-impl DerefMut for ItemVecGuard<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.items
-    }
-}
-
-impl Drop for ItemVecGuard<'_> {
-    fn drop(&mut self) {
-        *self.target = crate::urp::items_to_nodes_with_envelope_control(std::mem::take(&mut self.items));
-    }
-}
-
-pub fn request_messages_mut(req: &mut UrpRequest) -> ItemVecGuard<'_> {
-    ItemVecGuard::new(&mut req.input)
-}
-
-pub fn with_request_messages_mut<R>(req: &mut UrpRequest, f: impl FnOnce(&mut Vec<Item>) -> R) -> R {
-    let mut items = nodes_to_items(&req.input);
-    let result = f(&mut items);
-    req.input = crate::urp::items_to_nodes_with_envelope_control(items);
-    result
-}
-
-pub fn response_output_items(resp: &UrpResponse) -> Vec<Item> {
-    nodes_to_items(&resp.output)
-}
-
-pub fn response_output_items_mut(resp: &mut UrpResponse) -> ItemVecGuard<'_> {
-    ItemVecGuard::new(&mut resp.output)
-}
-
-pub fn with_response_output_items_mut<R>(
-    resp: &mut UrpResponse,
-    f: impl FnOnce(&mut Vec<Item>) -> R,
-) -> R {
-    let mut items = nodes_to_items(&resp.output);
-    let result = f(&mut items);
-    resp.output = crate::urp::items_to_nodes_with_envelope_control(items);
-    result
 }
 
 pub fn set_extra_path(extra: &mut HashMap<String, Value>, path: &str, value: Value) {

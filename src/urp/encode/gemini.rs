@@ -554,10 +554,8 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
 mod tests {
     use super::*;
     use crate::urp::decode::gemini as decode_gemini;
-    use crate::urp::{
-        items_to_nodes, InputDetails, Item, OutputDetails, Part, Role, UrpRequest, UrpResponse,
-        Usage,
-    };
+    use crate::urp::internal_legacy_bridge::{items_to_nodes, Item, Part, Role};
+    use crate::urp::{InputDetails, OutputDetails, UrpRequest, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {

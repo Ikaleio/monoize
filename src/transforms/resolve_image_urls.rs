@@ -1,8 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, request_messages, request_messages_mut,
+    TransformScope, TransformState, UrpData,
 };
-use crate::urp::{ImageSource, Item, Part, Role};
+use crate::urp::{ImageSource, Node, OrdinaryRole};
 use async_trait::async_trait;
 use base64::Engine as _;
 use serde::Deserialize;
@@ -106,59 +106,50 @@ impl Transform for ResolveImageUrlsTransform {
 
         let mut futures = Vec::new();
 
-        let snapshot = request_messages(req);
-        for (item_idx, item) in snapshot.iter().enumerate() {
-            let Item::Message { role, parts, .. } = item else {
+        for (node_idx, node) in req.input.iter().enumerate() {
+            let Some(role) = node.role() else {
                 continue;
             };
-            if !allowed_roles.contains(role) {
+            if !allowed_roles.contains(&role) {
                 continue;
             }
-            for (part_idx, part) in parts.iter().enumerate() {
-                if let Part::Image {
-                    source: ImageSource::Url { url, .. },
-                    ..
-                } = part
-                {
-                    if is_data_url(url) {
-                        continue;
-                    }
-                    let client = context.http_client.clone();
-                    let url = url.clone();
-                    let timeout =
-                        std::time::Duration::from_secs(cfg.timeout_seconds);
-                    let max_bytes = cfg.max_bytes;
-                    futures.push((
-                        item_idx,
-                        part_idx,
-                        tokio::spawn(async move {
-                            fetch_image_as_base64(&client, &url, timeout, max_bytes).await
-                        }),
-                    ));
+            if let Node::Image {
+                source: ImageSource::Url { url, .. },
+                ..
+            } = node
+            {
+                if is_data_url(url.as_str()) {
+                    continue;
                 }
+                let client = context.http_client.clone();
+                let url = url.clone();
+                let timeout = std::time::Duration::from_secs(cfg.timeout_seconds);
+                let max_bytes = cfg.max_bytes;
+                futures.push((
+                    node_idx,
+                    tokio::spawn(async move {
+                        fetch_image_as_base64(&client, &url, timeout, max_bytes).await
+                    }),
+                ));
             }
         }
 
-        for (item_idx, part_idx, handle) in futures {
+        for (node_idx, handle) in futures {
             let result = handle.await.map_err(|e| {
                 TransformError::Apply(format!("image fetch task failed: {e}"))
             })?;
             match result {
                 Ok((media_type, b64_data)) => {
-                    let mut messages = request_messages_mut(req);
-                    if let Some(Item::Message { parts, .. }) = messages.get_mut(item_idx) {
-                        if let Some(Part::Image { source, .. }) = parts.get_mut(part_idx) {
-                            *source = ImageSource::Base64 {
-                                media_type,
-                                data: b64_data,
-                            };
-                        }
+                    if let Some(Node::Image { source, .. }) = req.input.get_mut(node_idx) {
+                        *source = ImageSource::Base64 {
+                            media_type,
+                            data: b64_data,
+                        };
                     }
                 }
                 Err(e) => {
                     tracing::warn!(
-                        item_idx,
-                        part_idx,
+                        node_idx,
                         error = %e,
                         "resolve_image_urls: failed to fetch image, keeping original URL"
                     );
@@ -170,16 +161,21 @@ impl Transform for ResolveImageUrlsTransform {
     }
 }
 
-fn parse_allowed_roles(roles: &Option<Vec<String>>) -> Vec<Role> {
+fn parse_allowed_roles(roles: &Option<Vec<String>>) -> Vec<OrdinaryRole> {
     match roles {
-        None => vec![Role::User, Role::Assistant, Role::System, Role::Developer],
+        None => vec![
+            OrdinaryRole::User,
+            OrdinaryRole::Assistant,
+            OrdinaryRole::System,
+            OrdinaryRole::Developer,
+        ],
         Some(names) => names
             .iter()
             .filter_map(|name| match name.as_str() {
-                "user" => Some(Role::User),
-                "assistant" => Some(Role::Assistant),
-                "system" => Some(Role::System),
-                "developer" => Some(Role::Developer),
+                "user" => Some(OrdinaryRole::User),
+                "assistant" => Some(OrdinaryRole::Assistant),
+                "system" => Some(OrdinaryRole::System),
+                "developer" => Some(OrdinaryRole::Developer),
                 _ => None,
             })
             .collect(),

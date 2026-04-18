@@ -1,9 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages,
-    request_messages_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Item, Part};
+use crate::urp::Node;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -70,26 +69,17 @@ impl Transform for StripOrphanedToolUseTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            let result_ids: HashSet<String> = request_messages(req)
+            let result_ids: HashSet<String> = req
+                .input
                 .iter()
-                .filter_map(|item| match item {
-                    Item::ToolResult { call_id, .. } => Some(call_id.clone()),
+                .filter_map(|node| match node {
+                    Node::ToolResult { call_id, .. } => Some(call_id.clone()),
                     _ => None,
                 })
                 .collect();
 
-            let mut messages = request_messages_mut(req);
-            for item in messages.iter_mut() {
-                if let Item::Message { parts, .. } = item {
-                    parts.retain(|part| match part {
-                        Part::ToolCall { call_id, .. } => result_ids.contains(call_id),
-                        _ => true,
-                    });
-                }
-            }
-
-            messages.retain(|item| match item {
-                Item::Message { parts, .. } => !parts.is_empty(),
+            req.input.retain(|node| match node {
+                Node::ToolCall { call_id, .. } => result_ids.contains(call_id),
                 _ => true,
             });
         }

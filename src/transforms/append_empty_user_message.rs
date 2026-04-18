@@ -1,8 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Item, Role};
+use crate::urp::{Node, OrdinaryRole};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -73,17 +73,18 @@ impl Transform for AppendEmptyUserMessageTransform {
             .downcast_ref::<Config>()
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         if let UrpData::Request(req) = data {
-            let mut messages = request_messages_mut(req);
-            if let Some(last) = messages.last() {
-                if matches!(
-                    last,
-                    Item::Message {
-                        role: Role::Assistant,
-                        ..
-                    }
-                ) {
-                    messages.push(Item::text(Role::User, cfg.content.clone()));
-                }
+            if req
+                .input
+                .last()
+                .is_some_and(|node| node.role() == Some(OrdinaryRole::Assistant))
+            {
+                req.input.push(Node::Text {
+                    id: None,
+                    role: OrdinaryRole::User,
+                    content: cfg.content.clone(),
+                    phase: None,
+                    extra_body: std::collections::HashMap::new(),
+                });
             }
         }
         Ok(())

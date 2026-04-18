@@ -6,8 +6,9 @@ pub mod openai_responses;
 pub mod replicate;
 
 use crate::urp::{
-    FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole, Part, ToolDefinition,
+    FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole, ToolDefinition,
 };
+use crate::urp::internal_legacy_bridge::Part;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -140,7 +141,7 @@ pub fn parse_tool_call_arguments_value(obj: &Map<String, Value>) -> Option<Value
         })
 }
 
-pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
     let tool_type = obj.get("type").and_then(|v| v.as_str())?;
     if !matches!(tool_type, "tool_call" | "function_call" | "tool_use") {
         return None;
@@ -168,9 +169,7 @@ pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
             value
                 .as_str()
                 .map(|text| text.to_string())
-                .unwrap_or_else(|| {
-                    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
-                })
+                .unwrap_or_else(|| serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string()))
         })
         .unwrap_or_else(|| "{}".to_string());
 
@@ -178,7 +177,7 @@ pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
         return None;
     }
 
-    Some(Part::ToolCall {
+    Some(Node::ToolCall {
         id: obj
             .get("id")
             .and_then(|v| v.as_str())
@@ -202,80 +201,84 @@ pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     })
 }
 
-pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+    let Node::ToolCall {
+        id,
+        call_id,
+        name,
+        arguments,
+        extra_body,
+    } = parse_tool_call_node_from_obj(obj)?
+    else {
+        return None;
+    };
+    Some(Part::ToolCall {
+        id,
+        call_id,
+        name,
+        arguments,
+        extra_body,
+    })
+}
+
+pub fn parse_image_source_from_obj(obj: &Map<String, Value>) -> Option<ImageSource> {
     let t = obj.get("type")?.as_str()?;
     match t {
         "image_url" | "input_image" | "output_image" | "image" => {
             if let Some(url) = obj.get("image_url").and_then(|v| v.as_str()) {
-                return Some(Part::Image {
-                    source: ImageSource::Url {
-                        url: url.to_string(),
-                        detail: obj
-                            .get("detail")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                    },
-                    extra_body: split_extra(obj, &["type", "image_url", "detail"]),
+                return Some(ImageSource::Url {
+                    url: url.to_string(),
+                    detail: obj
+                        .get("detail")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 });
             }
             if let Some(url_obj) = obj.get("image_url").and_then(|v| v.as_object()) {
-                let url = url_obj.get("url")?.as_str()?.to_string();
-                let detail = url_obj
-                    .get("detail")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                return Some(Part::Image {
-                    source: ImageSource::Url { url, detail },
-                    extra_body: HashMap::new(),
+                return Some(ImageSource::Url {
+                    url: url_obj.get("url")?.as_str()?.to_string(),
+                    detail: url_obj
+                        .get("detail")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 });
             }
             if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
-                return Some(Part::Image {
-                    source: ImageSource::Url {
-                        url: url.to_string(),
-                        detail: obj
-                            .get("detail")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                    },
-                    extra_body: split_extra(obj, &["type", "url", "detail"]),
+                return Some(ImageSource::Url {
+                    url: url.to_string(),
+                    detail: obj
+                        .get("detail")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 });
             }
             if let Some(data) = obj.get("image_base64").and_then(|v| v.as_str()) {
-                return Some(Part::Image {
-                    source: ImageSource::Base64 {
-                        media_type: obj
-                            .get("media_type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("image/png")
-                            .to_string(),
-                        data: data.to_string(),
-                    },
-                    extra_body: split_extra(obj, &["type", "image_base64", "media_type"]),
+                return Some(ImageSource::Base64 {
+                    media_type: obj
+                        .get("media_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image/png")
+                        .to_string(),
+                    data: data.to_string(),
                 });
             }
             if let Some(src) = obj.get("source").and_then(|v| v.as_object()) {
                 if let Some(url) = src.get("url").and_then(|v| v.as_str()) {
-                    return Some(Part::Image {
-                        source: ImageSource::Url {
-                            url: url.to_string(),
-                            detail: obj
-                                .get("detail")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string()),
-                        },
-                        extra_body: split_extra(obj, &["type", "source", "detail"]),
+                    return Some(ImageSource::Url {
+                        url: url.to_string(),
+                        detail: obj
+                            .get("detail")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
                     });
                 }
-                let media_type = src
-                    .get("media_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("image/png")
-                    .to_string();
-                let data = src.get("data").and_then(|v| v.as_str())?.to_string();
-                return Some(Part::Image {
-                    source: ImageSource::Base64 { media_type, data },
-                    extra_body: split_extra(obj, &["type", "source"]),
+                return Some(ImageSource::Base64 {
+                    media_type: src
+                        .get("media_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image/png")
+                        .to_string(),
+                    data: src.get("data").and_then(|v| v.as_str())?.to_string(),
                 });
             }
             None
@@ -284,52 +287,59 @@ pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     }
 }
 
-pub fn parse_file_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+pub fn parse_image_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
+    Some(Node::Image {
+        id: None,
+        role,
+        source: parse_image_source_from_obj(obj)?,
+        extra_body: split_extra(
+            obj,
+            &["type", "image_url", "detail", "url", "image_base64", "media_type", "source"],
+        ),
+    })
+}
+
+pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+    Some(Part::Image {
+        source: parse_image_source_from_obj(obj)?,
+        extra_body: split_extra(
+            obj,
+            &["type", "image_url", "detail", "url", "image_base64", "media_type", "source"],
+        ),
+    })
+}
+
+pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource> {
     let t = obj.get("type")?.as_str()?;
     match t {
         "input_file" | "output_file" | "document" | "file" => {
             if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
-                return Some(Part::File {
-                    source: FileSource::Url {
-                        url: url.to_string(),
-                    },
-                    extra_body: split_extra(obj, &["type", "url"]),
+                return Some(FileSource::Url {
+                    url: url.to_string(),
                 });
             }
             if let Some(url) = obj.get("file_url").and_then(|v| v.as_str()) {
-                return Some(Part::File {
-                    source: FileSource::Url {
-                        url: url.to_string(),
-                    },
-                    extra_body: split_extra(obj, &["type", "file_url"]),
+                return Some(FileSource::Url {
+                    url: url.to_string(),
                 });
             }
             if let Some(src) = obj.get("source").and_then(|v| v.as_object()) {
                 if let Some(url) = src.get("url").and_then(|v| v.as_str()) {
-                    return Some(Part::File {
-                        source: FileSource::Url {
-                            url: url.to_string(),
-                        },
-                        extra_body: split_extra(obj, &["type", "source"]),
+                    return Some(FileSource::Url {
+                        url: url.to_string(),
                     });
                 }
-                let media_type = src
-                    .get("media_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
-                let data = src.get("data").and_then(|v| v.as_str())?.to_string();
-                let filename = src
-                    .get("filename")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                return Some(Part::File {
-                    source: FileSource::Base64 {
-                        filename,
-                        media_type,
-                        data,
-                    },
-                    extra_body: split_extra(obj, &["type", "source"]),
+                return Some(FileSource::Base64 {
+                    filename: src
+                        .get("filename")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    media_type: src
+                        .get("media_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("application/octet-stream")
+                        .to_string(),
+                    data: src.get("data").and_then(|v| v.as_str())?.to_string(),
                 });
             }
             if let Some(data) = obj
@@ -337,37 +347,70 @@ pub fn parse_file_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
                 .or_else(|| obj.get("data"))
                 .and_then(|v| v.as_str())
             {
-                return Some(Part::File {
-                    source: FileSource::Base64 {
-                        filename: obj
-                            .get("filename")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        media_type: obj
-                            .get("media_type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("application/octet-stream")
-                            .to_string(),
-                        data: data.to_string(),
-                    },
-                    extra_body: split_extra(
-                        obj,
-                        &["type", "file_data", "data", "filename", "media_type"],
-                    ),
+                return Some(FileSource::Base64 {
+                    filename: obj
+                        .get("filename")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    media_type: obj
+                        .get("media_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("application/octet-stream")
+                        .to_string(),
+                    data: data.to_string(),
                 });
             }
             if let Some(file_id) = obj.get("file_id").and_then(|v| v.as_str()) {
-                return Some(Part::File {
-                    source: FileSource::Url {
-                        url: format!("file_id://{file_id}"),
-                    },
-                    extra_body: split_extra(obj, &["type", "file_id"]),
+                return Some(FileSource::Url {
+                    url: format!("file_id://{file_id}"),
                 });
             }
             None
         }
         _ => None,
     }
+}
+
+pub fn parse_file_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
+    Some(Node::File {
+        id: None,
+        role,
+        source: parse_file_source_from_obj(obj)?,
+        extra_body: split_extra(
+            obj,
+            &[
+                "type",
+                "url",
+                "file_url",
+                "source",
+                "file_data",
+                "data",
+                "filename",
+                "media_type",
+                "file_id",
+            ],
+        ),
+    })
+}
+
+pub fn parse_file_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+    Some(Part::File {
+        source: parse_file_source_from_obj(obj)?,
+        extra_body: split_extra(
+            obj,
+            &[
+                "type",
+                "url",
+                "file_url",
+                "source",
+                "file_data",
+                "data",
+                "filename",
+                "media_type",
+                "file_id",
+            ],
+        ),
+    })
 }
 
 pub fn value_to_text(v: &Value) -> String {
@@ -381,25 +424,13 @@ pub fn value_to_text(v: &Value) -> String {
                 out.push_str(s);
                 continue;
             }
-            if let Some(obj) = item.as_object() {
-                if let Some(text) = obj.get("text").and_then(|x| x.as_str()) {
-                    out.push_str(text);
-                }
+            if let Some(obj) = item.as_object()
+                && let Some(text) = obj.get("text").and_then(|x| x.as_str())
+            {
+                out.push_str(text);
             }
         }
         return out;
     }
     serde_json::to_string(v).unwrap_or_default()
-}
-
-pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
-    parse_tool_call_part_from_obj(obj).map(|p| p.into_node(OrdinaryRole::Assistant))
-}
-
-pub fn parse_image_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
-    parse_image_part_from_obj(obj).map(|p| p.into_node(role))
-}
-
-pub fn parse_file_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
-    parse_file_part_from_obj(obj).map(|p| p.into_node(role))
 }

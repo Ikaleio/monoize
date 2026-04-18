@@ -52,15 +52,13 @@ pub async fn create_image_generation(
 
     let extra_body = build_extra_body(obj, &["prompt", "model", "n", "max_multiplier"]);
 
-    let inputs = urp::items_to_nodes(vec![urp::Item::Message {
+    let inputs = vec![urp::Node::Text {
         id: None,
-        role: urp::Role::User,
-        parts: vec![urp::Part::Text {
-            content: prompt,
-            extra_body: HashMap::new(),
-        }],
+        role: urp::OrdinaryRole::User,
+        content: prompt,
+        phase: None,
         extra_body: HashMap::new(),
-    }]);
+    }];
 
     tracing::info!(
         model = %model,
@@ -211,8 +209,10 @@ pub async fn create_image_edit(
 
     let has_mask = mask_data.is_some();
 
-    let mut parts = Vec::new();
-    parts.push(urp::Part::Image {
+    let mut inputs = Vec::new();
+    inputs.push(urp::Node::Image {
+        id: None,
+        role: urp::OrdinaryRole::User,
         source: urp::ImageSource::Base64 {
             media_type: image_media_type,
             data: image_b64,
@@ -220,7 +220,9 @@ pub async fn create_image_edit(
         extra_body: HashMap::new(),
     });
     for (extra_media_type, extra_b64) in extra_images {
-        parts.push(urp::Part::Image {
+        inputs.push(urp::Node::Image {
+            id: None,
+            role: urp::OrdinaryRole::User,
             source: urp::ImageSource::Base64 {
                 media_type: extra_media_type,
                 data: extra_b64,
@@ -229,7 +231,9 @@ pub async fn create_image_edit(
         });
     }
     if let Some((mask_media_type, mask_b64)) = mask_data {
-        parts.push(urp::Part::Image {
+        inputs.push(urp::Node::Image {
+            id: None,
+            role: urp::OrdinaryRole::User,
             source: urp::ImageSource::Base64 {
                 media_type: mask_media_type,
                 data: mask_b64,
@@ -237,17 +241,13 @@ pub async fn create_image_edit(
             extra_body: HashMap::new(),
         });
     }
-    parts.push(urp::Part::Text {
+    inputs.push(urp::Node::Text {
+        id: None,
+        role: urp::OrdinaryRole::User,
         content: prompt,
+        phase: None,
         extra_body: HashMap::new(),
     });
-
-    let inputs = urp::items_to_nodes(vec![urp::Item::Message {
-        id: None,
-        role: urp::Role::User,
-        parts,
-        extra_body: HashMap::new(),
-    }]);
 
     tracing::info!(
         model = %model,

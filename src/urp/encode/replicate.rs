@@ -1,7 +1,7 @@
 use crate::urp::encode::merge_extra;
+use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::{
-    nodes_to_items, FinishReason, ImageSource, Item, Part, Role, ToolResultContent, UrpRequest,
-    UrpResponse,
+    FinishReason, ImageSource, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 

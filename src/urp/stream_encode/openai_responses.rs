@@ -2453,7 +2453,7 @@ fn merge_json_extra_preserving_typed(obj: &mut Map<String, Value>, extra: &HashM
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::urp::{FinishReason, Part, Role, UrpResponse};
+    use crate::urp::{FinishReason, OrdinaryRole, UrpResponse};
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
@@ -2461,40 +2461,37 @@ mod tests {
 
     #[test]
     fn streamed_completion_uses_nonstream_response_output_shape_for_merged_items() {
-        let output = urp::items_to_nodes(vec![crate::urp::Item::Message {
-            id: None,
-            role: Role::Assistant,
-            parts: vec![
-                Part::Reasoning {
-                    id: None,
-                    content: Some("think".to_string()),
-                    encrypted: Some(json!("sig_1")),
-                    summary: None,
-                    source: None,
-                    extra_body: empty_map(),
-                },
-                Part::Text {
-                    content: "answer".to_string(),
-                    extra_body: {
-                        let mut map = empty_map();
-                        map.insert("phase".to_string(), json!("analysis"));
-                        map
-                    },
-                },
-                Part::ToolCall {
-                    id: None,
-                    call_id: "call_1".to_string(),
-                    name: "lookup".to_string(),
-                    arguments: "{}".to_string(),
-                    extra_body: empty_map(),
-                },
-            ],
-            extra_body: {
-                let mut map = empty_map();
-                map.insert("custom_message_field".to_string(), json!(true));
-                map
+        let output = vec![
+            urp::Node::Reasoning {
+                id: None,
+                content: Some("think".to_string()),
+                encrypted: Some(json!("sig_1")),
+                summary: None,
+                source: None,
+                extra_body: empty_map(),
             },
-        }]);
+            urp::Node::NextDownstreamEnvelopeExtra {
+                extra_body: {
+                    let mut map = empty_map();
+                    map.insert("custom_message_field".to_string(), json!(true));
+                    map
+                },
+            },
+            urp::Node::Text {
+                id: None,
+                role: OrdinaryRole::Assistant,
+                content: "answer".to_string(),
+                phase: Some("analysis".to_string()),
+                extra_body: empty_map(),
+            },
+            urp::Node::ToolCall {
+                id: None,
+                call_id: "call_1".to_string(),
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+                extra_body: empty_map(),
+            },
+        ];
 
         let encoded = urp::encode::openai_responses::encode_response(
             &UrpResponse {

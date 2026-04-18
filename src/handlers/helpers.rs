@@ -756,31 +756,33 @@ mod tests {
             id: "resp_1".to_string(),
             model: "gpt-image-1".to_string(),
             created_at: None,
-            output: urp::items_to_nodes(vec![urp::Item::Message {
-                id: None,
-                role: urp::Role::Assistant,
-                parts: vec![
-                    urp::Part::Text {
-                        content: "Here you go".to_string(),
-                        extra_body: std::collections::HashMap::new(),
+            output: vec![
+                urp::Node::Text {
+                    id: None,
+                    role: urp::OrdinaryRole::Assistant,
+                    content: "Here you go".to_string(),
+                    phase: None,
+                    extra_body: std::collections::HashMap::new(),
+                },
+                urp::Node::Image {
+                    id: None,
+                    role: urp::OrdinaryRole::Assistant,
+                    source: urp::ImageSource::Base64 {
+                        media_type: "image/png".to_string(),
+                        data: "QUJD".to_string(),
                     },
-                    urp::Part::Image {
-                        source: urp::ImageSource::Base64 {
-                            media_type: "image/png".to_string(),
-                            data: "QUJD".to_string(),
-                        },
-                        extra_body: std::collections::HashMap::new(),
+                    extra_body: std::collections::HashMap::new(),
+                },
+                urp::Node::Image {
+                    id: None,
+                    role: urp::OrdinaryRole::Assistant,
+                    source: urp::ImageSource::Url {
+                        url: "https://example.com/two.png".to_string(),
+                        detail: None,
                     },
-                    urp::Part::Image {
-                        source: urp::ImageSource::Url {
-                            url: "https://example.com/two.png".to_string(),
-                            detail: None,
-                        },
-                        extra_body: std::collections::HashMap::new(),
-                    },
-                ],
-                extra_body: std::collections::HashMap::new(),
-            }]),
+                    extra_body: std::collections::HashMap::new(),
+                },
+            ],
             finish_reason: Some(urp::FinishReason::Stop),
             usage: None,
             extra_body: std::collections::HashMap::new(),
@@ -788,15 +790,11 @@ mod tests {
 
         convert_assistant_images_to_markdown(&mut resp);
 
-        let outputs = urp::nodes_to_items(&resp.output);
-        let urp::Item::Message { parts, .. } = &outputs[0] else {
-            panic!("expected assistant message");
-        };
-        assert_eq!(parts.len(), 1);
         assert!(matches!(
-            &parts[0],
-            urp::Part::Text { content, .. }
+            &resp.output[0],
+            urp::Node::Text { content, .. }
             if content == "Here you go\n\n![image](data:image/png;base64,QUJD)\n\n![image](https://example.com/two.png)"
         ));
+        assert_eq!(resp.output.len(), 1);
     }
 }

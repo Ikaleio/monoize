@@ -154,7 +154,8 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::{Item, Part, Role, UrpResponse, items_to_nodes, nodes_to_items};
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
+    use crate::urp::UrpResponse;
     use std::collections::HashMap;
     use tempfile::TempDir;
 

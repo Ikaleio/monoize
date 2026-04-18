@@ -2,7 +2,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{ImageSource, Item, Part, Role, UrpStreamEvent};
+use crate::urp::{ImageSource, Node, OrdinaryRole, UrpStreamEvent};
 use async_trait::async_trait;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
@@ -89,39 +89,6 @@ impl Transform for AssistantOutputImagesToMarkdownTransform {
         }
         Ok(())
     }
-}
-
-#[cfg(test)]
-fn append_images_as_markdown(item: &mut Item, config: &Config) {
-    let Item::Message { role, parts, .. } = item else {
-        return;
-    };
-    if *role != Role::Assistant {
-        return;
-    }
-    let appended = parts
-        .iter()
-        .filter_map(|part| match part {
-            Part::Image { source, .. } => Some(format_image_markdown(source, config)),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    if appended.is_empty() {
-        return;
-    }
-    if let Some(Part::Text { content, .. }) = parts
-        .iter_mut()
-        .rev()
-        .find(|part| matches!(part, Part::Text { .. }))
-    {
-        content.push_str(&appended);
-        return;
-    }
-    parts.push(Part::Text {
-        content: appended,
-        extra_body: HashMap::new(),
-    });
 }
 
 fn append_images_as_markdown_nodes(output: &mut Vec<crate::urp::Node>, config: &Config) {
@@ -220,29 +187,26 @@ mod tests {
     #[test]
     fn appends_default_markdown_for_output_images() {
         let cfg = Config { template: None };
-        let mut item = Item::Message {
-            id: None,
-            role: Role::Assistant,
-            parts: vec![
-                Part::Text {
-                    content: "hello".to_string(),
-                    extra_body: HashMap::new(),
+        let mut nodes = vec![
+            Node::Text {
+                id: None,
+                role: OrdinaryRole::Assistant,
+                content: "hello".to_string(),
+                phase: None,
+                extra_body: HashMap::new(),
+            },
+            Node::Image {
+                id: None,
+                role: OrdinaryRole::Assistant,
+                source: ImageSource::Url {
+                    url: "https://example.com/a.png".to_string(),
+                    detail: None,
                 },
-                Part::Image {
-                    source: ImageSource::Url {
-                        url: "https://example.com/a.png".to_string(),
-                        detail: None,
-                    },
-                    extra_body: HashMap::new(),
-                },
-            ],
-            extra_body: HashMap::new(),
-        };
-        append_images_as_markdown(&mut item, &cfg);
-        let Item::Message { parts, .. } = item else {
-            panic!("expected message");
-        };
-        let Part::Text { content, .. } = &parts[0] else {
+                extra_body: HashMap::new(),
+            },
+        ];
+        append_images_as_markdown_nodes(&mut nodes, &cfg);
+        let Node::Text { content, .. } = &nodes[0] else {
             panic!("expected text");
         };
         assert_eq!(content, "hello![image](https://example.com/a.png)");

@@ -1,8 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, merge_same_role_items,
-    request_messages, request_messages_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
+use crate::urp::Node;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -60,12 +60,43 @@ impl Transform for MergeConsecutiveRolesTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            let merged = merge_same_role_items(&request_messages(req));
-            let mut messages = request_messages_mut(req);
-            *messages = merged;
+            req.input = merge_same_role_nodes(&req.input);
         }
         Ok(())
     }
+}
+
+fn merge_same_role_nodes(nodes: &[Node]) -> Vec<Node> {
+    let mut merged: Vec<Node> = Vec::new();
+    for node in nodes {
+        if let (
+            Some(Node::Text {
+                role: last_role,
+                content: last_content,
+                phase: last_phase,
+                extra_body: last_extra,
+                ..
+            }),
+            Node::Text {
+                role,
+                content,
+                phase,
+                extra_body,
+                ..
+            },
+        ) = (merged.last_mut(), node)
+            && last_role == role
+            && last_phase == phase
+        {
+            last_content.push_str(content);
+            for (k, v) in extra_body {
+                last_extra.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            continue;
+        }
+        merged.push(node.clone());
+    }
+    merged
 }
 
 inventory::submit!(TransformEntry {

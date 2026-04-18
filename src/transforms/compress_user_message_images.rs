@@ -1,9 +1,9 @@
 use crate::image_transform_cache::CachedImagePayload;
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{ImageSource, Item, Part, Role};
+use crate::urp::{ImageSource, Node, OrdinaryRole};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
@@ -123,43 +123,35 @@ impl Transform for CompressUserMessageImagesTransform {
             return Ok(());
         };
 
-        let mut messages = request_messages_mut(req);
-        for message in messages.iter_mut() {
-            let Item::Message { role, parts, .. } = message else {
+        for node in &mut req.input {
+            let Node::Image {
+                role: OrdinaryRole::User,
+                source,
+                ..
+            } = node
+            else {
                 continue;
             };
-            if *role != Role::User {
-                continue;
-            }
-            for part in parts.iter_mut() {
-                let Part::Image { source, .. } = part else {
-                    continue;
-                };
-                match source {
-                    ImageSource::Base64 { media_type, data } => {
-                        let Some(next_source) = compress_base64_image(
-                            context,
-                            cfg.clone(),
-                            media_type.clone(),
-                            data.clone(),
-                        )
-                        .await?
-                        else {
-                            continue;
-                        };
-                        *source = next_source;
-                    }
-                    ImageSource::Url { url, detail } => {
-                        let Some((media_type, data)) = split_image_data_url(url.as_str()) else {
-                            continue;
-                        };
-                        let Some(next_source) =
-                            compress_base64_image(context, cfg.clone(), media_type, data).await?
-                        else {
-                            continue;
-                        };
-                        *source = preserve_url_detail(next_source, detail.clone());
-                    }
+            match source {
+                ImageSource::Base64 { media_type, data } => {
+                    let Some(next_source) =
+                        compress_base64_image(context, cfg.clone(), media_type.clone(), data.clone())
+                            .await?
+                    else {
+                        continue;
+                    };
+                    *source = next_source;
+                }
+                ImageSource::Url { url, detail } => {
+                    let Some((media_type, data)) = split_image_data_url(url.as_str()) else {
+                        continue;
+                    };
+                    let Some(next_source) =
+                        compress_base64_image(context, cfg.clone(), media_type, data).await?
+                    else {
+                        continue;
+                    };
+                    *source = preserve_url_detail(next_source, detail.clone());
                 }
             }
         }
@@ -372,7 +364,8 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::{Item, UrpRequest, items_to_nodes, nodes_to_items};
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
+    use crate::urp::UrpRequest;
     use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
     use image::{ImageBuffer, ImageEncoder, Rgb};
     use serde_json::json;
@@ -531,7 +524,7 @@ mod tests {
             panic!("expected data-url image source");
         };
         assert_eq!(detail.as_deref(), Some("high"));
-        let Some((media_type, data)) = split_image_data_url(url) else {
+        let Some((media_type, data)) = split_image_data_url(url.as_str()) else {
             panic!("expected transformed data url");
         };
         assert_eq!(media_type, "image/jpeg");

@@ -1,11 +1,12 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
+    deserialize_u64ish_default, parse_file_node_from_obj, parse_file_source_from_obj,
+    parse_image_node_from_obj, parse_image_source_from_obj,
     parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::{
     unwrap_reasoning_signature_sigil, FinishReason, InputDetails, Node, OrdinaryRole,
-    OutputDetails, Part, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse,
-    Usage, REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
+    OutputDetails, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -536,29 +537,11 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                         extra_body: split_extra(bobj, &["type", "id", "name", "input"]),
                     }]
                 }
-                "image" => parse_image_part_from_obj(bobj)
+                "image" => parse_image_node_from_obj(bobj, OrdinaryRole::Assistant)
                     .into_iter()
-                    .map(|part| match part {
-                        crate::urp::Part::Image { source, extra_body } => Node::Image {
-                            id: None,
-                            role: OrdinaryRole::Assistant,
-                            source,
-                            extra_body,
-                        },
-                        _ => unreachable!(),
-                    })
                     .collect(),
-                "document" | "file" => parse_file_part_from_obj(bobj)
+                "document" | "file" => parse_file_node_from_obj(bobj, OrdinaryRole::Assistant)
                     .into_iter()
-                    .map(|part| match part {
-                        crate::urp::Part::File { source, extra_body } => Node::File {
-                            id: None,
-                            role: OrdinaryRole::Assistant,
-                            source,
-                            extra_body,
-                        },
-                        _ => unreachable!(),
-                    })
                     .collect(),
                 _ => {
                     vec![text_node_with_phase(
@@ -700,17 +683,11 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
             }
         }
         _ => {
-            if let Some(image) = parse_image_part_from_obj(obj) {
-                let Part::Image { source, .. } = image else {
-                    unreachable!();
-                };
+            if let Some(source) = parse_image_source_from_obj(obj) {
                 content.push(ToolResultContent::Image { source });
                 return;
             }
-            if let Some(file) = parse_file_part_from_obj(obj) {
-                let Part::File { source, .. } = file else {
-                    unreachable!();
-                };
+            if let Some(source) = parse_file_source_from_obj(obj) {
                 content.push(ToolResultContent::File { source });
                 return;
             }

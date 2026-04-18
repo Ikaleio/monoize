@@ -8,9 +8,11 @@ use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,
 };
+use crate::urp::internal_legacy_bridge::{
+    Item, ItemHeader, Part, PartDelta, PartHeader, Role, nodes_to_items,
+};
 use crate::urp::{
-    FinishReason, Item, ItemHeader, Node, NodeDelta, NodeHeader, OrdinaryRole, Part, PartDelta,
-    PartHeader, Role, UrpStreamEvent, nodes_to_items,
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;

@@ -1,9 +1,10 @@
 use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj, split_extra,
 };
+use crate::urp::internal_legacy_bridge::{Part, Role, nodes_to_items};
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, Part, ReasoningConfig, Role,
-    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ReasoningConfig, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -672,7 +673,7 @@ fn collect_content_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::decode_response;
-    use crate::urp::nodes_to_items;
+    use crate::urp::internal_legacy_bridge::nodes_to_items;
     use serde_json::{json, Value};
 
     #[test]

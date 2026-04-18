@@ -32,7 +32,7 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::urp::{items_to_nodes, Item, Part, Role};
+    use crate::urp::{Node, OrdinaryRole};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -44,50 +44,13 @@ mod tests {
     fn encodes_user_text_parts_into_prompt_and_preserves_allowed_extra_fields() {
         let req = UrpRequest {
             model: "logical-model".to_string(),
-            input: items_to_nodes(vec![
-                Item::Message {
-                    id: None,
-                    role: Role::System,
-                    parts: vec![Part::Text {
-                        content: "ignore system".to_string(),
-                        extra_body: empty_map(),
-                    }],
-                    extra_body: empty_map(),
-                },
-                Item::Message {
-                    id: None,
-                    role: Role::User,
-                    parts: vec![
-                        Part::Text {
-                            content: "draw a cat".to_string(),
-                            extra_body: empty_map(),
-                        },
-                        Part::Text {
-                            content: "  ".to_string(),
-                            extra_body: empty_map(),
-                        },
-                    ],
-                    extra_body: empty_map(),
-                },
-                Item::Message {
-                    id: None,
-                    role: Role::Assistant,
-                    parts: vec![Part::Text {
-                        content: "ignore assistant".to_string(),
-                        extra_body: empty_map(),
-                    }],
-                    extra_body: empty_map(),
-                },
-                Item::Message {
-                    id: None,
-                    role: Role::User,
-                    parts: vec![Part::Text {
-                        content: "in watercolor".to_string(),
-                        extra_body: empty_map(),
-                    }],
-                    extra_body: empty_map(),
-                },
-            ]),
+            input: vec![
+                Node::Text { id: None, role: OrdinaryRole::System, content: "ignore system".to_string(), phase: None, extra_body: empty_map() },
+                Node::Text { id: None, role: OrdinaryRole::User, content: "draw a cat".to_string(), phase: None, extra_body: empty_map() },
+                Node::Text { id: None, role: OrdinaryRole::User, content: "  ".to_string(), phase: None, extra_body: empty_map() },
+                Node::Text { id: None, role: OrdinaryRole::Assistant, content: "ignore assistant".to_string(), phase: None, extra_body: empty_map() },
+                Node::Text { id: None, role: OrdinaryRole::User, content: "in watercolor".to_string(), phase: None, extra_body: empty_map() },
+            ],
             stream: Some(true),
             temperature: Some(0.3),
             top_p: Some(0.9),

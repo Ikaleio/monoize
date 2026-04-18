@@ -2,9 +2,10 @@ use crate::urp::encode::{
     merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
     usage_output_details,
 };
+use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
 use crate::urp::{
-    nodes_to_items, FileSource, FinishReason, ImageSource, Item, Part, ResponseFormat, Role,
-    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, ResponseFormat, ToolDefinition, ToolResultContent,
+    UrpRequest, UrpResponse,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -893,9 +894,8 @@ fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str 
 mod tests {
     use super::*;
     use crate::urp::decode::openai_responses as decode_responses;
-    use crate::urp::{
-        items_to_nodes, nodes_to_items, InputDetails, Item, OutputDetails, Role, Usage,
-    };
+    use crate::urp::internal_legacy_bridge::{items_to_nodes, nodes_to_items, Item, Part, Role};
+    use crate::urp::{InputDetails, OutputDetails, Usage};
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()

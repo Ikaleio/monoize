@@ -1,9 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages,
-    request_messages_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Item, Part, Role};
+use crate::urp::{Node, OrdinaryRole};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -69,10 +68,7 @@ impl Transform for AutoCacheToolUseTransform {
         };
 
         // Check if the last message is a Tool result
-        let snapshot = request_messages(req);
-        let last_msg = snapshot.last();
-        let is_tool_result = last_msg.is_some_and(|item| matches!(item, Item::ToolResult { .. }));
-        if !is_tool_result {
+        if !matches!(req.input.last(), Some(Node::ToolResult { .. })) {
             return Ok(());
         }
 
@@ -83,19 +79,14 @@ impl Transform for AutoCacheToolUseTransform {
         // Walk backwards to find: Tool(result) <- Assistant(ToolCall) <- User(the target)
         // Find the last Assistant message with a ToolCall before the trailing tool results
         let mut assistant_tool_call_idx: Option<usize> = None;
-        for (i, item) in snapshot.iter().enumerate().rev() {
-            if matches!(item, Item::ToolResult { .. }) {
+        for (i, node) in req.input.iter().enumerate().rev() {
+            if matches!(node, Node::ToolResult { .. }) {
                 continue;
             }
-            if let Item::Message { role, parts, .. } = item {
-                if *role == Role::Assistant
-                    && parts.iter().any(|p| matches!(p, Part::ToolCall { .. }))
-                {
-                    assistant_tool_call_idx = Some(i);
-                    break;
-                }
+            if matches!(node, Node::ToolCall { .. }) {
+                assistant_tool_call_idx = Some(i);
+                break;
             }
-            // If we hit anything else (User, System), stop searching
             break;
         }
 
@@ -106,13 +97,7 @@ impl Transform for AutoCacheToolUseTransform {
         // Find the last User message before the assistant's tool call
         let mut target_user_idx: Option<usize> = None;
         for i in (0..assistant_idx).rev() {
-            if matches!(
-                &snapshot[i],
-                Item::Message {
-                    role: Role::User,
-                    ..
-                }
-            ) {
+            if req.input[i].role() == Some(OrdinaryRole::User) {
                 target_user_idx = Some(i);
                 break;
             }
@@ -123,70 +108,38 @@ impl Transform for AutoCacheToolUseTransform {
         };
 
         // Check if that User message already has cache_control
-        let already_has_cache = match &snapshot[user_idx] {
-            Item::Message { parts, .. } => parts
-                .iter()
-                .any(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control"))),
-            Item::ToolResult { extra_body, .. } => extra_body.contains_key("cache_control"),
-        };
+        let already_has_cache = node_has_cache_control(&req.input[user_idx]);
         if already_has_cache {
             return Ok(());
         }
 
-        // Add cache_control to the last part of the target User message
-        let mut messages = request_messages_mut(req);
-        if let Item::Message { parts, .. } = &mut messages[user_idx] {
-            if let Some(last_part) = parts.last_mut() {
-                if let Some(eb) = part_extra_body_mut(last_part) {
-                    eb.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
-                }
-            }
-        }
+        req.input[user_idx]
+            .extra_body_mut()
+            .insert("cache_control".to_string(), json!({"type": "ephemeral"}));
 
         Ok(())
     }
 }
 
 fn count_cache_breakpoints(req: &crate::urp::UrpRequest) -> usize {
-    request_messages(req)
+    req.input
         .iter()
-        .map(|item| match item {
-            Item::Message { parts, .. } => parts
-                .iter()
-                .filter(|p| part_extra_body(p).is_some_and(|eb| eb.contains_key("cache_control")))
-                .count(),
-            Item::ToolResult { extra_body, .. } => {
-                usize::from(extra_body.contains_key("cache_control"))
-            }
-        })
-        .sum()
+        .filter(|node| node_has_cache_control(node))
+        .count()
 }
 
-fn part_extra_body(part: &crate::urp::Part) -> Option<&std::collections::HashMap<String, Value>> {
-    match part {
-        crate::urp::Part::Text { extra_body, .. }
-        | crate::urp::Part::Image { extra_body, .. }
-        | crate::urp::Part::Audio { extra_body, .. }
-        | crate::urp::Part::File { extra_body, .. }
-        | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ToolCall { extra_body, .. }
-        | crate::urp::Part::ProviderItem { extra_body, .. }
-        | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
-    }
-}
-
-fn part_extra_body_mut(
-    part: &mut crate::urp::Part,
-) -> Option<&mut std::collections::HashMap<String, Value>> {
-    match part {
-        crate::urp::Part::Text { extra_body, .. }
-        | crate::urp::Part::Image { extra_body, .. }
-        | crate::urp::Part::Audio { extra_body, .. }
-        | crate::urp::Part::File { extra_body, .. }
-        | crate::urp::Part::Reasoning { extra_body, .. }
-        | crate::urp::Part::ToolCall { extra_body, .. }
-        | crate::urp::Part::ProviderItem { extra_body, .. }
-        | crate::urp::Part::Refusal { extra_body, .. } => Some(extra_body),
+fn node_has_cache_control(node: &Node) -> bool {
+    match node {
+        Node::Text { extra_body, .. }
+        | Node::Image { extra_body, .. }
+        | Node::Audio { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::Refusal { extra_body, .. }
+        | Node::Reasoning { extra_body, .. }
+        | Node::ToolCall { extra_body, .. }
+        | Node::ProviderItem { extra_body, .. }
+        | Node::ToolResult { extra_body, .. }
+        | Node::NextDownstreamEnvelopeExtra { extra_body } => extra_body.contains_key("cache_control"),
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::urp::{
-    items_to_nodes, FinishReason, ImageSource, InputDetails, Item, ModalityBreakdown,
-    OutputDetails, Part, Role, UrpResponse, Usage,
+    FinishReason, ImageSource, InputDetails, ModalityBreakdown, Node, OrdinaryRole, OutputDetails,
+    UrpResponse, Usage,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         .and_then(|v| v.as_array())
         .ok_or("missing data array in image response")?;
 
-    let mut parts: Vec<Part> = Vec::new();
+    let mut output: Vec<Node> = Vec::new();
     let mut revised_prompt: Option<String> = None;
 
     for item in data {
@@ -32,7 +32,9 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         }
 
         if let Some(b64) = item_obj.get("b64_json").and_then(|v| v.as_str()) {
-            parts.push(Part::Image {
+            output.push(Node::Image {
+                id: None,
+                role: OrdinaryRole::Assistant,
                 source: ImageSource::Base64 {
                     media_type: "image/png".to_string(),
                     data: b64.to_string(),
@@ -40,7 +42,9 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
                 extra_body: HashMap::new(),
             });
         } else if let Some(url) = item_obj.get("url").and_then(|v| v.as_str()) {
-            parts.push(Part::Image {
+            output.push(Node::Image {
+                id: None,
+                role: OrdinaryRole::Assistant,
                 source: ImageSource::Url {
                     url: url.to_string(),
                     detail: None,
@@ -50,25 +54,19 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         }
     }
 
-    if parts.is_empty() {
+    if output.is_empty() {
         return Err("no images found in upstream response".to_string());
     }
 
-    let mut all_parts: Vec<Part> = Vec::new();
     if let Some(rp) = revised_prompt {
-        all_parts.push(Part::Text {
+        output.insert(0, Node::Text {
+            id: None,
+            role: OrdinaryRole::Assistant,
             content: rp,
+            phase: None,
             extra_body: HashMap::new(),
         });
     }
-    all_parts.extend(parts);
-
-    let outputs = items_to_nodes(vec![Item::Message {
-        id: None,
-        role: Role::Assistant,
-        parts: all_parts,
-        extra_body: HashMap::new(),
-    }]);
 
     let usage = obj.get("usage").and_then(|u| {
         let usage_obj = u.as_object()?;
@@ -122,7 +120,7 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
         id,
         model: model.to_string(),
         created_at: obj.get("created").and_then(|v| v.as_i64()),
-        output: outputs,
+        output,
         finish_reason: Some(FinishReason::Stop),
         usage,
         extra_body: HashMap::new(),
@@ -148,6 +146,7 @@ fn parse_modality_breakdown(obj: &serde_json::Map<String, Value>) -> Option<Moda
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::internal_legacy_bridge::{nodes_to_items, Item, Part, Role};
     use serde_json::json;
 
     #[test]
@@ -183,7 +182,7 @@ mod tests {
         assert_eq!(resp.model, "gpt-image-1");
         assert_eq!(resp.finish_reason, Some(FinishReason::Stop));
 
-        let outputs = crate::urp::nodes_to_items(&resp.output);
+        let outputs = nodes_to_items(&resp.output);
         let Item::Message { role, parts, .. } = &outputs[0] else {
             panic!("expected assistant message");
         };

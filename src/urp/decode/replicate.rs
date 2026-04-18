@@ -1,6 +1,6 @@
 use crate::urp::decode::split_extra;
 use crate::urp::{
-    items_to_nodes, FinishReason, ImageSource, Item, Part, Role, UrpRequest, UrpResponse, Usage,
+    FinishReason, ImageSource, Node, OrdinaryRole, UrpRequest, UrpResponse, Usage,
 };
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -16,43 +16,43 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .unwrap_or_default()
         .to_string();
 
-    let mut input_items = Vec::new();
+    let mut input_nodes = Vec::new();
 
     let input = obj.get("input").and_then(|v| v.as_object());
 
     if let Some(input_obj) = input {
         if let Some(system_prompt) = input_obj.get("system_prompt").and_then(|v| v.as_str()) {
             if !system_prompt.is_empty() {
-                input_items.push(Item::text(Role::System, system_prompt));
+                input_nodes.push(Node::Text {
+                    id: None,
+                    role: OrdinaryRole::System,
+                    content: system_prompt.to_string(),
+                    phase: None,
+                    extra_body: HashMap::new(),
+                });
             }
         }
 
-        let mut user_parts = Vec::new();
-
         if let Some(prompt) = input_obj.get("prompt").and_then(|v| v.as_str()) {
             if !prompt.is_empty() {
-                user_parts.push(Part::Text {
+                input_nodes.push(Node::Text {
+                    id: None,
+                    role: OrdinaryRole::User,
                     content: prompt.to_string(),
+                    phase: None,
                     extra_body: HashMap::new(),
                 });
             }
         }
 
         if let Some(image_url) = input_obj.get("image").and_then(|v| v.as_str()) {
-            user_parts.push(Part::Image {
+            input_nodes.push(Node::Image {
+                id: None,
+                role: OrdinaryRole::User,
                 source: ImageSource::Url {
                     url: image_url.to_string(),
                     detail: None,
                 },
-                extra_body: HashMap::new(),
-            });
-        }
-
-        if !user_parts.is_empty() {
-            input_items.push(Item::Message {
-                id: None,
-                role: Role::User,
-                parts: user_parts,
                 extra_body: HashMap::new(),
             });
         }
@@ -71,7 +71,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     Ok(UrpRequest {
         model,
-        input: items_to_nodes(input_items),
+        input: input_nodes,
         stream,
         temperature,
         top_p,
@@ -110,31 +110,21 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         _ => None,
     };
 
-    let mut output_parts = Vec::new();
+    let mut output_nodes = Vec::new();
 
     if let Some(output) = obj.get("output") {
-        parse_output_into_parts(output, &mut output_parts);
+        parse_output_into_nodes(output, &mut output_nodes);
     }
 
     if let Some(error) = obj.get("error").and_then(|v| v.as_str()) {
-        if !error.is_empty() && output_parts.is_empty() {
-            output_parts.push(Part::Refusal {
+        if !error.is_empty() && output_nodes.is_empty() {
+            output_nodes.push(Node::Refusal {
+                id: None,
                 content: error.to_string(),
                 extra_body: HashMap::new(),
             });
         }
     }
-
-    let outputs = if output_parts.is_empty() {
-        Vec::new()
-    } else {
-        items_to_nodes(vec![Item::Message {
-            id: None,
-            role: Role::Assistant,
-            parts: output_parts,
-            extra_body: HashMap::new(),
-        }])
-    };
 
     let usage = parse_replicate_usage(obj);
 
@@ -142,7 +132,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         id,
         model,
         created_at: None,
-        output: outputs,
+        output: output_nodes,
         finish_reason,
         usage,
         extra_body: split_extra(
@@ -154,11 +144,13 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     })
 }
 
-fn parse_output_into_parts(output: &Value, parts: &mut Vec<Part>) {
+fn parse_output_into_nodes(output: &Value, nodes: &mut Vec<Node>) {
     match output {
         Value::String(s) => {
             if looks_like_url(s) && looks_like_media_url(s) {
-                parts.push(Part::Image {
+                nodes.push(Node::Image {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
                     source: ImageSource::Url {
                         url: s.clone(),
                         detail: None,
@@ -166,8 +158,11 @@ fn parse_output_into_parts(output: &Value, parts: &mut Vec<Part>) {
                     extra_body: HashMap::new(),
                 });
             } else {
-                parts.push(Part::Text {
+                nodes.push(Node::Text {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
                     content: s.clone(),
+                    phase: None,
                     extra_body: HashMap::new(),
                 });
             }
@@ -182,7 +177,9 @@ fn parse_output_into_parts(output: &Value, parts: &mut Vec<Part>) {
                 if all_urls {
                     for v in arr {
                         if let Some(url) = v.as_str() {
-                            parts.push(Part::Image {
+                            nodes.push(Node::Image {
+                                id: None,
+                                role: OrdinaryRole::Assistant,
                                 source: ImageSource::Url {
                                     url: url.to_string(),
                                     detail: None,
@@ -198,8 +195,11 @@ fn parse_output_into_parts(output: &Value, parts: &mut Vec<Part>) {
                         .collect::<Vec<_>>()
                         .join("");
                     if !combined.is_empty() {
-                        parts.push(Part::Text {
+                        nodes.push(Node::Text {
+                            id: None,
+                            role: OrdinaryRole::Assistant,
                             content: combined,
+                            phase: None,
                             extra_body: HashMap::new(),
                         });
                     }
@@ -207,8 +207,11 @@ fn parse_output_into_parts(output: &Value, parts: &mut Vec<Part>) {
             } else {
                 let serialized = serde_json::to_string(output).unwrap_or_default();
                 if !serialized.is_empty() {
-                    parts.push(Part::Text {
+                    nodes.push(Node::Text {
+                        id: None,
+                        role: OrdinaryRole::Assistant,
                         content: serialized,
+                        phase: None,
                         extra_body: HashMap::new(),
                     });
                 }
@@ -218,8 +221,11 @@ fn parse_output_into_parts(output: &Value, parts: &mut Vec<Part>) {
         other => {
             let serialized = serde_json::to_string(other).unwrap_or_default();
             if !serialized.is_empty() {
-                parts.push(Part::Text {
+                nodes.push(Node::Text {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
                     content: serialized,
+                    phase: None,
                     extra_body: HashMap::new(),
                 });
             }

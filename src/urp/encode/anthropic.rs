@@ -818,10 +818,8 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
 mod tests {
     use super::*;
     use crate::urp::decode::anthropic as decode_anthropic;
-    use crate::urp::{
-        items_to_nodes, nodes_to_items, Item, OutputDetails, Part, ResponseFormat, Role,
-        UrpRequest, UrpResponse, Usage,
-    };
+    use crate::urp::internal_legacy_bridge::{items_to_nodes, nodes_to_items, Item, Part, Role};
+    use crate::urp::{OutputDetails, ResponseFormat, UrpRequest, UrpResponse, Usage};
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
