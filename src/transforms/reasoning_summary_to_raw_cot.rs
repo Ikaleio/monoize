@@ -1,8 +1,8 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, response_output_items_mut,
+    TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Item, Node, Part, PartDelta, UrpStreamEvent};
+use crate::urp::{Node, NodeDelta, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -70,37 +70,14 @@ impl Transform for ReasoningSummaryToRawCotTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                let mut items = response_output_items_mut(resp);
-                for item in items.iter_mut() {
-                    mark_item(item);
+                for node in &mut resp.output {
+                    mark_node(node);
                 }
             }
             UrpData::Stream(event) => mark_stream(event),
             UrpData::Request(_) => {}
         }
         Ok(())
-    }
-}
-
-fn mark_item(item: &mut Item) {
-    let Item::Message { parts, .. } = item else {
-        return;
-    };
-    for part in parts {
-        let Part::Reasoning {
-            summary,
-            extra_body,
-            ..
-        } = part
-        else {
-            continue;
-        };
-        if summary
-            .as_deref()
-            .is_some_and(|summary| !summary.is_empty())
-        {
-            extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
-        }
     }
 }
 
@@ -123,34 +100,16 @@ fn mark_node(node: &mut Node) {
 
 fn mark_stream(event: &mut UrpStreamEvent) {
     match event {
-        UrpStreamEvent::Delta {
+        UrpStreamEvent::NodeDelta {
             delta, extra_body, ..
         } => {
-            if let PartDelta::Reasoning { summary, .. } = delta
-                && summary
-                    .as_deref()
-                    .is_some_and(|summary| !summary.is_empty())
+            if let NodeDelta::Reasoning { summary, .. } = delta
+                && summary.as_deref().is_some_and(|summary| !summary.is_empty())
             {
                 extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
             }
         }
-        UrpStreamEvent::PartDone { part, .. } => {
-            let Part::Reasoning {
-                summary,
-                extra_body,
-                ..
-            } = part
-            else {
-                return;
-            };
-            if summary
-                .as_deref()
-                .is_some_and(|summary| !summary.is_empty())
-            {
-                extra_body.insert("openwebui_reasoning_content".to_string(), Value::Bool(true));
-            }
-        }
-        UrpStreamEvent::ItemDone { item, .. } => mark_item(item),
+        UrpStreamEvent::NodeDone { node, .. } => mark_node(node),
         UrpStreamEvent::ResponseDone { output, .. } => {
             for node in output {
                 mark_node(node);
@@ -169,7 +128,7 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::{Item, Part, PartDelta, Role, UrpResponse, items_to_nodes, nodes_to_items};
+    use crate::urp::{Item, Part, Role, UrpResponse, items_to_nodes, nodes_to_items};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -244,9 +203,9 @@ mod tests {
         let context = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
-        let mut event = UrpStreamEvent::Delta {
-            part_index: 7,
-            delta: PartDelta::Reasoning {
+        let mut event = UrpStreamEvent::NodeDelta {
+            node_index: 7,
+            delta: NodeDelta::Reasoning {
                 content: None,
                 encrypted: None,
                 summary: Some("brief summary".to_string()),
@@ -266,7 +225,7 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::Delta { extra_body, .. } = event else {
+        let UrpStreamEvent::NodeDelta { extra_body, .. } = event else {
             panic!("expected delta");
         };
         assert_eq!(

@@ -1,8 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, response_output_items_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Item, Part, PartDelta, PartHeader, UrpStreamEvent};
+use crate::urp::{Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -69,25 +69,19 @@ impl Transform for ReasoningToThinkXmlTransform {
             .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         match data {
             UrpData::Response(resp) => {
-                let mut messages = response_output_items_mut(resp);
-                for message in messages.iter_mut() {
-                    if let Item::Message { parts, .. } = message {
-                        let mut next_parts = Vec::with_capacity(parts.len());
-                        for part in parts.iter() {
-                            match part {
-                                Part::Reasoning {
-                                    content: Some(content),
-                                    ..
-                                } => {
-                                    next_parts.push(Part::Text {
-                                        content: format!("<{0}>{1}</{0}>", cfg.tag, content),
-                                        extra_body: HashMap::new(),
-                                    });
-                                }
-                                other => next_parts.push(other.clone()),
-                            }
-                        }
-                        *parts = next_parts;
+                for node in &mut resp.output {
+                    if let Node::Reasoning {
+                        content: Some(content),
+                        ..
+                    } = node
+                    {
+                        *node = Node::Text {
+                            id: None,
+                            role: OrdinaryRole::Assistant,
+                            content: format!("<{0}>{1}</{0}>", cfg.tag, content),
+                            phase: None,
+                            extra_body: HashMap::new(),
+                        };
                     }
                 }
             }
@@ -100,20 +94,24 @@ impl Transform for ReasoningToThinkXmlTransform {
 
 fn convert_stream_reasoning_to_xml(event: &mut UrpStreamEvent, tag: &str) {
     match event {
-        UrpStreamEvent::PartStart { header, .. } => {
-            if matches!(header, PartHeader::Reasoning { .. }) {
-                *header = PartHeader::Text;
+        UrpStreamEvent::NodeStart { header, .. } => {
+            if let NodeHeader::Reasoning { id } = header {
+                *header = NodeHeader::Text {
+                    id: id.take(),
+                    role: OrdinaryRole::Assistant,
+                    phase: None,
+                };
             }
         }
-        UrpStreamEvent::Delta { delta, .. } => {
-            if let PartDelta::Reasoning {
+        UrpStreamEvent::NodeDelta { delta, .. } => {
+            if let NodeDelta::Reasoning {
                 content: Some(content),
                 encrypted: None,
                 summary: None,
                 ..
             } = delta
             {
-                *delta = PartDelta::Text {
+                *delta = NodeDelta::Text {
                     content: format!("<{tag}>{content}</{tag}>"),
                 };
             }

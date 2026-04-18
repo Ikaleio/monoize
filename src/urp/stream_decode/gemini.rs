@@ -5,8 +5,7 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
-    FinishReason, Item, ItemHeader, Node, NodeDelta, NodeHeader, OrdinaryRole, Part, PartDelta,
-    PartHeader, Role, UrpStreamEvent, nodes_to_items,
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -21,8 +20,6 @@ struct GeminiStreamState {
     node_order: Vec<u32>,
     active_nodes: HashMap<u32, ActiveNodeState>,
     completed_nodes: HashMap<u32, Node>,
-    bridge_item_started: bool,
-    bridge_item_done_sent: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -134,24 +131,29 @@ pub(crate) async fn stream_gemini_to_urp_events(
             if let Some(existing_active) = state.active_nodes.get_mut(&node_index) {
                 let deltas = update_active_node(existing_active, &next_active);
                 for delta in deltas {
-                    let mut events = Vec::new();
-                    emit_node_delta_with_bridge(node_index, delta, next_extra.clone(), &mut events);
-                    for event in events {
-                        let _ = tx.send(event).await;
-                    }
+                    let _ = tx
+                        .send(UrpStreamEvent::NodeDelta {
+                            node_index,
+                            delta,
+                            usage: None,
+                            extra_body: next_extra.clone(),
+                        })
+                        .await;
                 }
             } else {
                 state.active_nodes.insert(node_index, next_active.clone());
-                let mut events = Vec::new();
-                emit_node_start_with_bridge(
+                let mut events = vec![UrpStreamEvent::NodeStart {
                     node_index,
-                    &next_node,
-                    next_extra.clone(),
-                    &mut state,
-                    &mut events,
-                );
+                    header: node_header_from_node(&next_node),
+                    extra_body: next_extra.clone(),
+                }];
                 for delta in initial_deltas_for_active_node(&next_active) {
-                    emit_node_delta_with_bridge(node_index, delta, next_extra.clone(), &mut events);
+                    events.push(UrpStreamEvent::NodeDelta {
+                        node_index,
+                        delta,
+                        usage: None,
+                        extra_body: next_extra.clone(),
+                    });
                 }
                 for event in events {
                     let _ = tx.send(event).await;
@@ -174,37 +176,25 @@ pub(crate) async fn stream_gemini_to_urp_events(
         let extra_body = active_node.extra_body.clone();
         state.completed_nodes.insert(node_index, node.clone());
 
-        let mut events = Vec::new();
-        emit_node_done_with_bridge(node_index, node, extra_body, &mut events);
-        for event in events {
-            let _ = tx.send(event).await;
-        }
+        let _ = tx
+            .send(UrpStreamEvent::NodeDone {
+                node_index,
+                node,
+                usage: None,
+                extra_body,
+            })
+            .await;
     }
 
     let output_nodes = ordered_completed_nodes(&state);
-    let output_item = build_completed_message_item(&output_nodes);
-    let outputs = if output_nodes.is_empty() {
-        Vec::new()
-    } else {
-        output_nodes.clone()
-    };
     let usage = latest_stream_usage_snapshot(&runtime_metrics).await;
 
     if started_response {
-        for event in build_message_completion_events(
-            &mut state,
-            usage.clone(),
-            output_item,
-            finish_reason,
-        ) {
-            let _ = tx.send(event).await;
-        }
-
         let _ = tx
             .send(UrpStreamEvent::ResponseDone {
                 finish_reason,
                 usage,
-                output: outputs,
+                output: output_nodes,
                 extra_body: HashMap::new(),
             })
             .await;
@@ -460,211 +450,12 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
     }
 }
 
-fn part_header_from_node(node: &Node) -> Option<PartHeader> {
-    match node {
-        Node::Text { .. } => Some(PartHeader::Text),
-        Node::Reasoning { .. } => Some(PartHeader::Reasoning { id: node.id().cloned() }),
-        Node::ToolCall { call_id, name, .. } => Some(PartHeader::ToolCall {
-            id: node.id().cloned(),
-            call_id: call_id.clone(),
-            name: name.clone(),
-        }),
-        Node::Refusal { .. } => Some(PartHeader::Refusal),
-        Node::Image { extra_body, .. } => Some(PartHeader::Image {
-            extra_body: extra_body.clone(),
-        }),
-        Node::Audio { extra_body, .. } => Some(PartHeader::Audio {
-            extra_body: extra_body.clone(),
-        }),
-        Node::File { extra_body, .. } => Some(PartHeader::File {
-            extra_body: extra_body.clone(),
-        }),
-        Node::ProviderItem {
-            item_type, body, ..
-        } => Some(PartHeader::ProviderItem {
-            id: node.id().cloned(),
-            item_type: item_type.clone(),
-            body: body.clone(),
-        }),
-        Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
-    }
-}
-
-fn part_delta_from_node_delta(delta: &NodeDelta) -> Option<PartDelta> {
-    match delta {
-        NodeDelta::Text { content } => Some(PartDelta::Text {
-            content: content.clone(),
-        }),
-        NodeDelta::Reasoning {
-            content,
-            encrypted,
-            summary,
-            source,
-        } => Some(PartDelta::Reasoning {
-            content: content.clone(),
-            encrypted: encrypted.clone(),
-            summary: summary.clone(),
-            source: source.clone(),
-        }),
-        NodeDelta::Refusal { content } => Some(PartDelta::Refusal {
-            content: content.clone(),
-        }),
-        NodeDelta::ToolCallArguments { arguments } => Some(PartDelta::ToolCallArguments {
-            arguments: arguments.clone(),
-        }),
-        NodeDelta::Image { source } => Some(PartDelta::Image {
-            source: source.clone(),
-        }),
-        NodeDelta::Audio { source } => Some(PartDelta::Audio {
-            source: source.clone(),
-        }),
-        NodeDelta::File { source } => Some(PartDelta::File {
-            source: source.clone(),
-        }),
-        NodeDelta::ProviderItem { data } => Some(PartDelta::ProviderItem { data: data.clone() }),
-    }
-}
-
-fn bridge_part_from_node(node: &Node) -> Option<Part> {
-    match nodes_to_items(std::slice::from_ref(node)).into_iter().next() {
-        Some(Item::Message { mut parts, .. }) if !parts.is_empty() => Some(parts.remove(0)),
-        _ => None,
-    }
-}
-
-fn emit_node_start_with_bridge(
-    node_index: u32,
-    node: &Node,
-    extra_body: HashMap<String, Value>,
-    state: &mut GeminiStreamState,
-    events: &mut Vec<UrpStreamEvent>,
-) {
-    events.push(UrpStreamEvent::NodeStart {
-        node_index,
-        header: node_header_from_node(node),
-        extra_body: extra_body.clone(),
-    });
-
-    let Some(part_header) = part_header_from_node(node) else {
-        return;
-    };
-
-    if !state.bridge_item_started {
-        events.push(UrpStreamEvent::ItemStart {
-            item_index: 0,
-            header: ItemHeader::Message {
-                id: None,
-                role: Role::Assistant,
-            },
-            extra_body: HashMap::new(),
-        });
-        state.bridge_item_started = true;
-    }
-
-    events.push(UrpStreamEvent::PartStart {
-        part_index: node_index,
-        item_index: 0,
-        header: part_header,
-        extra_body,
-    });
-}
-
-fn emit_node_delta_with_bridge(
-    node_index: u32,
-    delta: NodeDelta,
-    extra_body: HashMap<String, Value>,
-    events: &mut Vec<UrpStreamEvent>,
-) {
-    events.push(UrpStreamEvent::NodeDelta {
-        node_index,
-        delta: delta.clone(),
-        usage: None,
-        extra_body: extra_body.clone(),
-    });
-    if let Some(part_delta) = part_delta_from_node_delta(&delta) {
-        events.push(UrpStreamEvent::Delta {
-            part_index: node_index,
-            delta: part_delta,
-            usage: None,
-            extra_body,
-        });
-    }
-}
-
-fn emit_node_done_with_bridge(
-    node_index: u32,
-    node: Node,
-    extra_body: HashMap<String, Value>,
-    events: &mut Vec<UrpStreamEvent>,
-) {
-    events.push(UrpStreamEvent::NodeDone {
-        node_index,
-        node: node.clone(),
-        usage: None,
-        extra_body: extra_body.clone(),
-    });
-    if let Some(part) = bridge_part_from_node(&node) {
-        events.push(UrpStreamEvent::PartDone {
-            part_index: node_index,
-            part,
-            usage: None,
-            extra_body,
-        });
-    }
-}
-
 fn ordered_completed_nodes(state: &GeminiStreamState) -> Vec<Node> {
     state
         .node_order
         .iter()
         .filter_map(|node_index| state.completed_nodes.get(node_index).cloned())
         .collect()
-}
-
-fn build_completed_message_item(nodes: &[Node]) -> Item {
-    Item::Message {
-        id: None,
-        role: Role::Assistant,
-        parts: nodes.iter().filter_map(bridge_part_from_node).collect(),
-        extra_body: HashMap::new(),
-    }
-}
-
-fn build_message_completion_events(
-    state: &mut GeminiStreamState,
-    usage: Option<crate::urp::Usage>,
-    item: Item,
-    finish_reason: Option<FinishReason>,
-) -> Vec<UrpStreamEvent> {
-    let mut events = Vec::new();
-
-    if !state.bridge_item_started {
-        events.push(UrpStreamEvent::ItemStart {
-            item_index: 0,
-            header: ItemHeader::Message {
-                id: None,
-                role: Role::Assistant,
-            },
-            extra_body: HashMap::new(),
-        });
-        state.bridge_item_started = true;
-    }
-
-    if !state.bridge_item_done_sent {
-        events.push(UrpStreamEvent::ItemDone {
-            item_index: 0,
-            item,
-            usage,
-            extra_body: HashMap::new(),
-        });
-        state.bridge_item_done_sent = true;
-    }
-
-    if finish_reason.is_some() {
-        return events;
-    }
-
-    events
 }
 
 fn parse_finish_reason(reason: &str) -> FinishReason {
@@ -682,7 +473,6 @@ mod tests {
 
     #[test]
     fn gemini_start_and_initial_delta_share_canonical_node_index() {
-        let mut state = GeminiStreamState::default();
         let node = Node::Text {
             id: None,
             role: OrdinaryRole::Assistant,
@@ -698,12 +488,21 @@ mod tests {
         };
         let mut events = Vec::new();
 
-        emit_node_start_with_bridge(0, &node, HashMap::new(), &mut state, &mut events);
+        events.push(UrpStreamEvent::NodeStart {
+            node_index: 0,
+            header: node_header_from_node(&node),
+            extra_body: HashMap::new(),
+        });
         for delta in initial_deltas_for_active_node(&active) {
-            emit_node_delta_with_bridge(0, delta, HashMap::new(), &mut events);
+            events.push(UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta,
+                usage: None,
+                extra_body: HashMap::new(),
+            });
         }
 
-        assert_eq!(events.len(), 5);
+        assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
             UrpStreamEvent::NodeStart {
@@ -714,42 +513,17 @@ mod tests {
         ));
         assert!(matches!(
             &events[1],
-            UrpStreamEvent::ItemStart {
-                item_index,
-                header: ItemHeader::Message { role: Role::Assistant, .. },
-                ..
-            } if *item_index == 0
-        ));
-        assert!(matches!(
-            &events[2],
-            UrpStreamEvent::PartStart {
-                part_index,
-                item_index,
-                header: PartHeader::Text,
-                ..
-            } if *part_index == 0 && *item_index == 0
-        ));
-        assert!(matches!(
-            &events[3],
             UrpStreamEvent::NodeDelta {
                 node_index,
                 delta: NodeDelta::Text { content },
                 ..
             } if *node_index == 0 && content == "hello"
         ));
-        assert!(matches!(
-            &events[4],
-            UrpStreamEvent::Delta {
-                part_index,
-                delta: PartDelta::Text { content },
-                ..
-            } if *part_index == 0 && content == "hello"
-        ));
     }
 
     #[test]
-    fn gemini_completion_uses_ordered_completed_nodes_and_emits_item_done_once() {
-        let mut state = GeminiStreamState {
+    fn gemini_completion_uses_ordered_completed_nodes_for_response_done() {
+        let state = GeminiStreamState {
             node_order: vec![1, 0, 2],
             active_nodes: HashMap::new(),
             completed_nodes: HashMap::from([
@@ -785,8 +559,6 @@ mod tests {
                     },
                 ),
             ]),
-            bridge_item_started: false,
-            bridge_item_done_sent: false,
         };
 
         let ordered = ordered_completed_nodes(&state);
@@ -794,41 +566,23 @@ mod tests {
         assert!(matches!(&ordered[1], Node::Text { content, .. } if content == "answer"));
         assert!(matches!(&ordered[2], Node::ToolCall { call_id, .. } if call_id == "call_1"));
 
-        let item = build_completed_message_item(&ordered);
-        let first_events = build_message_completion_events(
-            &mut state,
-            None,
-            item.clone(),
-            Some(FinishReason::Stop),
-        );
-        let second_events = build_message_completion_events(
-            &mut state,
-            None,
-            item.clone(),
-            Some(FinishReason::Stop),
-        );
+        let completion_event = UrpStreamEvent::ResponseDone {
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            output: ordered,
+            extra_body: HashMap::new(),
+        };
 
-        assert_eq!(first_events.len(), 2);
         assert!(matches!(
-            &first_events[0],
-            UrpStreamEvent::ItemStart {
-                item_index,
-                header: ItemHeader::Message { role: Role::Assistant, .. },
-                ..
-            } if *item_index == 0
-        ));
-        assert!(matches!(
-            &first_events[1],
-            UrpStreamEvent::ItemDone {
-                item_index,
-                item: Item::Message { parts, .. },
+            &completion_event,
+            UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                output,
                 ..
             }
-            if *item_index == 0
-                && matches!(&parts[0], Part::Reasoning { content: Some(content), summary: Some(summary), .. } if content == "think" && summary == "sum")
-                && matches!(&parts[1], Part::Text { content, .. } if content == "answer")
-                && matches!(&parts[2], Part::ToolCall { call_id, arguments, .. } if call_id == "call_1" && arguments == "{\"a\":1}")
+            if matches!(&output[0], Node::Reasoning { content: Some(content), summary: Some(summary), .. } if content == "think" && summary == "sum")
+                && matches!(&output[1], Node::Text { content, .. } if content == "answer")
+                && matches!(&output[2], Node::ToolCall { call_id, arguments, .. } if call_id == "call_1" && arguments == "{\"a\":1}")
         ));
-        assert!(second_events.is_empty(), "item done should only be emitted once");
     }
 }

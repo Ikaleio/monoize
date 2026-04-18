@@ -169,35 +169,35 @@ RTYPE-11. The Rust core layer MUST NOT retain `Item`, `Part`, `ItemHeader`, `Par
 
 ### 2.2 Exact current-to-target concept mapping
 
-MAP-1. The current grouped request field `UrpRequest.inputs: Vec<Item>` maps to `UrpRequest.input: Vec<Node>`.
+MAP-1. Any pre-RTYPE-11 grouped request field such as `UrpRequest.inputs: Vec<Item>` is legacy-only. The canonical Rust request field is `UrpRequest.input: Vec<Node>`.
 
-MAP-2. The current grouped response field `UrpResponse.outputs: Vec<Item>` maps to `UrpResponse.output: Vec<Node>`.
+MAP-2. Any pre-RTYPE-11 grouped response field such as `UrpResponse.outputs: Vec<Item>` is legacy-only. The canonical Rust response field is `UrpResponse.output: Vec<Node>`.
 
-MAP-3. The current grouped variant `Item::Message { role, parts, extra_body }` does not survive in canonical storage. It maps to zero or more flat `Node` values in source order.
+MAP-3. No grouped `Item::Message { role, parts, extra_body }` value survives in canonical storage. Any decode or adapter logic that still receives grouped provider payloads MUST translate them directly to flat `Node` values in source order.
 
-MAP-4. The current grouped variant `Item::ToolResult { call_id, is_error, content, extra_body }` maps one-to-one to flat `Node::ToolResult { call_id, is_error, content, extra_body }`.
+MAP-4. No grouped `Item::ToolResult { call_id, is_error, content, extra_body }` value survives in canonical storage. Tool results MUST exist only as top-level `Node::ToolResult { call_id, is_error, content, extra_body }`.
 
-MAP-5. The current part variants map to flat node variants as follows:
+MAP-5. Any legacy grouped-part concept translates to the corresponding flat node family as follows:
 
-| Current grouped concept | Flat canonical target |
+| Legacy grouped concept | Flat canonical target |
 | --- | --- |
-| `Part::Text` | `Node::Text` with copied `role` |
-| `Part::Image` | `Node::Image` with copied `role` |
-| `Part::Audio` | `Node::Audio` with copied `role` |
-| `Part::File` | `Node::File` with copied `role` |
-| `Part::Refusal` | `Node::Refusal` with `role = OrdinaryRole::Assistant` |
-| `Part::Reasoning` | `Node::Reasoning` with `role = OrdinaryRole::Assistant` |
-| `Part::ToolCall` | `Node::ToolCall` with `role = OrdinaryRole::Assistant` |
-| `Part::ProviderItem` | `Node::ProviderItem` with copied `role` |
+| text part | `Node::Text` with copied `role` |
+| image part | `Node::Image` with copied `role` |
+| audio part | `Node::Audio` with copied `role` |
+| file part | `Node::File` with copied `role` |
+| refusal part | `Node::Refusal` with `role = OrdinaryRole::Assistant` |
+| reasoning part | `Node::Reasoning` with `role = OrdinaryRole::Assistant` |
+| tool-call part | `Node::ToolCall` with `role = OrdinaryRole::Assistant` |
+| provider-item part | `Node::ProviderItem` with copied `role` |
 
-MAP-6. The current grouped role `Role::Tool` has no flat canonical target. Any prior semantic use of `Role::Tool` MUST be represented as top-level `Node::ToolResult` instead.
+MAP-6. The legacy grouped role `Role::Tool` has no flat canonical target. Any tool-result semantics MUST be represented only as top-level `Node::ToolResult`.
 
-MAP-7. Unknown fields on the current grouped `Message` envelope do not map to a surviving canonical message wrapper. They MUST map either:
+MAP-7. Unknown fields on a pre-RTYPE-11 grouped message envelope do not map to a surviving canonical message wrapper. They MUST map either:
 
 1. to the owning emitted flat node's `extra_body`, when the field belongs to exactly one emitted node; or
 2. to a preceding `Node::NextDownstreamEnvelopeExtra`, when the field belongs to the envelope rather than to exactly one emitted node.
 
-MAP-8. The current stream lifecycle `{ ItemStart, PartStart, Delta, PartDone, ItemDone, ResponseDone.outputs }` maps to flat node lifecycle `{ NodeStart, NodeDelta, NodeDone, ResponseDone.output }`.
+MAP-8. Any pre-RTYPE-11 stream lifecycle `{ ItemStart, PartStart, Delta, PartDone, ItemDone, ResponseDone.outputs }` is legacy-only. The canonical stream lifecycle is `{ NodeStart, NodeDelta, NodeDone, ResponseDone.output }`.
 
 MAP-9. `ResponseDone.output` is the only authoritative terminal flat stream state. There is no Rust helper contract in which `ResponseDone` authority depends on first rebuilding grouped `Item::Message` values.
 

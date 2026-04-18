@@ -28,7 +28,7 @@ OIU-E1. When `provider_type` resolves to `openai_image`, Monoize MUST encode the
 
 OIU-E2. The upstream request body MUST include:
 - `model`: from `UrpRequest.model` (after redirect).
-- `prompt`: concatenation of all `Part::Text.content` from user-role `Item::Message` items in `UrpRequest.inputs`, joined by newline.
+- `prompt`: concatenation of all `Node::Text.content` from user-role nodes in `UrpRequest.input`, joined by newline.
 
 OIU-E3. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be merged into the upstream request body as top-level fields. Adapter-generated keys (`model`, `prompt`) take precedence over `extra_body` keys.
 
@@ -56,17 +56,17 @@ OIU-D1. Monoize MUST parse the upstream response as the OpenAI Image API respons
 ```
 
 OIU-D2. For each entry in `data[]`:
-- If `b64_json` is present: create a `Part::Image` with `ImageSource::Base64 { media_type: "image/png", data: <b64_json> }`.
-- If `url` is present (and `b64_json` is absent): create a `Part::Image` with `ImageSource::Url { url: <url>, detail: None }`.
+- If `b64_json` is present: create a `Node::Image` with `role: Assistant` and `ImageSource::Base64 { media_type: "image/png", data: <b64_json> }`.
+- If `url` is present (and `b64_json` is absent): create a `Node::Image` with `role: Assistant` and `ImageSource::Url { url: <url>, detail: None }`.
 
-OIU-D3. If `revised_prompt` is present in any `data[]` entry, Monoize MUST create a `Part::Text` with the `revised_prompt` content, placed before image parts in the assistant message.
+OIU-D3. If `revised_prompt` is present in any `data[]` entry, Monoize MUST create a `Node::Text` with `role: Assistant` and the `revised_prompt` content, placed before image nodes in source order.
 
-OIU-D4. All extracted parts MUST be placed in a single `Item::Message` with `role: Assistant`.
+OIU-D4. All extracted assistant nodes MUST be placed directly into `UrpResponse.output` in source order.
 
 OIU-D5. The decoded `UrpResponse` MUST have:
 - `id`: the string value of `created` from the upstream response, or a generated ID if absent.
 - `model`: the requested model name.
-- `outputs`: containing the assembled assistant `Item::Message`.
+- `output`: containing the assembled assistant nodes.
 - `finish_reason`: `Some(FinishReason::Stop)`.
 - `usage`: parsed from upstream `usage` object if present, otherwise `None`.
 
@@ -76,15 +76,15 @@ OIU-D6. If the upstream response contains a top-level `usage` object, Monoize MU
 
 ### 5.1 Responses API downstream (`/v1/responses`)
 
-OIU-R1. When the downstream protocol is Responses, the URP response MUST be encoded using the standard Responses encoder. Image parts appear as native `output_image` items in the response.
+OIU-R1. When the downstream protocol is Responses, the URP response MUST be encoded using the standard Responses encoder. Assistant image nodes appear as native `output_image` items in the response.
 
 ### 5.2 Chat Completions / Messages downstream
 
-OIU-R2. When the downstream protocol is Chat Completions or Anthropic Messages, Monoize MUST automatically convert `Part::Image` outputs in the assistant response to inline markdown base64 images appended to assistant text content before encoding the downstream response.
+OIU-R2. When the downstream protocol is Chat Completions or Anthropic Messages, Monoize MUST automatically convert assistant `Node::Image` outputs to inline markdown base64 images appended to assistant text content before encoding the downstream response.
 
 OIU-R3. The markdown format MUST be: `![image](data:{media_type};base64,{data})` for base64 images, and `![image]({url})` for URL images.
 
-OIU-R4. This automatic conversion MUST occur after response-phase transforms have been applied, so user-configured transforms can still operate on the raw `Part::Image` data.
+OIU-R4. This automatic conversion MUST occur after response-phase transforms have been applied, so user-configured transforms can still operate on the raw `Node::Image` data.
 
 ## 6. Streaming Behavior
 

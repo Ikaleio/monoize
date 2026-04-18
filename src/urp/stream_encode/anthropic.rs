@@ -2,8 +2,8 @@ use crate::error::AppResult;
 use crate::urp::encode::anthropic::anthropic_native_input_tokens;
 use crate::urp::stream_helpers::*;
 use crate::urp::{
-    self, FinishReason, Node, NodeDelta, NodeHeader, Part, PartDelta, PartHeader,
-    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage,
+    self, FinishReason, Node, NodeDelta, NodeHeader, REASONING_KIND_EXTRA_KEY,
+    REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage,
     wrap_reasoning_signature_with_item_id,
 };
 use axum::response::sse::Event;
@@ -381,88 +381,6 @@ fn message_start_payload(
     })
 }
 
-fn anthropic_block_from_part(part: &Part) -> Option<AnthropicBlockPayload> {
-    match part {
-        Part::Text { content, .. } | Part::Refusal { content, .. } => {
-            Some(AnthropicBlockPayload::Text {
-                content: content.clone(),
-            })
-        }
-        Part::Reasoning {
-            id,
-            summary,
-            encrypted,
-            extra_body,
-            ..
-        } => {
-            let thinking = match part {
-                Part::Reasoning { content, .. } => content
-                    .as_deref()
-                    .filter(|content| !content.is_empty())
-                    .or_else(|| summary.as_deref().filter(|summary| !summary.is_empty()))
-                    .unwrap_or_default()
-                    .to_string(),
-                _ => String::new(),
-            };
-            let raw_signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
-            let is_redacted = reasoning_is_redacted_extra(extra_body);
-            if thinking.is_empty() && !is_redacted {
-                return None;
-            }
-            if is_redacted && raw_signature.is_none() {
-                return None;
-            }
-            let extra = reasoning_kind_marker(extra_body);
-            Some(AnthropicBlockPayload::Thinking {
-                thinking,
-                signature: raw_signature,
-                item_id: reasoning_item_id(id.as_deref()),
-                extra,
-            })
-        }
-        Part::ToolCall {
-            call_id,
-            name,
-            arguments,
-            ..
-        } => Some(AnthropicBlockPayload::ToolUse {
-            call_id: call_id.clone(),
-            name: name.clone(),
-            arguments: arguments.clone(),
-        }),
-        Part::Image { .. }
-        | Part::Audio { .. }
-        | Part::File { .. }
-        | Part::ProviderItem { .. } => None,
-    }
-}
-
-fn anthropic_block_from_part_header(
-    header: &PartHeader,
-    extra_body: &HashMap<String, Value>,
-) -> Option<AnthropicBlockPayload> {
-    match header {
-        PartHeader::Text | PartHeader::Refusal => Some(AnthropicBlockPayload::Text {
-            content: String::new(),
-        }),
-        PartHeader::Reasoning { .. } => Some(AnthropicBlockPayload::Thinking {
-            thinking: String::new(),
-            signature: reasoning_signature_value(None, extra_body),
-            item_id: None,
-            extra: reasoning_kind_marker(extra_body),
-        }),
-        PartHeader::ToolCall { call_id, name, .. } => Some(AnthropicBlockPayload::ToolUse {
-            call_id: call_id.clone(),
-            name: name.clone(),
-            arguments: String::new(),
-        }),
-        PartHeader::Image { .. }
-        | PartHeader::Audio { .. }
-        | PartHeader::File { .. }
-        | PartHeader::ProviderItem { .. } => None,
-    }
-}
-
 fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
     match (payload, delta) {
         (AnthropicBlockPayload::Text { content }, NodeDelta::Text { content: delta })
@@ -563,53 +481,6 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
             if !done.is_empty() {
                 *content = done.clone();
             }
-        }
-        _ => {}
-    }
-}
-
-fn apply_part_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &PartDelta) {
-    match (payload, delta) {
-        (AnthropicBlockPayload::Text { content }, PartDelta::Text { content: delta })
-        | (AnthropicBlockPayload::Text { content }, PartDelta::Refusal { content: delta }) => {
-            content.push_str(delta);
-        }
-        (
-            AnthropicBlockPayload::Thinking { thinking, signature, .. },
-            PartDelta::Reasoning {
-                content,
-                encrypted,
-                summary,
-                ..
-            },
-        ) => {
-            if let Some(delta) = content.as_deref().filter(|content| !content.is_empty()) {
-                thinking.push_str(delta);
-            } else if thinking.is_empty()
-                && let Some(delta) = summary.as_deref().filter(|summary| !summary.is_empty())
-            {
-                thinking.push_str(delta);
-            }
-            if let Some(signature_delta) = encrypted
-                .as_ref()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string())
-                })
-                .filter(|signature| !signature.is_empty())
-            {
-                signature
-                    .get_or_insert_with(String::new)
-                    .push_str(&signature_delta);
-            }
-        }
-        (
-            AnthropicBlockPayload::ToolUse { arguments, .. },
-            PartDelta::ToolCallArguments { arguments: delta },
-        ) => {
-            arguments.push_str(delta);
         }
         _ => {}
     }
@@ -718,11 +589,9 @@ pub(crate) async fn encode_urp_stream_as_messages(
     let mut node_owned_surfaces: HashSet<MessagesSurfaceKind> = HashSet::new();
     let mut emitted_node_owned_surfaces: HashSet<MessagesSurfaceKind> = HashSet::new();
     let mut completed_node_owned_surfaces: HashSet<MessagesSurfaceKind> = HashSet::new();
-    let mut completed_node_indices: HashSet<u32> = HashSet::new();
     let mut live_node_blocks: HashMap<u32, LiveNodeBlockState> = HashMap::new();
     let mut pending_node_blocks: HashMap<u32, PendingAnthropicBlock> = HashMap::new();
     let mut next_flush_node_index = 0u32;
-    let mut live_bridge_blocks: HashMap<u32, PendingAnthropicBlock> = HashMap::new();
     let mut response_id: Option<String> = None;
     let mut message_start_sent = false;
     let mut pending_envelope_extra: HashMap<String, Value> = HashMap::new();
@@ -831,7 +700,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
                     continue;
                 }
-                completed_node_indices.insert(node_index);
                 let block_index = live_node_blocks
                     .get(&node_index)
                     .map(|state| state.block_index)
@@ -872,104 +740,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 )
                 .await?;
             }
-            UrpStreamEvent::PartStart {
-                part_index,
-                header,
-                extra_body,
-                ..
-            } => {
-                if completed_node_indices.contains(&part_index) {
-                    continue;
-                }
-                let Some(payload) = anthropic_block_from_part_header(&header, &extra_body) else {
-                    continue;
-                };
-                should_emit_terminal_message = true;
-                ensure_message_start(
-                    &tx,
-                    response_id.as_deref().unwrap_or("msg_mock"),
-                    logical_model,
-                    response_usage.as_ref(),
-                    &pending_envelope_extra,
-                    &mut message_start_sent,
-                )
-                .await?;
-                pending_envelope_extra.clear();
-                let surface = surface_kind_for_payload(&payload);
-                if completed_node_owned_surfaces.contains(&surface) {
-                    continue;
-                }
-                if matches!(surface, MessagesSurfaceKind::ToolUse) {
-                    saw_tool_use = true;
-                }
-                live_bridge_blocks.insert(
-                    part_index,
-                    PendingAnthropicBlock {
-                        block_index: next_content_block_index,
-                        payload,
-                    },
-                );
-                next_content_block_index += 1;
-            }
-            UrpStreamEvent::Delta {
-                part_index,
-                delta,
-                usage,
-                extra_body,
-            } => {
-                if let Some(usage) = usage {
-                    response_usage = Some(usage);
-                }
-                let Some(block_state) = live_bridge_blocks.get_mut(&part_index) else {
-                    continue;
-                };
-                maybe_override_reasoning_item_id(&mut block_state.payload, &extra_body);
-                apply_part_delta_to_block(&mut block_state.payload, &delta);
-            }
-            UrpStreamEvent::PartDone {
-                part_index,
-                part,
-                usage,
-                ..
-            } => {
-                if let Some(usage) = usage {
-                    response_usage = Some(usage);
-                }
-                let payload_from_part = anthropic_block_from_part(&part);
-                let Some(surface) = payload_from_part
-                    .as_ref()
-                    .map(surface_kind_for_payload)
-                    .or_else(|| {
-                        live_bridge_blocks
-                            .get(&part_index)
-                            .map(|block| surface_kind_for_payload(&block.payload))
-                    })
-                else {
-                    live_bridge_blocks.remove(&part_index);
-                    continue;
-                };
-                if completed_node_owned_surfaces.contains(&surface) {
-                    live_bridge_blocks.remove(&part_index);
-                    continue;
-                }
-                let Some(mut block) = live_bridge_blocks.remove(&part_index) else {
-                    if let Some(payload) = payload_from_part {
-                        PendingAnthropicBlock {
-                            block_index: next_content_block_index,
-                            payload,
-                        }
-                        .emit(&tx, &mut saw_tool_use, sse_max_frame_length)
-                        .await?;
-                        next_content_block_index += 1;
-                    }
-                    continue;
-                };
-                if let Some(payload) = payload_from_part {
-                    block.payload = payload;
-                }
-                block.emit(&tx, &mut saw_tool_use, sse_max_frame_length).await?;
-            }
-            UrpStreamEvent::ItemStart { .. } | UrpStreamEvent::ItemDone { .. } => {}
             UrpStreamEvent::ResponseDone {
                 finish_reason,
                 usage,
@@ -982,7 +752,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 should_emit_terminal_message = should_emit_terminal_message
                     || !pending_node_blocks.is_empty()
                     || !live_node_blocks.is_empty()
-                    || !live_bridge_blocks.is_empty()
                     || output.iter().any(|node| anthropic_block_from_node(node).is_some());
                 if !should_emit_terminal_message && !message_start_sent {
                     pending_envelope_extra.clear();
@@ -1087,6 +856,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 });
                 send_named_messages_event(&tx, error).await?;
             }
+            _ => {}
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, response_output_items_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
 use crate::urp::{ImageSource, Item, Part, Role, UrpStreamEvent};
 use async_trait::async_trait;
@@ -77,10 +77,7 @@ impl Transform for AssistantOutputImagesToMarkdownTransform {
             .clone();
         match data {
             UrpData::Response(resp) => {
-                let mut items = response_output_items_mut(resp);
-                for item in items.iter_mut() {
-                    append_images_as_markdown(item, &cfg);
-                }
+                append_images_as_markdown_nodes(&mut resp.output, &cfg);
             }
             UrpData::Stream(event) => match event {
                 UrpStreamEvent::ResponseDone { output, .. } => {
@@ -94,6 +91,7 @@ impl Transform for AssistantOutputImagesToMarkdownTransform {
     }
 }
 
+#[cfg(test)]
 fn append_images_as_markdown(item: &mut Item, config: &Config) {
     let Item::Message { role, parts, .. } = item else {
         return;

@@ -1,8 +1,8 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, response_output_items_mut, strip_reasoning_parts,
+    TransformScope, TransformState, UrpData, strip_reasoning_nodes,
 };
-use crate::urp::{Item, Part, PartDelta, PartHeader, UrpStreamEvent};
+use crate::urp::{Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -73,12 +73,7 @@ impl Transform for StripReasoningTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                let mut messages = response_output_items_mut(resp);
-                for message in messages.iter_mut() {
-                    if let Item::Message { parts, .. } = message {
-                        *parts = strip_reasoning_parts(parts);
-                    }
-                }
+                resp.output = strip_reasoning_nodes(&resp.output);
             }
             UrpData::Stream(event) => strip_stream_reasoning(event, state),
             UrpData::Request(_) => {}
@@ -92,41 +87,48 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
         return;
     };
     match event {
-        UrpStreamEvent::PartStart {
-            item_index,
-            part_index,
-            header,
-            ..
+        UrpStreamEvent::NodeStart {
+            node_index, header, ..
         } => {
-            if matches!(header, PartHeader::Reasoning { .. }) {
-                strip_state
-                    .stripped_indices
-                    .insert((*item_index << 16) | *part_index);
-                *header = PartHeader::Text;
+            if let NodeHeader::Reasoning { id } = header {
+                strip_state.stripped_indices.insert(*node_index);
+                *header = NodeHeader::Text {
+                    id: id.take(),
+                    role: OrdinaryRole::Assistant,
+                    phase: None,
+                };
             }
         }
-        UrpStreamEvent::Delta {
-            part_index, delta, ..
+        UrpStreamEvent::NodeDelta {
+            node_index, delta, ..
         } => {
-            let key = *part_index;
-            if strip_state.stripped_indices.contains(&key)
-                && matches!(delta, PartDelta::Reasoning { .. })
+            if strip_state.stripped_indices.contains(node_index)
+                && matches!(delta, NodeDelta::Reasoning { .. })
             {
-                *delta = PartDelta::Text {
+                *delta = NodeDelta::Text {
                     content: String::new(),
                 };
             }
         }
-        UrpStreamEvent::PartDone {
-            part_index, part, ..
+        UrpStreamEvent::NodeDone {
+            node_index, node, ..
         } => {
-            let key = *part_index;
-            if strip_state.stripped_indices.contains(&key) {
-                *part = Part::Text {
+            if strip_state.stripped_indices.remove(node_index) {
+                let (id, extra_body) = match node {
+                    Node::Reasoning { id, extra_body, .. } => (id.take(), std::mem::take(extra_body)),
+                    _ => (None, Default::default()),
+                };
+                *node = Node::Text {
+                    id,
+                    role: OrdinaryRole::Assistant,
                     content: String::new(),
-                    extra_body: Default::default(),
+                    phase: None,
+                    extra_body,
                 };
             }
+        }
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            *output = strip_reasoning_nodes(output);
         }
         _ => {}
     }

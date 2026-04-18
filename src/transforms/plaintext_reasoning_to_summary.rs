@@ -1,8 +1,8 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, response_output_items_mut,
+    TransformScope, TransformState, UrpData,
 };
-use crate::urp::{Item, Node, NodeDelta, Part, PartDelta, UrpStreamEvent};
+use crate::urp::{Node, NodeDelta, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -20,7 +20,6 @@ impl TransformConfig for Config {
 
 #[derive(Default)]
 struct StreamState {
-    encrypted_parts: HashSet<u32>,
     encrypted_nodes: HashSet<u32>,
 }
 
@@ -74,9 +73,8 @@ impl Transform for PlaintextReasoningToSummaryTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                let mut items = response_output_items_mut(resp);
-                for item in items.iter_mut() {
-                    rewrite_item_reasoning(item);
+                for node in &mut resp.output {
+                    rewrite_reasoning_node(node);
                 }
             }
             UrpData::Stream(event) => {
@@ -122,39 +120,6 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
             }
             rewrite_reasoning_node(node);
         }
-        UrpStreamEvent::Delta {
-            part_index, delta, ..
-        } => {
-            let PartDelta::Reasoning {
-                content,
-                encrypted,
-                summary,
-                ..
-            } = delta
-            else {
-                return;
-            };
-            if encrypted.is_some() {
-                state.encrypted_parts.insert(*part_index);
-                return;
-            }
-            if !state.encrypted_parts.contains(part_index) {
-                if let Some(text) = content.take().filter(|text| !text.is_empty()) {
-                    *summary = Some(text);
-                }
-            }
-        }
-        UrpStreamEvent::PartDone {
-            part_index, part, ..
-        } => {
-            if let Part::Reasoning { encrypted, .. } = part {
-                if encrypted.is_some() {
-                    state.encrypted_parts.insert(*part_index);
-                }
-            }
-            rewrite_reasoning_part(part);
-        }
-        UrpStreamEvent::ItemDone { item, .. } => rewrite_item_reasoning(item),
         UrpStreamEvent::ResponseDone { output, .. } => {
             for node in output {
                 rewrite_reasoning_node(node);
@@ -162,31 +127,6 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
         }
         _ => {}
     }
-}
-
-fn rewrite_item_reasoning(item: &mut Item) {
-    let Item::Message { parts, .. } = item else {
-        return;
-    };
-    for part in parts.iter_mut() {
-        rewrite_reasoning_part(part);
-    }
-}
-
-fn rewrite_reasoning_part(part: &mut Part) {
-    let Part::Reasoning {
-        content, summary, ..
-    } = part
-    else {
-        return;
-    };
-    let Some(text) = content.take() else {
-        return;
-    };
-    if text.is_empty() {
-        return;
-    }
-    *summary = Some(text);
 }
 
 fn rewrite_reasoning_node(node: &mut Node) {
@@ -352,9 +292,9 @@ mod tests {
         let context = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
-        let mut event = UrpStreamEvent::Delta {
-            part_index: 7,
-            delta: PartDelta::Reasoning {
+        let mut event = UrpStreamEvent::NodeDelta {
+            node_index: 7,
+            delta: NodeDelta::Reasoning {
                 content: Some("plain".to_string()),
                 encrypted: None,
                 summary: None,
@@ -374,10 +314,10 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::Delta { delta, .. } = event else {
+        let UrpStreamEvent::NodeDelta { delta, .. } = event else {
             panic!("expected delta");
         };
-        let PartDelta::Reasoning {
+        let NodeDelta::Reasoning {
             content,
             encrypted,
             summary,
@@ -398,9 +338,9 @@ mod tests {
         let context = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
-        let mut event = UrpStreamEvent::PartDone {
-            part_index: 2,
-            part: Part::Reasoning { id: None, content: Some("plain".to_string()), encrypted: Some(Value::String("ciphertext".to_string())), summary: None, source: Some("openrouter".to_string()), extra_body: HashMap::from([(
+        let mut event = UrpStreamEvent::NodeDone {
+            node_index: 2,
+            node: Node::Reasoning { id: None, content: Some("plain".to_string()), encrypted: Some(Value::String("ciphertext".to_string())), summary: None, source: Some("openrouter".to_string()), extra_body: HashMap::from([(
                 "preserved".to_string(),
                 Value::String("yes".to_string()),
             )]) },
@@ -418,17 +358,17 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::PartDone { part, .. } = event else {
-            panic!("expected part done");
+        let UrpStreamEvent::NodeDone { node, .. } = event else {
+            panic!("expected node done");
         };
-        let Part::Reasoning {
+        let Node::Reasoning {
             content,
             encrypted,
             summary,
             source,
             extra_body,
             ..
-        } = part
+        } = node
         else {
             panic!("expected reasoning");
         };

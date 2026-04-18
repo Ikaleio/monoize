@@ -79,7 +79,7 @@ For each sub-request derived from `POST /v1/images/generations`:
 
 IM1. `model` → `UrpRequest.model` (used for routing).
 
-IM2. `prompt` → `UrpRequest.inputs` as one `Item::Message` with `role: User` containing one `Part::Text` with the prompt string.
+IM2. `prompt` → `UrpRequest.input` as one `Node::Text` with `role: User` and the prompt string.
 
 IM3. `stream` MUST be set to `Some(false)`. Image API sub-requests are always non-streaming.
 
@@ -93,13 +93,13 @@ For each sub-request derived from `POST /v1/images/edits`:
 
 IM6. `model` → `UrpRequest.model`.
 
-IM7. The `image` file MUST be mapped to one `Part::Image` with `ImageSource::Base64 { media_type, data }` in the user message parts.
+IM7. The `image` file MUST be mapped to one `Node::Image` with `role: User` and `ImageSource::Base64 { media_type, data }`.
 
-IM8. If `mask` is present, the mask file MUST be mapped to a second `Part::Image` with `ImageSource::Base64 { media_type, data }` in the user message parts, after the source image.
+IM8. If `mask` is present, the mask file MUST be mapped to a second `Node::Image` with `role: User` and `ImageSource::Base64 { media_type, data }`, after the source image.
 
-IM9. `prompt` MUST be mapped to one `Part::Text` in the user message parts, after the image part(s).
+IM9. `prompt` MUST be mapped to one `Node::Text` with `role: User`, after the image node(s).
 
-IM10. Part order in the user message MUST be: `[image, mask?, prompt_text]`.
+IM10. Node order in `UrpRequest.input` MUST be: `[image, mask?, prompt_text]`.
 
 IM11. `stream` MUST be set to `Some(false)`.
 
@@ -124,16 +124,16 @@ IM17. The order of items in the response `data[]` array is not required to match
 
 ### 5.1 Image extraction from URP response
 
-IR1. For each successful sub-request, Monoize MUST scan the URP response `outputs` for `Part::Image` parts within `Item::Message` items.
+IR1. For each successful sub-request, Monoize MUST scan the URP response `output` for assistant `Node::Image` nodes.
 
-IR2. For each `Part::Image` found:
+IR2. For each `Node::Image` found:
 
 - `ImageSource::Base64 { data, .. }` → use `data` as `b64_json`.
 - `ImageSource::Url { url, .. }` → use `url` as `url` field in the response data item. If the downstream request did not specify `response_format: "url"`, Monoize MUST still include the URL as-is (no download/re-encoding).
 
-IR3. If a sub-request succeeds but produces zero `Part::Image` parts, Monoize MUST scan for `Part::Text` parts and attempt to extract text content. If the URP response contains no extractable image, that sub-request MUST be treated as failed for the purpose of IM16.
+IR3. If a sub-request succeeds but produces zero assistant `Node::Image` nodes, Monoize MUST scan for assistant `Node::Text` nodes and attempt to extract text content. If the URP response contains no extractable image, that sub-request MUST be treated as failed for the purpose of IM16.
 
-IR4. `revised_prompt`: If the URP response contains `Part::Text` parts in assistant `Item::Message` items alongside `Part::Image` parts, the concatenated text content of those text parts MUST be used as `revised_prompt` for the corresponding `data[]` entry. If no text parts exist alongside images, `revised_prompt` MUST be omitted.
+IR4. `revised_prompt`: If the URP response contains assistant `Node::Text` nodes alongside assistant `Node::Image` nodes, the concatenated text content of those text nodes MUST be used as `revised_prompt` for the corresponding `data[]` entry. If no assistant text nodes exist alongside images, `revised_prompt` MUST be omitted.
 
 ### 5.2 Response envelope
 
@@ -155,9 +155,9 @@ IR6. `created` MUST be the Unix timestamp (seconds) at the time the response is 
 
 IR7. `data` MUST be a JSON array. Each element corresponds to one extracted image across all successful sub-requests.
 
-IR8. If `n = 1` and the single sub-request produces multiple `Part::Image` outputs, all images MUST appear as separate entries in `data[]`.
+IR8. If `n = 1` and the single sub-request produces multiple assistant `Node::Image` outputs, all images MUST appear as separate entries in `data[]`.
 
-IR9. When a `Part::Image` has `ImageSource::Url`, the data item MUST use field `url` instead of `b64_json`:
+IR9. When a `Node::Image` has `ImageSource::Url`, the data item MUST use field `url` instead of `b64_json`:
 
 ```json
 {

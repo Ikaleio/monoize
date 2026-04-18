@@ -1,9 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
-    text_part,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, text_node,
 };
-use crate::urp::{Item, Part, Role};
+use crate::urp::{Node, OrdinaryRole};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -81,33 +80,20 @@ impl Transform for InjectSystemPromptTransform {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
-        let mut messages = request_messages_mut(req);
 
         let mut target_index: Option<usize> = None;
         match cfg.position {
             Position::Prepend => {
-                for (idx, msg) in messages.iter().enumerate() {
-                    if matches!(
-                        msg,
-                        Item::Message {
-                            role: Role::System,
-                            ..
-                        }
-                    ) {
+                for (idx, node) in req.input.iter().enumerate() {
+                    if matches!(node.role(), Some(OrdinaryRole::System)) {
                         target_index = Some(idx);
                         break;
                     }
                 }
             }
             Position::Append => {
-                for (idx, msg) in messages.iter().enumerate().rev() {
-                    if matches!(
-                        msg,
-                        Item::Message {
-                            role: Role::System,
-                            ..
-                        }
-                    ) {
+                for (idx, node) in req.input.iter().enumerate().rev() {
+                    if matches!(node.role(), Some(OrdinaryRole::System)) {
                         target_index = Some(idx);
                         break;
                     }
@@ -116,20 +102,13 @@ impl Transform for InjectSystemPromptTransform {
         }
 
         if let Some(idx) = target_index {
-            if let Item::Message { parts, .. } = &mut messages[idx] {
-                parts.push(Part::Text {
-                    content: cfg.content.clone(),
-                    extra_body: std::collections::HashMap::new(),
-                });
-            }
+            req.input
+                .insert(idx + 1, text_node(OrdinaryRole::System, cfg.content.clone()));
         } else {
-            let mut message = Item::new_message(Role::System);
-            if let Item::Message { parts, .. } = &mut message {
-                parts.push(text_part(cfg.content.clone()));
-            }
+            let message = text_node(OrdinaryRole::System, cfg.content.clone());
             match cfg.position {
-                Position::Prepend => messages.insert(0, message),
-                Position::Append => messages.push(message),
+                Position::Prepend => req.input.insert(0, message),
+                Position::Append => req.input.push(message),
             }
         }
         Ok(())

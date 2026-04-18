@@ -35,11 +35,11 @@ The model key stored in the provider's model map determines the upstream Replica
 
 | URP field | Replicate field |
 |---|---|
-| System/Developer messages → concatenated text | `input.system_prompt` |
-| User text parts → concatenated text | `input.prompt` |
-| User image parts → first URL/data-URL | `input.image` |
-| User file parts → first URL/data-URL | `input.file` |
-| User audio parts → first URL/data-URL | `input.audio` |
+| System/Developer text nodes → concatenated text | `input.system_prompt` |
+| User text nodes → concatenated text | `input.prompt` |
+| User image nodes → first URL/data-URL | `input.image` |
+| User file nodes → first URL/data-URL | `input.file` |
+| User audio nodes → first URL/data-URL | `input.audio` |
 | `max_output_tokens` | `input.max_tokens` and `input.max_new_tokens` |
 | `temperature` | `input.temperature` |
 | `top_p` | `input.top_p` |
@@ -60,14 +60,14 @@ Fields `model` and `max_multiplier` are stripped from the upstream body.
 | `model` | `UrpResponse.model` |
 | `status` == `"succeeded"` | `finish_reason = Stop` |
 | `status` == `"failed"` / `"canceled"` / `"aborted"` | `finish_reason = Other` |
-| `output` (string) | `Part::Text` or `Part::Image` (if URL pointing to media) |
-| `output` (array of strings) | Concatenated `Part::Text` or multiple `Part::Image` (if all are media URLs) |
-| `output` (other) | JSON-serialized `Part::Text` |
-| `error` (non-empty, no output) | `Part::Refusal` |
+| `output` (string) | `Node::Text` or `Node::Image` (if URL pointing to media) |
+| `output` (array of strings) | Concatenated `Node::Text` or multiple `Node::Image` (if all are media URLs) |
+| `output` (other) | JSON-serialized `Node::Text` |
+| `error` (non-empty, no output) | `Node::Refusal` |
 | `metrics.input_token_count` | `Usage.input_tokens` |
 | `metrics.output_token_count` | `Usage.output_tokens` |
 
-URLs pointing to `replicate.delivery` or with common image/video/audio extensions are decoded as `Part::Image`.
+URLs pointing to `replicate.delivery` or with common image/video/audio extensions are decoded as `Node::Image`.
 
 ### 3.3 Stream Decoding (Replicate SSE → URP Events)
 
@@ -75,7 +75,7 @@ URLs pointing to `replicate.delivery` or with common image/video/audio extension
 
 | Replicate SSE event | URP event |
 |---|---|
-| `event: output`, `data: <text>` | `Delta { PartDelta::Text }` |
+| `event: output`, `data: <text>` | `NodeDelta { Text }` |
 | `event: error`, `data: <message>` | `Error` |
 | `event: done` | `ResponseDone` with `finish_reason = Stop` |
 

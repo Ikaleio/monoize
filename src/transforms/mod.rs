@@ -1,4 +1,7 @@
-use crate::urp::{Item, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent, nodes_to_items};
+use crate::urp::{
+    Item, Node, OrdinaryRole, Part, Role, UrpRequest, UrpResponse, UrpStreamEvent,
+    nodes_to_items,
+};
 use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -326,6 +329,16 @@ pub fn text_part(content: impl Into<String>) -> Part {
     }
 }
 
+pub fn text_node(role: OrdinaryRole, content: impl Into<String>) -> Node {
+    Node::Text {
+        id: None,
+        role,
+        content: content.into(),
+        phase: None,
+        extra_body: HashMap::new(),
+    }
+}
+
 pub fn move_system_to_developer(items: &mut [Item]) {
     for item in items.iter_mut() {
         if let Item::Message { role, .. } = item {
@@ -383,6 +396,48 @@ pub fn strip_reasoning_parts(parts: &[Part]) -> Vec<Part> {
     parts
         .iter()
         .filter(|part| !matches!(part, Part::Reasoning { .. }))
+        .cloned()
+        .collect()
+}
+
+pub fn move_system_to_developer_nodes(nodes: &mut [Node]) {
+    for node in nodes.iter_mut() {
+        match node {
+            Node::Text { role, .. }
+            | Node::Image { role, .. }
+            | Node::Audio { role, .. }
+            | Node::File { role, .. }
+            | Node::ProviderItem { role, .. } => {
+                if *role == OrdinaryRole::System {
+                    *role = OrdinaryRole::Developer;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn move_developer_to_system_nodes(nodes: &mut [Node]) {
+    for node in nodes.iter_mut() {
+        match node {
+            Node::Text { role, .. }
+            | Node::Image { role, .. }
+            | Node::Audio { role, .. }
+            | Node::File { role, .. }
+            | Node::ProviderItem { role, .. } => {
+                if *role == OrdinaryRole::Developer {
+                    *role = OrdinaryRole::System;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn strip_reasoning_nodes(nodes: &[Node]) -> Vec<Node> {
+    nodes
+        .iter()
+        .filter(|node| !matches!(node, Node::Reasoning { .. }))
         .cloned()
         .collect()
 }

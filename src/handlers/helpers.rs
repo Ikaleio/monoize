@@ -1,6 +1,6 @@
 use super::*;
 use crate::transforms::split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
-use crate::urp::{ImageSource, Item, Part, Role};
+use crate::urp::ImageSource;
 
 #[allow(clippy::result_large_err)]
 pub(super) fn decode_urp_request(
@@ -500,52 +500,61 @@ pub(super) fn requires_buffered_response_stream(
 }
 
 pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) {
-    let response_items = urp::nodes_to_items(&resp.output);
-    let mut rewritten = Vec::with_capacity(response_items.len());
+    let mut pending_markdown = String::new();
+    let mut last_assistant_text_idx: Option<usize> = None;
 
-    for item in response_items {
-        let mut item = item;
-        let Item::Message { role, parts, .. } = &mut item else {
-            rewritten.push(item);
-            continue;
-        };
-        if *role != Role::Assistant {
-            rewritten.push(item);
-            continue;
-        }
-        let appended: String = parts
-            .iter()
-            .filter_map(|part| match part {
-                Part::Image { source, .. } => Some(match source {
+    for (i, node) in resp.output.iter().enumerate() {
+        match node {
+            urp::Node::Image {
+                role: urp::OrdinaryRole::Assistant,
+                source,
+                ..
+            } => {
+                let md = match source {
                     ImageSource::Url { url, .. } => format!("\n\n![image]({url})"),
                     ImageSource::Base64 { media_type, data } => {
                         format!("\n\n![image](data:{media_type};base64,{data})")
                     }
-                }),
-                _ => None,
-            })
-            .collect();
-        if appended.is_empty() {
-            rewritten.push(item);
-            continue;
+                };
+                pending_markdown.push_str(&md);
+            }
+            urp::Node::Text {
+                role: urp::OrdinaryRole::Assistant,
+                ..
+            } => {
+                last_assistant_text_idx = Some(i);
+            }
+            _ => {}
         }
-        if let Some(Part::Text { content, .. }) = parts
-            .iter_mut()
-            .rev()
-            .find(|part| matches!(part, Part::Text { .. }))
-        {
-            content.push_str(&appended);
-        } else {
-            parts.push(Part::Text {
-                content: appended,
-                extra_body: std::collections::HashMap::new(),
-            });
-        }
-        parts.retain(|part| !matches!(part, Part::Image { .. }));
-        rewritten.push(item);
     }
 
-    resp.output = urp::items_to_nodes_with_envelope_control(rewritten);
+    if pending_markdown.is_empty() {
+        return;
+    }
+
+    if let Some(idx) = last_assistant_text_idx {
+        if let urp::Node::Text { content, .. } = &mut resp.output[idx] {
+            content.push_str(&pending_markdown);
+        }
+    } else {
+        resp.output.push(urp::Node::Text {
+            id: None,
+            role: urp::OrdinaryRole::Assistant,
+            content: pending_markdown,
+            phase: None,
+            extra_body: std::collections::HashMap::new(),
+        });
+    }
+
+    resp.output.retain(|node| {
+        !matches!(
+            node,
+            urp::Node::Image {
+                role: urp::OrdinaryRole::Assistant,
+                ..
+            }
+        )
+    });
 }
 
 pub(super) fn model_glob_match(pattern: &str, model: &str) -> bool {

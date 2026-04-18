@@ -1,7 +1,7 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, move_system_to_developer,
-    request_messages_mut,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    move_system_to_developer_nodes,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -60,8 +60,7 @@ impl Transform for SystemToDeveloperRoleTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            let mut messages = request_messages_mut(req);
-            move_system_to_developer(&mut messages);
+            move_system_to_developer_nodes(&mut req.input);
         }
         Ok(())
     }

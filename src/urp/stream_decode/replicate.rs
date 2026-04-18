@@ -4,8 +4,7 @@ use crate::handlers::usage::{
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
-    FinishReason, Item, ItemHeader, Node, NodeDelta, NodeHeader, OrdinaryRole, Part, PartDelta,
-    PartHeader, Role, UrpStreamEvent, nodes_to_items,
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -23,7 +22,6 @@ pub(crate) async fn stream_replicate_to_urp_events(
 ) -> AppResult<()> {
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut started_response = false;
-    let mut bridge_item_started = false;
     let mut text_started = false;
     let mut output_text = String::new();
     let mut had_error = false;
@@ -81,27 +79,6 @@ pub(crate) async fn stream_replicate_to_urp_events(
                             extra_body: HashMap::new(),
                         })
                         .await;
-                    if !bridge_item_started {
-                        let _ = tx
-                            .send(UrpStreamEvent::ItemStart {
-                                item_index: 0,
-                                header: ItemHeader::Message {
-                                    id: None,
-                                    role: Role::Assistant,
-                                },
-                                extra_body: HashMap::new(),
-                            })
-                            .await;
-                        bridge_item_started = true;
-                    }
-                    let _ = tx
-                        .send(UrpStreamEvent::PartStart {
-                            part_index: 0,
-                            item_index: 0,
-                            header: PartHeader::Text,
-                            extra_body: HashMap::new(),
-                        })
-                        .await;
                     text_started = true;
                 }
 
@@ -112,16 +89,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
                 let _ = tx
                     .send(UrpStreamEvent::NodeDelta {
                         node_index: 0,
-                        delta: delta.clone(),
-                        usage: None,
-                        extra_body: HashMap::new(),
-                    })
-                    .await;
-                let _ = tx
-                    .send(UrpStreamEvent::Delta {
-                        part_index: 0,
-                        delta: part_delta_from_node_delta(&delta)
-                            .unwrap_or(PartDelta::Text { content: String::new() }),
+                        delta,
                         usage: None,
                         extra_body: HashMap::new(),
                     })
@@ -171,42 +139,11 @@ pub(crate) async fn stream_replicate_to_urp_events(
                 extra_body: HashMap::new(),
             })
             .await;
-        if let Some(part) = bridge_part_from_node(node) {
-            let _ = tx
-                .send(UrpStreamEvent::PartDone {
-                    part_index: 0,
-                    part,
-                    usage: None,
-                    extra_body: HashMap::new(),
-                })
-                .await;
-        }
     }
 
-    let output_item = build_completed_message_item(&completed_nodes);
     let outputs = completed_nodes.clone();
 
     if started_response {
-        if !bridge_item_started {
-            let _ = tx
-                .send(UrpStreamEvent::ItemStart {
-                    item_index: 0,
-                    header: ItemHeader::Message {
-                        id: None,
-                        role: Role::Assistant,
-                    },
-                    extra_body: HashMap::new(),
-                })
-                .await;
-        }
-        let _ = tx
-            .send(UrpStreamEvent::ItemDone {
-                item_index: 0,
-                item: output_item,
-                usage: None,
-                extra_body: HashMap::new(),
-            })
-            .await;
         let _ = tx
             .send(UrpStreamEvent::ResponseDone {
                 finish_reason,
@@ -219,55 +156,4 @@ pub(crate) async fn stream_replicate_to_urp_events(
 
     record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
-}
-
-fn part_delta_from_node_delta(delta: &NodeDelta) -> Option<PartDelta> {
-    match delta {
-        NodeDelta::Text { content } => Some(PartDelta::Text {
-            content: content.clone(),
-        }),
-        NodeDelta::Reasoning {
-            content,
-            encrypted,
-            summary,
-            source,
-        } => Some(PartDelta::Reasoning {
-            content: content.clone(),
-            encrypted: encrypted.clone(),
-            summary: summary.clone(),
-            source: source.clone(),
-        }),
-        NodeDelta::Refusal { content } => Some(PartDelta::Refusal {
-            content: content.clone(),
-        }),
-        NodeDelta::ToolCallArguments { arguments } => Some(PartDelta::ToolCallArguments {
-            arguments: arguments.clone(),
-        }),
-        NodeDelta::Image { source } => Some(PartDelta::Image {
-            source: source.clone(),
-        }),
-        NodeDelta::Audio { source } => Some(PartDelta::Audio {
-            source: source.clone(),
-        }),
-        NodeDelta::File { source } => Some(PartDelta::File {
-            source: source.clone(),
-        }),
-        NodeDelta::ProviderItem { data } => Some(PartDelta::ProviderItem { data: data.clone() }),
-    }
-}
-
-fn bridge_part_from_node(node: &Node) -> Option<Part> {
-    match nodes_to_items(std::slice::from_ref(node)).into_iter().next() {
-        Some(Item::Message { mut parts, .. }) if !parts.is_empty() => Some(parts.remove(0)),
-        _ => None,
-    }
-}
-
-fn build_completed_message_item(nodes: &[Node]) -> Item {
-    Item::Message {
-        id: Some(crate::urp::synthetic_message_id()),
-        role: Role::Assistant,
-        parts: nodes.iter().filter_map(bridge_part_from_node).collect(),
-        extra_body: HashMap::new(),
-    }
 }

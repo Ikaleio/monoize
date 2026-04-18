@@ -1,9 +1,7 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, request_messages_mut,
-    strip_reasoning_parts,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, strip_reasoning_nodes,
 };
-use crate::urp::Item;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -61,12 +59,7 @@ impl Transform for StripInputReasoningTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            let mut messages = request_messages_mut(req);
-            for item in messages.iter_mut() {
-                if let Item::Message { parts, .. } = item {
-                    *parts = strip_reasoning_parts(parts);
-                }
-            }
+            req.input = strip_reasoning_nodes(&req.input);
         }
         Ok(())
     }

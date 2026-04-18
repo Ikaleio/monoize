@@ -1,21 +1,11 @@
 use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
 use crate::urp::stream_helpers::*;
-use crate::urp::{
-    self, Item, ItemHeader, Part, PartDelta, PartHeader, Role, ToolResultContent, UrpStreamEvent,
-};
+use crate::urp::{self, ToolResultContent, UrpStreamEvent};
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
-
-#[derive(Clone)]
-struct PendingResponsesMessageItem {
-    role: Role,
-    phase: Option<String>,
-    content: Vec<Value>,
-    extra_body: HashMap<String, Value>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResponsesOutputZone {
@@ -31,28 +21,7 @@ struct ActiveResponsesOutputItem {
     item_id: String,
     item: Value,
     next_content_index: u64,
-    summary_part_added_sent: bool,
     envelope_extra: HashMap<String, Value>,
-}
-
-#[derive(Clone, Debug)]
-struct PendingResponsesAssistantItem {
-    role: Role,
-    item_extra_body: HashMap<String, Value>,
-    active_output: Option<ActiveResponsesOutputItem>,
-    staged_outputs: Vec<ActiveResponsesOutputItem>,
-    streamed_any_output: bool,
-}
-
-#[derive(Clone, Debug)]
-struct StreamedPartState {
-    item_index: u32,
-    output_index: usize,
-    zone: ResponsesOutputZone,
-    content_index: Option<u32>,
-    item_id: String,
-    call_id: Option<String>,
-    name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -463,12 +432,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut response_id = "resp".to_string();
     let mut created: Option<i64> = None;
     let mut next_output_index = 0usize;
-    let mut output_indices: HashMap<u32, usize> = HashMap::new();
-    let mut part_states: HashMap<u32, StreamedPartState> = HashMap::new();
     let mut node_states: HashMap<u32, StreamedNodeState> = HashMap::new();
-    let mut pending_assistant_items: HashMap<u32, PendingResponsesAssistantItem> = HashMap::new();
-    let mut flushed_output_indices: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
     let mut completed_output_items: Vec<(usize, Value)> = Vec::new();
     let mut completed_output_indices: HashSet<usize> = HashSet::new();
     let mut streamed_output_indices: HashSet<usize> = HashSet::new();
@@ -488,7 +452,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
         seq: &mut u64,
         node_state: &mut StreamedNodeState,
         pending_envelope_extra: &mut HashMap<String, Value>,
-        _pending_assistant_items: &HashMap<u32, PendingResponsesAssistantItem>,
         active_node_message_output: &mut Option<ActiveResponsesOutputItem>,
         streamed_output_indices: &mut HashSet<usize>,
         sse_max_frame_length: Option<usize>,
@@ -588,526 +551,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 send_responses_event(&tx, &mut seq, "response.created", payload.clone()).await?;
                 send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
             }
-            UrpStreamEvent::ItemStart {
-                item_index,
-                header,
-                extra_body,
-            } => match header {
-                ItemHeader::Message { role, id } => {
-                    merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
-                    let mut item_extra_body = extra_body;
-                    if let Some(id) = id {
-                        item_extra_body
-                            .entry("id".to_string())
-                            .or_insert(Value::String(id));
-                    }
-                    pending_assistant_items.insert(
-                        item_index,
-                        PendingResponsesAssistantItem {
-                            role,
-                            item_extra_body,
-                            active_output: None,
-                            staged_outputs: Vec::new(),
-                            streamed_any_output: false,
-                        },
-                    );
-                }
-                ItemHeader::ToolResult { .. } => {
-                    let output_index = next_output_index;
-                    next_output_index += 1;
-                    output_indices.insert(item_index, output_index);
-                    let item = encode_item_start_stub(&header);
-                    send_responses_event(
-                        &tx,
-                        &mut seq,
-                        "response.output_item.added",
-                        json!({
-                            "output_index": output_index,
-                            "item": item,
-                        }),
-                    )
-                    .await?;
-                }
-            },
-            UrpStreamEvent::PartStart {
-                part_index,
-                item_index,
-                header,
-                extra_body,
-            } => {
-                if node_states.contains_key(&part_index) {
-                    continue;
-                }
-                if let Some(pending_item) = pending_assistant_items.get_mut(&item_index) {
-                    let zone = zone_from_part_header(&header);
-                    let content_index = if zone == ResponsesOutputZone::Message {
-                        let next = pending_item
-                            .active_output
-                            .as_ref()
-                            .filter(|active| active.zone == zone)
-                            .map(|active| active.next_content_index)
-                            .unwrap_or(0);
-                        Some(next)
-                    } else {
-                        None
-                    };
-                    let needs_new_output =
-                        pending_item.active_output.as_ref().is_none_or(|active| {
-                            active.zone != zone || matches!(zone, ResponsesOutputZone::FunctionCall)
-                        });
-
-                    if needs_new_output {
-                        let entering_reasoning = zone == ResponsesOutputZone::Reasoning;
-                        let leaving_message = pending_item
-                            .active_output
-                            .as_ref()
-                            .is_some_and(|a| a.zone == ResponsesOutputZone::Message);
-                        if entering_reasoning && leaving_message {
-                            if let Some(active) = pending_item.active_output.take() {
-                                flushed_output_indices.insert(active.output_index);
-                                let flushed = flush_stream_output(
-                                    tx.clone(),
-                                    &mut seq,
-                                    active,
-                                    sse_max_frame_length,
-                                )
-                                .await?;
-                                completed_output_indices.insert(flushed.0);
-                                completed_output_items.push(flushed);
-                            }
-                        } else {
-                            stage_active_stream_output(
-                                &mut pending_item.active_output,
-                                &mut pending_item.staged_outputs,
-                            );
-                        }
-                    }
-
-                    let active_output = pending_item.active_output.get_or_insert_with(|| {
-                        let output_index = next_output_index;
-                        next_output_index += 1;
-                        let item = stream_output_item_start_stub(
-                            zone,
-                            pending_item.role,
-                            &pending_item.item_extra_body,
-                            &header,
-                            &extra_body,
-                        );
-                        ActiveResponsesOutputItem {
-                            zone,
-                            output_index,
-                            item_id: item
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            item,
-                            next_content_index: 0,
-                            summary_part_added_sent: false,
-                            envelope_extra: HashMap::new(),
-                        }
-                    });
-
-                    if needs_new_output {
-                        pending_item.streamed_any_output = true;
-                        send_responses_event(
-                            &tx,
-                            &mut seq,
-                            "response.output_item.added",
-                            json!({
-                                "output_index": active_output.output_index,
-                                "item": active_output.item.clone(),
-                            }),
-                        )
-                        .await?;
-                        streamed_output_indices.insert(active_output.output_index);
-                    }
-
-                    if zone == ResponsesOutputZone::Message {
-                        active_output.next_content_index += 1;
-                        send_responses_event(
-                            &tx,
-                            &mut seq,
-                            "response.content_part.added",
-                            json!({
-                                "output_index": active_output.output_index,
-                                "content_index": content_index.unwrap_or(0),
-                                "item_id": active_output.item_id,
-                                "part": encode_part_start_header(&header),
-                            }),
-                        )
-                        .await?;
-                        streamed_output_indices.insert(active_output.output_index);
-                    }
-
-                    part_states.insert(
-                        part_index,
-                        StreamedPartState {
-                            item_index,
-                            output_index: active_output.output_index,
-                            zone,
-                            content_index: content_index.map(|v| v as u32),
-                            item_id: active_output.item_id.clone(),
-                            call_id: part_call_id_from_header(&header),
-                            name: part_name_from_header(&header),
-                        },
-                    );
-                }
-            }
-            UrpStreamEvent::Delta {
-                part_index, delta, ..
-            } => {
-                if node_states.contains_key(&part_index) {
-                    continue;
-                }
-                match delta {
-                PartDelta::Text { ref content } => {
-                    let mut part_state = if let Some(existing) = part_states.get(&part_index).cloned() {
-                        existing
-                    } else {
-                        let orphan_item_index = pending_assistant_items
-                            .iter()
-                            .find(|(_, pending)| pending.active_output.is_some())
-                            .map(|(item_index, _)| *item_index)
-                            .or_else(|| {
-                                pending_assistant_items
-                                    .iter()
-                                    .find(|(_, pending)| !pending.streamed_any_output)
-                                    .map(|(item_index, _)| *item_index)
-                            });
-                        let Some(orphan_item_index) = orphan_item_index else {
-                            continue;
-                        };
-                        let Some(pending_item) = pending_assistant_items.get_mut(&orphan_item_index) else {
-                            continue;
-                        };
-                        let output_index = next_output_index;
-                        next_output_index += 1;
-                        let item = stream_output_item_start_stub(
-                            ResponsesOutputZone::Message,
-                            pending_item.role,
-                            &pending_item.item_extra_body,
-                            &PartHeader::Text,
-                            &pending_envelope_extra,
-                        );
-                        pending_envelope_extra.clear();
-                        let item_id = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let new_output = ActiveResponsesOutputItem {
-                            zone: ResponsesOutputZone::Message,
-                            output_index,
-                            item_id: item_id.clone(),
-                            item,
-                            next_content_index: 1,
-                            summary_part_added_sent: false,
-                            envelope_extra: pending_envelope_extra.clone(),
-                        };
-                        send_responses_event(
-                            &tx,
-                            &mut seq,
-                            "response.output_item.added",
-                            json!({
-                                "output_index": new_output.output_index,
-                                "item": new_output.item.clone(),
-                            }),
-                        )
-                        .await?;
-                        streamed_output_indices.insert(new_output.output_index);
-                        send_responses_event(
-                            &tx,
-                            &mut seq,
-                            "response.content_part.added",
-                            json!({
-                                "output_index": new_output.output_index,
-                                "content_index": 0,
-                                "item_id": item_id,
-                                "part": json!({"type": "output_text", "text": "", "annotations": [], "logprobs": []}),
-                            }),
-                        )
-                        .await?;
-                        streamed_output_indices.insert(new_output.output_index);
-                        stage_active_stream_output(
-                            &mut pending_item.active_output,
-                            &mut pending_item.staged_outputs,
-                        );
-                        pending_item.active_output = Some(new_output.clone());
-                        pending_item.streamed_any_output = true;
-                        let synthesized = StreamedPartState {
-                            item_index: orphan_item_index,
-                            output_index: new_output.output_index,
-                            zone: ResponsesOutputZone::Message,
-                            content_index: Some(0),
-                            item_id: new_output.item_id.clone(),
-                            call_id: None,
-                            name: None,
-                        };
-                        part_states.insert(part_index, synthesized.clone());
-                        synthesized
-                    };
-
-                    if flushed_output_indices.contains(&part_state.output_index) {
-                        if let Some(pending_item) =
-                            pending_assistant_items.get_mut(&part_state.item_index)
-                        {
-                            let output_index = next_output_index;
-                            next_output_index += 1;
-                            let item = stream_output_item_start_stub(
-                                ResponsesOutputZone::Message,
-                                pending_item.role,
-                                &pending_item.item_extra_body,
-                                &PartHeader::Text,
-                                &HashMap::new(),
-                            );
-                            let new_output = ActiveResponsesOutputItem {
-                                zone: ResponsesOutputZone::Message,
-                                output_index,
-                                item_id: item
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                item,
-                                next_content_index: 1,
-                                summary_part_added_sent: false,
-                                envelope_extra: HashMap::new(),
-                            };
-                            send_responses_event(
-                                &tx,
-                                &mut seq,
-                                "response.output_item.added",
-                                json!({
-                                    "output_index": new_output.output_index,
-                                    "item": new_output.item.clone(),
-                                }),
-                            )
-                            .await?;
-                            streamed_output_indices.insert(new_output.output_index);
-                            send_responses_event(
-                                &tx,
-                                &mut seq,
-                                "response.content_part.added",
-                                json!({
-                                    "output_index": new_output.output_index,
-                                    "content_index": 0,
-                                    "item_id": new_output.item_id,
-                                    "part": json!({"type": "output_text", "text": "", "annotations": [], "logprobs": []}),
-                                }),
-                            )
-                            .await?;
-                            streamed_output_indices.insert(new_output.output_index);
-
-                            part_state.output_index = new_output.output_index;
-                            part_state.item_id = new_output.item_id.clone();
-                            part_state.content_index = Some(0);
-                            part_states.insert(part_index, part_state.clone());
-
-                            stage_active_stream_output(
-                                &mut pending_item.active_output,
-                                &mut pending_item.staged_outputs,
-                            );
-                            pending_item.active_output = Some(new_output);
-                            pending_item.streamed_any_output = true;
-                        }
-                    }
-
-                    if let Some(active_output) = pending_assistant_items
-                        .get_mut(&part_state.item_index)
-                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
-                    {
-                        append_delta_to_stream_output_item(active_output, &delta);
-                    }
-                    send_responses_delta_string(
-                        &tx,
-                        &mut seq,
-                        "response.output_text.delta",
-                        responses_text_delta_payload(
-                            None,
-                            &json!({ "id": part_state.item_id }),
-                            part_state.output_index as u64,
-                            part_state.content_index.unwrap_or(part_index) as u64,
-                        ),
-                        "delta",
-                        content,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
-                PartDelta::Reasoning {
-                    ref content,
-                    ref encrypted,
-                    ref summary,
-                    ref source,
-                } => {
-                    let part_state =
-                        part_states
-                            .get(&part_index)
-                            .cloned()
-                            .unwrap_or(StreamedPartState {
-                                item_index: 0,
-                                output_index: 0,
-                                zone: ResponsesOutputZone::Reasoning,
-                                content_index: None,
-                                item_id: String::new(),
-                                call_id: None,
-                                name: None,
-                            });
-                    if let Some(active_output) = pending_assistant_items
-                        .get_mut(&part_state.item_index)
-                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
-                    {
-                        append_delta_to_stream_output_item(active_output, &delta);
-                    }
-                    if let Some(content) = content.as_deref().filter(|content| !content.is_empty())
-                    {
-                        reasoning_delta_indices.insert(part_state.output_index);
-                        send_responses_delta_string(
-                            &tx,
-                            &mut seq,
-                            "response.reasoning.delta",
-                            insert_reasoning_source(
-                                json!({
-                                    "item_id": part_state.item_id,
-                                    "output_index": part_state.output_index,
-                                }),
-                                source.as_deref(),
-                            ),
-                            "delta",
-                            content,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
-                    if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty())
-                    {
-                        let should_emit_added = pending_assistant_items
-                            .get_mut(&part_state.item_index)
-                            .and_then(|pending| stream_output_mut(pending, part_state.output_index))
-                            .map(|output| {
-                                if output.summary_part_added_sent {
-                                    false
-                                } else {
-                                    output.summary_part_added_sent = true;
-                                    true
-                                }
-                            })
-                            .unwrap_or(true);
-                        if should_emit_added {
-                            reasoning_summary_added_indices.insert(part_state.output_index);
-                            send_responses_event(
-                                &tx,
-                                &mut seq,
-                                "response.reasoning_summary_part.added",
-                                json!({
-                                    "item_id": part_state.item_id,
-                                    "output_index": part_state.output_index,
-                                    "summary_index": 0,
-                                    "part": { "type": "summary_text", "text": "" },
-                                }),
-                            )
-                            .await?;
-                        }
-                        reasoning_summary_delta_indices.insert(part_state.output_index);
-                        send_responses_delta_string(
-                            &tx,
-                            &mut seq,
-                            "response.reasoning_summary_text.delta",
-                            insert_reasoning_source(
-                                json!({
-                                    "item_id": part_state.item_id,
-                                    "output_index": part_state.output_index,
-                                    "summary_index": 0,
-                                }),
-                                source.as_deref(),
-                            ),
-                            "delta",
-                            summary,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                    }
-                    let _ = encrypted;
-                }
-                PartDelta::ToolCallArguments { ref arguments } => {
-                    let part_state =
-                        part_states
-                            .get(&part_index)
-                            .cloned()
-                            .unwrap_or(StreamedPartState {
-                                item_index: 0,
-                                output_index: 0,
-                                zone: ResponsesOutputZone::FunctionCall,
-                                content_index: None,
-                                item_id: String::new(),
-                                call_id: Some(String::new()),
-                                name: Some(String::new()),
-                            });
-                    if let Some(active_output) = pending_assistant_items
-                        .get_mut(&part_state.item_index)
-                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
-                    {
-                        append_delta_to_stream_output_item(active_output, &delta);
-                    }
-                    send_responses_delta_string(
-                        &tx,
-                        &mut seq,
-                        "response.function_call_arguments.delta",
-                        json!({
-                            "item_id": part_state.item_id,
-                            "output_index": part_state.output_index,
-                        }),
-                        "delta",
-                        arguments,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                    function_args_delta_indices.insert(part_state.output_index);
-                }
-                PartDelta::Refusal { ref content } => {
-                    let part_state =
-                        part_states
-                            .get(&part_index)
-                            .cloned()
-                            .unwrap_or(StreamedPartState {
-                                item_index: 0,
-                                output_index: 0,
-                                zone: ResponsesOutputZone::Message,
-                                content_index: Some(part_index),
-                                item_id: String::new(),
-                                call_id: None,
-                                name: None,
-                            });
-                    if let Some(active_output) = pending_assistant_items
-                        .get_mut(&part_state.item_index)
-                        .and_then(|pending| pending.active_output.as_mut())
-                    {
-                        append_delta_to_stream_output_item(active_output, &delta);
-                    }
-                    send_responses_delta_string(
-                        &tx,
-                        &mut seq,
-                        "response.output_text.delta",
-                        json!({
-                            "item_id": part_state.item_id,
-                            "output_index": part_state.output_index,
-                            "content_index": part_state.content_index.unwrap_or(part_index),
-                            "logprobs": Value::Null,
-                            "type": "refusal"
-                        }),
-                        "delta",
-                        content,
-                        sse_max_frame_length,
-                    )
-                    .await?;
-                }
-                PartDelta::Image { .. }
-                | PartDelta::Audio { .. }
-                | PartDelta::File { .. }
-                | PartDelta::ProviderItem { .. } => {}
-            }
-            },
             UrpStreamEvent::NodeStart {
                 node_index,
                 header,
@@ -1147,7 +590,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         item_id,
                         item,
                         next_content_index: 0,
-                        summary_part_added_sent: false,
                         envelope_extra: HashMap::new(),
                     });
                     next_output_index += 1;
@@ -1177,7 +619,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    output_indices.insert(node_index, output_index);
                     node_states.insert(
                         node_index,
                         StreamedNodeState {
@@ -1208,12 +649,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let message_start_emitted = false;
                 let completed_item = None;
                 let is_shared_message_output = true;
-                if let Some(provider_id) = extra_body.get("id").and_then(Value::as_str) {
-                    output_indices.insert(node_index, output_index);
-                    output_indices.insert(provider_id.parse::<u32>().unwrap_or(node_index), output_index);
-                } else {
-                    output_indices.insert(node_index, output_index);
-                }
                 node_states.insert(
                     node_index,
                     StreamedNodeState {
@@ -1247,7 +682,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &mut seq,
                         node_state,
                         &mut pending_envelope_extra,
-                        &pending_assistant_items,
                         &mut active_node_message_output,
                         &mut streamed_output_indices,
                         sse_max_frame_length,
@@ -1422,7 +856,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         &mut seq,
                         &mut node_state,
                         &mut pending_envelope_extra,
-                        &pending_assistant_items,
                         &mut active_node_message_output,
                         &mut streamed_output_indices,
                         sse_max_frame_length,
@@ -1613,270 +1046,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     completed_output_items.push((node_state.output_index, completed_item));
                 }
             }
-            UrpStreamEvent::PartDone {
-                part_index, part, ..
-            } => {
-                if node_states.contains_key(&part_index) {
-                    continue;
-                }
-                if let Some(part_state) = part_states.get(&part_index).cloned() {
-                    let is_staged_message = pending_assistant_items
-                        .get(&part_state.item_index)
-                        .is_some_and(|pending| is_staged_output(pending, part_state.output_index));
-
-                    if let Some(active_output) = pending_assistant_items
-                        .get_mut(&part_state.item_index)
-                        .and_then(|pending| stream_output_mut(pending, part_state.output_index))
-                    {
-                        apply_part_done_to_stream_output_item(active_output, &part);
-                    }
-
-                    if part_state.zone == ResponsesOutputZone::Message {
-                        if matches!(part, Part::Text { .. }) {
-                            let mut done_payload = responses_text_delta_payload(
-                                None,
-                                &json!({ "id": part_state.item_id }),
-                                part_state.output_index as u64,
-                                part_state.content_index.unwrap_or(part_index) as u64,
-                            );
-                            if let Some(obj) = done_payload.as_object_mut() {
-                                obj.insert(
-                                    "text".to_string(),
-                                    json!(match &part {
-                                        Part::Text { content, .. } => content,
-                                        _ => "",
-                                    }),
-                                );
-                            }
-                            send_responses_event(
-                                &tx,
-                                &mut seq,
-                                "response.output_text.done",
-                                done_payload,
-                            )
-                            .await?;
-                        }
-                        send_responses_event(
-                            &tx,
-                            &mut seq,
-                            "response.content_part.done",
-                            json!({
-                                "output_index": part_state.output_index,
-                                "content_index": part_state.content_index.unwrap_or(part_index),
-                                "item_id": part_state.item_id,
-                                "part": encode_part_value(&part),
-                            }),
-                        )
-                        .await?;
-                        if is_staged_message
-                            && let Some(output) = pending_assistant_items
-                                .get_mut(&part_state.item_index)
-                                .and_then(|pending| {
-                                    take_stream_output(pending, part_state.output_index)
-                                })
-                        {
-                            let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
-                                .await?;
-                            completed_output_indices.insert(flushed.0);
-                            completed_output_items.push(flushed);
-                        }
-                    } else if part_state.zone == ResponsesOutputZone::FunctionCall {
-                        if let Part::ToolCall { arguments, .. } = &part {
-                            if function_args_done_indices.insert(part_state.output_index) {
-                                send_responses_event(
-                                    &tx,
-                                    &mut seq,
-                                    "response.function_call_arguments.done",
-                                    json!({
-                                        "arguments": arguments,
-                                        "call_id": part_state.call_id.clone().unwrap_or_default(),
-                                        "item_id": part_state.item_id,
-                                        "name": part_state.name.clone().unwrap_or_default(),
-                                        "output_index": part_state.output_index,
-                                    }),
-                                )
-                                .await?;
-                            }
-                        }
-                        if let Some(output) = pending_assistant_items
-                            .get_mut(&part_state.item_index)
-                            .and_then(|pending| {
-                                take_stream_output(pending, part_state.output_index)
-                            })
-                        {
-                            let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
-                                .await?;
-                            completed_output_indices.insert(flushed.0);
-                            completed_output_items.push(flushed);
-                        }
-                    } else if part_state.zone == ResponsesOutputZone::Reasoning {
-                        if let Part::Reasoning {
-                            content,
-                            summary,
-                            source,
-                            ..
-                        } = &part
-                        {
-                            if let Some(summary) =
-                                summary.as_deref().filter(|summary| !summary.is_empty())
-                            {
-                                if reasoning_summary_text_done_indices.insert(part_state.output_index) {
-                                    send_responses_event(
-                                        &tx,
-                                        &mut seq,
-                                        "response.reasoning_summary_text.done",
-                                        insert_reasoning_source(
-                                            json!({
-                                                "item_id": part_state.item_id,
-                                                "output_index": part_state.output_index,
-                                                "summary_index": 0,
-                                                "text": summary,
-                                            }),
-                                            source.as_deref(),
-                                        ),
-                                    )
-                                    .await?;
-                                }
-                                if reasoning_summary_part_done_indices.insert(part_state.output_index) {
-                                    send_responses_event(
-                                        &tx,
-                                        &mut seq,
-                                        "response.reasoning_summary_part.done",
-                                        json!({
-                                            "item_id": part_state.item_id,
-                                            "output_index": part_state.output_index,
-                                            "summary_index": 0,
-                                            "part": { "type": "summary_text", "text": summary },
-                                        }),
-                                    )
-                                    .await?;
-                                }
-                            }
-                            if content
-                                .as_deref()
-                                .is_some_and(|content| !content.is_empty())
-                            {
-                                if reasoning_done_indices.insert(part_state.output_index) {
-                                    send_responses_event(
-                                        &tx,
-                                        &mut seq,
-                                        "response.reasoning.done",
-                                        insert_reasoning_source(
-                                            json!({
-                                                "item_id": part_state.item_id,
-                                                "output_index": part_state.output_index,
-                                                "text": content,
-                                            }),
-                                            source.as_deref(),
-                                        ),
-                                    )
-                                    .await?;
-                                }
-                            }
-                        }
-                        if let Some(output) = pending_assistant_items
-                            .get_mut(&part_state.item_index)
-                            .and_then(|pending| {
-                                take_stream_output(pending, part_state.output_index)
-                            })
-                        {
-                            let flushed = flush_stream_output(tx.clone(), &mut seq, output, sse_max_frame_length)
-                                .await?;
-                            completed_output_indices.insert(flushed.0);
-                            completed_output_items.push(flushed);
-                        }
-                    }
-                }
-            }
-            UrpStreamEvent::ItemDone {
-                item_index, item, ..
-            } => {
-                if let Some(output_index) = output_indices.get(&item_index) {
-                    if completed_output_indices.contains(output_index) {
-                        continue;
-                    }
-                }
-                if let Some(mut pending_item) = pending_assistant_items.remove(&item_index) {
-                    if pending_item.active_output.is_some()
-                        || !pending_item.staged_outputs.is_empty()
-                    {
-                        let flushed = flush_pending_stream_outputs(
-                            tx.clone(),
-                            &mut seq,
-                            &mut pending_item,
-                            sse_max_frame_length,
-                        )
-                        .await?;
-                        completed_output_indices.extend(flushed.iter().map(|(idx, _)| *idx));
-                        completed_output_items.extend(flushed);
-                    } else if !pending_item.streamed_any_output {
-                        for encoded_item in encode_stream_output_item(&item) {
-                            let output_index = next_output_index;
-                            next_output_index += 1;
-                            let mut added_item = mark_stream_output_item_in_progress(&encoded_item);
-                            if let Some(obj) = added_item.as_object_mut() {
-                                merge_json_extra_preserving_typed(obj, &pending_envelope_extra);
-                            }
-                            pending_envelope_extra.clear();
-                            send_responses_event(
-                                &tx,
-                                &mut seq,
-                                "response.output_item.added",
-                                json!({
-                                    "output_index": output_index,
-                                    "item": added_item,
-                                }),
-                            )
-                            .await?;
-                            let done_item = sanitize_responses_output_item_for_frame_limit(
-                                &encoded_item,
-                                sse_max_frame_length,
-                            );
-                            if completed_output_indices.insert(output_index) {
-                                send_responses_event(
-                                    &tx,
-                                    &mut seq,
-                                    "response.output_item.done",
-                                    json!({
-                                        "output_index": output_index,
-                                        "item": done_item,
-                                    }),
-                                )
-                                .await?;
-                                completed_output_items.push((output_index, done_item.clone()));
-                            }
-                        }
-                    }
-                } else {
-                    let output_index = *output_indices.entry(item_index).or_insert_with(|| {
-                        let output_index = next_output_index;
-                        next_output_index += 1;
-                        output_index
-                    });
-                    let done_item = sanitize_responses_output_item_for_frame_limit(
-                        &encode_stream_output_item(&item)
-                            .into_iter()
-                            .next()
-                            .unwrap_or_else(|| {
-                                encode_item_start_stub(&item_header_from_item(&item))
-                            }),
-                        sse_max_frame_length,
-                    );
-                    if completed_output_indices.insert(output_index) {
-                        send_responses_event(
-                            &tx,
-                            &mut seq,
-                            "response.output_item.done",
-                            json!({
-                                "output_index": output_index,
-                                "item": done_item,
-                            }),
-                        )
-                        .await?;
-                        completed_output_items.push((output_index, done_item.clone()));
-                    }
-                }
-            }
             UrpStreamEvent::ResponseDone {
                 finish_reason,
                 usage,
@@ -1908,13 +1077,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     if node_state.zone == ResponsesOutputZone::Message {
                         ensure_node_message_start_emitted(
                             &tx,
-                            &mut seq,
-                            &mut node_state,
-                            &mut pending_envelope_extra,
-                            &pending_assistant_items,
-                            &mut active_node_message_output,
-                            &mut streamed_output_indices,
-                            sse_max_frame_length,
+                        &mut seq,
+                        &mut node_state,
+                        &mut pending_envelope_extra,
+                        &mut active_node_message_output,
+                        &mut streamed_output_indices,
+                        sse_max_frame_length,
                         )
                         .await?;
                     }
@@ -2310,6 +1478,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 )
                 .await?;
             }
+            _ => {}
         }
     }
 
@@ -2540,23 +1709,62 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             Value::Object(obj)
         }
         urp::Node::Reasoning { id, content, encrypted, summary, source, extra_body } => {
-            encode_reasoning_output_item(&Part::Reasoning {
-                id: id.clone(),
-                content: content.clone(),
-                encrypted: encrypted.clone(),
-                summary: summary.clone(),
-                source: source.clone(),
-                extra_body: extra_body.clone(),
-            }).unwrap_or_else(|| json!({ "type": "reasoning" }))
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("reasoning"));
+            obj.insert(
+                "id".to_string(),
+                json!(
+                    id.clone()
+                        .or_else(|| {
+                            extra_body
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()))
+                ),
+            );
+            if let Some(text) = summary.as_ref().filter(|text| !text.is_empty()) {
+                obj.insert(
+                    "summary".to_string(),
+                    Value::Array(vec![json!({ "type": "summary_text", "text": text })]),
+                );
+            }
+            if let Some(text) = content.as_ref().filter(|text| !text.is_empty()) {
+                obj.insert("text".to_string(), json!(text));
+            }
+            if let Some(encrypted) = encrypted.as_ref().filter(|encrypted| !encrypted.is_null()) {
+                obj.insert("encrypted_content".to_string(), encrypted.clone());
+            }
+            if let Some(source) = source.as_ref().filter(|source| !source.is_empty()) {
+                obj.insert("source".to_string(), json!(source));
+            }
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
         }
         urp::Node::ToolCall { id, call_id, name, arguments, extra_body } => {
-            encode_function_call_output_item(&Part::ToolCall {
-                id: id.clone(),
-                call_id: call_id.clone(),
-                name: name.clone(),
-                arguments: arguments.clone(),
-                extra_body: extra_body.clone(),
-            }).unwrap_or_else(|| json!({ "type": "function_call" }))
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!("function_call"));
+            obj.insert("call_id".to_string(), json!(call_id));
+            obj.insert("name".to_string(), json!(name));
+            obj.insert("arguments".to_string(), json!(arguments));
+            obj.insert(
+                "id".to_string(),
+                json!(
+                    id.clone()
+                        .or_else(|| {
+                            extra_body
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_else(|| format!("fc_{}", uuid::Uuid::new_v4()))
+                ),
+            );
+            obj.insert("status".to_string(), json!("completed"));
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
         }
         urp::Node::Image { role, source, extra_body, .. } => {
             let mut obj = Map::new();
@@ -2650,198 +1858,6 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }
-    }
-}
-
-fn encode_item_start_stub(header: &ItemHeader) -> Value {
-    match header {
-        ItemHeader::Message { id, role } => json!({
-            "type": "message",
-            "role": role_to_str(*role),
-            "content": [],
-            "id": id.clone().unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4())),
-            "status": "in_progress",
-        }),
-        ItemHeader::ToolResult { id, call_id } => json!({
-            "type": "tool_result",
-            "call_id": call_id,
-            "output": "",
-            "id": id.clone().unwrap_or_else(|| format!("tr_{}", uuid::Uuid::new_v4())),
-            "status": "in_progress",
-        }),
-    }
-}
-
-fn item_header_from_item(item: &Item) -> ItemHeader {
-    match item {
-        Item::Message { id, role, .. } => ItemHeader::Message { id: id.clone(), role: *role },
-        Item::ToolResult { id, call_id, .. } => ItemHeader::ToolResult {
-            id: id.clone(),
-            call_id: call_id.clone(),
-        },
-    }
-}
-
-fn zone_from_part_header(header: &PartHeader) -> ResponsesOutputZone {
-    match header {
-        PartHeader::Reasoning { .. } => ResponsesOutputZone::Reasoning,
-        PartHeader::ToolCall { .. } => ResponsesOutputZone::FunctionCall,
-        _ => ResponsesOutputZone::Message,
-    }
-}
-
-fn part_call_id_from_header(header: &PartHeader) -> Option<String> {
-    match header {
-        PartHeader::ToolCall { call_id, .. } => Some(call_id.clone()),
-        _ => None,
-    }
-}
-
-fn part_header_id(header: &PartHeader) -> Option<String> {
-    match header {
-        PartHeader::Reasoning { id }
-        | PartHeader::ToolCall { id, .. }
-        | PartHeader::ProviderItem { id, .. } => id.clone(),
-        _ => None,
-    }
-}
-
-fn part_name_from_header(header: &PartHeader) -> Option<String> {
-    match header {
-        PartHeader::ToolCall { name, .. } => Some(name.clone()),
-        _ => None,
-    }
-}
-
-fn stream_output_item_start_stub(
-    zone: ResponsesOutputZone,
-    role: Role,
-    item_extra_body: &HashMap<String, Value>,
-    header: &PartHeader,
-    part_extra_body: &HashMap<String, Value>,
-) -> Value {
-    match zone {
-        ResponsesOutputZone::Message => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("message"));
-            obj.insert("role".to_string(), json!(role_to_str(role)));
-            obj.insert("content".to_string(), json!([]));
-            let id = item_extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
-            obj.insert("id".to_string(), json!(id));
-            obj.insert("status".to_string(), json!("in_progress"));
-            if let Some(phase) = part_extra_body
-                .get("phase")
-                .and_then(|value| value.as_str())
-            {
-                obj.insert("phase".to_string(), json!(phase));
-            }
-            merge_json_extra(&mut obj, item_extra_body);
-            Value::Object(obj)
-        }
-        ResponsesOutputZone::Reasoning => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("reasoning"));
-            let id = part_header_id(header)
-                .or_else(|| part_extra_body.get("id").and_then(Value::as_str).map(|s| s.to_string()))
-                .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()));
-            obj.insert("id".to_string(), json!(id));
-            obj.insert("status".to_string(), json!("in_progress"));
-            obj.insert("summary".to_string(), json!([]));
-            obj.insert(
-                "started_at".to_string(),
-                json!(chrono::Utc::now().timestamp()),
-            );
-            if let PartHeader::ProviderItem { body, .. } = header {
-                merge_json_extra_value(&mut obj, body);
-            }
-            merge_json_extra(&mut obj, part_extra_body);
-            Value::Object(obj)
-        }
-        ResponsesOutputZone::FunctionCall => {
-            let PartHeader::ToolCall { call_id, name, .. } = header else {
-                unreachable!("function-call zone requires tool-call header");
-            };
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("function_call"));
-            obj.insert("call_id".to_string(), json!(call_id));
-            obj.insert("name".to_string(), json!(name));
-            obj.insert("arguments".to_string(), json!(""));
-            let id = part_header_id(header)
-                .or_else(|| part_extra_body.get("id").and_then(Value::as_str).map(|s| s.to_string()))
-                .unwrap_or_else(|| format!("fc_{}", uuid::Uuid::new_v4()));
-            obj.insert("id".to_string(), json!(id));
-            obj.insert("status".to_string(), json!("in_progress"));
-            merge_json_extra(&mut obj, part_extra_body);
-            Value::Object(obj)
-        }
-    }
-}
-
-fn merge_json_extra_value(obj: &mut Map<String, Value>, value: &Value) {
-    if let Some(map) = value.as_object() {
-        for (key, value) in map {
-            obj.entry(key.clone()).or_insert_with(|| value.clone());
-        }
-    }
-}
-
-fn append_delta_to_stream_output_item(
-    active_output: &mut ActiveResponsesOutputItem,
-    delta: &PartDelta,
-) {
-    match (&active_output.zone, delta) {
-        (ResponsesOutputZone::Message, PartDelta::Text { content }) => {
-            append_string_field_to_message_content(
-                &mut active_output.item,
-                "output_text",
-                "text",
-                content,
-            );
-        }
-        (ResponsesOutputZone::Message, PartDelta::Refusal { content }) => {
-            append_string_field_to_message_content(
-                &mut active_output.item,
-                "refusal",
-                "refusal",
-                content,
-            );
-        }
-        (
-            ResponsesOutputZone::Reasoning,
-            PartDelta::Reasoning {
-                content,
-                encrypted,
-                summary,
-                source,
-            },
-        ) => {
-            if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
-                append_string_field(&mut active_output.item, "text", content);
-            }
-            if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
-                append_reasoning_summary_field(&mut active_output.item, summary);
-            }
-            if let Some(encrypted) = encrypted.as_ref().filter(|encrypted| !encrypted.is_null()) {
-                let Some(obj) = active_output.item.as_object_mut() else {
-                    return;
-                };
-                obj.insert("encrypted_content".to_string(), encrypted.clone());
-            }
-            if let Some(source) = source.as_deref().filter(|source| !source.is_empty()) {
-                let Some(obj) = active_output.item.as_object_mut() else {
-                    return;
-                };
-                obj.insert("source".to_string(), Value::String(source.to_string()));
-            }
-        }
-        (ResponsesOutputZone::FunctionCall, PartDelta::ToolCallArguments { arguments }) => {
-            append_string_field(&mut active_output.item, "arguments", arguments);
-        }
-        _ => {}
     }
 }
 
@@ -3064,160 +2080,6 @@ fn apply_node_done_to_stream_output_item(
     }
 }
 
-fn apply_part_done_to_stream_output_item(
-    active_output: &mut ActiveResponsesOutputItem,
-    part: &Part,
-) {
-    match active_output.zone {
-        ResponsesOutputZone::Message => {
-            if let Some(content) = active_output
-                .item
-                .get_mut("content")
-                .and_then(Value::as_array_mut)
-            {
-                let encoded_part = encode_part_value(part);
-                let encoded_type = encoded_part
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let matches_last_type = content.last().is_some_and(|last| {
-                    last.get("type").and_then(Value::as_str) == Some(encoded_type.as_str())
-                });
-                if content.is_empty() {
-                    content.push(encode_part_value(part));
-                } else if matches_last_type {
-                    if let Some(last_part) = content.last_mut() {
-                        *last_part = encoded_part;
-                    }
-                } else {
-                    content.push(encoded_part);
-                }
-            }
-        }
-        ResponsesOutputZone::Reasoning => {
-            if let Some(reasoning_item) = encode_reasoning_output_item(part) {
-                let mut item = mark_stream_output_item_in_progress(&reasoning_item);
-                if let Some(existing_id) = active_output.item.get("id").cloned()
-                    && let Some(obj) = item.as_object_mut()
-                {
-                    obj.insert("id".to_string(), existing_id);
-                }
-                active_output.item = item;
-            }
-        }
-        ResponsesOutputZone::FunctionCall => {
-            if let Some(function_item) = encode_function_call_output_item(part) {
-                let mut item = mark_stream_output_item_in_progress(&function_item);
-                if let Some(existing_id) = active_output.item.get("id").cloned()
-                    && let Some(obj) = item.as_object_mut()
-                {
-                    obj.insert("id".to_string(), existing_id);
-                }
-                active_output.item = item;
-            }
-        }
-    }
-}
-
-fn mark_stream_output_item_in_progress(item: &Value) -> Value {
-    let mut item = item.clone();
-    if let Some(obj) = item.as_object_mut() {
-        obj.insert("status".to_string(), json!("in_progress"));
-    }
-    item
-}
-
-fn stage_active_stream_output(
-    active_output: &mut Option<ActiveResponsesOutputItem>,
-    staged_outputs: &mut Vec<ActiveResponsesOutputItem>,
-) {
-    if let Some(active_output) = active_output.take() {
-        staged_outputs.push(active_output);
-    }
-}
-
-fn stream_output_mut(
-    pending: &mut PendingResponsesAssistantItem,
-    output_index: usize,
-) -> Option<&mut ActiveResponsesOutputItem> {
-    if pending
-        .active_output
-        .as_ref()
-        .is_some_and(|output| output.output_index == output_index)
-    {
-        return pending.active_output.as_mut();
-    }
-    pending
-        .staged_outputs
-        .iter_mut()
-        .find(|output| output.output_index == output_index)
-}
-
-fn is_staged_output(pending: &PendingResponsesAssistantItem, output_index: usize) -> bool {
-    pending
-        .staged_outputs
-        .iter()
-        .any(|output| output.output_index == output_index)
-}
-
-fn take_stream_output(
-    pending: &mut PendingResponsesAssistantItem,
-    output_index: usize,
-) -> Option<ActiveResponsesOutputItem> {
-    if pending
-        .active_output
-        .as_ref()
-        .is_some_and(|output| output.output_index == output_index)
-    {
-        return pending.active_output.take();
-    }
-    let idx = pending
-        .staged_outputs
-        .iter()
-        .position(|output| output.output_index == output_index)?;
-    Some(pending.staged_outputs.remove(idx))
-}
-
-async fn flush_stream_output(
-    tx: mpsc::Sender<Event>,
-    seq: &mut u64,
-    active_output: ActiveResponsesOutputItem,
-    sse_max_frame_length: Option<usize>,
-) -> AppResult<(usize, Value)> {
-    let completed_item = complete_stream_output_item(active_output.item);
-    let done_item =
-        sanitize_responses_output_item_for_frame_limit(&completed_item, sse_max_frame_length);
-    let output_index = active_output.output_index;
-    send_responses_event(
-        &tx,
-        seq,
-        "response.output_item.done",
-        json!({
-            "output_index": output_index,
-            "item": done_item,
-        }),
-    )
-    .await?;
-    Ok((output_index, done_item.clone()))
-}
-
-async fn flush_pending_stream_outputs(
-    tx: mpsc::Sender<Event>,
-    seq: &mut u64,
-    pending_item: &mut PendingResponsesAssistantItem,
-    sse_max_frame_length: Option<usize>,
-) -> AppResult<Vec<(usize, Value)>> {
-    let mut items = Vec::new();
-    while let Some(output) = pending_item.staged_outputs.pop() {
-        items.push(flush_stream_output(tx.clone(), seq, output, sse_max_frame_length).await?);
-    }
-    if let Some(output) = pending_item.active_output.take() {
-        items.push(flush_stream_output(tx, seq, output, sse_max_frame_length).await?);
-    }
-    Ok(items)
-}
-
 fn response_envelope_payload(
     id: &str,
     created_at: i64,
@@ -3272,13 +2134,6 @@ fn complete_stream_output_item(mut item: Value) -> Value {
         obj.insert("status".to_string(), json!("completed"));
     }
     item
-}
-
-fn text_part_phase(part: &Part) -> Option<&str> {
-    match part {
-        Part::Text { extra_body, .. } => extra_body.get("phase").and_then(|v| v.as_str()),
-        _ => None,
-    }
 }
 
 fn rebuild_completed_response_output(completed_output_items: &[(usize, Value)]) -> Vec<Value> {
@@ -3488,393 +2343,6 @@ async fn emit_missing_terminal_sub_lifecycles(
     Ok(())
 }
 
-fn role_from_responses_item_value(item: &Value) -> Role {
-    match item.get("role").and_then(Value::as_str).unwrap_or("assistant") {
-        "system" => Role::System,
-        "developer" => Role::Developer,
-        "user" => Role::User,
-        "tool" => Role::Tool,
-        _ => Role::Assistant,
-    }
-}
-
-fn item_extra_body_from_responses_item_value(item: &Value) -> HashMap<String, Value> {
-    let mut extra = HashMap::new();
-    let Some(obj) = item.as_object() else {
-        return extra;
-    };
-    for (key, value) in obj {
-        if matches!(key.as_str(), "type" | "status" | "role" | "content" | "phase") {
-            continue;
-        }
-        extra.insert(key.clone(), value.clone());
-    }
-    extra
-}
-
-fn flush_pending_message_item(
-    pending: &mut Option<PendingResponsesMessageItem>,
-    out: &mut Vec<Value>,
-) {
-    let Some(pending_item) = pending.take() else {
-        return;
-    };
-    if pending_item.content.is_empty() {
-        return;
-    }
-
-    let message_id = pending_item
-        .extra_body
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
-
-    let mut obj = Map::new();
-    obj.insert("type".to_string(), json!("message"));
-    obj.insert("role".to_string(), json!(role_to_str(pending_item.role)));
-    obj.insert("content".to_string(), Value::Array(pending_item.content));
-    obj.insert("id".to_string(), json!(message_id));
-    obj.insert("status".to_string(), json!("completed"));
-    if let Some(phase) = pending_item.phase {
-        obj.insert("phase".to_string(), Value::String(phase));
-    }
-    merge_json_extra(&mut obj, &pending_item.extra_body);
-    out.push(Value::Object(obj));
-}
-
-fn append_content_part_to_pending(
-    pending: &mut Option<PendingResponsesMessageItem>,
-    out: &mut Vec<Value>,
-    role: Role,
-    phase: Option<&str>,
-    message_extra: &HashMap<String, Value>,
-    content_part: Value,
-) {
-    let phase_owned = phase.map(str::to_string);
-    let should_flush = pending.as_ref().is_some_and(|existing| {
-        existing.role != role
-            || existing.phase != phase_owned
-            || existing.extra_body != *message_extra
-    });
-    if should_flush {
-        flush_pending_message_item(pending, out);
-    }
-
-    let entry = pending.get_or_insert_with(|| PendingResponsesMessageItem {
-        role,
-        phase: phase_owned,
-        content: Vec::new(),
-        extra_body: message_extra.clone(),
-    });
-    entry.content.push(content_part);
-}
-
-fn encode_message_content_part(part: &Part) -> Option<Value> {
-    match part {
-        Part::Text {
-            content,
-            extra_body,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("output_text"));
-            obj.insert("text".to_string(), json!(content));
-            merge_json_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        Part::Image { source, extra_body } => Some(encode_image_part(source, extra_body)),
-        Part::File { source, extra_body } => Some(encode_file_part(source, extra_body)),
-        Part::Refusal {
-            content,
-            extra_body,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("refusal"));
-            obj.insert("refusal".to_string(), json!(content));
-            merge_json_extra(&mut obj, extra_body);
-            Some(Value::Object(obj))
-        }
-        _ => None,
-    }
-}
-
-fn encode_stream_output_item(item: &Item) -> Vec<Value> {
-    match item {
-        Item::Message {
-            id,
-            role,
-            parts,
-            extra_body,
-        } => {
-            let mut output = Vec::new();
-            let mut pending_message: Option<PendingResponsesMessageItem> = None;
-            let mut message_extra = extra_body.clone();
-            if let Some(id) = id.clone() {
-                message_extra.entry("id".to_string()).or_insert(Value::String(id));
-            }
-
-            for part in parts {
-                if let Some(content_part) = encode_message_content_part(part) {
-                    append_content_part_to_pending(
-                        &mut pending_message,
-                        &mut output,
-                        *role,
-                        text_part_phase(part),
-                        &message_extra,
-                        content_part,
-                    );
-                    continue;
-                }
-
-                flush_pending_message_item(&mut pending_message, &mut output);
-
-                if let Some(reasoning_item) = encode_reasoning_output_item(part) {
-                    output.push(reasoning_item);
-                    continue;
-                }
-                if let Some(tool_call_item) = encode_function_call_output_item(part) {
-                    output.push(tool_call_item);
-                    continue;
-                }
-            }
-
-            flush_pending_message_item(&mut pending_message, &mut output);
-            output
-        }
-        Item::ToolResult {
-            id,
-            call_id,
-            content,
-            is_error,
-            extra_body,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("function_call_output"));
-            obj.insert("call_id".to_string(), json!(call_id));
-            obj.insert(
-                "id".to_string(),
-                json!(id.clone().unwrap_or_else(crate::urp::synthetic_tool_result_id)),
-            );
-            obj.insert("status".to_string(), json!("completed"));
-            obj.insert("output".to_string(), encode_tool_result_output(content));
-            if *is_error {
-                obj.insert("is_error".to_string(), Value::Bool(true));
-            }
-            merge_json_extra(&mut obj, extra_body);
-            vec![Value::Object(obj)]
-        }
-    }
-}
-
-fn encode_reasoning_output_item(part: &Part) -> Option<Value> {
-    let Part::Reasoning {
-        id,
-        content,
-        encrypted,
-        summary,
-        source,
-        extra_body,
-    } = part
-    else {
-        return None;
-    };
-
-    let mut obj = Map::new();
-    obj.insert("type".to_string(), json!("reasoning"));
-    obj.insert(
-        "id".to_string(),
-        json!(id.clone().unwrap_or_else(crate::urp::synthetic_reasoning_id)),
-    );
-    if let Some(text) = summary.as_ref() {
-        obj.insert(
-            "summary".to_string(),
-            Value::Array(vec![json!({ "type": "summary_text", "text": text })]),
-        );
-    }
-    if let Some(text) = content {
-        obj.insert("text".to_string(), json!(text));
-    }
-    if let Some(encrypted) = encrypted {
-        obj.insert("encrypted_content".to_string(), encrypted.clone());
-    }
-    if let Some(source) = source {
-        obj.insert("source".to_string(), json!(source));
-    }
-    merge_json_extra(&mut obj, extra_body);
-    Some(Value::Object(obj))
-}
-
-fn encode_function_call_output_item(part: &Part) -> Option<Value> {
-    let Part::ToolCall {
-        id,
-        call_id,
-        name,
-        arguments,
-        extra_body,
-    } = part
-    else {
-        return None;
-    };
-
-    let mut obj = Map::new();
-    obj.insert("type".to_string(), json!("function_call"));
-    obj.insert("call_id".to_string(), json!(call_id));
-    obj.insert("name".to_string(), json!(name));
-    obj.insert("arguments".to_string(), json!(arguments));
-    obj.insert(
-        "id".to_string(),
-        json!(id.clone().unwrap_or_else(crate::urp::synthetic_tool_call_id)),
-    );
-    obj.insert("status".to_string(), json!("completed"));
-    merge_json_extra(&mut obj, extra_body);
-    Some(Value::Object(obj))
-}
-
-fn encode_part_start_header(header: &PartHeader) -> Value {
-    match header {
-        PartHeader::Text => json!({ "type": "output_text", "text": "", "annotations": [], "logprobs": [] }),
-        PartHeader::Reasoning { .. } => json!({ "type": "reasoning", "text": "" }),
-        PartHeader::Refusal => json!({ "type": "refusal", "refusal": "" }),
-        PartHeader::ToolCall { call_id, name, .. } => json!({
-            "type": "function_call",
-            "call_id": call_id,
-            "name": name,
-            "arguments": "",
-        }),
-        PartHeader::Image { extra_body } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("output_image"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        PartHeader::Audio { extra_body } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("audio"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        PartHeader::File { extra_body } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("output_file"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        PartHeader::ProviderItem { item_type, body, .. } => {
-            let mut obj = match body {
-                Value::Object(map) => map.clone(),
-                other => {
-                    let mut map = Map::new();
-                    map.insert("body".to_string(), other.clone());
-                    map
-                }
-            };
-            obj.entry("type".to_string())
-                .or_insert_with(|| Value::String(item_type.clone()));
-            Value::Object(obj)
-        }
-    }
-}
-
-fn encode_part_value(part: &Part) -> Value {
-    match part {
-        Part::Text {
-            content,
-            extra_body,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("output_text"));
-            obj.insert("text".to_string(), json!(content));
-            obj.entry("annotations".to_string())
-                .or_insert_with(|| json!([]));
-            obj.entry("logprobs".to_string())
-                .or_insert_with(|| json!([]));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        Part::Reasoning {
-            id: _,
-            content,
-            encrypted,
-            summary,
-            source,
-            extra_body,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("reasoning"));
-            if let Some(text) = content {
-                obj.insert("text".to_string(), json!(text));
-            }
-            if let Some(text) = summary {
-                obj.insert(
-                    "summary".to_string(),
-                    Value::Array(vec![json!({ "type": "summary_text", "text": text })]),
-                );
-            }
-            if let Some(encrypted) = encrypted {
-                obj.insert("encrypted_content".to_string(), encrypted.clone());
-            }
-            if let Some(source) = source {
-                obj.insert("source".to_string(), json!(source));
-            }
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        Part::ToolCall {
-            id: _,
-            call_id,
-            name,
-            arguments,
-            extra_body,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("function_call"));
-            obj.insert("call_id".to_string(), json!(call_id));
-            obj.insert("name".to_string(), json!(name));
-            obj.insert("arguments".to_string(), json!(arguments));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        Part::Refusal {
-            content,
-            extra_body,
-        } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("refusal"));
-            obj.insert("refusal".to_string(), json!(content));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        Part::Image { source, extra_body } => encode_image_part(source, extra_body),
-        Part::Audio { source, extra_body } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("audio"));
-            obj.insert("source".to_string(), encode_audio_source(source));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-        Part::File { source, extra_body } => encode_file_part(source, extra_body),
-        Part::ProviderItem {
-            id: _,
-            item_type,
-            body,
-            extra_body,
-        } => {
-            let mut obj = match body {
-                Value::Object(map) => map.clone(),
-                other => {
-                    let mut map = Map::new();
-                    map.insert("body".to_string(), other.clone());
-                    map
-                }
-            };
-            obj.entry("type".to_string())
-                .or_insert_with(|| Value::String(item_type.clone()));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
-        }
-    }
-}
-
 fn encode_image_part(
     source: &crate::urp::ImageSource,
     extra_body: &HashMap<String, Value>,
@@ -3982,16 +2450,6 @@ fn merge_json_extra_preserving_typed(obj: &mut Map<String, Value>, extra: &HashM
     }
 }
 
-fn role_to_str(role: Role) -> &'static str {
-    match role {
-        Role::System => "system",
-        Role::Developer => "developer",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4003,7 +2461,7 @@ mod tests {
 
     #[test]
     fn streamed_completion_uses_nonstream_response_output_shape_for_merged_items() {
-        let output = urp::items_to_nodes(vec![Item::Message {
+        let output = urp::items_to_nodes(vec![crate::urp::Item::Message {
             id: None,
             role: Role::Assistant,
             parts: vec![

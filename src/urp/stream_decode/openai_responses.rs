@@ -440,18 +440,6 @@ pub(crate) async fn stream_responses_to_urp_events(
             &call_ids_by_output_index,
         );
         let output_items = nodes_to_items(&output_nodes);
-        for (output_index, output_item) in output_items.iter().enumerate() {
-            let output_state = output_state_for(&mut index_state, output_index as u64);
-            if output_state.item_extra_body.is_empty() {
-                output_state.item_extra_body = item_extra_body_from_item(output_item);
-            }
-            if output_state.role.is_none() {
-                output_state.role = Some(match output_item {
-                    Item::Message { role, .. } => *role,
-                    Item::ToolResult { .. } => Role::Tool,
-                });
-            }
-        }
         let final_usage = latest_stream_usage_snapshot(&runtime_metrics).await;
 
         if !saw_text_delta && !saw_text_part_done {
@@ -568,64 +556,10 @@ pub(crate) async fn stream_responses_to_urp_events(
                         .send(UrpStreamEvent::NodeDone {
                             node_index,
                             node: synthetic_node,
-                            usage: final_usage.clone(),
-                            extra_body: extra_body.clone(),
-                        })
-                        .await;
-                    let bridge_part = Part::Text {
-                        content: content.clone(),
-                        extra_body: extra_body.clone(),
-                    };
-                    let item_index = index_state.allocate_fresh_item_index();
-                    let _ = tx
-                        .send(UrpStreamEvent::ItemStart {
-                            item_index,
-                            header: ItemHeader::Message {
-                                id: output_item_message_id(output_item),
-                                role: Role::Assistant,
-                            },
-                            extra_body: item_extra_body_from_item(output_item),
-                        })
-                        .await;
-                    let _ = tx
-                        .send(UrpStreamEvent::PartStart {
-                            item_index,
-                            part_index: node_index,
-                            header: PartHeader::Text,
-                            extra_body: extra_body.clone(),
-                        })
-                        .await;
-                    let _ = tx
-                        .send(UrpStreamEvent::Delta {
-                            part_index: node_index,
-                            delta: PartDelta::Text {
-                                content: content.clone(),
-                            },
-                            usage: final_usage.clone(),
-                            extra_body: extra_body.clone(),
-                        })
-                        .await;
-                    let _ = tx
-                        .send(UrpStreamEvent::PartDone {
-                            part_index: node_index,
-                            part: bridge_part.clone(),
-                            usage: final_usage.clone(),
-                            extra_body: extra_body.clone(),
-                        })
-                        .await;
-                    let _ = tx
-                        .send(UrpStreamEvent::ItemDone {
-                            item_index,
-                            item: Item::Message {
-                                id: output_item_message_id(output_item),
-                                role: Role::Assistant,
-                                parts: vec![bridge_part],
-                                extra_body: item_extra_body_from_item(output_item),
-                            },
-                            usage: final_usage.clone(),
-                            extra_body: HashMap::new(),
-                        })
-                        .await;
+                                usage: final_usage.clone(),
+                                extra_body: extra_body.clone(),
+                            })
+                            .await;
                 }
             }
         }
@@ -683,46 +617,46 @@ fn map_responses_event_to_urp_events_with_state(
             let node_index = index_state.node_index_for_content(output_index, content_index);
             let should_emit_start = {
                 let output_state = output_state_for(index_state, output_index);
-                !output_state.item_start_sent && !output_state.emitted_any_node
+                !output_state.emitted_any_node
             };
             if should_emit_start {
                 let output_state = output_state_for(index_state, output_index);
                 if output_state.item_extra_body.is_empty() {
                     output_state.item_extra_body = extra.clone();
                 }
-                emit_node_start_with_bridge(
-                    output_index,
+                emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+                let node = Node::Text {
+                    id: output_state_for(index_state, output_index)
+                        .item_id
+                        .clone()
+                        .or_else(|| Some(crate::urp::synthetic_message_id())),
+                    role: output_state_for(index_state, output_index)
+                        .role
+                        .unwrap_or(Role::Assistant)
+                        .to_ordinary()
+                        .unwrap_or(OrdinaryRole::Assistant),
+                    content: String::new(),
+                    phase: extra
+                        .get("phase")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    extra_body: extra.clone(),
+                };
+                events.push(UrpStreamEvent::NodeStart {
                     node_index,
-                    &Node::Text {
-                        id: output_state_for(index_state, output_index)
-                            .item_id
-                            .clone()
-                            .or_else(|| Some(crate::urp::synthetic_message_id())),
-                        role: output_state_for(index_state, output_index)
-                            .role
-                            .unwrap_or(Role::Assistant)
-                            .to_ordinary()
-                            .unwrap_or(OrdinaryRole::Assistant),
-                        content: String::new(),
-                        phase: extra
-                            .get("phase")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        extra_body: extra.clone(),
-                    },
-                    extra.clone(),
-                    index_state,
-                    &mut events,
-                );
+                    header: node_header_from_node(&node),
+                    extra_body: extra.clone(),
+                });
+                output_state_for(index_state, output_index).emitted_any_node = true;
             }
-            emit_node_delta_with_bridge(
+            events.push(UrpStreamEvent::NodeDelta {
                 node_index,
-                NodeDelta::Text {
+                delta: NodeDelta::Text {
                     content: output_text_delta_content(&data_val).to_string(),
                 },
-                extra,
-                &mut events,
-            );
+                usage: None,
+                extra_body: extra,
+            });
             events
         }
         "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
@@ -771,14 +705,12 @@ fn map_responses_event_to_urp_events_with_state(
                     Value::String(id),
                 );
             }
-            let mut events = Vec::new();
-            emit_node_delta_with_bridge(
-                urp_node_index_from_delta(&data_val, index_state),
-                node_delta_from_reasoning_event(event_name, &data_val, reasoning_source),
+            vec![UrpStreamEvent::NodeDelta {
+                node_index: urp_node_index_from_delta(&data_val, index_state),
+                delta: node_delta_from_reasoning_event(event_name, &data_val, reasoning_source),
+                usage: None,
                 extra_body,
-                &mut events,
-            );
-            events
+            }]
         }
         "response.reasoning.done" => {
             let node_index = urp_node_index_from_delta(&data_val, index_state);
@@ -796,15 +728,14 @@ fn map_responses_event_to_urp_events_with_state(
                     );
                     output_state.reasoning_source.clone()
                 });
-            let mut events = Vec::new();
-            emit_node_done_with_bridge(
-                data_val
-                    .get("output_index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
+            let output_index = data_val
+                .get("output_index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            vec![UrpStreamEvent::NodeDone {
                 node_index,
-                Node::Reasoning {
-                    id: output_state_for(index_state, data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0))
+                node: Node::Reasoning {
+                    id: output_state_for(index_state, output_index)
                         .item_id
                         .clone()
                         .or_else(|| Some(crate::urp::synthetic_reasoning_id())),
@@ -817,7 +748,7 @@ fn map_responses_event_to_urp_events_with_state(
                     summary: None,
                     source: reasoning_source,
                     extra_body: split_known_fields(
-                        data_val,
+                        data_val.clone(),
                         &[
                             "text",
                             "delta",
@@ -827,30 +758,26 @@ fn map_responses_event_to_urp_events_with_state(
                         ],
                     ),
                 },
-                HashMap::new(),
-                index_state,
-                &mut events,
-            );
-            events
+                usage: None,
+                extra_body: HashMap::new(),
+            }]
         }
         "response.function_call_arguments.delta" => {
-            let mut events = Vec::new();
-            emit_node_delta_with_bridge(
-                urp_node_index_from_delta(&data_val, index_state),
-                NodeDelta::ToolCallArguments {
+            vec![UrpStreamEvent::NodeDelta {
+                node_index: urp_node_index_from_delta(&data_val, index_state),
+                delta: NodeDelta::ToolCallArguments {
                     arguments: data_val
                         .get("delta")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string(),
                 },
-                split_known_fields(
+                usage: None,
+                extra_body: split_known_fields(
                     data_val,
                     &["delta", "output_index", "content_index", "part_index"],
                 ),
-                &mut events,
-            );
-            events
+            }]
         }
         "response.content_part.done" => map_content_part_done(data_val, index_state),
         "response.output_item.done" => map_output_item_done(data_val, index_state),
@@ -873,7 +800,6 @@ fn map_responses_event_to_urp_events_with_state(
 
 #[derive(Debug, Default)]
 struct ResponsesStreamIndexState {
-    next_item_index: u32,
     next_node_index: u32,
     node_index_by_content_key: HashMap<(u64, u64), u32>,
     synthetic_node_index_by_output_index: HashMap<u64, u32>,
@@ -881,12 +807,6 @@ struct ResponsesStreamIndexState {
 }
 
 impl ResponsesStreamIndexState {
-    fn allocate_fresh_item_index(&mut self) -> u32 {
-        let next = self.next_item_index;
-        self.next_item_index += 1;
-        next
-    }
-
     fn node_index_for_content(&mut self, output_index: u64, content_index: u64) -> u32 {
         *self
             .node_index_by_content_key
@@ -918,12 +838,10 @@ impl ResponsesStreamIndexState {
 
 #[derive(Debug, Clone, Default)]
 struct OutputItemStreamState {
-    bridge_item_index: Option<u32>,
     item_type: Option<String>,
     item_id: Option<String>,
     role: Option<Role>,
     item_extra_body: HashMap<String, Value>,
-    item_start_sent: bool,
     emitted_any_node: bool,
     control_emitted: bool,
     part_done_seen: bool,
@@ -1035,101 +953,6 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
     }
 }
 
-fn part_header_from_node(node: &Node) -> Option<PartHeader> {
-    match node {
-        Node::Text { .. } => Some(PartHeader::Text),
-        Node::Image { extra_body, .. } => Some(PartHeader::Image {
-            extra_body: extra_body.clone(),
-        }),
-        Node::Audio { extra_body, .. } => Some(PartHeader::Audio {
-            extra_body: extra_body.clone(),
-        }),
-        Node::File { extra_body, .. } => Some(PartHeader::File {
-            extra_body: extra_body.clone(),
-        }),
-        Node::Refusal { .. } => Some(PartHeader::Refusal),
-        Node::Reasoning { id, .. } => Some(PartHeader::Reasoning { id: id.clone() }),
-        Node::ToolCall { id, call_id, name, .. } => Some(PartHeader::ToolCall {
-            id: id.clone(),
-            call_id: call_id.clone(),
-            name: name.clone(),
-        }),
-        Node::ProviderItem {
-            id, item_type, body, ..
-        } => Some(PartHeader::ProviderItem {
-            id: id.clone(),
-            item_type: item_type.clone(),
-            body: body.clone(),
-        }),
-        Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
-    }
-}
-
-fn bridge_part_from_node(node: &Node) -> Option<Part> {
-    match node {
-        Node::Text { content, extra_body, .. } => Some(Part::Text {
-            content: content.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::Image { source, extra_body, .. } => Some(Part::Image {
-            source: source.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::Audio { source, extra_body, .. } => Some(Part::Audio {
-            source: source.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::File { source, extra_body, .. } => Some(Part::File {
-            source: source.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::Refusal { content, extra_body, .. } => Some(Part::Refusal {
-            content: content.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::Reasoning {
-            id,
-            content,
-            encrypted,
-            summary,
-            source,
-            extra_body,
-        } => Some(Part::Reasoning {
-            id: id.clone().or_else(|| Some(crate::urp::synthetic_reasoning_id())),
-            content: content.clone(),
-            encrypted: encrypted.clone(),
-            summary: summary.clone(),
-            source: source.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::ToolCall {
-            id,
-            call_id,
-            name,
-            arguments,
-            extra_body,
-        } => Some(Part::ToolCall {
-            id: id.clone().or_else(|| Some(crate::urp::synthetic_tool_call_id())),
-            call_id: call_id.clone(),
-            name: name.clone(),
-            arguments: arguments.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::ProviderItem {
-            item_type,
-            body,
-            extra_body,
-            ..
-        } => Some(Part::ProviderItem {
-            id: node.id().cloned().or_else(|| Some(crate::urp::synthetic_provider_item_id())),
-            item_type: item_type.clone(),
-            body: body.clone(),
-            extra_body: extra_body.clone(),
-        }),
-        Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
-    }
-}
-
 fn node_delta_from_reasoning_event(event_name: &str, data_val: &Value, source: Option<String>) -> NodeDelta {
     NodeDelta::Reasoning {
         content: if event_name == "response.reasoning_summary_text.delta" {
@@ -1155,87 +978,6 @@ fn node_delta_from_reasoning_event(event_name: &str, data_val: &Value, source: O
         },
         source,
     }
-}
-
-fn part_delta_from_node_delta(delta: &NodeDelta) -> Option<PartDelta> {
-    match delta {
-        NodeDelta::Text { content } => Some(PartDelta::Text {
-            content: content.clone(),
-        }),
-        NodeDelta::Reasoning {
-            content,
-            encrypted,
-            summary,
-            source,
-        } => Some(PartDelta::Reasoning {
-            content: content.clone(),
-            encrypted: encrypted.clone(),
-            summary: summary.clone(),
-            source: source.clone(),
-        }),
-        NodeDelta::Refusal { content } => Some(PartDelta::Refusal {
-            content: content.clone(),
-        }),
-        NodeDelta::ToolCallArguments { arguments } => Some(PartDelta::ToolCallArguments {
-            arguments: arguments.clone(),
-        }),
-        NodeDelta::Image { source } => Some(PartDelta::Image {
-            source: source.clone(),
-        }),
-        NodeDelta::Audio { source } => Some(PartDelta::Audio {
-            source: source.clone(),
-        }),
-        NodeDelta::File { source } => Some(PartDelta::File {
-            source: source.clone(),
-        }),
-        NodeDelta::ProviderItem { data } => Some(PartDelta::ProviderItem { data: data.clone() }),
-    }
-}
-
-fn ensure_bridge_item_start(
-    output_index: u64,
-    index_state: &mut ResponsesStreamIndexState,
-    events: &mut Vec<UrpStreamEvent>,
-) -> u32 {
-    let (existing_index, already_sent, item_type, role, item_extra_body, item_id) = {
-        let output_state = output_state_for(index_state, output_index);
-        (
-            output_state.bridge_item_index,
-            output_state.item_start_sent,
-            output_state.item_type.clone(),
-            output_state.role.unwrap_or(Role::Assistant),
-            output_state.item_extra_body.clone(),
-            output_state.item_id.clone(),
-        )
-    };
-
-    let item_index = existing_index.unwrap_or_else(|| index_state.allocate_fresh_item_index());
-
-    if !already_sent {
-        let header = if item_type.as_deref() == Some("function_call_output") {
-            ItemHeader::ToolResult {
-                id: item_id.clone(),
-                call_id: item_id.unwrap_or_default(),
-            }
-        } else {
-            ItemHeader::Message {
-                id: item_id.clone(),
-                role,
-            }
-        };
-        events.push(UrpStreamEvent::ItemStart {
-            item_index,
-            header,
-            extra_body: item_extra_body,
-        });
-        let output_state = output_state_for(index_state, output_index);
-        output_state.item_start_sent = true;
-        output_state.bridge_item_index = Some(item_index);
-    } else if existing_index.is_none() {
-        output_state_for(index_state, output_index).bridge_item_index = Some(item_index);
-    }
-
-    item_index
 }
 
 fn emit_pending_envelope_control_if_needed(
@@ -1268,104 +1010,6 @@ fn emit_pending_envelope_control_if_needed(
         extra_body,
     });
     output_state_for(index_state, output_index).control_emitted = true;
-}
-
-fn emit_node_start_with_bridge(
-    output_index: u64,
-    node_index: u32,
-    node: &Node,
-    extra_body: HashMap<String, Value>,
-    index_state: &mut ResponsesStreamIndexState,
-    events: &mut Vec<UrpStreamEvent>,
-) {
-    emit_pending_envelope_control_if_needed(output_index, index_state, events);
-    events.push(UrpStreamEvent::NodeStart {
-        node_index,
-        header: node_header_from_node(node),
-        extra_body: extra_body.clone(),
-    });
-    output_state_for(index_state, output_index).emitted_any_node = true;
-
-    let Some(part_header) = part_header_from_node(node) else {
-        return;
-    };
-    let item_index = ensure_bridge_item_start(output_index, index_state, events);
-    events.push(UrpStreamEvent::PartStart {
-        part_index: node_index,
-        item_index,
-        header: part_header,
-        extra_body,
-    });
-}
-
-fn emit_node_delta_with_bridge(
-    node_index: u32,
-    delta: NodeDelta,
-    extra_body: HashMap<String, Value>,
-    events: &mut Vec<UrpStreamEvent>,
-) {
-    events.push(UrpStreamEvent::NodeDelta {
-        node_index,
-        delta: delta.clone(),
-        usage: None,
-        extra_body: extra_body.clone(),
-    });
-    if let Some(delta) = part_delta_from_node_delta(&delta) {
-        events.push(UrpStreamEvent::Delta {
-            part_index: node_index,
-            delta,
-            usage: None,
-            extra_body,
-        });
-    }
-}
-
-fn emit_node_done_with_bridge(
-    output_index: u64,
-    node_index: u32,
-    node: Node,
-    extra_body: HashMap<String, Value>,
-    index_state: &mut ResponsesStreamIndexState,
-    events: &mut Vec<UrpStreamEvent>,
-) {
-    events.push(UrpStreamEvent::NodeDone {
-        node_index,
-        node: node.clone(),
-        usage: None,
-        extra_body: extra_body.clone(),
-    });
-
-    match node {
-        Node::ToolResult { .. } => {}
-        other => {
-            let Some(part) = bridge_part_from_node(&other) else {
-                return;
-            };
-            let _item_index = ensure_bridge_item_start(output_index, index_state, events);
-            events.push(UrpStreamEvent::PartDone {
-                part_index: node_index,
-                part,
-                usage: None,
-                extra_body: extra_body.clone(),
-            });
-        }
-    }
-}
-
-fn emit_item_done_bridge(
-    output_index: u64,
-    item: Item,
-    extra_body: HashMap<String, Value>,
-    index_state: &mut ResponsesStreamIndexState,
-    events: &mut Vec<UrpStreamEvent>,
-) {
-    let item_index = ensure_bridge_item_start(output_index, index_state, events);
-    events.push(UrpStreamEvent::ItemDone {
-        item_index,
-        item,
-        usage: None,
-        extra_body,
-    });
 }
 
 fn map_output_item_added(
@@ -1420,14 +1064,13 @@ fn map_output_item_added(
                 extra_body: part_extra_body_from_value(item),
             });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
-            emit_node_start_with_bridge(
-                output_index,
+            emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+            events.push(UrpStreamEvent::NodeStart {
                 node_index,
-                &node,
-                part_extra_body_from_value(item),
-                index_state,
-                &mut events,
-            );
+                header: node_header_from_node(&node),
+                extra_body: part_extra_body_from_value(item),
+            });
+            output_state_for(index_state, output_index).emitted_any_node = true;
         }
         "function_call" => {
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolCall {
@@ -1454,14 +1097,13 @@ fn map_output_item_added(
                 extra_body: part_extra_body_from_value(item),
             });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
-            emit_node_start_with_bridge(
-                output_index,
+            emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+            events.push(UrpStreamEvent::NodeStart {
                 node_index,
-                &node,
-                part_extra_body_from_value(item),
-                index_state,
-                &mut events,
-            );
+                header: node_header_from_node(&node),
+                extra_body: part_extra_body_from_value(item),
+            });
+            output_state_for(index_state, output_index).emitted_any_node = true;
         }
         "function_call_output" => {
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolResult {
@@ -1481,13 +1123,13 @@ fn map_output_item_added(
                 extra_body: item_extra_body_from_value(item),
             });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
+            emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
             events.push(UrpStreamEvent::NodeStart {
                 node_index,
                 header: node_header_from_node(&node),
                 extra_body: item_extra_body_from_value(item),
             });
             output_state_for(index_state, output_index).emitted_any_node = true;
-            ensure_bridge_item_start(output_index, index_state, &mut events);
         }
         _ => {}
     }
@@ -1525,14 +1167,13 @@ fn map_content_part_added(
             .clone()
             .or_else(|| Some(crate::urp::synthetic_message_id())),
     );
-    emit_node_start_with_bridge(
-        output_index,
+    emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+    events.push(UrpStreamEvent::NodeStart {
         node_index,
-        &node,
-        part_extra_body_from_value(part),
-        index_state,
-        &mut events,
-    );
+        header: node_header_from_node(&node),
+        extra_body: part_extra_body_from_value(part),
+    });
+    output_state_for(index_state, output_index).emitted_any_node = true;
     events
 }
 
@@ -1567,16 +1208,12 @@ fn map_content_part_done(
     if let Some(output_state) = index_state.output_state_by_index.get_mut(&output_index) {
         output_state.part_done_seen = true;
     }
-    let mut events = Vec::new();
-    emit_node_done_with_bridge(
-        output_index,
+    vec![UrpStreamEvent::NodeDone {
         node_index,
         node,
-        part_extra_body_from_value(part),
-        index_state,
-        &mut events,
-    );
-    events
+        usage: None,
+        extra_body: part_extra_body_from_value(part),
+    }]
 }
 
 fn map_output_item_done(
@@ -1612,21 +1249,12 @@ fn map_output_item_done(
                 extra_body: item_extra_body_from_value(item),
             });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
-            emit_node_done_with_bridge(
-                output_index,
+            events.push(UrpStreamEvent::NodeDone {
                 node_index,
                 node,
-                item_extra_body_from_value(item),
-                index_state,
-                &mut events,
-            );
-            emit_item_done_bridge(
-                output_index,
-                decode_item_from_value(item),
-                item_extra_body_from_value(item),
-                index_state,
-                &mut events,
-            );
+                usage: None,
+                extra_body: item_extra_body_from_value(item),
+            });
         }
         "reasoning" | "function_call" => {
             let role = output_state_for(index_state, output_index)
@@ -1648,9 +1276,6 @@ fn map_output_item_done(
                 .output_state_by_index
                 .get(&output_index);
             let emitted_any_node = state.map(|state| state.emitted_any_node).unwrap_or(false);
-            let bridge_item_done_already_emitted = state
-                .map(|state| state.bridge_item_index.is_some())
-                .unwrap_or(false);
             if !emitted_any_node {
                 let reasoning_text_delta_seen = state.map(|state| state.reasoning_text_delta_seen).unwrap_or(false);
                 let reasoning_summary_delta_seen = state
@@ -1694,91 +1319,67 @@ fn map_output_item_done(
                                 Value::String(id.clone()),
                             );
                         }
-                        emit_node_delta_with_bridge(
+                        events.push(UrpStreamEvent::NodeDelta {
                             node_index,
-                            NodeDelta::Reasoning {
+                            delta: NodeDelta::Reasoning {
                                 content: fallback_content,
                                 encrypted: fallback_encrypted,
                                 summary: fallback_summary,
                                 source: source.clone(),
                             },
-                            delta_extra,
-                            &mut events,
-                        );
+                            usage: None,
+                            extra_body: delta_extra,
+                        });
                     }
                 }
-                emit_node_done_with_bridge(
-                    output_index,
+                events.push(UrpStreamEvent::NodeDone {
                     node_index,
-                    node.clone(),
-                    part_extra_body_from_value(item),
-                    index_state,
-                    &mut events,
-                );
-            }
-            if !bridge_item_done_already_emitted {
-                emit_item_done_bridge(
-                    output_index,
-                    decode_item_from_value(item),
-                    item_extra_body_from_value(item),
-                    index_state,
-                    &mut events,
-                );
+                    node: node.clone(),
+                    usage: None,
+                    extra_body: part_extra_body_from_value(item),
+                });
             }
         }
         "message" => {
-            let (part_done_seen, emitted_any_node, bridge_item_done_already_emitted) = index_state
+            let (part_done_seen, emitted_any_node) = index_state
                 .output_state_by_index
                 .get(&output_index)
                 .map(|state| {
                     (
                         state.part_done_seen,
                         state.emitted_any_node,
-                        state.bridge_item_index.is_some(),
                     )
                 })
-                .unwrap_or((false, false, false));
+                .unwrap_or((false, false));
             if !part_done_seen && !emitted_any_node {
                 let decoded_item = decode_item_from_value(item);
                 if let Item::Message { .. } = decoded_item {
                     let nodes = nodes_from_item_value(item);
                     for node in nodes {
                         let node_index = index_state.allocate_fresh_node_index();
-                        emit_node_start_with_bridge(
-                            output_index,
+                        emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+                        events.push(UrpStreamEvent::NodeStart {
                             node_index,
-                            &node,
-                            item_extra_body_from_value(item),
-                            index_state,
-                            &mut events,
-                        );
-                        emit_node_done_with_bridge(
-                            output_index,
+                            header: node_header_from_node(&node),
+                            extra_body: item_extra_body_from_value(item),
+                        });
+                        output_state_for(index_state, output_index).emitted_any_node = true;
+                        events.push(UrpStreamEvent::NodeDone {
                             node_index,
                             node,
-                            HashMap::new(),
-                            index_state,
-                            &mut events,
-                        );
+                            usage: None,
+                            extra_body: HashMap::new(),
+                        });
                     }
                 }
             }
-            if !bridge_item_done_already_emitted {
-                emit_item_done_bridge(
-                    output_index,
-                    decode_item_from_value(item),
-                    item_extra_body_from_value(item),
-                    index_state,
-                    &mut events,
-                );
-            }
         }
         _ => {
-            let (emitted_any_node, bridge_item_done_already_emitted) = index_state
+            let emitted_any_node = index_state
                 .output_state_by_index
                 .get(&output_index)
-                .map(|state| (state.emitted_any_node, state.bridge_item_index.is_some()))
-                .unwrap_or((false, false));
+                .map(|state| state.emitted_any_node)
+                .unwrap_or(false);
             if !emitted_any_node {
                 let role = output_state_for(index_state, output_index)
                     .role
@@ -1791,27 +1392,16 @@ fn map_output_item_done(
                             output_state_for(index_state, output_index)
                                 .item_id
                                 .clone()
-                                .or_else(|| item.get("id").and_then(Value::as_str).map(|s| s.to_string())),
+                            .or_else(|| item.get("id").and_then(Value::as_str).map(|s| s.to_string())),
                         )
                     });
                 let node_index = index_state.synthetic_node_index_for_output(output_index);
-                emit_node_done_with_bridge(
-                    output_index,
+                events.push(UrpStreamEvent::NodeDone {
                     node_index,
                     node,
-                    part_extra_body_from_value(item),
-                    index_state,
-                    &mut events,
-                );
-            }
-            if !bridge_item_done_already_emitted {
-                emit_item_done_bridge(
-                    output_index,
-                    decode_item_from_value(item),
-                    item_extra_body_from_value(item),
-                    index_state,
-                    &mut events,
-                );
+                    usage: None,
+                    extra_body: part_extra_body_from_value(item),
+                });
             }
         }
     }
@@ -2738,23 +2328,6 @@ mod tests {
                 ..
             } if *node_index == 0
         ));
-        assert!(matches!(
-            &reasoning_events[reasoning_offset + 1],
-            UrpStreamEvent::ItemStart {
-                item_index,
-                header: ItemHeader::Message { role: Role::Assistant, .. },
-                ..
-            } if *item_index == 0
-        ));
-        assert!(matches!(
-            &reasoning_events[reasoning_offset + 2],
-            UrpStreamEvent::PartStart {
-                item_index,
-                part_index,
-                header: PartHeader::Reasoning { .. },
-                ..
-            } if *item_index == 0 && *part_index == 0
-        ));
 
         let function_events = map_responses_event_to_urp_events_with_state(
             "response.output_item.added",
@@ -2796,23 +2369,6 @@ mod tests {
             } if call_id == "call_1" && name == "lookup" => *node_index,
             other => panic!("unexpected tool-call node start: {other:?}"),
         };
-        assert!(matches!(
-            &function_events[function_offset + 1],
-            UrpStreamEvent::ItemStart {
-                item_index,
-                header: ItemHeader::Message { role: Role::Assistant, .. },
-                ..
-            } if *item_index == 1
-        ));
-        assert!(matches!(
-            &function_events[function_offset + 2],
-            UrpStreamEvent::PartStart {
-                item_index,
-                part_index,
-                header: PartHeader::ToolCall { call_id, name, .. },
-                ..
-            } if *item_index == 1 && *part_index == tool_call_node_index && call_id == "call_1" && name == "lookup"
-        ));
 
         let function_delta = map_responses_event_to_urp_events_with_state(
             "response.function_call_arguments.delta",
@@ -2830,14 +2386,6 @@ mod tests {
                 delta: NodeDelta::ToolCallArguments { arguments },
                 ..
             } if *node_index == tool_call_node_index && arguments == "{}"
-        ));
-        assert!(matches!(
-            &function_delta[1],
-            UrpStreamEvent::Delta {
-                part_index,
-                delta: PartDelta::ToolCallArguments { arguments },
-                ..
-            } if *part_index == tool_call_node_index && arguments == "{}"
         ));
     }
 
@@ -2863,23 +2411,6 @@ mod tests {
                 ..
             } if *node_index == 0
         ));
-        assert!(matches!(
-            &added[1],
-            UrpStreamEvent::ItemStart {
-                item_index,
-                header: ItemHeader::Message { role: Role::Assistant, .. },
-                ..
-            } if *item_index == 0
-        ));
-        assert!(matches!(
-            &added[2],
-            UrpStreamEvent::PartStart {
-                part_index,
-                item_index,
-                header: PartHeader::Text,
-                ..
-            } if *item_index == 0 && *part_index == 0
-        ));
 
         let done = map_responses_event_to_urp_events_with_state(
             "response.content_part.done",
@@ -2898,14 +2429,6 @@ mod tests {
                 node: Node::Text { content, .. },
                 ..
             } if *node_index == 0 && content == "done"
-        ));
-        assert!(matches!(
-            &done[1],
-            UrpStreamEvent::PartDone {
-                part_index,
-                part: Part::Text { content, .. },
-                ..
-            } if *part_index == 0 && content == "done"
         ));
     }
 
@@ -3023,7 +2546,6 @@ mod tests {
                     &HashMap::new(),
                 ));
         let mut state = ResponsesStreamIndexState::default();
-        assert_eq!(state.allocate_fresh_item_index(), 0);
         assert_eq!(state.node_index_for_content(11, 4), 0);
         assert_eq!(state.synthetic_node_index_for_output(12), 1);
 
@@ -3197,8 +2719,8 @@ mod tests {
 
         assert_eq!(
             done_events.len(),
-            10,
-            "fallback should emit two node lifecycles plus one final item done"
+            4,
+            "fallback should emit two node lifecycles (start+done each)"
         );
         assert!(matches!(
             &done_events[0],
@@ -3210,14 +2732,11 @@ mod tests {
         ));
         assert!(matches!(
             &done_events[1],
-            UrpStreamEvent::ItemStart {
-                item_index: 0,
-                header: ItemHeader::Message {
-                    role: Role::Assistant,
-                    ..
-                },
+            UrpStreamEvent::NodeDone {
+                node_index: 0,
+                node: Node::Text { content, .. },
                 ..
-            }
+            } if content == "answer"
         ));
         assert!(
             done_events.iter().any(|event| matches!(
@@ -3229,18 +2748,16 @@ mod tests {
                 } if call_id == "call_1"
             ))
         );
-        let UrpStreamEvent::ItemDone { item, .. } = done_events
-            .last()
-            .expect("expected terminal item done")
-        else {
-            panic!("expected terminal item done");
-        };
-        let Item::Message { parts, .. } = item else {
-            panic!("expected message item");
-        };
-        assert_eq!(parts.len(), 2);
-        assert!(matches!(&parts[0], Part::Text { content, .. } if content == "answer"));
-        assert!(matches!(&parts[1], Part::ToolCall { call_id, .. } if call_id == "call_1"));
+        assert!(
+            done_events.iter().any(|event| matches!(
+                event,
+                UrpStreamEvent::NodeDone {
+                    node_index: 1,
+                    node: Node::ToolCall { call_id, .. },
+                    ..
+                } if call_id == "call_1"
+            ))
+        );
     }
 
     #[test]

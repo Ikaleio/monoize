@@ -2,9 +2,7 @@ use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
 use crate::handlers::usage::usage_to_chat_usage_json;
 use crate::urp::stream_helpers::*;
-use crate::urp::{
-    self, FinishReason, Node, NodeDelta, NodeHeader, PartDelta, PartHeader, UrpStreamEvent,
-};
+use crate::urp::{self, FinishReason, Node, NodeDelta, NodeHeader, UrpStreamEvent};
 use axum::response::sse::Event;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -17,7 +15,6 @@ struct StreamedChatToolCall {
     index: usize,
     header_sent: bool,
     arguments_streamed: bool,
-    saw_node_lifecycle: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -253,7 +250,6 @@ pub(crate) async fn encode_urp_stream_as_chat(
     let mut tool_idx = 0usize;
     let mut saw_tool = false;
     let mut node_states: HashMap<u32, StreamedChatNodeState> = HashMap::new();
-    let mut bridge_tool_info: HashMap<u32, StreamedChatToolCall> = HashMap::new();
     let mut finished = false;
     let mut emitted_terminal_for_tools = false;
     let mut node_owned_kinds: HashSet<ChatNodeKind> = HashSet::new();
@@ -294,7 +290,6 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     index: idx,
                     header_sent: false,
                     arguments_streamed: false,
-                    saw_node_lifecycle: true,
                 };
                 emit_tool_call_header(
                     &tx,
@@ -457,7 +452,6 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             index: idx,
                             header_sent: false,
                             arguments_streamed: false,
-                            saw_node_lifecycle: true,
                         }
                     });
                     if !tool_call.header_sent {
@@ -485,140 +479,6 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     }
                 }
             }
-            UrpStreamEvent::PartStart {
-                part_index,
-                header: PartHeader::ToolCall { call_id, name, .. },
-                ..
-            } => {
-                if node_states
-                    .get(&part_index)
-                    .and_then(|state| state.tool_call.as_ref())
-                    .is_some_and(|tool| tool.saw_node_lifecycle)
-                    || node_owned_kinds.contains(&ChatNodeKind::ToolCall)
-                {
-                    continue;
-                }
-                saw_tool = true;
-                let idx = tool_idx;
-                let mut tool_call = StreamedChatToolCall {
-                    call_id,
-                    name,
-                    index: idx,
-                    header_sent: false,
-                    arguments_streamed: false,
-                    saw_node_lifecycle: false,
-                };
-                emit_tool_call_header(
-                    &tx,
-                    &chat_id,
-                    created,
-                    logical_model,
-                    &mut tool_call,
-                )
-                .await?;
-                bridge_tool_info.insert(part_index, tool_call);
-                tool_idx += 1;
-            }
-            UrpStreamEvent::PartStart { .. }
-            | UrpStreamEvent::ItemStart { .. }
-            | UrpStreamEvent::PartDone { .. }
-            | UrpStreamEvent::ItemDone { .. } => {}
-            UrpStreamEvent::Delta {
-                delta: PartDelta::Text { content },
-                ..
-            }
-            | UrpStreamEvent::Delta {
-                delta: PartDelta::Refusal { content },
-                ..
-            } => {
-                if node_owned_kinds.contains(&ChatNodeKind::Content) {
-                    continue;
-                }
-                send_chat_chunk_string(
-                    &tx,
-                    &chat_id,
-                    created,
-                    logical_model,
-                    json!({ "content": "" }),
-                    &content,
-                    chat_delta_path_content,
-                    sse_max_frame_length,
-                )
-                .await?;
-            }
-            UrpStreamEvent::Delta {
-                delta:
-                    PartDelta::Reasoning {
-                        content,
-                        encrypted,
-                        summary,
-                        source,
-                    },
-                extra_body,
-                ..
-            } => {
-                let suppress_summary = summary.as_deref().is_some_and(|summary| !summary.is_empty())
-                    && node_owned_kinds.contains(&ChatNodeKind::ReasoningSummary);
-                let suppress_text = content.as_deref().is_some_and(|content| !content.is_empty())
-                    && node_owned_kinds.contains(&ChatNodeKind::ReasoningText);
-                let suppress_encrypted = encrypted.as_ref().is_some_and(|value| !value.is_null())
-                    && node_owned_kinds.contains(&ChatNodeKind::ReasoningEncrypted);
-                if suppress_summary && suppress_text && suppress_encrypted {
-                    continue;
-                }
-                emit_reasoning_delta(
-                    &tx,
-                    &chat_id,
-                    created,
-                    logical_model,
-                    content.as_deref(),
-                    encrypted.as_ref(),
-                    summary.as_deref(),
-                    source.as_deref(),
-                    &extra_body,
-                    false,
-                    sse_max_frame_length,
-                )
-                .await?;
-            }
-            UrpStreamEvent::Delta {
-                part_index,
-                delta: PartDelta::ToolCallArguments { arguments },
-                ..
-            } => {
-                if node_owned_kinds.contains(&ChatNodeKind::ToolCall) {
-                    continue;
-                }
-                let Some(tool_call) = bridge_tool_info.get_mut(&part_index) else {
-                    continue;
-                };
-
-                saw_tool = true;
-
-                if !tool_call.header_sent {
-                    emit_tool_call_header(
-                        &tx,
-                        &chat_id,
-                        created,
-                        logical_model,
-                        tool_call,
-                    )
-                    .await?;
-                }
-
-                emit_tool_call_arguments_delta(
-                    &tx,
-                    &chat_id,
-                    created,
-                    logical_model,
-                    tool_call.index,
-                    &arguments,
-                    sse_max_frame_length,
-                )
-                .await?;
-                tool_call.arguments_streamed = true;
-            }
-            UrpStreamEvent::Delta { .. } => {}
             UrpStreamEvent::ResponseDone {
                 finish_reason,
                 usage,
@@ -718,7 +578,6 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                 index: tool_idx,
                                 header_sent: false,
                                 arguments_streamed: false,
-                                saw_node_lifecycle: false,
                             };
                             tool_idx += 1;
                             saw_tool = true;
@@ -776,6 +635,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 send_plain_sse_data(&tx, error.to_string()).await?;
                 finished = true;
             }
+            _ => {}
         }
     }
 
@@ -1001,9 +861,9 @@ mod tests {
             .await
             .expect("response start");
         event_tx
-            .send(UrpStreamEvent::Delta {
-                part_index: 0,
-                delta: PartDelta::Reasoning {
+            .send(UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta: crate::urp::NodeDelta::Reasoning {
                     content: None,
                     encrypted: None,
                     summary: Some("brief summary".to_string()),
@@ -1098,9 +958,9 @@ mod tests {
             .await
             .expect("response start");
         event_tx
-            .send(UrpStreamEvent::Delta {
-                part_index: 0,
-                delta: PartDelta::Reasoning {
+            .send(UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta: crate::urp::NodeDelta::Reasoning {
                     content: None,
                     encrypted: Some(Value::String("live_sig".to_string())),
                     summary: None,

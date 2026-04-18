@@ -1,11 +1,8 @@
 use crate::transforms::{
     Phase, Transform, TransformConfig, TransformEntry, TransformError, TransformRuntimeContext,
-    TransformScope, TransformState, UrpData, response_output_items_mut,
+    TransformScope, TransformState, UrpData,
 };
-use crate::urp::{
-    ImageSource, Item, ItemHeader, Node, NodeDelta, NodeHeader, Part, PartDelta, PartHeader,
-    Role, UrpStreamEvent,
-};
+use crate::urp::{ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,49 +20,28 @@ impl TransformConfig for Config {
 
 pub struct AssistantMarkdownImagesToOutputTransform;
 
-struct StreamItemState {
-    role: Role,
-    extra_body: HashMap<String, Value>,
-    start_seen_or_emitted: bool,
-}
-
-struct ActiveTextPart {
-    part_index: u32,
-    content: String,
-}
-
-struct StreamTextPartState {
-    item_index: u32,
-    source_part_index: u32,
-    source_part_used: bool,
-    part_extra_body: HashMap<String, Value>,
+struct StreamTextNodeState {
+    header_id: Option<String>,
+    header_phase: Option<String>,
+    header_extra_body: HashMap<String, Value>,
     buffered_tail: String,
-    active_text_part: Option<ActiveTextPart>,
+    cleaned_content: String,
+    start_emitted: bool,
     saw_delta: bool,
 }
 
 struct StreamState {
     replacement: Option<Vec<UrpStreamEvent>>,
-    item_states: HashMap<u32, StreamItemState>,
-    text_parts: HashMap<u32, StreamTextPartState>,
-    pending_synthetic_item_done: Vec<u32>,
-    next_synthetic_item_index: u32,
-    next_synthetic_part_index: u32,
-    node_text_parts: HashMap<u32, StreamTextPartState>,
-    pending_synthetic_node_done: Vec<u32>,
+    node_text_parts: HashMap<u32, StreamTextNodeState>,
+    next_synthetic_node_index: u32,
 }
 
 impl Default for StreamState {
     fn default() -> Self {
         Self {
             replacement: None,
-            item_states: HashMap::new(),
-            text_parts: HashMap::new(),
-            pending_synthetic_item_done: Vec::new(),
-            next_synthetic_item_index: u32::MAX,
-            next_synthetic_part_index: u32::MAX,
             node_text_parts: HashMap::new(),
-            pending_synthetic_node_done: Vec::new(),
+            next_synthetic_node_index: u32::MAX,
         }
     }
 }
@@ -122,10 +98,7 @@ impl Transform for AssistantMarkdownImagesToOutputTransform {
     ) -> Result<(), TransformError> {
         match data {
             UrpData::Response(resp) => {
-                let mut items = response_output_items_mut(resp);
-                for item in items.iter_mut() {
-                    rewrite_assistant_markdown_images(item);
-                }
+                rewrite_assistant_markdown_images_nodes(&mut resp.output);
             }
             UrpData::Stream(event) => {
                 let Some(stream_state) = state.as_any_mut().downcast_mut::<StreamState>() else {
@@ -139,42 +112,13 @@ impl Transform for AssistantMarkdownImagesToOutputTransform {
     }
 }
 
-fn rewrite_assistant_markdown_images(item: &mut Item) {
-    let Item::Message { role, parts, .. } = item else {
-        return;
-    };
-    if *role != Role::Assistant {
-        return;
-    }
-    let mut next_parts = Vec::with_capacity(parts.len());
-    for part in parts.iter() {
-        match part {
-            Part::Text {
-                content,
-                extra_body,
-            } => {
-                let (cleaned, images) = extract_markdown_images_from_text(content);
-                if !cleaned.is_empty() {
-                    next_parts.push(Part::Text {
-                        content: cleaned,
-                        extra_body: extra_body.clone(),
-                    });
-                }
-                next_parts.extend(images);
-            }
-            other => next_parts.push(other.clone()),
-        }
-    }
-    *parts = next_parts;
-}
-
 fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
     let mut rewritten = Vec::with_capacity(nodes.len());
     for node in nodes.drain(..) {
         match node {
             Node::Text {
                 id,
-                role: crate::urp::OrdinaryRole::Assistant,
+                role: OrdinaryRole::Assistant,
                 content,
                 phase,
                 extra_body,
@@ -183,21 +127,18 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
                 if !cleaned.is_empty() {
                     rewritten.push(Node::Text {
                         id,
-                        role: crate::urp::OrdinaryRole::Assistant,
+                        role: OrdinaryRole::Assistant,
                         content: cleaned,
                         phase,
                         extra_body,
                     });
                 }
-                for image in images {
-                    let Part::Image { source, extra_body } = image else {
-                        continue;
-                    };
+                for source in images {
                     rewritten.push(Node::Image {
                         id: None,
-                        role: crate::urp::OrdinaryRole::Assistant,
+                        role: OrdinaryRole::Assistant,
                         source,
-                        extra_body,
+                        extra_body: HashMap::new(),
                     });
                 }
             }
@@ -207,7 +148,7 @@ fn rewrite_assistant_markdown_images_nodes(nodes: &mut Vec<Node>) {
     *nodes = rewritten;
 }
 
-fn extract_markdown_images_from_text(content: &str) -> (String, Vec<Part>) {
+fn extract_markdown_images_from_text(content: &str) -> (String, Vec<ImageSource>) {
     let (segments, tail) = split_stream_segments(content, true);
     debug_assert!(tail.is_empty());
     let mut images = Vec::new();
@@ -215,10 +156,7 @@ fn extract_markdown_images_from_text(content: &str) -> (String, Vec<Part>) {
     for segment in segments {
         match segment {
             StreamSegment::Text(text) => cleaned.push_str(&text),
-            StreamSegment::Image(source) => images.push(Part::Image {
-                source,
-                extra_body: HashMap::new(),
-            }),
+            StreamSegment::Image(source) => images.push(source),
         }
     }
     (cleaned, images)
@@ -345,127 +283,9 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState) {
     if apply_node_stream(event, state) {
         return;
     }
-    match event {
-        UrpStreamEvent::ItemStart {
-            item_index,
-            header: ItemHeader::Message { role, .. },
-            extra_body,
-        } if *role == Role::Assistant => {
-            state.item_states.insert(
-                *item_index,
-                StreamItemState {
-                    role: *role,
-                    extra_body: extra_body.clone(),
-                    start_seen_or_emitted: true,
-                },
-            );
-        }
-        UrpStreamEvent::PartStart {
-            part_index,
-            item_index,
-            header: PartHeader::Text,
-            extra_body,
-        } => {
-            ensure_item_state(state, *item_index, HashMap::new(), true);
-            state.text_parts.insert(
-                *part_index,
-                StreamTextPartState {
-                    item_index: *item_index,
-                    source_part_index: *part_index,
-                    source_part_used: false,
-                    part_extra_body: extra_body.clone(),
-                    buffered_tail: String::new(),
-                    active_text_part: None,
-                    saw_delta: false,
-                },
-            );
-            state.replacement = Some(Vec::new());
-        }
-        UrpStreamEvent::Delta {
-            part_index,
-            delta: PartDelta::Text { content },
-            usage,
-            extra_body,
-        } => {
-            let mut part_state =
-                state
-                    .text_parts
-                    .remove(part_index)
-                    .unwrap_or_else(|| StreamTextPartState {
-                        item_index: allocate_synthetic_item_for_delta(state, extra_body.clone()),
-                        source_part_index: *part_index,
-                        source_part_used: false,
-                        part_extra_body: extra_body.clone(),
-                        buffered_tail: String::new(),
-                        active_text_part: None,
-                        saw_delta: false,
-                    });
-            part_state.saw_delta = true;
-            let combined = format!("{}{}", part_state.buffered_tail, content);
-            let (segments, tail) = split_stream_segments(&combined, false);
-            part_state.buffered_tail = tail;
-            let mut emitted = Vec::new();
-            emit_segments(state, &mut part_state, segments, &mut emitted, extra_body);
-            attach_usage_to_last_event(&mut emitted, usage.clone());
-            state.text_parts.insert(*part_index, part_state);
-            state.replacement = Some(emitted);
-        }
-        UrpStreamEvent::PartDone {
-            part_index,
-            part: Part::Text { content, .. },
-            usage,
-            ..
-        } => {
-            let Some(mut part_state) = state.text_parts.remove(part_index) else {
-                return;
-            };
-            if !part_state.saw_delta {
-                part_state.buffered_tail.push_str(content);
-            }
-            let (segments, tail) = split_stream_segments(&part_state.buffered_tail, true);
-            part_state.buffered_tail = tail;
-            let mut emitted = Vec::new();
-            emit_segments(
-                state,
-                &mut part_state,
-                segments,
-                &mut emitted,
-                &HashMap::new(),
-            );
-            close_active_text_part(&mut part_state, &mut emitted);
-            attach_usage_to_last_event(&mut emitted, usage.clone());
-            state.replacement = Some(emitted);
-        }
-        UrpStreamEvent::ItemDone {
-            item_index,
-            item,
-            usage,
-            extra_body,
-        } => {
-            let mut emitted = flush_open_parts_for_item(state, *item_index);
-            rewrite_assistant_markdown_images(item);
-            emitted.push(UrpStreamEvent::ItemDone {
-                item_index: *item_index,
-                item: item.clone(),
-                usage: usage.clone(),
-                extra_body: extra_body.clone(),
-            });
-            state.item_states.remove(item_index);
-            state.replacement = Some(emitted);
-        }
-        UrpStreamEvent::ResponseDone { output, .. } => {
+    if let UrpStreamEvent::ResponseDone { output, .. } = event {
             rewrite_assistant_markdown_images_nodes(output);
-            let mut emitted = flush_all_open_parts(state);
-            for item_index in state.pending_synthetic_item_done.drain(..) {
-                state.item_states.remove(&item_index);
-            }
-            for item_index in state.pending_synthetic_node_done.drain(..) {
-                state.item_states.remove(&item_index);
-            }
-            emitted.push(event.clone());
-            state.replacement = Some(emitted);
-        }
-        _ => {}
+        state.node_text_parts.clear();
     }
 }
 
@@ -473,19 +293,23 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
     match event {
         UrpStreamEvent::NodeStart {
             node_index,
-            header: NodeHeader::Text { role, .. },
+            header:
+                NodeHeader::Text {
+                    id,
+                    role: OrdinaryRole::Assistant,
+                    phase,
+                },
             extra_body,
-        } if *role == crate::urp::OrdinaryRole::Assistant => {
-            let item_index = allocate_synthetic_item_for_node(state, extra_body.clone());
+        } => {
             state.node_text_parts.insert(
                 *node_index,
-                StreamTextPartState {
-                    item_index,
-                    source_part_index: *node_index,
-                    source_part_used: false,
-                    part_extra_body: extra_body.clone(),
+                StreamTextNodeState {
+                    header_id: id.clone(),
+                    header_phase: phase.clone(),
+                    header_extra_body: extra_body.clone(),
                     buffered_tail: String::new(),
-                    active_text_part: None,
+                    cleaned_content: String::new(),
+                    start_emitted: false,
                     saw_delta: false,
                 },
             );
@@ -498,45 +322,74 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             usage,
             extra_body,
         } => {
-            let Some(mut part_state) = state.node_text_parts.remove(node_index) else {
+            let Some(mut node_state) = state.node_text_parts.remove(node_index) else {
                 return false;
             };
-            part_state.saw_delta = true;
-            let combined = format!("{}{}", part_state.buffered_tail, content);
+            node_state.saw_delta = true;
+            let combined = format!("{}{}", node_state.buffered_tail, content);
             let (segments, tail) = split_stream_segments(&combined, false);
-            part_state.buffered_tail = tail;
+            node_state.buffered_tail = tail;
             let mut emitted = Vec::new();
-            emit_segments(state, &mut part_state, segments, &mut emitted, extra_body);
-            attach_usage_to_last_event(&mut emitted, usage.clone());
-            state.node_text_parts.insert(*node_index, part_state);
+            emit_node_segments(*node_index, state, &mut node_state, segments, &mut emitted, extra_body);
+            attach_usage_to_last_node_event(&mut emitted, usage.clone());
+            state.node_text_parts.insert(*node_index, node_state);
             state.replacement = Some(emitted);
             true
         }
         UrpStreamEvent::NodeDone {
             node_index,
-            node: Node::Text { content, .. },
+            node:
+                Node::Text {
+                    id,
+                    role: OrdinaryRole::Assistant,
+                    content,
+                    phase,
+                    extra_body: node_extra_body,
+                },
             usage,
-            ..
+            extra_body: event_extra_body,
         } => {
-            let Some(mut part_state) = state.node_text_parts.remove(node_index) else {
-                return false;
-            };
-            if !part_state.saw_delta {
-                part_state.buffered_tail.push_str(content);
+            let mut node_state = state
+                .node_text_parts
+                .remove(node_index)
+                .unwrap_or_else(|| StreamTextNodeState {
+                    header_id: id.clone(),
+                    header_phase: phase.clone(),
+                    header_extra_body: HashMap::new(),
+                    buffered_tail: String::new(),
+                    cleaned_content: String::new(),
+                    start_emitted: false,
+                    saw_delta: false,
+                });
+            if !node_state.saw_delta {
+                node_state.buffered_tail.push_str(content);
             }
-            let (segments, tail) = split_stream_segments(&part_state.buffered_tail, true);
-            part_state.buffered_tail = tail;
+            let (segments, tail) = split_stream_segments(&node_state.buffered_tail, true);
+            node_state.buffered_tail = tail;
             let mut emitted = Vec::new();
-            emit_segments(
+            emit_node_segments(
+                *node_index,
                 state,
-                &mut part_state,
+                &mut node_state,
                 segments,
                 &mut emitted,
                 &HashMap::new(),
             );
-            close_active_text_part(&mut part_state, &mut emitted);
-            attach_usage_to_last_event(&mut emitted, usage.clone());
-            emitted.push(event.clone());
+            if node_state.start_emitted {
+                emitted.push(UrpStreamEvent::NodeDone {
+                    node_index: *node_index,
+                    node: Node::Text {
+                        id: id.clone(),
+                        role: OrdinaryRole::Assistant,
+                        content: std::mem::take(&mut node_state.cleaned_content),
+                        phase: phase.clone(),
+                        extra_body: node_extra_body.clone(),
+                    },
+                    usage: None,
+                    extra_body: event_extra_body.clone(),
+                });
+            }
+            attach_usage_to_last_node_event(&mut emitted, usage.clone());
             state.replacement = Some(emitted);
             true
         }
@@ -544,107 +397,63 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
     }
 }
 
-fn allocate_synthetic_item_for_node(
-    state: &mut StreamState,
-    extra_body: HashMap<String, Value>,
-) -> u32 {
-    let item_index = allocate_synthetic_item_for_delta(state, extra_body);
-    state.pending_synthetic_node_done.push(item_index);
-    item_index
+fn allocate_synthetic_node_index(state: &mut StreamState) -> u32 {
+    let node_index = state.next_synthetic_node_index;
+    state.next_synthetic_node_index = state.next_synthetic_node_index.saturating_sub(1);
+    node_index
 }
 
-fn ensure_item_state(
-    state: &mut StreamState,
-    item_index: u32,
-    extra_body: HashMap<String, Value>,
-    start_seen_or_emitted: bool,
-) {
-    state
-        .item_states
-        .entry(item_index)
-        .or_insert_with(|| StreamItemState {
-            role: Role::Assistant,
-            extra_body,
-            start_seen_or_emitted,
-        });
-}
-
-fn allocate_synthetic_item_for_delta(
-    state: &mut StreamState,
-    extra_body: HashMap<String, Value>,
-) -> u32 {
-    let item_index = state.next_synthetic_item_index;
-    state.next_synthetic_item_index = state.next_synthetic_item_index.saturating_sub(1);
-    state.item_states.insert(
-        item_index,
-        StreamItemState {
-            role: Role::Assistant,
-            extra_body,
-            start_seen_or_emitted: false,
-        },
-    );
-    state.pending_synthetic_item_done.push(item_index);
-    item_index
-}
-
-fn allocate_synthetic_part_index(state: &mut StreamState) -> u32 {
-    let part_index = state.next_synthetic_part_index;
-    state.next_synthetic_part_index = state.next_synthetic_part_index.saturating_sub(1);
-    part_index
-}
-
-fn ensure_item_start_event(
-    state: &mut StreamState,
-    item_index: u32,
+fn ensure_text_node_start(
+    node_index: u32,
+    node_state: &mut StreamTextNodeState,
     emitted: &mut Vec<UrpStreamEvent>,
 ) {
-    let Some(item_state) = state.item_states.get_mut(&item_index) else {
-        return;
-    };
-    if item_state.start_seen_or_emitted {
+    if node_state.start_emitted {
         return;
     }
-    emitted.push(UrpStreamEvent::ItemStart {
-        item_index,
-        header: ItemHeader::Message {
-            id: Some(crate::urp::synthetic_message_id()),
-            role: item_state.role,
+    emitted.push(UrpStreamEvent::NodeStart {
+        node_index,
+        header: NodeHeader::Text {
+            id: node_state.header_id.clone(),
+            role: OrdinaryRole::Assistant,
+            phase: node_state.header_phase.clone(),
         },
-        extra_body: item_state.extra_body.clone(),
+        extra_body: node_state.header_extra_body.clone(),
     });
-    item_state.start_seen_or_emitted = true;
+    node_state.start_emitted = true;
 }
 
-fn ensure_active_text_part(
+fn emit_synthetic_image_node(
     state: &mut StreamState,
-    part_state: &mut StreamTextPartState,
+    source: ImageSource,
     emitted: &mut Vec<UrpStreamEvent>,
 ) {
-    if part_state.active_text_part.is_some() {
-        return;
-    }
-    ensure_item_start_event(state, part_state.item_index, emitted);
-    let part_index = if !part_state.source_part_used {
-        part_state.source_part_used = true;
-        part_state.source_part_index
-    } else {
-        allocate_synthetic_part_index(state)
-    };
-    emitted.push(UrpStreamEvent::PartStart {
-        part_index,
-        item_index: part_state.item_index,
-        header: PartHeader::Text,
-        extra_body: part_state.part_extra_body.clone(),
+    let node_index = allocate_synthetic_node_index(state);
+    emitted.push(UrpStreamEvent::NodeStart {
+        node_index,
+        header: NodeHeader::Image {
+            id: None,
+            role: OrdinaryRole::Assistant,
+        },
+        extra_body: HashMap::new(),
     });
-    part_state.active_text_part = Some(ActiveTextPart {
-        part_index,
-        content: String::new(),
+    emitted.push(UrpStreamEvent::NodeDone {
+        node_index,
+        node: Node::Image {
+            id: None,
+            role: OrdinaryRole::Assistant,
+            source,
+            extra_body: HashMap::new(),
+        },
+        usage: None,
+        extra_body: HashMap::new(),
     });
 }
 
-fn emit_segments(
+fn emit_node_segments(
+    node_index: u32,
     state: &mut StreamState,
-    part_state: &mut StreamTextPartState,
+    node_state: &mut StreamTextNodeState,
     segments: Vec<StreamSegment>,
     emitted: &mut Vec<UrpStreamEvent>,
     delta_extra_body: &HashMap<String, Value>,
@@ -655,105 +464,21 @@ fn emit_segments(
                 if text.is_empty() {
                     continue;
                 }
-                ensure_active_text_part(state, part_state, emitted);
-                if let Some(active) = part_state.active_text_part.as_mut() {
-                    active.content.push_str(&text);
-                    emitted.push(UrpStreamEvent::Delta {
-                        part_index: active.part_index,
-                        delta: PartDelta::Text { content: text },
-                        usage: None,
-                        extra_body: delta_extra_body.clone(),
-                    });
-                }
-            }
-            StreamSegment::Image(source) => {
-                close_active_text_part(part_state, emitted);
-                ensure_item_start_event(state, part_state.item_index, emitted);
-                let part_index = allocate_synthetic_part_index(state);
-                emitted.push(UrpStreamEvent::PartStart {
-                    part_index,
-                    item_index: part_state.item_index,
-                    header: PartHeader::Image {
-                        extra_body: HashMap::new(),
-                    },
-                    extra_body: HashMap::new(),
-                });
-                emitted.push(UrpStreamEvent::PartDone {
-                    part_index,
-                    part: Part::Image {
-                        source,
-                        extra_body: HashMap::new(),
-                    },
+                ensure_text_node_start(node_index, node_state, emitted);
+                node_state.cleaned_content.push_str(&text);
+                emitted.push(UrpStreamEvent::NodeDelta {
+                    node_index,
+                    delta: NodeDelta::Text { content: text },
                     usage: None,
-                    extra_body: HashMap::new(),
+                    extra_body: delta_extra_body.clone(),
                 });
             }
+            StreamSegment::Image(source) => emit_synthetic_image_node(state, source, emitted),
         }
     }
 }
 
-fn close_active_text_part(part_state: &mut StreamTextPartState, emitted: &mut Vec<UrpStreamEvent>) {
-    let Some(active) = part_state.active_text_part.take() else {
-        return;
-    };
-    emitted.push(UrpStreamEvent::PartDone {
-        part_index: active.part_index,
-        part: Part::Text {
-            content: active.content,
-            extra_body: part_state.part_extra_body.clone(),
-        },
-        usage: None,
-        extra_body: HashMap::new(),
-    });
-}
-
-fn flush_open_parts_for_item(state: &mut StreamState, item_index: u32) -> Vec<UrpStreamEvent> {
-    let matching_part_indices = state
-        .text_parts
-        .iter()
-        .filter_map(|(part_index, part_state)| {
-            (part_state.item_index == item_index).then_some(*part_index)
-        })
-        .collect::<Vec<_>>();
-    let mut emitted = Vec::new();
-    for part_index in matching_part_indices {
-        if let Some(mut part_state) = state.text_parts.remove(&part_index) {
-            let (segments, tail) = split_stream_segments(&part_state.buffered_tail, true);
-            part_state.buffered_tail = tail;
-            emit_segments(
-                state,
-                &mut part_state,
-                segments,
-                &mut emitted,
-                &HashMap::new(),
-            );
-            close_active_text_part(&mut part_state, &mut emitted);
-        }
-    }
-    emitted
-}
-
-fn flush_all_open_parts(state: &mut StreamState) -> Vec<UrpStreamEvent> {
-    let part_indices = state.text_parts.keys().copied().collect::<Vec<_>>();
-    let mut emitted = Vec::new();
-    for part_index in part_indices {
-        if let Some(mut part_state) = state.text_parts.remove(&part_index) {
-            let (segments, tail) = split_stream_segments(&part_state.buffered_tail, true);
-            part_state.buffered_tail = tail;
-            emit_segments(
-                state,
-                &mut part_state,
-                segments,
-                &mut emitted,
-                &HashMap::new(),
-            );
-            close_active_text_part(&mut part_state, &mut emitted);
-        }
-    }
-    emitted
-}
-
-fn attach_usage_to_last_event(events: &mut [UrpStreamEvent], usage: Option<crate::urp::Usage>) {
+fn attach_usage_to_last_node_event(events: &mut [UrpStreamEvent], usage: Option<crate::urp::Usage>) {
     let Some(usage) = usage else {
         return;
     };
@@ -761,17 +486,10 @@ fn attach_usage_to_last_event(events: &mut [UrpStreamEvent], usage: Option<crate
         return;
     };
     match last {
-        UrpStreamEvent::Delta { usage: slot, .. }
-        | UrpStreamEvent::PartDone { usage: slot, .. }
-        | UrpStreamEvent::ItemDone { usage: slot, .. }
-        | UrpStreamEvent::NodeDelta { usage: slot, .. }
+        UrpStreamEvent::NodeDelta { usage: slot, .. }
         | UrpStreamEvent::NodeDone { usage: slot, .. }
         | UrpStreamEvent::ResponseDone { usage: slot, .. } => *slot = Some(usage),
-        UrpStreamEvent::ResponseStart { .. }
-        | UrpStreamEvent::ItemStart { .. }
-        | UrpStreamEvent::PartStart { .. }
-        | UrpStreamEvent::NodeStart { .. }
-        | UrpStreamEvent::Error { .. } => {}
+        _ => {}
     }
 }
 
@@ -812,17 +530,11 @@ mod tests {
         assert_eq!(cleaned, "hello  world ");
         assert_eq!(images.len(), 2);
         match &images[0] {
-            Part::Image {
-                source: ImageSource::Url { url, .. },
-                ..
-            } => assert_eq!(url, "https://example.com/a.png"),
+            ImageSource::Url { url, .. } => assert_eq!(url, "https://example.com/a.png"),
             _ => panic!("expected url image"),
         }
         match &images[1] {
-            Part::Image {
-                source: ImageSource::Base64 { media_type, data },
-                ..
-            } => {
+            ImageSource::Base64 { media_type, data } => {
                 assert_eq!(media_type, "image/png");
                 assert_eq!(data, "QUJD");
             }
