@@ -708,8 +708,6 @@ pub(super) fn filter_extra_body_for_provider(
         .retain(|k, _| defaults.contains(&k.as_str()) || override_set.contains(k.as_str()));
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

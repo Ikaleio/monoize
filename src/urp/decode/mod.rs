@@ -5,10 +5,8 @@ pub mod openai_image;
 pub mod openai_responses;
 pub mod replicate;
 
-use crate::urp::{
-    FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole, ToolDefinition,
-};
 use crate::urp::internal_legacy_bridge::Part;
+use crate::urp::{FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole, ToolDefinition};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -169,7 +167,9 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
             value
                 .as_str()
                 .map(|text| text.to_string())
-                .unwrap_or_else(|| serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string()))
+                .unwrap_or_else(|| {
+                    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+                })
         })
         .unwrap_or_else(|| "{}".to_string());
 
@@ -294,7 +294,15 @@ pub fn parse_image_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -
         source: parse_image_source_from_obj(obj)?,
         extra_body: split_extra(
             obj,
-            &["type", "image_url", "detail", "url", "image_base64", "media_type", "source"],
+            &[
+                "type",
+                "image_url",
+                "detail",
+                "url",
+                "image_base64",
+                "media_type",
+                "source",
+            ],
         ),
     })
 }
@@ -304,7 +312,15 @@ pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
         source: parse_image_source_from_obj(obj)?,
         extra_body: split_extra(
             obj,
-            &["type", "image_url", "detail", "url", "image_base64", "media_type", "source"],
+            &[
+                "type",
+                "image_url",
+                "detail",
+                "url",
+                "image_base64",
+                "media_type",
+                "source",
+            ],
         ),
     })
 }

@@ -414,7 +414,16 @@ async fn fan_out_subrequests(
         let rip = request_ip.clone();
 
         join_set.spawn(async move {
-            execute_nonstream_typed(&state, &auth, req, max_multiplier, super::DownstreamProtocol::Responses, rid, rip).await
+            execute_nonstream_typed(
+                &state,
+                &auth,
+                req,
+                max_multiplier,
+                super::DownstreamProtocol::Responses,
+                rid,
+                rip,
+            )
+            .await
         });
     }
 

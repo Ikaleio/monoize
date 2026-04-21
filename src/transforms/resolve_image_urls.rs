@@ -135,9 +135,9 @@ impl Transform for ResolveImageUrlsTransform {
         }
 
         for (node_idx, handle) in futures {
-            let result = handle.await.map_err(|e| {
-                TransformError::Apply(format!("image fetch task failed: {e}"))
-            })?;
+            let result = handle
+                .await
+                .map_err(|e| TransformError::Apply(format!("image fetch task failed: {e}")))?;
             match result {
                 Ok((media_type, b64_data)) => {
                     if let Some(Node::Image { source, .. }) = req.input.get_mut(node_idx) {
@@ -200,10 +200,7 @@ async fn fetch_image_as_base64(
         .map_err(|e| format!("HTTP request failed for {url}: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!(
-            "HTTP {} for {url}",
-            resp.status()
-        ));
+        return Err(format!("HTTP {} for {url}", resp.status()));
     }
 
     let content_type = resp

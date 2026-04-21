@@ -3,9 +3,7 @@ use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, record_stream_done_sentinel, record_stream_terminal_event,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
-use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent,
-};
+use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;

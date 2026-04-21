@@ -885,15 +885,25 @@ async fn chat_streaming_openrouter_final_usage_chunk_shape() {
         }
     }
 
-    assert_eq!(usage_chunks.len(), 1, "chat stream must emit exactly one usage-bearing terminal chunk before [DONE]: {text}");
+    assert_eq!(
+        usage_chunks.len(),
+        1,
+        "chat stream must emit exactly one usage-bearing terminal chunk before [DONE]: {text}"
+    );
     let usage_chunk = &usage_chunks[0];
     let choice = usage_chunk["choices"]
         .as_array()
         .and_then(|choices| choices.first())
         .expect("usage terminal chunk choice");
-    assert_eq!(choice["finish_reason"].as_str(), Some("stop"), "usage-bearing chunk must be the terminal finish chunk: {text}");
+    assert_eq!(
+        choice["finish_reason"].as_str(),
+        Some("stop"),
+        "usage-bearing chunk must be the terminal finish chunk: {text}"
+    );
     assert!(
-        choice["delta"].as_object().is_some_and(|delta| delta.is_empty()),
+        choice["delta"]
+            .as_object()
+            .is_some_and(|delta| delta.is_empty()),
         "usage-bearing terminal chunk must not carry additional assistant deltas: {text}"
     );
     assert_eq!(usage_chunk["usage"]["prompt_tokens"].as_u64(), Some(12));

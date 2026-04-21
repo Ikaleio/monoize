@@ -164,8 +164,7 @@ pub(super) fn calculate_charge_nano(
     pricing: &ModelPricing,
     provider_multiplier: f64,
 ) -> Option<i128> {
-    calculate_charge_components(usage, pricing, provider_multiplier)
-        .map(|parts| parts.final_charge)
+    calculate_charge_components(usage, pricing, provider_multiplier).map(|parts| parts.final_charge)
 }
 
 pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
@@ -358,11 +357,8 @@ pub(super) async fn maybe_charge_usage(
             }
         };
 
-    let Some(components) = calculate_charge_components(
-        usage,
-        &pricing,
-        attempt.model_multiplier,
-    ) else {
+    let Some(components) = calculate_charge_components(usage, &pricing, attempt.model_multiplier)
+    else {
         tracing::error!(
             "billing error: charge overflow for model={}",
             attempt.upstream_model
@@ -406,26 +402,34 @@ pub(super) async fn maybe_charge_usage(
             .charge_sub_account_balance_nano(api_key_id, user_id, charge_nano, &meta)
             .await
         {
-            Ok(()) => return Ok(ChargeComputation {
-                charge_nano_usd: Some(charge_nano),
-                billing_breakdown: Some(billing_breakdown),
-            }),
+            Ok(()) => {
+                return Ok(ChargeComputation {
+                    charge_nano_usd: Some(charge_nano),
+                    billing_breakdown: Some(billing_breakdown),
+                });
+            }
             Err(err) => match err.kind {
-                BillingErrorKind::InsufficientBalance => return Err(AppError::new(
-                    StatusCode::PAYMENT_REQUIRED,
-                    "insufficient_balance",
-                    "insufficient balance",
-                )),
-                BillingErrorKind::NotFound => return Err(AppError::new(
-                    StatusCode::UNAUTHORIZED,
-                    "unauthorized",
-                    "api key not found",
-                )),
-                _ => return Err(AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    err.message,
-                )),
+                BillingErrorKind::InsufficientBalance => {
+                    return Err(AppError::new(
+                        StatusCode::PAYMENT_REQUIRED,
+                        "insufficient_balance",
+                        "insufficient balance",
+                    ));
+                }
+                BillingErrorKind::NotFound => {
+                    return Err(AppError::new(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        "api key not found",
+                    ));
+                }
+                _ => {
+                    return Err(AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        err.message,
+                    ));
+                }
             },
         }
     }

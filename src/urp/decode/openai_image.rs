@@ -59,13 +59,16 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
     }
 
     if let Some(rp) = revised_prompt {
-        output.insert(0, Node::Text {
-            id: None,
-            role: OrdinaryRole::Assistant,
-            content: rp,
-            phase: None,
-            extra_body: HashMap::new(),
-        });
+        output.insert(
+            0,
+            Node::Text {
+                id: None,
+                role: OrdinaryRole::Assistant,
+                content: rp,
+                phase: None,
+                extra_body: HashMap::new(),
+            },
+        );
     }
 
     let usage = obj.get("usage").and_then(|u| {
@@ -146,7 +149,7 @@ fn parse_modality_breakdown(obj: &serde_json::Map<String, Value>) -> Option<Moda
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::urp::internal_legacy_bridge::{nodes_to_items, Item, Part, Role};
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
     use serde_json::json;
 
     #[test]

@@ -613,7 +613,7 @@ impl MonoizeRoutingStore {
         let txn = self.db.begin_write().await.map_err(|e| e.to_string())?;
 
         txn.execute(self.db.stmt(
-                r#"UPDATE monoize_providers
+            r#"UPDATE monoize_providers
                    SET name = $1, provider_type = $2, max_retries = $3,
                        channel_max_retries = $4,
                        channel_retry_interval_ms = $5,
@@ -630,32 +630,32 @@ impl MonoizeRoutingStore {
                        groups = $17,
                        enabled = $18, priority = $19, updated_at = $20
                    WHERE id = $21"#,
-                vec![
-                    name.into(),
-                    provider_type.as_str().into(),
-                    SeaValue::Int(Some(max_retries)),
-                    SeaValue::Int(Some(channel_max_retries)),
-                    SeaValue::Int(Some(channel_retry_interval_ms as i32)),
-                    SeaValue::Int(Some(if circuit_breaker_enabled { 1 } else { 0 })),
-                    SeaValue::Int(Some(if per_model_circuit_break { 1 } else { 0 })),
-                    transforms_json.into(),
-                    api_type_overrides_json.into(),
-                    opt_bool_to_value(active_probe_enabled_override),
-                    opt_u64_to_value(active_probe_interval_seconds_override),
-                    opt_u64_to_value(active_probe_success_threshold_override.map(|v| v as u64)),
-                    active_probe_model_override.into(),
-                    opt_u64_to_value(request_timeout_ms_override),
-                    extra_fields_whitelist_json.into(),
-                    opt_bool_to_value(strip_cross_protocol_nested_extra),
-                    groups_json.into(),
-                    SeaValue::Int(Some(if enabled { 1 } else { 0 })),
-                    SeaValue::Int(Some(priority)),
-                    now.to_rfc3339().into(),
-                    id.into(),
-                ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
+            vec![
+                name.into(),
+                provider_type.as_str().into(),
+                SeaValue::Int(Some(max_retries)),
+                SeaValue::Int(Some(channel_max_retries)),
+                SeaValue::Int(Some(channel_retry_interval_ms as i32)),
+                SeaValue::Int(Some(if circuit_breaker_enabled { 1 } else { 0 })),
+                SeaValue::Int(Some(if per_model_circuit_break { 1 } else { 0 })),
+                transforms_json.into(),
+                api_type_overrides_json.into(),
+                opt_bool_to_value(active_probe_enabled_override),
+                opt_u64_to_value(active_probe_interval_seconds_override),
+                opt_u64_to_value(active_probe_success_threshold_override.map(|v| v as u64)),
+                active_probe_model_override.into(),
+                opt_u64_to_value(request_timeout_ms_override),
+                extra_fields_whitelist_json.into(),
+                opt_bool_to_value(strip_cross_protocol_nested_extra),
+                groups_json.into(),
+                SeaValue::Int(Some(if enabled { 1 } else { 0 })),
+                SeaValue::Int(Some(priority)),
+                now.to_rfc3339().into(),
+                id.into(),
+            ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
 
         if let Some(models) = &input.models {
             self.replace_models_on(&*txn, id, models).await?;
@@ -748,28 +748,28 @@ impl MonoizeRoutingStore {
         models: &HashMap<String, MonoizeModelEntry>,
     ) -> Result<(), String> {
         conn.execute(self.db.stmt(
-                "DELETE FROM monoize_provider_models WHERE provider_id = $1",
-                vec![provider_id.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
+            "DELETE FROM monoize_provider_models WHERE provider_id = $1",
+            vec![provider_id.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
 
         for (model_name, entry) in models {
             conn.execute(self.db.stmt(
-                    r#"INSERT INTO monoize_provider_models
+                r#"INSERT INTO monoize_provider_models
                        (id, provider_id, model_name, redirect, multiplier, created_at)
                        VALUES ($1, $2, $3, $4, $5, $6)"#,
-                    vec![
-                        format!("mono_model_{}", uuid::Uuid::new_v4().simple()).into(),
-                        provider_id.into(),
-                        model_name.as_str().into(),
-                        entry.redirect.clone().into(),
-                        SeaValue::Double(Some(entry.multiplier)),
-                        Utc::now().to_rfc3339().into(),
-                    ],
-                ))
-                .await
-                .map_err(|e| e.to_string())?;
+                vec![
+                    format!("mono_model_{}", uuid::Uuid::new_v4().simple()).into(),
+                    provider_id.into(),
+                    model_name.as_str().into(),
+                    entry.redirect.clone().into(),
+                    SeaValue::Double(Some(entry.multiplier)),
+                    Utc::now().to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -839,11 +839,11 @@ impl MonoizeRoutingStore {
         }
 
         conn.execute(self.db.stmt(
-                "DELETE FROM monoize_channels WHERE provider_id = $1",
-                vec![provider_id.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
+            "DELETE FROM monoize_channels WHERE provider_id = $1",
+            vec![provider_id.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
 
         for input in channels {
             let id = input

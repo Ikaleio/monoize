@@ -154,8 +154,8 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
     use crate::urp::UrpResponse;
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -184,19 +184,27 @@ mod tests {
             config: json!({}),
         }];
         let mut states = build_states_for_rules(&rules, &registry).expect("states");
-        let mut resp = UrpResponse { id: "resp_1".to_string(), model: "gpt-test".to_string(), created_at: None, output: items_to_nodes(vec![Item::Message {
-            id: None,
-            role: Role::Assistant,
-            parts: vec![Part::Reasoning {
+        let mut resp = UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-test".to_string(),
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
                 id: None,
-                content: Some("plain reasoning".to_string()),
-                encrypted: None,
-                summary: None,
-                source: None,
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    id: None,
+                    content: Some("plain reasoning".to_string()),
+                    encrypted: None,
+                    summary: None,
+                    source: None,
+                    extra_body: HashMap::new(),
+                }],
                 extra_body: HashMap::new(),
-            }],
+            }]),
+            finish_reason: None,
+            usage: None,
             extra_body: HashMap::new(),
-        }]), finish_reason: None, usage: None, extra_body: HashMap::new() };
+        };
         crate::transforms::apply_transforms(
             UrpData::Response(&mut resp),
             &rules,
@@ -234,22 +242,30 @@ mod tests {
             config: json!({}),
         }];
         let mut states = build_states_for_rules(&rules, &registry).expect("states");
-        let mut resp = UrpResponse { id: "resp_1".to_string(), model: "gpt-test".to_string(), created_at: None, output: items_to_nodes(vec![Item::Message {
-            id: None,
-            role: Role::Assistant,
-            parts: vec![Part::Reasoning {
+        let mut resp = UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-test".to_string(),
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
                 id: None,
-                content: Some("plain reasoning".to_string()),
-                encrypted: Some(Value::String("ciphertext".to_string())),
-                summary: None,
-                source: Some("openrouter".to_string()),
-                extra_body: HashMap::from([(
-                    "preserved".to_string(),
-                    Value::String("yes".to_string()),
-                )]),
-            }],
+                role: Role::Assistant,
+                parts: vec![Part::Reasoning {
+                    id: None,
+                    content: Some("plain reasoning".to_string()),
+                    encrypted: Some(Value::String("ciphertext".to_string())),
+                    summary: None,
+                    source: Some("openrouter".to_string()),
+                    extra_body: HashMap::from([(
+                        "preserved".to_string(),
+                        Value::String("yes".to_string()),
+                    )]),
+                }],
+                extra_body: HashMap::new(),
+            }]),
+            finish_reason: None,
+            usage: None,
             extra_body: HashMap::new(),
-        }]), finish_reason: None, usage: None, extra_body: HashMap::new() };
+        };
         crate::transforms::apply_transforms(
             UrpData::Response(&mut resp),
             &rules,
@@ -341,10 +357,17 @@ mod tests {
         let mut state = transform.init_state();
         let mut event = UrpStreamEvent::NodeDone {
             node_index: 2,
-            node: Node::Reasoning { id: None, content: Some("plain".to_string()), encrypted: Some(Value::String("ciphertext".to_string())), summary: None, source: Some("openrouter".to_string()), extra_body: HashMap::from([(
-                "preserved".to_string(),
-                Value::String("yes".to_string()),
-            )]) },
+            node: Node::Reasoning {
+                id: None,
+                content: Some("plain".to_string()),
+                encrypted: Some(Value::String("ciphertext".to_string())),
+                summary: None,
+                source: Some("openrouter".to_string()),
+                extra_body: HashMap::from([(
+                    "preserved".to_string(),
+                    Value::String("yes".to_string()),
+                )]),
+            },
             usage: None,
             extra_body: HashMap::new(),
         };

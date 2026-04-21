@@ -7,7 +7,7 @@ pub mod replicate;
 
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {

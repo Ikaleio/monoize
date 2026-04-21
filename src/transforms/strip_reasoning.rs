@@ -115,7 +115,9 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
         } => {
             if strip_state.stripped_indices.remove(node_index) {
                 let (id, extra_body) = match node {
-                    Node::Reasoning { id, extra_body, .. } => (id.take(), std::mem::take(extra_body)),
+                    Node::Reasoning { id, extra_body, .. } => {
+                        (id.take(), std::mem::take(extra_body))
+                    }
                     _ => (None, Default::default()),
                 };
                 *node = Node::Text {

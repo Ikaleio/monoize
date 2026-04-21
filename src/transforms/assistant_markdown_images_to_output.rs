@@ -271,11 +271,10 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState) {
         UrpStreamEvent::NodeStart {
             header: NodeHeader::NextDownstreamEnvelopeExtra,
             ..
+        } | UrpStreamEvent::NodeDone {
+            node: Node::NextDownstreamEnvelopeExtra { .. },
+            ..
         }
-            | UrpStreamEvent::NodeDone {
-                node: Node::NextDownstreamEnvelopeExtra { .. },
-                ..
-            }
     ) {
         state.replacement = Some(vec![event.clone()]);
         return;
@@ -284,7 +283,7 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState) {
         return;
     }
     if let UrpStreamEvent::ResponseDone { output, .. } = event {
-            rewrite_assistant_markdown_images_nodes(output);
+        rewrite_assistant_markdown_images_nodes(output);
         state.node_text_parts.clear();
     }
 }
@@ -330,7 +329,14 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             let (segments, tail) = split_stream_segments(&combined, false);
             node_state.buffered_tail = tail;
             let mut emitted = Vec::new();
-            emit_node_segments(*node_index, state, &mut node_state, segments, &mut emitted, extra_body);
+            emit_node_segments(
+                *node_index,
+                state,
+                &mut node_state,
+                segments,
+                &mut emitted,
+                extra_body,
+            );
             attach_usage_to_last_node_event(&mut emitted, usage.clone());
             state.node_text_parts.insert(*node_index, node_state);
             state.replacement = Some(emitted);
@@ -349,18 +355,19 @@ fn apply_node_stream(event: &mut UrpStreamEvent, state: &mut StreamState) -> boo
             usage,
             extra_body: event_extra_body,
         } => {
-            let mut node_state = state
-                .node_text_parts
-                .remove(node_index)
-                .unwrap_or_else(|| StreamTextNodeState {
-                    header_id: id.clone(),
-                    header_phase: phase.clone(),
-                    header_extra_body: HashMap::new(),
-                    buffered_tail: String::new(),
-                    cleaned_content: String::new(),
-                    start_emitted: false,
-                    saw_delta: false,
-                });
+            let mut node_state =
+                state
+                    .node_text_parts
+                    .remove(node_index)
+                    .unwrap_or_else(|| StreamTextNodeState {
+                        header_id: id.clone(),
+                        header_phase: phase.clone(),
+                        header_extra_body: HashMap::new(),
+                        buffered_tail: String::new(),
+                        cleaned_content: String::new(),
+                        start_emitted: false,
+                        saw_delta: false,
+                    });
             if !node_state.saw_delta {
                 node_state.buffered_tail.push_str(content);
             }
@@ -478,7 +485,10 @@ fn emit_node_segments(
     }
 }
 
-fn attach_usage_to_last_node_event(events: &mut [UrpStreamEvent], usage: Option<crate::urp::Usage>) {
+fn attach_usage_to_last_node_event(
+    events: &mut [UrpStreamEvent],
+    usage: Option<crate::urp::Usage>,
+) {
     let Some(usage) = usage else {
         return;
     };

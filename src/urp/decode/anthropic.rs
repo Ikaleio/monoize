@@ -1,12 +1,12 @@
 use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_node_from_obj, parse_file_source_from_obj,
-    parse_image_node_from_obj, parse_image_source_from_obj,
-    parse_tool_definition, split_extra, value_to_text,
+    parse_image_node_from_obj, parse_image_source_from_obj, parse_tool_definition, split_extra,
+    value_to_text,
 };
 use crate::urp::{
-    unwrap_reasoning_signature_sigil, FinishReason, InputDetails, Node, OrdinaryRole,
-    OutputDetails, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
-    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, REASONING_KIND_EXTRA_KEY,
+    REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest,
+    UrpResponse, Usage, unwrap_reasoning_signature_sigil,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};

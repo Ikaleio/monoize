@@ -312,17 +312,15 @@ pub(super) async fn forward_stream_typed(
                     .await;
                     mark_channel_success(&state, &attempt).await;
                     let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
-                    let pending_request_envelope_extra = req.input
-                    .clone()
-                    .into_iter()
-                    .find_map(|node| match node {
-                        crate::urp::Node::NextDownstreamEnvelopeExtra { extra_body }
-                            if !extra_body.is_empty() =>
-                        {
-                            Some(extra_body)
-                        }
-                        _ => None,
-                    });
+                    let pending_request_envelope_extra =
+                        req.input.clone().into_iter().find_map(|node| match node {
+                            crate::urp::Node::NextDownstreamEnvelopeExtra { extra_body }
+                                if !extra_body.is_empty() =>
+                            {
+                                Some(extra_body)
+                            }
+                            _ => None,
+                        });
                     let provider_type = attempt.provider_type;
                     let (tx, rx) = mpsc::channel::<Event>(64);
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
@@ -344,11 +342,8 @@ pub(super) async fn forward_stream_typed(
                     let reasoning_effort_for_log =
                         req.reasoning.as_ref().and_then(|r| r.effort.clone());
                     let tried_providers_for_log = tried_providers.clone();
-                    let enable_estimated_billing = state
-                        .monoize_runtime
-                        .read()
-                        .await
-                        .enable_estimated_billing;
+                    let enable_estimated_billing =
+                        state.monoize_runtime.read().await.enable_estimated_billing;
                     let state_for_transform = state.clone();
                     let provider_rules_for_transform = attempt.provider_transforms.clone();
                     let auth_rules_for_transform = auth.transforms.clone();
@@ -430,30 +425,28 @@ pub(super) async fn forward_stream_typed(
 
                         let (ttfb_ms, usage, is_estimated, terminal_diagnostics) = {
                             let guard = runtime_metrics.lock().await;
-                            let (usage, is_estimated) =
-                                match guard.usage.clone() {
-                                    Some(u) => (Some(u), false),
-                                    None if enable_estimated_billing
-                                        && guard.estimated_output_tokens > 0 =>
-                                    {
-                                        tracing::warn!(
-                                            estimated_output_tokens =
-                                                guard.estimated_output_tokens,
-                                            "upstream stream ended without usage; billing from estimate"
-                                        );
-                                        (
-                                            Some(urp::Usage {
-                                                input_tokens: 0,
-                                                output_tokens: guard.estimated_output_tokens,
-                                                input_details: None,
-                                                output_details: None,
-                                                extra_body: std::collections::HashMap::new(),
-                                            }),
-                                            true,
-                                        )
-                                    }
-                                    _ => (None, false),
-                                };
+                            let (usage, is_estimated) = match guard.usage.clone() {
+                                Some(u) => (Some(u), false),
+                                None if enable_estimated_billing
+                                    && guard.estimated_output_tokens > 0 =>
+                                {
+                                    tracing::warn!(
+                                        estimated_output_tokens = guard.estimated_output_tokens,
+                                        "upstream stream ended without usage; billing from estimate"
+                                    );
+                                    (
+                                        Some(urp::Usage {
+                                            input_tokens: 0,
+                                            output_tokens: guard.estimated_output_tokens,
+                                            input_details: None,
+                                            output_details: None,
+                                            extra_body: std::collections::HashMap::new(),
+                                        }),
+                                        true,
+                                    )
+                                }
+                                _ => (None, false),
+                            };
                             (guard.ttfb_ms, usage, is_estimated, guard.terminal.clone())
                         };
 

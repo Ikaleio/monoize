@@ -134,9 +134,13 @@ impl Transform for CompressUserMessageImagesTransform {
             };
             match source {
                 ImageSource::Base64 { media_type, data } => {
-                    let Some(next_source) =
-                        compress_base64_image(context, cfg.clone(), media_type.clone(), data.clone())
-                            .await?
+                    let Some(next_source) = compress_base64_image(
+                        context,
+                        cfg.clone(),
+                        media_type.clone(),
+                        data.clone(),
+                    )
+                    .await?
                     else {
                         continue;
                     };
@@ -364,8 +368,8 @@ mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
     use crate::urp::UrpRequest;
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
     use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
     use image::{ImageBuffer, ImageEncoder, Rgb};
     use serde_json::json;
@@ -386,27 +390,31 @@ mod tests {
             http_client: reqwest::Client::new(),
         };
         let input_png = build_png_data_url_source();
-        let mut req = UrpRequest { model: "gpt-test".to_string(), input: items_to_nodes(vec![Item::Message {
-            id: None,
-            role: Role::User,
-            parts: vec![Part::Image {
-                source: ImageSource::Base64 {
-                    media_type: "image/png".to_string(),
-                    data: input_png.clone(),
-                },
+        let mut req = UrpRequest {
+            model: "gpt-test".to_string(),
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::User,
+                parts: vec![Part::Image {
+                    source: ImageSource::Base64 {
+                        media_type: "image/png".to_string(),
+                        data: input_png.clone(),
+                    },
+                    extra_body: HashMap::new(),
+                }],
                 extra_body: HashMap::new(),
-            }],
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
             extra_body: HashMap::new(),
-        }]), stream: None,
-        temperature: None,
-        top_p: None,
-        max_output_tokens: None,
-        reasoning: None,
-        tools: None,
-        tool_choice: None,
-        response_format: None,
-        user: None,
-        extra_body: HashMap::new(), };
+        };
         let rules = vec![crate::transforms::TransformRuleConfig {
             transform: "compress_user_message_images".to_string(),
             enabled: true,
@@ -470,27 +478,31 @@ mod tests {
         };
         let input_png = build_png_data_url_source();
         let input_data_url = format!("data:image/png;base64,{input_png}");
-        let mut req = UrpRequest { model: "gpt-test".to_string(), input: items_to_nodes(vec![Item::Message {
-            id: None,
-            role: Role::User,
-            parts: vec![Part::Image {
-                source: ImageSource::Url {
-                    url: input_data_url,
-                    detail: Some("high".to_string()),
-                },
+        let mut req = UrpRequest {
+            model: "gpt-test".to_string(),
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::User,
+                parts: vec![Part::Image {
+                    source: ImageSource::Url {
+                        url: input_data_url,
+                        detail: Some("high".to_string()),
+                    },
+                    extra_body: HashMap::new(),
+                }],
                 extra_body: HashMap::new(),
-            }],
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
             extra_body: HashMap::new(),
-        }]), stream: None,
-        temperature: None,
-        top_p: None,
-        max_output_tokens: None,
-        reasoning: None,
-        tools: None,
-        tool_choice: None,
-        response_format: None,
-        user: None,
-        extra_body: HashMap::new(), };
+        };
         let rules = vec![crate::transforms::TransformRuleConfig {
             transform: "compress_user_message_images".to_string(),
             enabled: true,

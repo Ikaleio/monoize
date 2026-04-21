@@ -4,9 +4,7 @@ use crate::handlers::usage::{
     record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
-use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent,
-};
+use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -291,7 +289,12 @@ fn update_active_node(current: &mut ActiveNodeState, next: &ActiveNodeState) -> 
     let mut deltas = Vec::new();
 
     match (&mut current.kind, &next.kind) {
-        (ActiveNodeKind::Text { content }, ActiveNodeKind::Text { content: next_content }) => {
+        (
+            ActiveNodeKind::Text { content },
+            ActiveNodeKind::Text {
+                content: next_content,
+            },
+        ) => {
             if next_content.len() > content.len() {
                 let delta = next_content[content.len()..].to_string();
                 if !delta.is_empty() {
@@ -301,10 +304,7 @@ fn update_active_node(current: &mut ActiveNodeState, next: &ActiveNodeState) -> 
             *content = next_content.clone();
         }
         (
-            ActiveNodeKind::Reasoning {
-                content,
-                encrypted,
-            },
+            ActiveNodeKind::Reasoning { content, encrypted },
             ActiveNodeKind::Reasoning {
                 content: next_content,
                 encrypted: next_encrypted,
@@ -320,7 +320,9 @@ fn update_active_node(current: &mut ActiveNodeState, next: &ActiveNodeState) -> 
             } else {
                 None
             };
-            if content_delta.as_ref().is_some_and(|delta| !delta.is_empty())
+            if content_delta
+                .as_ref()
+                .is_some_and(|delta| !delta.is_empty())
                 || encrypted_delta.is_some()
             {
                 deltas.push(NodeDelta::Reasoning {
@@ -427,17 +429,32 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role: *role,
             phase: phase.clone(),
         },
-        Node::Reasoning { .. } => NodeHeader::Reasoning { id: node.id().cloned() },
+        Node::Reasoning { .. } => NodeHeader::Reasoning {
+            id: node.id().cloned(),
+        },
         Node::ToolCall { call_id, name, .. } => NodeHeader::ToolCall {
             id: node.id().cloned(),
             call_id: call_id.clone(),
             name: name.clone(),
         },
-        Node::Image { role, .. } => NodeHeader::Image { id: node.id().cloned(), role: *role },
-        Node::Audio { role, .. } => NodeHeader::Audio { id: node.id().cloned(), role: *role },
-        Node::File { role, .. } => NodeHeader::File { id: node.id().cloned(), role: *role },
-        Node::Refusal { .. } => NodeHeader::Refusal { id: node.id().cloned() },
-        Node::ProviderItem { role, item_type, .. } => NodeHeader::ProviderItem {
+        Node::Image { role, .. } => NodeHeader::Image {
+            id: node.id().cloned(),
+            role: *role,
+        },
+        Node::Audio { role, .. } => NodeHeader::Audio {
+            id: node.id().cloned(),
+            role: *role,
+        },
+        Node::File { role, .. } => NodeHeader::File {
+            id: node.id().cloned(),
+            role: *role,
+        },
+        Node::Refusal { .. } => NodeHeader::Refusal {
+            id: node.id().cloned(),
+        },
+        Node::ProviderItem {
+            role, item_type, ..
+        } => NodeHeader::ProviderItem {
             id: node.id().cloned(),
             role: *role,
             item_type: item_type.clone(),

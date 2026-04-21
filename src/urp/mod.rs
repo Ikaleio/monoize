@@ -577,9 +577,9 @@ impl Node {
             | Node::Audio { role, .. }
             | Node::File { role, .. }
             | Node::ProviderItem { role, .. } => Some(*role),
-            Node::Refusal { .. }
-            | Node::Reasoning { .. }
-            | Node::ToolCall { .. } => Some(OrdinaryRole::Assistant),
+            Node::Refusal { .. } | Node::Reasoning { .. } | Node::ToolCall { .. } => {
+                Some(OrdinaryRole::Assistant)
+            }
             Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
         }
     }
@@ -659,7 +659,10 @@ mod tests {
         let img = Node::Image {
             id: None,
             role: OrdinaryRole::Assistant,
-            source: ImageSource::Url { url: "http://x".into(), detail: None },
+            source: ImageSource::Url {
+                url: "http://x".into(),
+                detail: None,
+            },
             extra_body: HashMap::new(),
         };
         assert_eq!(img.role(), Some(OrdinaryRole::Assistant));
@@ -667,20 +670,28 @@ mod tests {
 
     #[test]
     fn node_role_returns_assistant_for_implicit_assistant_nodes() {
-        let refusal = Node::Refusal { id: None, content: "no".into(), extra_body: HashMap::new() };
+        let refusal = Node::Refusal {
+            id: None,
+            content: "no".into(),
+            extra_body: HashMap::new(),
+        };
         assert_eq!(refusal.role(), Some(OrdinaryRole::Assistant));
 
         let reasoning = Node::Reasoning {
             id: None,
             content: Some("think".into()),
-            encrypted: None, summary: None, source: None,
+            encrypted: None,
+            summary: None,
+            source: None,
             extra_body: HashMap::new(),
         };
         assert_eq!(reasoning.role(), Some(OrdinaryRole::Assistant));
 
         let tc = Node::ToolCall {
             id: None,
-            call_id: "c1".into(), name: "fn".into(), arguments: "{}".into(),
+            call_id: "c1".into(),
+            name: "fn".into(),
+            arguments: "{}".into(),
             extra_body: HashMap::new(),
         };
         assert_eq!(tc.role(), Some(OrdinaryRole::Assistant));
@@ -690,12 +701,16 @@ mod tests {
     fn node_role_returns_none_for_tool_result_and_control() {
         let tr = Node::ToolResult {
             id: None,
-            call_id: "c1".into(), is_error: false,
-            content: vec![], extra_body: HashMap::new(),
+            call_id: "c1".into(),
+            is_error: false,
+            content: vec![],
+            extra_body: HashMap::new(),
         };
         assert_eq!(tr.role(), None);
 
-        let ctrl = Node::NextDownstreamEnvelopeExtra { extra_body: HashMap::new() };
+        let ctrl = Node::NextDownstreamEnvelopeExtra {
+            extra_body: HashMap::new(),
+        };
         assert_eq!(ctrl.role(), None);
     }
 
@@ -705,7 +720,8 @@ mod tests {
             Node::text(OrdinaryRole::User, "hi"),
             Node::ToolResult {
                 id: None,
-                call_id: "c1".into(), is_error: false,
+                call_id: "c1".into(),
+                is_error: false,
                 content: vec![ToolResultContent::Text { text: "ok".into() }],
                 extra_body: HashMap::new(),
             },
@@ -739,7 +755,9 @@ mod tests {
         strip_nested_extra_body(&mut nodes);
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], Node::Text { extra_body, .. } if extra_body.is_empty()));
-        assert!(matches!(&nodes[1], Node::ToolResult { id: _, extra_body, .. } if extra_body.is_empty()));
+        assert!(
+            matches!(&nodes[1], Node::ToolResult { id: _, extra_body, .. } if extra_body.is_empty())
+        );
     }
 
     #[test]
@@ -753,7 +771,10 @@ mod tests {
         ];
         // Verify node vec preserves control node before stripping
         assert_eq!(nodes.len(), 3);
-        assert!(matches!(&nodes[1], Node::NextDownstreamEnvelopeExtra { .. }));
+        assert!(matches!(
+            &nodes[1],
+            Node::NextDownstreamEnvelopeExtra { .. }
+        ));
 
         strip_nested_extra_body(&mut nodes);
         assert_eq!(nodes.len(), 2);
@@ -761,13 +782,22 @@ mod tests {
 
     #[test]
     fn node_greedy_merger_flushes_on_role_change() {
-        use crate::urp::greedy::{NodeGreedyMerger, NodeAction};
+        use crate::urp::greedy::{NodeAction, NodeGreedyMerger};
         let mut m = NodeGreedyMerger::new();
-        assert!(matches!(m.feed(Node::text(OrdinaryRole::User, "a")), NodeAction::Append));
+        assert!(matches!(
+            m.feed(Node::text(OrdinaryRole::User, "a")),
+            NodeAction::Append
+        ));
         match m.feed(Node::text(OrdinaryRole::Assistant, "b")) {
             NodeAction::FlushAndNew(flushed) => {
                 assert_eq!(flushed.len(), 1);
-                assert!(matches!(&flushed[0], Node::Text { role: OrdinaryRole::User, .. }));
+                assert!(matches!(
+                    &flushed[0],
+                    Node::Text {
+                        role: OrdinaryRole::User,
+                        ..
+                    }
+                ));
             }
             _ => panic!("expected flush"),
         }

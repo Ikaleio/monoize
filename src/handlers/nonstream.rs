@@ -2,7 +2,8 @@ use super::*;
 use std::collections::HashSet;
 
 pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
-    let answered: HashSet<String> = req.input
+    let answered: HashSet<String> = req
+        .input
         .iter()
         .filter_map(|node| match node {
             urp::Node::ToolResult { call_id, .. } => Some(call_id.clone()),
@@ -142,8 +143,11 @@ pub(super) async fn execute_nonstream_typed(
                     )
                     .await;
                     mark_channel_success(state, &attempt).await;
-                    let mut resp =
-                        decode_response_from_provider(attempt.provider_type, &value, &req_attempt.model)?;
+                    let mut resp = decode_response_from_provider(
+                        attempt.provider_type,
+                        &value,
+                        &req_attempt.model,
+                    )?;
                     apply_transform_rules_response(
                         state,
                         &mut resp,
@@ -311,9 +315,7 @@ pub(super) fn encode_request_for_provider(
     strip_orphaned_tool_calls(req);
     let model = req.model.clone();
     let value = match attempt.provider_type {
-        ProviderType::Responses => {
-            urp::encode::openai_responses::encode_request(req, &model)
-        }
+        ProviderType::Responses => urp::encode::openai_responses::encode_request(req, &model),
         ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request(req, &model),
         ProviderType::Messages => urp::encode::anthropic::encode_request(req, &model),
         ProviderType::Gemini => urp::encode::gemini::encode_request(req, &model),
@@ -337,9 +339,7 @@ pub(super) fn decode_response_from_provider(
     model: &str,
 ) -> AppResult<urp::UrpResponse> {
     let decoded = match provider_type {
-        ProviderType::Responses => {
-            urp::decode::openai_responses::decode_response(value)
-        }
+        ProviderType::Responses => urp::decode::openai_responses::decode_response(value),
         ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),
         ProviderType::Messages => urp::decode::anthropic::decode_response(value),
         ProviderType::Gemini => urp::decode::gemini::decode_response(value),

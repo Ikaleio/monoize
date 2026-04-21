@@ -3,7 +3,7 @@ use crate::urp::{
     AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Node, OrdinaryRole,
     ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
@@ -554,7 +554,7 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
 mod tests {
     use super::*;
     use crate::urp::decode::gemini as decode_gemini;
-    use crate::urp::internal_legacy_bridge::{items_to_nodes, Item, Part, Role};
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes};
     use crate::urp::{InputDetails, OutputDetails, UrpRequest, UrpResponse, Usage};
     use std::collections::HashMap;
 
@@ -566,25 +566,33 @@ mod tests {
     fn gemini_usage_round_trips_extension_fields_without_extra_leakage() {
         let mut usage_extra = HashMap::new();
         usage_extra.insert("providerCounter".to_string(), json!(9));
-        let response = UrpResponse { id: "gem_resp".to_string(), model: "gemini-2.5-pro".to_string(), created_at: None, output: items_to_nodes(vec![Item::new_message(Role::Assistant)]), finish_reason: Some(FinishReason::Stop), usage: Some(Usage {
-            input_tokens: 14,
-            output_tokens: 9,
-            input_details: Some(InputDetails {
-                standard_tokens: 0,
-                cache_read_tokens: 2,
-                cache_creation_tokens: 3,
-                tool_prompt_tokens: 4,
-                modality_breakdown: None,
+        let response = UrpResponse {
+            id: "gem_resp".to_string(),
+            model: "gemini-2.5-pro".to_string(),
+            created_at: None,
+            output: items_to_nodes(vec![Item::new_message(Role::Assistant)]),
+            finish_reason: Some(FinishReason::Stop),
+            usage: Some(Usage {
+                input_tokens: 14,
+                output_tokens: 9,
+                input_details: Some(InputDetails {
+                    standard_tokens: 0,
+                    cache_read_tokens: 2,
+                    cache_creation_tokens: 3,
+                    tool_prompt_tokens: 4,
+                    modality_breakdown: None,
+                }),
+                output_details: Some(OutputDetails {
+                    standard_tokens: 0,
+                    reasoning_tokens: 5,
+                    accepted_prediction_tokens: 6,
+                    rejected_prediction_tokens: 7,
+                    modality_breakdown: None,
+                }),
+                extra_body: usage_extra,
             }),
-            output_details: Some(OutputDetails {
-                standard_tokens: 0,
-                reasoning_tokens: 5,
-                accepted_prediction_tokens: 6,
-                rejected_prediction_tokens: 7,
-                modality_breakdown: None,
-            }),
-            extra_body: usage_extra,
-        }), extra_body: empty_map() };
+            extra_body: empty_map(),
+        };
 
         let encoded = encode_response(&response, "gemini-2.5-pro");
         assert_eq!(
@@ -619,9 +627,11 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 5);
         assert_eq!(output.accepted_prediction_tokens, 6);
         assert_eq!(output.rejected_prediction_tokens, 7);
-        assert!(!decoded_usage
-            .extra_body
-            .contains_key("cachedContentTokenCount"));
+        assert!(
+            !decoded_usage
+                .extra_body
+                .contains_key("cachedContentTokenCount")
+        );
         assert!(!decoded_usage.extra_body.contains_key("thoughtsTokenCount"));
         assert_eq!(
             decoded_usage.extra_body.get("providerCounter"),
@@ -631,38 +641,42 @@ mod tests {
 
     #[test]
     fn encode_request_uses_function_name_for_function_response() {
-        let req = UrpRequest { model: "gemini-2.5-pro".to_string(), input: items_to_nodes(vec![
-            Item::Message {
-                id: None,
-                role: Role::Assistant,
-                parts: vec![Part::ToolCall {
+        let req = UrpRequest {
+            model: "gemini-2.5-pro".to_string(),
+            input: items_to_nodes(vec![
+                Item::Message {
+                    id: None,
+                    role: Role::Assistant,
+                    parts: vec![Part::ToolCall {
+                        id: None,
+                        call_id: "call_1".to_string(),
+                        name: "lookup".to_string(),
+                        arguments: "{\"q\":1}".to_string(),
+                        extra_body: empty_map(),
+                    }],
+                    extra_body: empty_map(),
+                },
+                Item::ToolResult {
                     id: None,
                     call_id: "call_1".to_string(),
-                    name: "lookup".to_string(),
-                    arguments: "{\"q\":1}".to_string(),
+                    is_error: false,
+                    content: vec![ToolResultContent::Text {
+                        text: "ok".to_string(),
+                    }],
                     extra_body: empty_map(),
-                }],
-                extra_body: empty_map(),
-            },
-            Item::ToolResult {
-                id: None,
-                call_id: "call_1".to_string(),
-                is_error: false,
-                content: vec![ToolResultContent::Text {
-                    text: "ok".to_string(),
-                }],
-                extra_body: empty_map(),
-            },
-        ]), stream: None,
-        temperature: None,
-        top_p: None,
-        max_output_tokens: None,
-        reasoning: None,
-        tools: None,
-        tool_choice: None,
-        response_format: None,
-        user: None,
-        extra_body: empty_map(), };
+                },
+            ]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
 
         let encoded = encode_request(&req, "gemini-2.5-pro");
         let contents = encoded["contents"].as_array().expect("contents array");

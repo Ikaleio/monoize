@@ -109,7 +109,9 @@ fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
         | Node::ToolCall { extra_body, .. }
         | Node::ProviderItem { extra_body, .. }
         | Node::ToolResult { extra_body, .. }
-        | Node::NextDownstreamEnvelopeExtra { extra_body } => extra_body.contains_key("cache_control"),
+        | Node::NextDownstreamEnvelopeExtra { extra_body } => {
+            extra_body.contains_key("cache_control")
+        }
     })
 }
 

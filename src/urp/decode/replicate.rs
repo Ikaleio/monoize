@@ -1,7 +1,5 @@
 use crate::urp::decode::split_extra;
-use crate::urp::{
-    FinishReason, ImageSource, Node, OrdinaryRole, UrpRequest, UrpResponse, Usage,
-};
+use crate::urp::{FinishReason, ImageSource, Node, OrdinaryRole, UrpRequest, UrpResponse, Usage};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 

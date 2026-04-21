@@ -8,9 +8,7 @@ use crate::urp::decode::parse_tool_call_arguments_value;
 use crate::urp::stream_helpers::{
     extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks,
 };
-use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent,
-};
+use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -793,7 +791,6 @@ fn parse_finish_reason(s: &str) -> FinishReason {
     }
 }
 
-
 #[allow(clippy::too_many_arguments)]
 fn sorted_nodes(
     assistant_message_phase: Option<&str>,
@@ -993,13 +990,17 @@ mod tests {
     fn chat_completion_builds_terminal_nodes_from_sorted_node_state() {
         let call_order = vec!["call_b".to_string(), "call_a".to_string()];
         let calls = HashMap::from([
-            ("call_b".to_string(), ("beta".to_string(), "{\"b\":2}".to_string())),
-            ("call_a".to_string(), ("alpha".to_string(), "{\"a\":1}".to_string())),
+            (
+                "call_b".to_string(),
+                ("beta".to_string(), "{\"b\":2}".to_string()),
+            ),
+            (
+                "call_a".to_string(),
+                ("alpha".to_string(), "{\"a\":1}".to_string()),
+            ),
         ]);
-        let tool_node_index_by_call_id = HashMap::from([
-            ("call_b".to_string(), 5),
-            ("call_a".to_string(), 1),
-        ]);
+        let tool_node_index_by_call_id =
+            HashMap::from([("call_b".to_string(), 5), ("call_a".to_string(), 1)]);
 
         let nodes = sorted_nodes(
             Some("analysis"),

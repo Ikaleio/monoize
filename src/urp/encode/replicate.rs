@@ -1,9 +1,7 @@
 use crate::urp::encode::merge_extra;
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
-use crate::urp::{
-    FinishReason, ImageSource, ToolResultContent, UrpRequest, UrpResponse,
-};
-use serde_json::{json, Map, Value};
+use crate::urp::{FinishReason, ImageSource, ToolResultContent, UrpRequest, UrpResponse};
+use serde_json::{Map, Value, json};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let request_items = nodes_to_items(&req.input);

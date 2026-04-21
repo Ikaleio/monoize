@@ -241,6 +241,11 @@ pub(super) async fn collect_provider_attempts(
         .unwrap_or(ordered.len())
         .min(ordered.len());
     let upstream_model = resolve_upstream_model(&urp.model, model_entry);
+    let effective_provider_type = crate::monoize_routing::resolve_effective_api_type(
+        &provider.api_type_overrides,
+        provider.provider_type,
+        &urp.model,
+    );
 
     let runtime = state.monoize_runtime.read().await;
     for channel in ordered.into_iter().take(max_attempts) {
@@ -266,12 +271,7 @@ pub(super) async fn collect_provider_attempts(
             .max(1);
         out.push(MonoizeAttempt {
             provider_id: provider.id.clone(),
-            provider_type: crate::monoize_routing::resolve_effective_api_type(
-                &provider.api_type_overrides,
-                provider.provider_type,
-                &upstream_model,
-            )
-            .to_config_type(),
+            provider_type: effective_provider_type.to_config_type(),
             channel_id: channel.id.clone(),
             base_url: channel.base_url.clone(),
             api_key: channel.api_key.clone(),
@@ -292,11 +292,7 @@ pub(super) async fn collect_provider_attempts(
             extra_fields_whitelist: merge_extra_fields_whitelist(
                 &runtime.extra_fields_whitelist,
                 &provider.extra_fields_whitelist,
-                crate::monoize_routing::resolve_effective_api_type(
-                    &provider.api_type_overrides,
-                    provider.provider_type,
-                    &upstream_model,
-                ),
+                effective_provider_type,
             ),
             strip_cross_protocol_nested_extra: provider
                 .strip_cross_protocol_nested_extra

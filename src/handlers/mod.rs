@@ -738,7 +738,11 @@ async fn ensure_balance_before_forward(
         let Some(api_key_id) = auth.api_key_id.as_deref() else {
             return Ok(());
         };
-        return match state.user_store.ensure_sub_account_can_spend(api_key_id).await {
+        return match state
+            .user_store
+            .ensure_sub_account_can_spend(api_key_id)
+            .await
+        {
             Ok(()) => Ok(()),
             Err(err) => match err.kind {
                 BillingErrorKind::InsufficientBalance => Err(AppError::new(

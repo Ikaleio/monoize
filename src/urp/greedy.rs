@@ -135,7 +135,10 @@ mod tests {
 
         assert_eq!(merger.feed(reasoning("r1")), NodeAction::Append);
         assert_eq!(merger.feed(reasoning("r2")), NodeAction::Append);
-        assert_eq!(merger.finish(), Some(vec![reasoning("r1"), reasoning("r2")]));
+        assert_eq!(
+            merger.finish(),
+            Some(vec![reasoning("r1"), reasoning("r2")])
+        );
     }
 
     #[test]
@@ -143,17 +146,29 @@ mod tests {
         let mut merger = NodeGreedyMerger::new();
 
         assert_eq!(merger.feed(reasoning("r")), NodeAction::Append);
-        assert_eq!(merger.feed(text(OrdinaryRole::Assistant, "t")), NodeAction::Append);
-        assert_eq!(merger.finish(), Some(vec![reasoning("r"), text(OrdinaryRole::Assistant, "t")]));
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "t")),
+            NodeAction::Append
+        );
+        assert_eq!(
+            merger.finish(),
+            Some(vec![reasoning("r"), text(OrdinaryRole::Assistant, "t")])
+        );
     }
 
     #[test]
     fn text_then_tool_call_does_not_flush() {
         let mut merger = NodeGreedyMerger::new();
 
-        assert_eq!(merger.feed(text(OrdinaryRole::Assistant, "t")), NodeAction::Append);
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "t")),
+            NodeAction::Append
+        );
         assert_eq!(merger.feed(tool_call("1")), NodeAction::Append);
-        assert_eq!(merger.finish(), Some(vec![text(OrdinaryRole::Assistant, "t"), tool_call("1")]));
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "t"), tool_call("1")])
+        );
     }
 
     #[test]
@@ -165,7 +180,10 @@ mod tests {
             merger.feed(text(OrdinaryRole::Assistant, "t")),
             vec![tool_call("1")],
         );
-        assert_eq!(merger.finish(), Some(vec![text(OrdinaryRole::Assistant, "t")]));
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "t")])
+        );
     }
 
     #[test]
@@ -181,8 +199,14 @@ mod tests {
     fn content_then_reasoning_flushes() {
         let mut merger = NodeGreedyMerger::new();
 
-        assert_eq!(merger.feed(text(OrdinaryRole::Assistant, "t")), NodeAction::Append);
-        assert_flushes_to(merger.feed(reasoning("r")), vec![text(OrdinaryRole::Assistant, "t")]);
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "t")),
+            NodeAction::Append
+        );
+        assert_flushes_to(
+            merger.feed(reasoning("r")),
+            vec![text(OrdinaryRole::Assistant, "t")],
+        );
         assert_eq!(merger.finish(), Some(vec![reasoning("r")]));
     }
 
@@ -190,12 +214,18 @@ mod tests {
     fn role_change_flushes() {
         let mut merger = NodeGreedyMerger::new();
 
-        assert_eq!(merger.feed(text(OrdinaryRole::User, "t")), NodeAction::Append);
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::User, "t")),
+            NodeAction::Append
+        );
         assert_flushes_to(
             merger.feed(text(OrdinaryRole::Assistant, "u")),
             vec![text(OrdinaryRole::User, "t")],
         );
-        assert_eq!(merger.finish(), Some(vec![text(OrdinaryRole::Assistant, "u")]));
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "u")])
+        );
     }
 
     #[test]
@@ -225,12 +255,18 @@ mod tests {
     #[test]
     fn text_then_text_flushes() {
         let mut merger = NodeGreedyMerger::new();
-        assert_eq!(merger.feed(text(OrdinaryRole::Assistant, "a")), NodeAction::Append);
+        assert_eq!(
+            merger.feed(text(OrdinaryRole::Assistant, "a")),
+            NodeAction::Append
+        );
         assert_flushes_to(
             merger.feed(text(OrdinaryRole::Assistant, "b")),
             vec![text(OrdinaryRole::Assistant, "a")],
         );
-        assert_eq!(merger.finish(), Some(vec![text(OrdinaryRole::Assistant, "b")]));
+        assert_eq!(
+            merger.finish(),
+            Some(vec![text(OrdinaryRole::Assistant, "b")])
+        );
     }
 
     fn text(role: OrdinaryRole, content: &str) -> Node {

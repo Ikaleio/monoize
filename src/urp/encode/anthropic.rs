@@ -2,11 +2,11 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    strip_reasoning_signature_sigil, wrap_reasoning_signature_with_item_id, FileSource,
-    FinishReason, ImageSource, Node, OrdinaryRole, ToolDefinition, ToolResultContent, UrpRequest,
-    UrpResponse, Usage, REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
+    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, REASONING_KIND_EXTRA_KEY,
+    REASONING_KIND_REDACTED_THINKING, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    Usage, strip_reasoning_signature_sigil, wrap_reasoning_signature_with_item_id,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 64_000;
@@ -818,7 +818,7 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
 mod tests {
     use super::*;
     use crate::urp::decode::anthropic as decode_anthropic;
-    use crate::urp::internal_legacy_bridge::{items_to_nodes, nodes_to_items, Item, Part, Role};
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
     use crate::urp::{OutputDetails, ResponseFormat, UrpRequest, UrpResponse, Usage};
     use std::collections::HashMap;
 
@@ -975,12 +975,16 @@ mod tests {
         assert_eq!(decoded_output.reasoning_tokens, 6);
         assert_eq!(decoded_output.accepted_prediction_tokens, 7);
         assert_eq!(decoded_output.rejected_prediction_tokens, 8);
-        assert!(!decoded_usage
-            .extra_body
-            .contains_key("tool_prompt_input_tokens"));
-        assert!(!decoded_usage
-            .extra_body
-            .contains_key("reasoning_output_tokens"));
+        assert!(
+            !decoded_usage
+                .extra_body
+                .contains_key("tool_prompt_input_tokens")
+        );
+        assert!(
+            !decoded_usage
+                .extra_body
+                .contains_key("reasoning_output_tokens")
+        );
         assert_eq!(
             decoded_usage.extra_body.get("native_counter"),
             Some(&json!(7))

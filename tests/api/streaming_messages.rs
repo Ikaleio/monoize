@@ -212,9 +212,20 @@ fn assert_exactly_one_message_terminal_pair(events: &[Value], label: &str) {
         .filter_map(|(idx, event)| (event["type"].as_str() == Some("message_stop")).then_some(idx))
         .collect();
 
-    assert_eq!(message_delta_positions.len(), 1, "{label}: message_delta must occur exactly once");
-    assert_eq!(message_stop_positions.len(), 1, "{label}: message_stop must occur exactly once");
-    assert!(message_delta_positions[0] < message_stop_positions[0], "{label}: message_delta must precede message_stop");
+    assert_eq!(
+        message_delta_positions.len(),
+        1,
+        "{label}: message_delta must occur exactly once"
+    );
+    assert_eq!(
+        message_stop_positions.len(),
+        1,
+        "{label}: message_stop must occur exactly once"
+    );
+    assert!(
+        message_delta_positions[0] < message_stop_positions[0],
+        "{label}: message_delta must precede message_stop"
+    );
 }
 
 #[tokio::test]
@@ -416,7 +427,10 @@ async fn messages_streaming_live_style_terminal_events_occur_exactly_once() {
     .await;
 
     assert_messages_stream_invariants(&events, "messages passthrough exact-once terminal stream");
-    assert_exactly_one_message_terminal_pair(&events, "messages passthrough exact-once terminal stream");
+    assert_exactly_one_message_terminal_pair(
+        &events,
+        "messages passthrough exact-once terminal stream",
+    );
 }
 
 #[tokio::test]
@@ -1123,7 +1137,10 @@ async fn messages_stream_response_done_output_does_not_replay_node_owned_surface
                 && event["content_block"]["type"].as_str() == Some("thinking")
         })
         .count();
-    assert_eq!(thinking_starts, 1, "canonical reasoning lifecycle should own thinking block emission");
+    assert_eq!(
+        thinking_starts, 1,
+        "canonical reasoning lifecycle should own thinking block emission"
+    );
 
     let text_starts = events
         .iter()
@@ -1132,7 +1149,10 @@ async fn messages_stream_response_done_output_does_not_replay_node_owned_surface
                 && event["content_block"]["type"].as_str() == Some("text")
         })
         .count();
-    assert_eq!(text_starts, 1, "canonical text lifecycle should own text block emission");
+    assert_eq!(
+        text_starts, 1,
+        "canonical text lifecycle should own text block emission"
+    );
 
     let tool_starts = events
         .iter()
@@ -1141,28 +1161,43 @@ async fn messages_stream_response_done_output_does_not_replay_node_owned_surface
                 && event["content_block"]["type"].as_str() == Some("tool_use")
         })
         .count();
-    assert_eq!(tool_starts, 1, "canonical tool lifecycle should own tool_use block emission");
+    assert_eq!(
+        tool_starts, 1,
+        "canonical tool lifecycle should own tool_use block emission"
+    );
 
     let text_deltas: Vec<&str> = events
         .iter()
         .filter(|event| event["delta"]["type"].as_str() == Some("text_delta"))
         .filter_map(|event| event["delta"]["text"].as_str())
         .collect();
-    assert_eq!(text_deltas, vec!["answer"], "completed outputs must not replay node-owned text");
+    assert_eq!(
+        text_deltas,
+        vec!["answer"],
+        "completed outputs must not replay node-owned text"
+    );
 
     let thinking_deltas: Vec<&str> = events
         .iter()
         .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
         .filter_map(|event| event["delta"]["thinking"].as_str())
         .collect();
-    assert_eq!(thinking_deltas, vec!["mock_reasoning"], "completed outputs must not replay node-owned thinking");
+    assert_eq!(
+        thinking_deltas,
+        vec!["mock_reasoning"],
+        "completed outputs must not replay node-owned thinking"
+    );
 
     let tool_json_deltas: Vec<&str> = events
         .iter()
         .filter(|event| event["delta"]["type"].as_str() == Some("input_json_delta"))
         .filter_map(|event| event["delta"]["partial_json"].as_str())
         .collect();
-    assert_eq!(tool_json_deltas, vec!["{\"a\":1}"], "completed outputs must not replay node-owned tool input");
+    assert_eq!(
+        tool_json_deltas,
+        vec!["{\"a\":1}"],
+        "completed outputs must not replay node-owned tool input"
+    );
 
     assert_non_interleaved_message_blocks(&events, "node-owned responses→msg mixed stream");
 }
@@ -1230,22 +1265,26 @@ async fn messages_stream_signature_delta_carries_sigil_from_responses_upstream()
             if delta.get("type").and_then(|v| v.as_str())? != "signature_delta" {
                 return None;
             }
-            delta.get("signature").and_then(|v| v.as_str()).map(str::to_owned)
+            delta
+                .get("signature")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
         })
         .collect();
 
-    let start_signature: Option<String> = events
-        .iter()
-        .find_map(|event| {
-            if event.get("type").and_then(|v| v.as_str())? != "content_block_start" {
-                return None;
-            }
-            let block = event.get("content_block")?;
-            if block.get("type").and_then(|v| v.as_str())? != "thinking" {
-                return None;
-            }
-            block.get("signature").and_then(|v| v.as_str()).map(str::to_owned)
-        });
+    let start_signature: Option<String> = events.iter().find_map(|event| {
+        if event.get("type").and_then(|v| v.as_str())? != "content_block_start" {
+            return None;
+        }
+        let block = event.get("content_block")?;
+        if block.get("type").and_then(|v| v.as_str())? != "thinking" {
+            return None;
+        }
+        block
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    });
 
     let combined = match start_signature {
         Some(prefix) if !prefix.is_empty() => prefix + &signature_payload,
