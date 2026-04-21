@@ -219,8 +219,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         .max(1);
     monoize_runtime.active_probe_model = settings_snapshot.monoize_active_probe_model.clone();
     monoize_runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
-    monoize_runtime.enable_estimated_billing =
-        settings_snapshot.monoize_enable_estimated_billing;
+    monoize_runtime.enable_estimated_billing = settings_snapshot.monoize_enable_estimated_billing;
     monoize_runtime.extra_fields_whitelist =
         settings_snapshot.monoize_extra_fields_whitelist.clone();
     monoize_runtime.strip_cross_protocol_nested_extra =
@@ -261,7 +260,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 if !provider.circuit_breaker_enabled {
                     continue;
                 }
-                if provider.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
+                if provider.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate
+                {
                     continue;
                 }
                 let active_enabled = provider

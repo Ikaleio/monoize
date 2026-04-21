@@ -949,10 +949,7 @@ impl UserStore {
                         .ok_or_else(|| "user not found".to_string())?;
                     if !user.balance_unlimited {
                         let _write_guard = self.db.write().await;
-                        let tx = _write_guard
-                            .begin()
-                            .await
-                            .map_err(|e| e.to_string())?;
+                        let tx = _write_guard.begin().await.map_err(|e| e.to_string())?;
                         tx.execute(self.db.stmt(
                             "UPDATE api_keys SET sub_account_balance_nano = '0' WHERE id = $1",
                             vec![key_id.into()],
@@ -1378,8 +1375,7 @@ impl UserStore {
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
 
-        let select_sql =
-            "SELECT sub_account_balance_nano FROM api_keys WHERE id = $1";
+        let select_sql = "SELECT sub_account_balance_nano FROM api_keys WHERE id = $1";
         let row = tx
             .query_one(self.db.stmt(select_sql, vec![api_key_id.into()]))
             .await
@@ -1397,7 +1393,10 @@ impl UserStore {
         let balance = parse_nano_usd(&balance_raw)
             .map_err(|e| BillingError::new(BillingErrorKind::InvalidStoredBalance, e))?;
         let next_balance = balance.checked_sub(amount_nano_usd).ok_or_else(|| {
-            BillingError::new(BillingErrorKind::Overflow, "sub-account balance subtraction overflow")
+            BillingError::new(
+                BillingErrorKind::Overflow,
+                "sub-account balance subtraction overflow",
+            )
         })?;
         if next_balance < 0 {
             return Err(BillingError::new(
@@ -1459,7 +1458,10 @@ impl UserStore {
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
         let Some(key_row) = key_row else {
-            return Err(BillingError::new(BillingErrorKind::NotFound, "api key not found"));
+            return Err(BillingError::new(
+                BillingErrorKind::NotFound,
+                "api key not found",
+            ));
         };
         let sub_enabled: i32 = key_row.try_get("", "sub_account_enabled").unwrap_or(0);
         if sub_enabled != 1 {
@@ -1477,9 +1479,15 @@ impl UserStore {
             .await
             .map_err(|e| BillingError::new(BillingErrorKind::Internal, e.to_string()))?;
         let Some(user_row) = user_row else {
-            return Err(BillingError::new(BillingErrorKind::NotFound, "user not found"));
+            return Err(BillingError::new(
+                BillingErrorKind::NotFound,
+                "user not found",
+            ));
         };
-        let user_unlimited = user_row.try_get::<i32>("", "balance_unlimited").unwrap_or(0) == 1;
+        let user_unlimited = user_row
+            .try_get::<i32>("", "balance_unlimited")
+            .unwrap_or(0)
+            == 1;
         let user_balance_raw: String = user_row
             .try_get("", "balance_nano_usd")
             .unwrap_or_else(|_| "0".to_string());
@@ -1555,10 +1563,7 @@ impl UserStore {
         Ok((new_key_balance, new_user_balance))
     }
 
-    pub async fn ensure_sub_account_can_spend(
-        &self,
-        api_key_id: &str,
-    ) -> Result<(), BillingError> {
+    pub async fn ensure_sub_account_can_spend(&self, api_key_id: &str) -> Result<(), BillingError> {
         let key = self
             .get_api_key_by_id(api_key_id)
             .await

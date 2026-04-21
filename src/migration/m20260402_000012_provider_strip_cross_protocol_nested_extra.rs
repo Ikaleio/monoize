@@ -30,7 +30,9 @@ impl MigrationTrait for Migration {
         let backend = manager.get_database_backend();
 
         let sql = match backend {
-            DbBackend::Sqlite => "ALTER TABLE monoize_providers DROP COLUMN strip_cross_protocol_nested_extra",
+            DbBackend::Sqlite => {
+                "ALTER TABLE monoize_providers DROP COLUMN strip_cross_protocol_nested_extra"
+            }
             DbBackend::Postgres => {
                 "ALTER TABLE monoize_providers DROP COLUMN IF EXISTS strip_cross_protocol_nested_extra"
             }

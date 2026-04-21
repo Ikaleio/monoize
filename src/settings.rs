@@ -380,8 +380,7 @@ impl SettingsStore {
                     settings.monoize_request_timeout_ms = row.value.parse().unwrap_or(30000);
                 }
                 "monoize_enable_estimated_billing" => {
-                    settings.monoize_enable_estimated_billing =
-                        row.value.parse().unwrap_or(true);
+                    settings.monoize_enable_estimated_billing = row.value.parse().unwrap_or(true);
                 }
                 "monoize_extra_fields_whitelist" => {
                     if let Ok(map) = serde_json::from_str(&row.value) {

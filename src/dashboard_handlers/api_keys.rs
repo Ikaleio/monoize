@@ -2,7 +2,10 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
 use crate::transforms::TransformRuleConfig;
-use crate::users::{CreateApiKeyInput, ModelRedirectRule, UpdateApiKeyInput, canonicalize_groups, format_nano_to_usd, parse_nano_usd};
+use crate::users::{
+    CreateApiKeyInput, ModelRedirectRule, UpdateApiKeyInput, canonicalize_groups,
+    format_nano_to_usd, parse_nano_usd,
+};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};

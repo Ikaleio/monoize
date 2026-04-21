@@ -165,8 +165,7 @@ pub async fn update_settings(
         rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
         rt.active_probe_model = updated.monoize_active_probe_model.clone();
         rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
-        rt.strip_cross_protocol_nested_extra =
-            updated.monoize_strip_cross_protocol_nested_extra;
+        rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
     }
 
     Ok(Json(updated))
