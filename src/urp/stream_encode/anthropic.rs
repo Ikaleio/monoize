@@ -3,8 +3,7 @@ use crate::urp::encode::anthropic::anthropic_native_input_tokens;
 use crate::urp::stream_helpers::*;
 use crate::urp::{
     self, FinishReason, Node, NodeDelta, NodeHeader, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage,
-    wrap_reasoning_signature_with_item_id,
+    REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage, wrap_reasoning_signature_with_item_id,
 };
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
@@ -52,7 +51,9 @@ impl PendingAnthropicBlock {
         };
         let raw = signature.as_deref().filter(|s| !s.is_empty())?;
         match item_id.as_deref().filter(|s| !s.is_empty()) {
-            Some(id) => wrap_reasoning_signature_with_item_id(id, raw).or_else(|| Some(raw.to_string())),
+            Some(id) => {
+                wrap_reasoning_signature_with_item_id(id, raw).or_else(|| Some(raw.to_string()))
+            }
             None => Some(raw.to_string()),
         }
     }
@@ -190,9 +191,7 @@ impl PendingAnthropicBlock {
 }
 
 fn payload_is_redacted(extra: &HashMap<String, Value>) -> bool {
-    extra
-        .get(REASONING_KIND_EXTRA_KEY)
-        .and_then(Value::as_str)
+    extra.get(REASONING_KIND_EXTRA_KEY).and_then(Value::as_str)
         == Some(REASONING_KIND_REDACTED_THINKING)
 }
 
@@ -389,7 +388,9 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
         }
         (
             AnthropicBlockPayload::Thinking {
-                thinking, signature, ..
+                thinking,
+                signature,
+                ..
             },
             NodeDelta::Reasoning {
                 content,
@@ -449,14 +450,22 @@ fn maybe_override_reasoning_item_id(
 
 fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &Node) {
     match (payload, node) {
-        (AnthropicBlockPayload::Thinking { thinking, signature, item_id, .. }, Node::Reasoning {
-            id,
-            content,
-            summary,
-            encrypted,
-            extra_body,
-            ..
-        }) => {
+        (
+            AnthropicBlockPayload::Thinking {
+                thinking,
+                signature,
+                item_id,
+                ..
+            },
+            Node::Reasoning {
+                id,
+                content,
+                summary,
+                encrypted,
+                extra_body,
+                ..
+            },
+        ) => {
             if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
                 *thinking = content.to_string();
             } else if thinking.is_empty()
@@ -471,7 +480,13 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
                 *item_id = reasoning_item_id(id.as_deref());
             }
         }
-        (AnthropicBlockPayload::ToolUse { arguments, .. }, Node::ToolCall { arguments: done_args, .. }) => {
+        (
+            AnthropicBlockPayload::ToolUse { arguments, .. },
+            Node::ToolCall {
+                arguments: done_args,
+                ..
+            },
+        ) => {
             if !done_args.is_empty() {
                 *arguments = done_args.clone();
             }
@@ -717,7 +732,10 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 if !used_existing_index {
                     next_content_block_index += 1;
                 }
-                if matches!(surface_kind_for_payload(&payload), MessagesSurfaceKind::ToolUse) {
+                if matches!(
+                    surface_kind_for_payload(&payload),
+                    MessagesSurfaceKind::ToolUse
+                ) {
                     saw_tool_use = true;
                 }
                 let surface = surface_kind_for_payload(&payload);
@@ -752,7 +770,9 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 should_emit_terminal_message = should_emit_terminal_message
                     || !pending_node_blocks.is_empty()
                     || !live_node_blocks.is_empty()
-                    || output.iter().any(|node| anthropic_block_from_node(node).is_some());
+                    || output
+                        .iter()
+                        .any(|node| anthropic_block_from_node(node).is_some());
                 if !should_emit_terminal_message && !message_start_sent {
                     pending_envelope_extra.clear();
                     continue;
@@ -774,10 +794,14 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     if let Some(node) = output.get(node_index as usize) {
                         merge_node_payload_with_terminal(&mut block_state.payload, node);
                     }
-                    if matches!(surface_kind_for_payload(&block_state.payload), MessagesSurfaceKind::ToolUse) {
+                    if matches!(
+                        surface_kind_for_payload(&block_state.payload),
+                        MessagesSurfaceKind::ToolUse
+                    ) {
                         saw_tool_use = true;
                     }
-                    completed_node_owned_surfaces.insert(surface_kind_for_payload(&block_state.payload));
+                    completed_node_owned_surfaces
+                        .insert(surface_kind_for_payload(&block_state.payload));
                     pending_node_blocks.insert(
                         node_index,
                         PendingAnthropicBlock {
@@ -856,7 +880,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 });
                 send_named_messages_event(&tx, error).await?;
             }
-            _ => {}
         }
     }
 

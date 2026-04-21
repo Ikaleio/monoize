@@ -120,6 +120,7 @@ pub enum Item {
     },
 }
 
+#[cfg(test)]
 impl Item {
     pub fn new_message(role: Role) -> Self {
         Item::Message {
@@ -232,7 +233,10 @@ pub enum PartDelta {
 impl Part {
     pub fn into_node(self, role: OrdinaryRole) -> Node {
         match self {
-            Part::Text { content, extra_body } => Node::Text {
+            Part::Text {
+                content,
+                extra_body,
+            } => Node::Text {
                 id: None,
                 role,
                 phase: extra_body
@@ -288,7 +292,10 @@ impl Part {
                 arguments,
                 extra_body,
             },
-            Part::Refusal { content, extra_body } => Node::Refusal {
+            Part::Refusal {
+                content,
+                extra_body,
+            } => Node::Refusal {
                 id: None,
                 content,
                 extra_body,
@@ -310,6 +317,7 @@ impl Part {
 }
 
 impl Item {
+    #[cfg(test)]
     pub fn into_nodes(self) -> Vec<Node> {
         match self {
             Item::Message {
@@ -351,56 +359,13 @@ impl Item {
             }
         }
     }
-
-    pub fn into_nodes_with_envelope_control(self) -> Vec<Node> {
-        match self {
-            Item::Message {
-                id,
-                role,
-                parts,
-                extra_body,
-            } => {
-                let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
-                let mut nodes = Vec::new();
-                if !extra_body.is_empty() && !parts.is_empty() {
-                    nodes.push(Node::NextDownstreamEnvelopeExtra { extra_body });
-                }
-                for (idx, part) in parts.into_iter().enumerate() {
-                    let mut node = part.into_node(ordinary_role);
-                    if idx == 0 && node.id().is_none() {
-                        node.set_id(id.clone());
-                    }
-                    nodes.push(node);
-                }
-                nodes
-            }
-            Item::ToolResult {
-                id,
-                call_id,
-                is_error,
-                content,
-                extra_body,
-            } => {
-                vec![Node::ToolResult {
-                    id,
-                    call_id,
-                    is_error,
-                    content,
-                    extra_body,
-                }]
-            }
-        }
-    }
 }
 
+#[cfg(test)]
 pub fn items_to_nodes(items: Vec<Item>) -> Vec<Node> {
-    items.into_iter().flat_map(|item| item.into_nodes()).collect()
-}
-
-pub fn items_to_nodes_with_envelope_control(items: Vec<Item>) -> Vec<Node> {
     items
         .into_iter()
-        .flat_map(|item| item.into_nodes_with_envelope_control())
+        .flat_map(|item| item.into_nodes())
         .collect()
 }
 
@@ -558,25 +523,19 @@ fn node_to_part(node: &Node) -> Part {
             extra_body: extra_body.clone(),
         },
         Node::Image {
-            source,
-            extra_body,
-            ..
+            source, extra_body, ..
         } => Part::Image {
             source: source.clone(),
             extra_body: extra_body.clone(),
         },
         Node::Audio {
-            source,
-            extra_body,
-            ..
+            source, extra_body, ..
         } => Part::Audio {
             source: source.clone(),
             extra_body: extra_body.clone(),
         },
         Node::File {
-            source,
-            extra_body,
-            ..
+            source, extra_body, ..
         } => Part::File {
             source: source.clone(),
             extra_body: extra_body.clone(),

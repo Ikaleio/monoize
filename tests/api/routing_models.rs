@@ -272,6 +272,101 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
 }
 
 #[tokio::test]
+async fn provider_api_type_override_matches_logical_model_before_provider_redirect() {
+    let ctx = setup().await;
+    seed_test_model_pricing(&ctx.state, &["gpt-5.4-fast", "gpt-5.4"]).await;
+    let (upstream_addr, _, captured_bodies) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-5.4-fast".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: Some("gpt-5.4".to_string()),
+            multiplier: 1.0,
+        },
+    );
+
+    let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
+        name: "mono-provider-redirect-api-type-override".to_string(),
+        provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
+        models,
+        api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
+            pattern: "gpt-5.4-fast".to_string(),
+            api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+        }],
+        groups: Vec::new(),
+        channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+            id: Some("mono-provider-redirect-api-type-override-ch1".to_string()),
+            name: "mono-provider-redirect-api-type-override-ch1".to_string(),
+            base_url,
+            api_key: Some("upstream-key".to_string()),
+            weight: 1,
+            enabled: true,
+            passive_failure_count_threshold_override: None,
+            passive_cooldown_seconds_override: None,
+            passive_window_seconds_override: None,
+            passive_rate_limit_cooldown_seconds_override: None,
+        }],
+        max_retries: -1,
+        channel_max_retries: 0,
+        channel_retry_interval_ms: 0,
+        circuit_breaker_enabled: true,
+        per_model_circuit_break: false,
+        transforms: vec![monoize::transforms::TransformRuleConfig {
+            transform: "set_field".to_string(),
+            enabled: true,
+            models: Some(vec!["gpt-5.4-fast".to_string()]),
+            phase: monoize::transforms::Phase::Request,
+            config: json!({
+                "path": "service_tier",
+                "value": "priority"
+            }),
+        }],
+        active_probe_enabled_override: None,
+        active_probe_interval_seconds_override: None,
+        active_probe_success_threshold_override: None,
+        active_probe_model_override: None,
+        request_timeout_ms_override: None,
+        extra_fields_whitelist: None,
+        strip_cross_protocol_nested_extra: None,
+        enabled: true,
+        priority: Some(-1),
+    };
+
+    ctx.state
+        .monoize_store
+        .create_provider(create_input)
+        .await
+        .unwrap();
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5.4-fast",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hello" }] }]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    let captured = captured_bodies.lock().unwrap();
+    let (endpoint, upstream_body) = captured.last().expect("captured upstream body");
+    assert_eq!(
+        endpoint, "responses",
+        "provider api_type_overrides should match the logical model before provider redirect"
+    );
+    assert_eq!(upstream_body["model"].as_str(), Some("gpt-5.4"));
+    assert_eq!(
+        upstream_body["service_tier"].as_str(),
+        Some("priority"),
+        "service_tier should survive whitelist filtering when the logical model selects the responses API type"
+    );
+}
+
+#[tokio::test]
 async fn models_list_respects_api_key_model_limits() {
     let ctx = setup().await;
 
@@ -301,7 +396,7 @@ async fn models_list_respects_api_key_model_limits() {
             monoize::users::CreateApiKeyInput {
                 name: "restricted-key".to_string(),
                 expires_in_days: None,
-                    sub_account_enabled: false,
+                sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string(), "grok-4".to_string()],
                 ip_whitelist: Vec::new(),
@@ -355,7 +450,7 @@ async fn models_list_model_limits_disabled_shows_all() {
             monoize::users::CreateApiKeyInput {
                 name: "disabled-limits-key".to_string(),
                 expires_in_days: None,
-                    sub_account_enabled: false,
+                sub_account_enabled: false,
                 model_limits_enabled: false,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: Vec::new(),
@@ -412,7 +507,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
             monoize::users::CreateApiKeyInput {
                 name: "restricted-forward-key".to_string(),
                 expires_in_days: None,
-                    sub_account_enabled: false,
+                sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
@@ -467,7 +562,7 @@ async fn forwarding_applies_api_key_model_redirects_before_model_limits_and_rout
             monoize::users::CreateApiKeyInput {
                 name: "redirected-forward-key".to_string(),
                 expires_in_days: None,
-                    sub_account_enabled: false,
+                sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
@@ -524,7 +619,7 @@ async fn image_generation_applies_api_key_model_redirects_before_model_limits() 
             monoize::users::CreateApiKeyInput {
                 name: "redirected-image-key".to_string(),
                 expires_in_days: None,
-                    sub_account_enabled: false,
+                sub_account_enabled: false,
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],

@@ -2,7 +2,7 @@ use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
     parse_tool_call_part_from_obj, parse_tool_definition, split_extra, value_to_text,
 };
-use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
+use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ReasoningConfig, ToolChoice,
     ToolResultContent, UrpRequest, UrpResponse, Usage,
@@ -354,42 +354,46 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .collect::<Vec<_>>()
     });
 
-    Ok(UrpRequest { model, input: input_nodes, stream: obj.get("stream").and_then(|v| v.as_bool()),
-    temperature: obj.get("temperature").and_then(|v| v.as_f64()),
-    top_p: obj.get("top_p").and_then(|v| v.as_f64()),
-    max_output_tokens: obj
-        .get("max_completion_tokens")
-        .or_else(|| obj.get("max_tokens"))
-        .and_then(|v| v.as_u64()),
-    reasoning,
-    tools,
-    tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
-    response_format: obj
-        .get("response_format")
-        .cloned()
-        .and_then(parse_response_format),
-    user: obj
-        .get("user")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string()),
-    extra_body: split_extra(
-        obj,
-        &[
-            "model",
-            "messages",
-            "stream",
-            "temperature",
-            "top_p",
-            "max_completion_tokens",
-            "max_tokens",
-            "reasoning_effort",
-            "reasoning",
-            "tools",
-            "tool_choice",
-            "response_format",
-            "user",
-        ],
-    ), })
+    Ok(UrpRequest {
+        model,
+        input: input_nodes,
+        stream: obj.get("stream").and_then(|v| v.as_bool()),
+        temperature: obj.get("temperature").and_then(|v| v.as_f64()),
+        top_p: obj.get("top_p").and_then(|v| v.as_f64()),
+        max_output_tokens: obj
+            .get("max_completion_tokens")
+            .or_else(|| obj.get("max_tokens"))
+            .and_then(|v| v.as_u64()),
+        reasoning,
+        tools,
+        tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
+        response_format: obj
+            .get("response_format")
+            .cloned()
+            .and_then(parse_response_format),
+        user: obj
+            .get("user")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        extra_body: split_extra(
+            obj,
+            &[
+                "model",
+                "messages",
+                "stream",
+                "temperature",
+                "top_p",
+                "max_completion_tokens",
+                "max_tokens",
+                "reasoning_effort",
+                "reasoning",
+                "tools",
+                "tool_choice",
+                "response_format",
+                "user",
+            ],
+        ),
+    })
 }
 
 pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
@@ -501,22 +505,26 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .and_then(|v| v.as_object())
         .map(parse_usage_from_chat);
 
-    Ok(UrpResponse { id: obj
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("chat_completion")
-        .to_string(),
-    model: obj
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string(),
-    created_at: obj.get("created").and_then(|v| v.as_i64()), output: output_nodes, finish_reason,
-    usage,
-    extra_body: split_extra(
-        obj,
-        &["id", "object", "created", "model", "choices", "usage"],
-    ), })
+    Ok(UrpResponse {
+        id: obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("chat_completion")
+            .to_string(),
+        model: obj
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        created_at: obj.get("created").and_then(|v| v.as_i64()),
+        output: output_nodes,
+        finish_reason,
+        usage,
+        extra_body: split_extra(
+            obj,
+            &["id", "object", "created", "model", "choices", "usage"],
+        ),
+    })
 }
 
 fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
@@ -777,8 +785,8 @@ fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::urp::internal_legacy_bridge::{nodes_to_items, Item};
     use crate::urp::Node;
+    use crate::urp::internal_legacy_bridge::{Item, nodes_to_items};
     use serde_json::json;
 
     fn output_parts(nodes: &[Node]) -> Vec<Part> {

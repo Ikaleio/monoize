@@ -974,6 +974,8 @@ DE7. Billing tokens for embeddings MUST be:
 
 DE8. Downstream response body MUST preserve upstream payload structure except top-level `model` MUST be rewritten to the logical model requested by the client.
 
+DE8a. For downstream `POST /v1/responses` non-stream responses, Monoize MUST preserve top-level upstream response fields such as `service_tier` through canonical decode and re-encode. Monoize MUST NOT replace a present upstream `service_tier` value with a synthesized default.
+
 DE9. Embeddings endpoint is non-streaming only.
 
 ### 7.10 Downstream endpoint: `GET /v1/models`
@@ -1041,6 +1043,8 @@ STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST prese
 STR3e. `response.created` and `response.in_progress` payloads MUST carry the Responses object under top-level field `response`. The nested response object MUST use field name `created_at`, not `created`.
 
 STR3f. Every downstream `/v1/responses` SSE payload that contains a Responses object, `response.created`, `response.in_progress`, `response.completed`, and `response.failed` when present, MUST encode that nested object with canonical Responses object field names. In particular, the timestamp field MUST be `created_at`.
+
+STR3fa. When a downstream `/v1/responses` SSE payload contains a nested completed Responses object, Monoize MUST preserve top-level upstream response fields such as `service_tier`. Monoize MUST NOT force `service_tier = "auto"` when the terminal upstream response carried a different value.
 
 STR3g. For downstream `/v1/responses` message text streaming:
 

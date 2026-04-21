@@ -113,10 +113,19 @@ async fn chat_nonstream_openrouter_request_extensions_passthrough() {
     assert_eq!(status, StatusCode::OK, "{body}");
 
     let upstream = last_captured_body(&ctx, "chat");
-    assert_eq!(upstream["models"], json!(["openai/gpt-5-mini", "anthropic/claude-3.7-sonnet"]));
+    assert_eq!(
+        upstream["models"],
+        json!(["openai/gpt-5-mini", "anthropic/claude-3.7-sonnet"])
+    );
     assert_eq!(upstream["route"], json!("fallback"));
-    assert_eq!(upstream["provider"], json!({ "order": ["openai", "anthropic"], "allow_fallbacks": true }));
-    assert_eq!(upstream["plugins"], json!([{ "id": "web", "enabled": true }]));
+    assert_eq!(
+        upstream["provider"],
+        json!({ "order": ["openai", "anthropic"], "allow_fallbacks": true })
+    );
+    assert_eq!(
+        upstream["plugins"],
+        json!([{ "id": "web", "enabled": true }])
+    );
     assert_eq!(upstream["user"], json!("user-123"));
     assert_eq!(upstream["debug"], json!({ "echo_upstream_body": true }));
 }
@@ -233,8 +242,14 @@ async fn cross_family_top_level_extra_survives_while_nested_extra_is_stripped() 
     assert_eq!(upstream["extra_echo"], json!("TOP"));
     let input_message = &upstream["input"][0];
     assert_eq!(input_message["type"], json!("message"));
-    assert!(input_message.get("message_local").is_none(), "cross-family nested envelope extra must strip: {input_message}");
-    assert!(input_message["content"][0].get("nested_local").is_none(), "cross-family nested node extra must strip: {input_message}");
+    assert!(
+        input_message.get("message_local").is_none(),
+        "cross-family nested envelope extra must strip: {input_message}"
+    );
+    assert!(
+        input_message["content"][0].get("nested_local").is_none(),
+        "cross-family nested node extra must strip: {input_message}"
+    );
 }
 
 #[tokio::test]
@@ -266,7 +281,10 @@ async fn responses_same_family_next_downstream_envelope_extra_applies_once() {
     let upstream = last_captured_body(&ctx, "responses");
     let input = upstream["input"].as_array().expect("responses input array");
     assert_eq!(input[0]["first_only"], json!("A"));
-    assert!(input[1].get("first_only").is_none(), "next_downstream_envelope_extra must apply once: {input:?}");
+    assert!(
+        input[1].get("first_only").is_none(),
+        "next_downstream_envelope_extra must apply once: {input:?}"
+    );
 }
 
 #[tokio::test]
@@ -298,19 +316,28 @@ async fn chat_cross_family_strips_next_downstream_envelope_extra() {
     let upstream = last_captured_body(&ctx, "responses");
     let input = upstream["input"].as_array().expect("responses input array");
     assert_eq!(
-        input.iter().filter(|item| item["type"].as_str() == Some("function_call_output")).count(),
+        input
+            .iter()
+            .filter(|item| item["type"].as_str() == Some("function_call_output"))
+            .count(),
         1,
         "tool result must stay distinct: {input:?}"
     );
     assert_eq!(
-        input.iter().filter(|item| item.get("chat_only_extra").is_some()).count(),
+        input
+            .iter()
+            .filter(|item| item.get("chat_only_extra").is_some())
+            .count(),
         0,
         "cross-family next_downstream_envelope_extra must strip: {input:?}"
     );
     assert!(
         !input.iter().any(|item| {
             item["type"].as_str() == Some("message")
-                && item["content"].as_array().map(|parts| parts.is_empty()).unwrap_or(false)
+                && item["content"]
+                    .as_array()
+                    .map(|parts| parts.is_empty())
+                    .unwrap_or(false)
         }),
         "control node must not synthesize an empty envelope: {input:?}"
     );
@@ -363,7 +390,12 @@ async fn cross_family_phase_is_not_synthesized_for_chat_or_messages() {
     .await;
     assert_eq!(chat_status, StatusCode::OK, "{chat_body}");
     let chat_upstream = last_captured_body(&ctx, "responses");
-    assert!(chat_upstream["input"][0]["content"][0].get("phase").is_none(), "chat cross-family phase must strip: {chat_upstream}");
+    assert!(
+        chat_upstream["input"][0]["content"][0]
+            .get("phase")
+            .is_none(),
+        "chat cross-family phase must strip: {chat_upstream}"
+    );
 
     let (messages_status, messages_body) = json_post(
         &ctx,
@@ -377,7 +409,12 @@ async fn cross_family_phase_is_not_synthesized_for_chat_or_messages() {
     .await;
     assert_eq!(messages_status, StatusCode::OK, "{messages_body}");
     let messages_upstream = last_captured_body(&ctx, "responses");
-    assert!(messages_upstream["input"][0]["content"][0].get("phase").is_none(), "messages cross-family phase must strip: {messages_upstream}");
+    assert!(
+        messages_upstream["input"][0]["content"][0]
+            .get("phase")
+            .is_none(),
+        "messages cross-family phase must strip: {messages_upstream}"
+    );
 }
 
 #[tokio::test]
@@ -500,6 +537,24 @@ async fn responses_reasoning_effort_maps_to_chat_upstream_reasoning() {
         out.iter()
             .any(|x| x.get("type").and_then(|t| t.as_str()) == Some("reasoning"))
     );
+}
+
+#[tokio::test]
+async fn responses_nonstream_preserves_upstream_service_tier() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "ping" }] }],
+            "service_tier": "priority"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["service_tier"].as_str(), Some("priority"));
 }
 
 #[tokio::test]

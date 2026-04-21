@@ -53,138 +53,130 @@ pub(crate) async fn emit_synthetic_chat_stream(
                 extra_body,
                 ..
             } => {
-                            if let Some(rc_value) = extra_body
-                                .get("inject_reasoning_content")
-                                .and_then(Value::as_str)
-                                .filter(|s| !s.is_empty())
-                            {
-                                send_chat_chunk_string(
-                                    &tx,
-                                    &id,
-                                    created,
-                                    logical_model,
-                                    json!({ "reasoning_content": "" }),
-                                    rc_value,
-                                    chat_delta_path_reasoning_content,
-                                    sse_max_frame_length,
-                                )
-                                .await?;
-                            }
-                            let format = source.as_deref().filter(|format| !format.is_empty());
-                            if let Some(summary) =
-                                summary.as_deref().filter(|summary| !summary.is_empty())
-                            {
-                                if extra_body
-                                    .get("openwebui_reasoning_content")
-                                    .and_then(Value::as_bool)
-                                    == Some(true)
-                                {
-                                    send_chat_chunk_string(
-                                        &tx,
-                                        &id,
-                                        created,
-                                        logical_model,
-                                        json!({ "reasoning_content": "" }),
-                                        summary,
-                                        chat_delta_path_reasoning_content,
-                                        sse_max_frame_length,
-                                    )
-                                    .await?;
-                                } else {
-                                    send_chat_chunk_string(
-                                        &tx,
-                                        &id,
-                                        created,
-                                        logical_model,
-                                        chat_reasoning_delta_from_summary("", format),
-                                        summary,
-                                        chat_delta_path_reasoning_summary,
-                                        sse_max_frame_length,
-                                    )
-                                    .await?;
-                                }
-                            }
-                            if let Some(content) =
-                                content.as_deref().filter(|content| !content.is_empty())
-                            {
-                                send_chat_chunk_string(
-                                    &tx,
-                                    &id,
-                                    created,
-                                    logical_model,
-                                    chat_reasoning_delta_from_text("", format),
-                                    content,
-                                    chat_delta_path_reasoning_text,
-                                    sse_max_frame_length,
-                                )
-                                .await?;
-                            }
-                            if let Some(data) = encrypted {
-                                let sig = data
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| data.to_string());
-                                if !sig.is_empty() {
-                                    let reasoning_id = extra_body
-                                        .get("id")
-                                        .and_then(Value::as_str)
-                                        .filter(|id| !id.is_empty());
-                                    send_chat_chunk_string(
-                                        &tx,
-                                        &id,
-                                        created,
-                                        logical_model,
-                                        chat_reasoning_delta_from_encrypted(
-                                            "",
-                                            format,
-                                            reasoning_id,
-                                        ),
-                                        &sig,
-                                        chat_delta_path_reasoning_encrypted,
-                                        sse_max_frame_length,
-                                    )
-                                    .await?;
-                                }
-                            }
-                        }
+                if let Some(rc_value) = extra_body
+                    .get("inject_reasoning_content")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    send_chat_chunk_string(
+                        &tx,
+                        &id,
+                        created,
+                        logical_model,
+                        json!({ "reasoning_content": "" }),
+                        rc_value,
+                        chat_delta_path_reasoning_content,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                let format = source.as_deref().filter(|format| !format.is_empty());
+                if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
+                    if extra_body
+                        .get("openwebui_reasoning_content")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    {
+                        send_chat_chunk_string(
+                            &tx,
+                            &id,
+                            created,
+                            logical_model,
+                            json!({ "reasoning_content": "" }),
+                            summary,
+                            chat_delta_path_reasoning_content,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    } else {
+                        send_chat_chunk_string(
+                            &tx,
+                            &id,
+                            created,
+                            logical_model,
+                            chat_reasoning_delta_from_summary("", format),
+                            summary,
+                            chat_delta_path_reasoning_summary,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                }
+                if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
+                    send_chat_chunk_string(
+                        &tx,
+                        &id,
+                        created,
+                        logical_model,
+                        chat_reasoning_delta_from_text("", format),
+                        content,
+                        chat_delta_path_reasoning_text,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+                if let Some(data) = encrypted {
+                    let sig = data
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| data.to_string());
+                    if !sig.is_empty() {
+                        let reasoning_id = extra_body
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty());
+                        send_chat_chunk_string(
+                            &tx,
+                            &id,
+                            created,
+                            logical_model,
+                            chat_reasoning_delta_from_encrypted("", format, reasoning_id),
+                            &sig,
+                            chat_delta_path_reasoning_encrypted,
+                            sse_max_frame_length,
+                        )
+                        .await?;
+                    }
+                }
+            }
             Node::ToolCall {
                 call_id,
                 name,
                 arguments,
                 ..
             } => {
-                            saw_tool = true;
-                            let chunk = json!({
-                                "id": id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": logical_model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {
-                                        "tool_calls": [{
-                                            "index": tool_idx,
-                                            "id": call_id,
-                                            "type": "function",
-                                            "function": { "name": name, "arguments": "" }
-                                        }]
-                                    },
-                                    "finish_reason": Value::Null
-                                }]
-                            });
-                            tool_idx += 1;
-                            send_chat_chunk_string(
-                                &tx,
-                                &id,
-                                created,
-                                logical_model,
-                                chunk["choices"][0]["delta"].clone(),
-                                arguments,
-                                chat_delta_path_tool_arguments,
-                                sse_max_frame_length,
-                            )
-                            .await?;
-                        }
+                saw_tool = true;
+                let chunk = json!({
+                    "id": id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": logical_model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": tool_idx,
+                                "id": call_id,
+                                "type": "function",
+                                "function": { "name": name, "arguments": "" }
+                            }]
+                        },
+                        "finish_reason": Value::Null
+                    }]
+                });
+                tool_idx += 1;
+                send_chat_chunk_string(
+                    &tx,
+                    &id,
+                    created,
+                    logical_model,
+                    chunk["choices"][0]["delta"].clone(),
+                    arguments,
+                    chat_delta_path_tool_arguments,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
             Node::Text {
                 role: urp::OrdinaryRole::Assistant,
                 content,
@@ -291,14 +283,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     header_sent: false,
                     arguments_streamed: false,
                 };
-                emit_tool_call_header(
-                    &tx,
-                    &chat_id,
-                    created,
-                    logical_model,
-                    &mut tool_call,
-                )
-                .await?;
+                emit_tool_call_header(&tx, &chat_id, created, logical_model, &mut tool_call)
+                    .await?;
                 node_states.insert(
                     node_index,
                     StreamedChatNodeState {
@@ -309,9 +295,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 );
             }
             UrpStreamEvent::NodeStart {
-                node_index,
-                header,
-                ..
+                node_index, header, ..
             } => {
                 if node_header_streams_as_content(&header) {
                     node_owned_kinds.insert(ChatNodeKind::Content);
@@ -353,10 +337,16 @@ pub(crate) async fn encode_urp_stream_as_chat(
             } => {
                 node_states.entry(node_index).or_default().saw_node_start = true;
                 let mut transform_plaintext_to_summary = false;
-                if summary.as_deref().is_some_and(|summary| !summary.is_empty()) {
+                if summary
+                    .as_deref()
+                    .is_some_and(|summary| !summary.is_empty())
+                {
                     node_owned_kinds.insert(ChatNodeKind::ReasoningSummary);
                 }
-                if content.as_deref().is_some_and(|content| !content.is_empty()) {
+                if content
+                    .as_deref()
+                    .is_some_and(|content| !content.is_empty())
+                {
                     if extra_body
                         .get("inject_reasoning_content")
                         .and_then(Value::as_str)
@@ -403,14 +393,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
 
                 saw_tool = true;
                 if !tool_call.header_sent {
-                    emit_tool_call_header(
-                        &tx,
-                        &chat_id,
-                        created,
-                        logical_model,
-                        tool_call,
-                    )
-                    .await?;
+                    emit_tool_call_header(&tx, &chat_id, created, logical_model, tool_call).await?;
                 }
                 emit_tool_call_arguments_delta(
                     &tx,
@@ -428,9 +411,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 node_states.entry(node_index).or_default().saw_node_start = true;
             }
             UrpStreamEvent::NodeDone {
-                node_index,
-                node,
-                ..
+                node_index, node, ..
             } => {
                 let state = node_states.entry(node_index).or_default();
                 state.saw_node_done = true;
@@ -455,14 +436,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         }
                     });
                     if !tool_call.header_sent {
-                        emit_tool_call_header(
-                            &tx,
-                            &chat_id,
-                            created,
-                            logical_model,
-                            tool_call,
-                        )
-                        .await?;
+                        emit_tool_call_header(&tx, &chat_id, created, logical_model, tool_call)
+                            .await?;
                     }
                     if !arguments.is_empty() && !tool_call.arguments_streamed {
                         emit_tool_call_arguments_delta(
@@ -491,7 +466,10 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     !node_owned_kinds.contains(&ChatNodeKind::ReasoningText);
                 let missing_reasoning_encrypted =
                     !node_owned_kinds.contains(&ChatNodeKind::ReasoningEncrypted);
-                if missing_reasoning_summary || missing_reasoning_text || missing_reasoning_encrypted {
+                if missing_reasoning_summary
+                    || missing_reasoning_text
+                    || missing_reasoning_encrypted
+                {
                     for node in &output {
                         let Node::Reasoning {
                             content,
@@ -505,7 +483,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             continue;
                         };
 
-                        let original_content = content.as_deref().filter(|content| !content.is_empty());
+                        let original_content =
+                            content.as_deref().filter(|content| !content.is_empty());
 
                         let allow_text_surface = missing_reasoning_text;
                         let allow_summary_surface = missing_reasoning_summary;
@@ -519,7 +498,9 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             .filter(|value| !value.is_null() && allow_encrypted_surface);
                         let transform_plaintext_to_summary = allow_summary_surface
                             && !allow_text_surface
-                            && source.as_deref().is_none_or(|source| source != "openrouter")
+                            && source
+                                .as_deref()
+                                .is_none_or(|source| source != "openrouter")
                             && content.is_none()
                             && summary.is_none()
                             && original_content.is_some()
@@ -534,8 +515,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                 (allow_text_surface
                                     && source.as_deref() == Some("openrouter")
                                     && summary.is_none())
-                                    .then_some(original_content)
-                                    .flatten()
+                                .then_some(original_content)
+                                .flatten()
                             })
                         };
                         let summary = if transform_plaintext_to_summary {
@@ -562,7 +543,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         .await?;
                     }
                 }
-                if !emitted_terminal_for_tools && !node_owned_kinds.contains(&ChatNodeKind::ToolCall)
+                if !emitted_terminal_for_tools
+                    && !node_owned_kinds.contains(&ChatNodeKind::ToolCall)
                 {
                     for node in output {
                         if let Node::ToolCall {
@@ -635,7 +617,6 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 send_plain_sse_data(&tx, error.to_string()).await?;
                 finished = true;
             }
-            _ => {}
         }
     }
 
@@ -880,7 +861,12 @@ mod tests {
             .await
             .expect("reasoning delta");
         event_tx
-            .send(UrpStreamEvent::ResponseDone { finish_reason: Some(FinishReason::Stop), usage: None, output: Vec::new(), extra_body: HashMap::new() })
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                usage: None,
+                output: Vec::new(),
+                extra_body: HashMap::new(),
+            })
             .await
             .expect("response done");
         drop(event_tx);
@@ -969,7 +955,12 @@ mod tests {
             .await
             .expect("reasoning signature delta");
         event_tx
-            .send(UrpStreamEvent::ResponseDone { finish_reason: Some(FinishReason::Stop), usage: None, output: Vec::new(), extra_body: HashMap::new() })
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                usage: None,
+                output: Vec::new(),
+                extra_body: HashMap::new(),
+            })
             .await
             .expect("response done");
         drop(event_tx);

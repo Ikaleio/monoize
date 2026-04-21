@@ -5,15 +5,11 @@ use crate::handlers::usage::{
     record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,
 };
-use crate::urp::internal_legacy_bridge::{
-    Item, ItemHeader, Part, PartDelta, PartHeader, Role, nodes_to_items,
-};
-use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent,
-};
+use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -109,7 +105,8 @@ pub(crate) async fn stream_responses_to_urp_events(
                     .push_str(text);
                 if !message_item_extra_by_output_index.contains_key(&output_index) {
                     if let Some(extra_body) = pending_request_envelope_extra.take() {
-                        output_state_for(&mut index_state, output_index).item_extra_body = extra_body.clone();
+                        output_state_for(&mut index_state, output_index).item_extra_body =
+                            extra_body.clone();
                         message_item_extra_by_output_index.insert(output_index, extra_body);
                     }
                 }
@@ -221,7 +218,8 @@ pub(crate) async fn stream_responses_to_urp_events(
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                     if !message_item_extra_by_output_index.contains_key(&idx) {
                         if let Some(extra_body) = pending_request_envelope_extra.take() {
-                            output_state_for(&mut index_state, idx).item_extra_body = extra_body.clone();
+                            output_state_for(&mut index_state, idx).item_extra_body =
+                                extra_body.clone();
                             message_item_extra_by_output_index.insert(idx, extra_body);
                         }
                     }
@@ -448,7 +446,12 @@ pub(crate) async fn stream_responses_to_urp_events(
             let mut grouped_output_nodes = Vec::new();
             for output_item in &output_items {
                 grouped_output_nodes.push(match output_item {
-                    Item::Message { id, role, parts, extra_body } => {
+                    Item::Message {
+                        id,
+                        role,
+                        parts,
+                        extra_body,
+                    } => {
                         let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
                         let mut item_nodes = Vec::new();
                         for (index, part) in parts.iter().cloned().enumerate() {
@@ -480,7 +483,10 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
 
             for (output_item, item_nodes) in output_items.iter().zip(grouped_output_nodes.iter()) {
-                let Item::Message { role: Role::Assistant, .. } = output_item
+                let Item::Message {
+                    role: Role::Assistant,
+                    ..
+                } = output_item
                 else {
                     continue;
                 };
@@ -512,7 +518,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                         phase: phase.clone(),
                         extra_body: extra_body.clone(),
                     };
-                    let item_extra = item_extra_body_from_item(output_item);
+                    let item_extra = item_extra_body_from_item(&output_item);
                     if !item_extra.is_empty() {
                         let _ = tx
                             .send(UrpStreamEvent::NodeStart {
@@ -558,26 +564,31 @@ pub(crate) async fn stream_responses_to_urp_events(
                         .send(UrpStreamEvent::NodeDone {
                             node_index,
                             node: synthetic_node,
-                                usage: final_usage.clone(),
-                                extra_body: extra_body.clone(),
-                            })
-                            .await;
+                            usage: final_usage.clone(),
+                            extra_body: extra_body.clone(),
+                        })
+                        .await;
                 }
             }
         }
 
         let _ = tx
-            .send(UrpStreamEvent::ResponseDone { finish_reason: Some(if outputs_have_tool_calls(&output_nodes) {
-                FinishReason::ToolCalls
-            } else {
-                FinishReason::Stop
-            }), usage: final_usage, output: output_nodes, extra_body: HashMap::from([
-                ("id".to_string(), json!(response_id)),
-                ("object".to_string(), json!("response")),
-                ("created_at".to_string(), json!(created)),
-                ("model".to_string(), json!(urp.model.clone())),
-                ("status".to_string(), json!("completed")),
-            ]) })
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(if outputs_have_tool_calls(&output_nodes) {
+                    FinishReason::ToolCalls
+                } else {
+                    FinishReason::Stop
+                }),
+                usage: final_usage,
+                output: output_nodes,
+                extra_body: HashMap::from([
+                    ("id".to_string(), json!(response_id)),
+                    ("object".to_string(), json!("response")),
+                    ("created_at".to_string(), json!(created)),
+                    ("model".to_string(), json!(urp.model.clone())),
+                    ("status".to_string(), json!("completed")),
+                ]),
+            })
             .await;
     }
     record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
@@ -595,7 +606,8 @@ fn map_responses_event_to_urp_events_with_state(
         "response.output_item.added" => map_output_item_added(data_val, index_state),
         "response.content_part.added" => map_content_part_added(data_val, index_state),
         "response.output_text.delta" => {
-            let mut extra = delta_extra_body_with_phase(data_val.clone(), message_phases_by_output_index);
+            let mut extra =
+                delta_extra_body_with_phase(data_val.clone(), message_phases_by_output_index);
             let mut events = Vec::new();
             let output_index = data_val
                 .get("output_index")
@@ -702,10 +714,7 @@ fn map_responses_event_to_urp_events_with_state(
                 ],
             );
             if let Some(id) = reasoning_item_id {
-                extra_body.insert(
-                    "reasoning_item_id".to_string(),
-                    Value::String(id),
-                );
+                extra_body.insert("reasoning_item_id".to_string(), Value::String(id));
             }
             vec![UrpStreamEvent::NodeDelta {
                 node_index: urp_node_index_from_delta(&data_val, index_state),
@@ -870,7 +879,10 @@ fn output_state_for<'a>(
     index_state: &'a mut ResponsesStreamIndexState,
     output_index: u64,
 ) -> &'a mut OutputItemStreamState {
-    index_state.output_state_by_index.entry(output_index).or_default()
+    index_state
+        .output_state_by_index
+        .entry(output_index)
+        .or_default()
 }
 
 fn output_role_to_ordinary(role: Role) -> OrdinaryRole {
@@ -927,22 +939,40 @@ fn node_from_part_value(part: &Value, role: Role, item_id: Option<String>) -> No
 
 fn node_header_from_node(node: &Node) -> NodeHeader {
     match node {
-        Node::Text { id, role, phase, .. } => NodeHeader::Text {
+        Node::Text {
+            id, role, phase, ..
+        } => NodeHeader::Text {
             id: id.clone(),
             role: *role,
             phase: phase.clone(),
         },
-        Node::Image { id, role, .. } => NodeHeader::Image { id: id.clone(), role: *role },
-        Node::Audio { id, role, .. } => NodeHeader::Audio { id: id.clone(), role: *role },
-        Node::File { id, role, .. } => NodeHeader::File { id: id.clone(), role: *role },
+        Node::Image { id, role, .. } => NodeHeader::Image {
+            id: id.clone(),
+            role: *role,
+        },
+        Node::Audio { id, role, .. } => NodeHeader::Audio {
+            id: id.clone(),
+            role: *role,
+        },
+        Node::File { id, role, .. } => NodeHeader::File {
+            id: id.clone(),
+            role: *role,
+        },
         Node::Refusal { id, .. } => NodeHeader::Refusal { id: id.clone() },
         Node::Reasoning { id, .. } => NodeHeader::Reasoning { id: id.clone() },
-        Node::ToolCall { id, call_id, name, .. } => NodeHeader::ToolCall {
+        Node::ToolCall {
+            id, call_id, name, ..
+        } => NodeHeader::ToolCall {
             id: id.clone(),
             call_id: call_id.clone(),
             name: name.clone(),
         },
-        Node::ProviderItem { id, role, item_type, .. } => NodeHeader::ProviderItem {
+        Node::ProviderItem {
+            id,
+            role,
+            item_type,
+            ..
+        } => NodeHeader::ProviderItem {
             id: id.clone(),
             role: *role,
             item_type: item_type.clone(),
@@ -955,7 +985,11 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
     }
 }
 
-fn node_delta_from_reasoning_event(event_name: &str, data_val: &Value, source: Option<String>) -> NodeDelta {
+fn node_delta_from_reasoning_event(
+    event_name: &str,
+    data_val: &Value,
+    source: Option<String>,
+) -> NodeDelta {
     NodeDelta::Reasoning {
         content: if event_name == "response.reasoning_summary_text.delta" {
             None
@@ -1058,7 +1092,10 @@ fn map_output_item_added(
     match item_type {
         "reasoning" => {
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::Reasoning {
-                id: item.get("id").and_then(Value::as_str).map(|s| s.to_string()),
+                id: item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string()),
                 content: None,
                 encrypted: None,
                 summary: None,
@@ -1262,24 +1299,27 @@ fn map_output_item_done(
             let role = output_state_for(index_state, output_index)
                 .role
                 .unwrap_or(Role::Assistant);
-            let node = first_node_from_item_value(item)
-                .unwrap_or_else(|| {
-                    node_from_part_value(
-                        item,
-                        role,
-                        output_state_for(index_state, output_index)
-                            .item_id
-                            .clone()
-                            .or_else(|| item.get("id").and_then(Value::as_str).map(|s| s.to_string())),
-                    )
-                });
+            let node = first_node_from_item_value(item).unwrap_or_else(|| {
+                node_from_part_value(
+                    item,
+                    role,
+                    output_state_for(index_state, output_index)
+                        .item_id
+                        .clone()
+                        .or_else(|| {
+                            item.get("id")
+                                .and_then(Value::as_str)
+                                .map(|s| s.to_string())
+                        }),
+                )
+            });
             let node_index = index_state.synthetic_node_index_for_output(output_index);
-            let state = index_state
-                .output_state_by_index
-                .get(&output_index);
+            let state = index_state.output_state_by_index.get(&output_index);
             let emitted_any_node = state.map(|state| state.emitted_any_node).unwrap_or(false);
             if !emitted_any_node {
-                let reasoning_text_delta_seen = state.map(|state| state.reasoning_text_delta_seen).unwrap_or(false);
+                let reasoning_text_delta_seen = state
+                    .map(|state| state.reasoning_text_delta_seen)
+                    .unwrap_or(false);
                 let reasoning_summary_delta_seen = state
                     .map(|state| state.reasoning_summary_delta_seen)
                     .unwrap_or(false);
@@ -1287,10 +1327,7 @@ fn map_output_item_done(
                     .get("id")
                     .and_then(Value::as_str)
                     .map(|s| s.to_string())
-                    .or_else(|| {
-                        state
-                            .and_then(|state| state.item_id.clone())
-                    });
+                    .or_else(|| state.and_then(|state| state.item_id.clone()));
                 if let Node::Reasoning {
                     content,
                     encrypted,
@@ -1316,10 +1353,8 @@ fn map_output_item_done(
                     {
                         let mut delta_extra = HashMap::new();
                         if let Some(id) = &reasoning_item_id {
-                            delta_extra.insert(
-                                "reasoning_item_id".to_string(),
-                                Value::String(id.clone()),
-                            );
+                            delta_extra
+                                .insert("reasoning_item_id".to_string(), Value::String(id.clone()));
                         }
                         events.push(UrpStreamEvent::NodeDelta {
                             node_index,
@@ -1346,12 +1381,7 @@ fn map_output_item_done(
             let (part_done_seen, emitted_any_node) = index_state
                 .output_state_by_index
                 .get(&output_index)
-                .map(|state| {
-                    (
-                        state.part_done_seen,
-                        state.emitted_any_node,
-                    )
-                })
+                .map(|state| (state.part_done_seen, state.emitted_any_node))
                 .unwrap_or((false, false));
             if !part_done_seen && !emitted_any_node {
                 let decoded_item = decode_item_from_value(item);
@@ -1359,7 +1389,11 @@ fn map_output_item_done(
                     let nodes = nodes_from_item_value(item);
                     for node in nodes {
                         let node_index = index_state.allocate_fresh_node_index();
-                        emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+                        emit_pending_envelope_control_if_needed(
+                            output_index,
+                            index_state,
+                            &mut events,
+                        );
                         events.push(UrpStreamEvent::NodeStart {
                             node_index,
                             header: node_header_from_node(&node),
@@ -1386,17 +1420,20 @@ fn map_output_item_done(
                 let role = output_state_for(index_state, output_index)
                     .role
                     .unwrap_or(Role::Assistant);
-                let node = first_node_from_item_value(item)
-                    .unwrap_or_else(|| {
-                        node_from_part_value(
-                            item,
-                            role,
-                            output_state_for(index_state, output_index)
-                                .item_id
-                                .clone()
-                            .or_else(|| item.get("id").and_then(Value::as_str).map(|s| s.to_string())),
-                        )
-                    });
+                let node = first_node_from_item_value(item).unwrap_or_else(|| {
+                    node_from_part_value(
+                        item,
+                        role,
+                        output_state_for(index_state, output_index)
+                            .item_id
+                            .clone()
+                            .or_else(|| {
+                                item.get("id")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.to_string())
+                            }),
+                    )
+                });
                 let node_index = index_state.synthetic_node_index_for_output(output_index);
                 events.push(UrpStreamEvent::NodeDone {
                     node_index,
@@ -1827,7 +1864,8 @@ fn item_extra_body_from_item(item: &Item) -> HashMap<String, Value> {
 }
 
 fn outputs_have_tool_calls(items: &[Node]) -> bool {
-    items.iter()
+    items
+        .iter()
         .any(|item| matches!(item, Node::ToolCall { .. }))
 }
 
@@ -1897,16 +1935,13 @@ fn build_accumulated_output_nodes(
             FallbackOutputKind::Reasoning(_) => {
                 nodes.push(Node::Reasoning {
                     id: reasoning_output_index.and_then(|idx| {
-                        item_ids_by_output_index
-                            .get(&idx)
-                            .cloned()
-                            .or_else(|| {
-                                message_item_extra_by_output_index
-                                    .get(&idx)
-                                    .and_then(|extra| extra.get("id"))
-                                    .and_then(Value::as_str)
-                                    .map(|s| s.to_string())
-                            })
+                        item_ids_by_output_index.get(&idx).cloned().or_else(|| {
+                            message_item_extra_by_output_index
+                                .get(&idx)
+                                .and_then(|extra| extra.get("id"))
+                                .and_then(Value::as_str)
+                                .map(|s| s.to_string())
+                        })
                     }),
                     content: (!reasoning_text.is_empty()).then(|| reasoning_text.to_string()),
                     summary: (!reasoning_summary_text.is_empty())
@@ -1933,7 +1968,9 @@ fn build_accumulated_output_nodes(
                     .cloned()
                     .unwrap_or_default();
                 if let Some(phase) = text_extra_body.get("phase") {
-                    item_extra_body.entry("phase".to_string()).or_insert_with(|| phase.clone());
+                    item_extra_body
+                        .entry("phase".to_string())
+                        .or_insert_with(|| phase.clone());
                 }
                 let message_id = item_extra_body
                     .get("id")
@@ -1969,12 +2006,6 @@ fn build_accumulated_output_nodes(
     }
 
     nodes
-}
-
-fn output_item_message_id(item: &Item) -> Option<String> {
-    match item {
-        Item::Message { id, .. } | Item::ToolResult { id, .. } => id.clone(),
-    }
 }
 
 fn output_index_for_call_id(
@@ -2042,23 +2073,26 @@ mod tests {
         )]);
 
         let outputs = build_accumulated_output_nodes(
-                    "think",
-                    "summary",
-                    "sig_1",
-                    Some("anthropic"),
-                    Some(0),
-                    &HashMap::from([(0, "answer".to_string())]),
-                    &HashMap::from([(0, "analysis".to_string())]),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &["call_1".to_string()],
-                    &calls,
-                    &HashMap::from([(1, "call_1".to_string())]),
-                );
+            "think",
+            "summary",
+            "sig_1",
+            Some("anthropic"),
+            Some(0),
+            &HashMap::from([(0, "answer".to_string())]),
+            &HashMap::from([(0, "analysis".to_string())]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &["call_1".to_string()],
+            &calls,
+            &HashMap::from([(1, "call_1".to_string())]),
+        );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 2);
-        let Item::Message { parts, extra_body, .. } = &outputs[0] else {
+        let Item::Message {
+            parts, extra_body, ..
+        } = &outputs[0]
+        else {
             panic!("expected reasoning compatibility item");
         };
         assert!(extra_body.is_empty());
@@ -2102,19 +2136,19 @@ mod tests {
     #[test]
     fn build_accumulated_output_nodes_omit_empty_text_message() {
         let outputs = build_accumulated_output_nodes(
-                    "",
-                    "",
-                    "sig_only",
-                    None,
-                    Some(0),
-                    &HashMap::new(),
-                    &HashMap::from([(0, "analysis".to_string())]),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &[],
-                    &HashMap::new(),
-                    &HashMap::new(),
-                );
+            "",
+            "",
+            "sig_only",
+            None,
+            Some(0),
+            &HashMap::new(),
+            &HashMap::from([(0, "analysis".to_string())]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 1);
@@ -2139,22 +2173,22 @@ mod tests {
     #[test]
     fn build_accumulated_output_nodes_preserve_multiple_output_text_phases() {
         let outputs = build_accumulated_output_nodes(
-                    "",
-                    "",
-                    "",
-                    None,
-                    None,
-                    &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
-                    &HashMap::from([
-                        (0, "commentary".to_string()),
-                        (2, "final_answer".to_string()),
-                    ]),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &[],
-                    &HashMap::new(),
-                    &HashMap::new(),
-                );
+            "",
+            "",
+            "",
+            None,
+            None,
+            &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
+            &HashMap::from([
+                (0, "commentary".to_string()),
+                (2, "final_answer".to_string()),
+            ]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 2);
@@ -2188,19 +2222,19 @@ mod tests {
         )]);
 
         let outputs = build_accumulated_output_nodes(
-                    "think",
-                    "summary",
-                    "",
-                    Some("upstream-reasoner"),
-                    Some(2),
-                    &HashMap::from([(5, "answer".to_string())]),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &["call_1".to_string()],
-                    &calls,
-                    &HashMap::from([(9, "call_1".to_string())]),
-                );
+            "think",
+            "summary",
+            "",
+            Some("upstream-reasoner"),
+            Some(2),
+            &HashMap::from([(5, "answer".to_string())]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &["call_1".to_string()],
+            &calls,
+            &HashMap::from([(9, "call_1".to_string())]),
+        );
 
         let outputs = nodes_to_items(&outputs);
         assert_eq!(outputs.len(), 2);
@@ -2531,22 +2565,22 @@ mod tests {
     #[test]
     fn synthetic_text_fallback_preserves_multiple_phases_and_allocates_distinct_part_indices() {
         let output_items = nodes_to_items(&build_accumulated_output_nodes(
-                    "",
-                    "",
-                    "",
-                    None,
-                    None,
-                    &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
-                    &HashMap::from([
-                        (0, "commentary".to_string()),
-                        (2, "final_answer".to_string()),
-                    ]),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &[],
-                    &HashMap::new(),
-                    &HashMap::new(),
-                ));
+            "",
+            "",
+            "",
+            None,
+            None,
+            &HashMap::from([(0, "analysis".to_string()), (2, "final".to_string())]),
+            &HashMap::from([
+                (0, "commentary".to_string()),
+                (2, "final_answer".to_string()),
+            ]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        ));
         let mut state = ResponsesStreamIndexState::default();
         assert_eq!(state.node_index_for_content(11, 4), 0);
         assert_eq!(state.synthetic_node_index_for_output(12), 1);
@@ -2572,10 +2606,15 @@ mod tests {
                 else {
                     continue;
                 };
-                let synthetic_text_item = Item::Message { id: None, role: Role::Assistant, parts: vec![Part::Text {
-                    content: content.clone(),
-                    extra_body: text_extra_body.clone(),
-                }], extra_body: extra_body.clone() };
+                let synthetic_text_item = Item::Message {
+                    id: None,
+                    role: Role::Assistant,
+                    parts: vec![Part::Text {
+                        content: content.clone(),
+                        extra_body: text_extra_body.clone(),
+                    }],
+                    extra_body: extra_body.clone(),
+                };
                 let node_index = state.allocate_fresh_node_index();
                 observed.push(UrpStreamEvent::NodeStart {
                     node_index,
@@ -2615,19 +2654,19 @@ mod tests {
     #[test]
     fn build_accumulated_output_nodes_omit_reasoning_source_when_missing() {
         let outputs = build_accumulated_output_nodes(
-                    "think",
-                    "",
-                    "",
-                    None,
-                    Some(0),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &[],
-                    &HashMap::new(),
-                    &HashMap::new(),
-                );
+            "think",
+            "",
+            "",
+            None,
+            Some(0),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         let outputs = nodes_to_items(&outputs);
         let Item::Message { parts, .. } = &outputs[0] else {
@@ -2740,47 +2779,43 @@ mod tests {
                 ..
             } if content == "answer"
         ));
-        assert!(
-            done_events.iter().any(|event| matches!(
-                event,
-                UrpStreamEvent::NodeStart {
-                    node_index: 1,
-                    header: NodeHeader::ToolCall { call_id, .. },
-                    ..
-                } if call_id == "call_1"
-            ))
-        );
-        assert!(
-            done_events.iter().any(|event| matches!(
-                event,
-                UrpStreamEvent::NodeDone {
-                    node_index: 1,
-                    node: Node::ToolCall { call_id, .. },
-                    ..
-                } if call_id == "call_1"
-            ))
-        );
+        assert!(done_events.iter().any(|event| matches!(
+            event,
+            UrpStreamEvent::NodeStart {
+                node_index: 1,
+                header: NodeHeader::ToolCall { call_id, .. },
+                ..
+            } if call_id == "call_1"
+        )));
+        assert!(done_events.iter().any(|event| matches!(
+            event,
+            UrpStreamEvent::NodeDone {
+                node_index: 1,
+                node: Node::ToolCall { call_id, .. },
+                ..
+            } if call_id == "call_1"
+        )));
     }
 
     #[test]
     fn accumulated_output_nodes_drive_response_done_before_grouped_projection() {
         let output_nodes = build_accumulated_output_nodes(
-                    "think",
-                    "summary",
-                    "sig_1",
-                    Some("anthropic"),
-                    Some(0),
-                    &HashMap::from([(0, "answer".to_string())]),
-                    &HashMap::from([(0, "analysis".to_string())]),
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &["call_1".to_string()],
-                    &HashMap::from([(
-                        "call_1".to_string(),
-                        ("lookup".to_string(), "{}".to_string()),
-                    )]),
-                    &HashMap::from([(1, "call_1".to_string())]),
-                );
+            "think",
+            "summary",
+            "sig_1",
+            Some("anthropic"),
+            Some(0),
+            &HashMap::from([(0, "answer".to_string())]),
+            &HashMap::from([(0, "analysis".to_string())]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &["call_1".to_string()],
+            &HashMap::from([(
+                "call_1".to_string(),
+                ("lookup".to_string(), "{}".to_string()),
+            )]),
+            &HashMap::from([(1, "call_1".to_string())]),
+        );
 
         assert_eq!(output_nodes.len(), 4);
         assert!(matches!(
@@ -2811,12 +2846,18 @@ mod tests {
 
         let output_items = nodes_to_items(&output_nodes);
         assert_eq!(output_items.len(), 2);
-        let Item::Message { parts, extra_body, .. } = &output_items[0] else {
+        let Item::Message {
+            parts, extra_body, ..
+        } = &output_items[0]
+        else {
             panic!("expected reasoning compatibility item");
         };
         assert!(extra_body.is_empty());
         assert_eq!(parts.len(), 1);
-        let Item::Message { parts, extra_body, .. } = &output_items[1] else {
+        let Item::Message {
+            parts, extra_body, ..
+        } = &output_items[1]
+        else {
             panic!("expected phased assistant compatibility item");
         };
         assert_eq!(extra_body.get("phase"), Some(&json!("analysis")));

@@ -2,7 +2,7 @@ use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
     parse_tool_definition, split_extra, value_to_text,
 };
-use crate::urp::internal_legacy_bridge::{Part, Role, nodes_to_items};
+use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ReasoningConfig, ToolChoice,
     ToolResultContent, UrpRequest, UrpResponse, Usage,
@@ -806,11 +806,7 @@ fn summary_to_text(item_obj: &Map<String, Value>) -> Option<String> {
             }
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {

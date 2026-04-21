@@ -2,7 +2,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData, text_node,
 };
-use crate::urp::{Node, OrdinaryRole};
+use crate::urp::OrdinaryRole;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -102,8 +102,10 @@ impl Transform for InjectSystemPromptTransform {
         }
 
         if let Some(idx) = target_index {
-            req.input
-                .insert(idx + 1, text_node(OrdinaryRole::System, cfg.content.clone()));
+            req.input.insert(
+                idx + 1,
+                text_node(OrdinaryRole::System, cfg.content.clone()),
+            );
         } else {
             let message = text_node(OrdinaryRole::System, cfg.content.clone());
             match cfg.position {

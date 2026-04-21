@@ -2,12 +2,12 @@ use crate::urp::encode::{
     merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
     usage_output_details,
 };
-use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
+use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::{
     FileSource, FinishReason, ImageSource, ResponseFormat, ToolDefinition, ToolResultContent,
     UrpRequest, UrpResponse,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -528,7 +528,6 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         "max_tool_calls": null,
         "store": false,
         "background": false,
-        "service_tier": "auto",
         "metadata": {},
         "safety_identifier": null,
         "prompt_cache_key": null
@@ -894,7 +893,7 @@ fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str 
 mod tests {
     use super::*;
     use crate::urp::decode::openai_responses as decode_responses;
-    use crate::urp::internal_legacy_bridge::{items_to_nodes, nodes_to_items, Item, Part, Role};
+    use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
     use crate::urp::{InputDetails, OutputDetails, Usage};
 
     fn empty_map() -> HashMap<String, Value> {
@@ -1329,12 +1328,16 @@ mod tests {
         assert_eq!(output.reasoning_tokens, 5);
         assert_eq!(output.accepted_prediction_tokens, 6);
         assert_eq!(output.rejected_prediction_tokens, 7);
-        assert!(!decoded_usage
-            .extra_body
-            .contains_key("input_tokens_details"));
-        assert!(!decoded_usage
-            .extra_body
-            .contains_key("output_tokens_details"));
+        assert!(
+            !decoded_usage
+                .extra_body
+                .contains_key("input_tokens_details")
+        );
+        assert!(
+            !decoded_usage
+                .extra_body
+                .contains_key("output_tokens_details")
+        );
         assert_eq!(
             decoded_usage.extra_body.get("upstream_counter"),
             Some(&json!(42))

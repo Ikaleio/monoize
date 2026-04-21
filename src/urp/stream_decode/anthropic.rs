@@ -4,9 +4,7 @@ use crate::handlers::usage::{
     record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
-use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent, Usage,
-};
+use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -325,7 +323,10 @@ fn handle_content_block_stop(
 }
 
 fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeState> {
-    let content_type = content_block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let content_type = content_block
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     match content_type {
         "text" => {
@@ -350,8 +351,7 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
             })
         }
         "thinking" => {
-            let extra_body =
-                object_without_keys(content_block, &["type", "thinking", "signature"]);
+            let extra_body = object_without_keys(content_block, &["type", "thinking", "signature"]);
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Reasoning {
                     content: content_block
@@ -422,9 +422,7 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
                 (None, None)
             } else {
                 match crate::urp::unwrap_reasoning_signature_sigil(encrypted) {
-                    Some((item_id, original)) => {
-                        (Some(item_id), Some(Value::String(original)))
-                    }
+                    Some((item_id, original)) => (Some(item_id), Some(Value::String(original))),
                     None => (None, Some(Value::String(encrypted.clone()))),
                 }
             };
@@ -459,17 +457,32 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role: *role,
             phase: phase.clone(),
         },
-        Node::Reasoning { .. } => NodeHeader::Reasoning { id: node.id().cloned() },
+        Node::Reasoning { .. } => NodeHeader::Reasoning {
+            id: node.id().cloned(),
+        },
         Node::ToolCall { call_id, name, .. } => NodeHeader::ToolCall {
             id: node.id().cloned(),
             call_id: call_id.clone(),
             name: name.clone(),
         },
-        Node::Image { role, .. } => NodeHeader::Image { id: node.id().cloned(), role: *role },
-        Node::Audio { role, .. } => NodeHeader::Audio { id: node.id().cloned(), role: *role },
-        Node::File { role, .. } => NodeHeader::File { id: node.id().cloned(), role: *role },
-        Node::Refusal { .. } => NodeHeader::Refusal { id: node.id().cloned() },
-        Node::ProviderItem { role, item_type, .. } => NodeHeader::ProviderItem {
+        Node::Image { role, .. } => NodeHeader::Image {
+            id: node.id().cloned(),
+            role: *role,
+        },
+        Node::Audio { role, .. } => NodeHeader::Audio {
+            id: node.id().cloned(),
+            role: *role,
+        },
+        Node::File { role, .. } => NodeHeader::File {
+            id: node.id().cloned(),
+            role: *role,
+        },
+        Node::Refusal { .. } => NodeHeader::Refusal {
+            id: node.id().cloned(),
+        },
+        Node::ProviderItem {
+            role, item_type, ..
+        } => NodeHeader::ProviderItem {
             id: node.id().cloned(),
             role: *role,
             item_type: item_type.clone(),
@@ -491,7 +504,8 @@ fn ordered_completed_nodes(state: &AnthropicMessagesStreamState) -> Vec<Node> {
 }
 
 fn estimated_output_chars(nodes: &[Node]) -> u64 {
-    nodes.iter()
+    nodes
+        .iter()
         .map(|node| match node {
             Node::Text { content, .. } | Node::Refusal { content, .. } => content.len() as u64,
             Node::Reasoning {
@@ -633,11 +647,9 @@ mod tests {
     fn anthropic_message_completion_uses_completed_nodes_as_authoritative_state() {
         let mut state = AnthropicMessagesStreamState::default();
 
-        for event in handle_content_block_start(
-            0,
-            json!({ "type": "text", "text": "" }),
-            &mut state,
-        ) {
+        for event in
+            handle_content_block_start(0, json!({ "type": "text", "text": "" }), &mut state)
+        {
             assert!(!matches!(event, UrpStreamEvent::ResponseDone { .. }));
         }
         handle_content_block_delta(

@@ -202,6 +202,42 @@ async fn responses_streaming_reconstructs_text_from_output_item_done() {
 }
 
 #[tokio::test]
+async fn responses_streaming_completed_preserves_service_tier() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"stream"}]}],
+                "stream": true,
+                "stream_mode": "message_then_tool_then_completed",
+                "tools": [{ "type": "function", "name": "tool_a", "parameters": { "type": "object", "additionalProperties": true } }],
+                "service_tier": "priority"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .expect("response.completed frame");
+    assert_eq!(
+        completed["response"]["service_tier"].as_str(),
+        Some("priority")
+    );
+}
+
+#[tokio::test]
 async fn responses_streaming_reconstructs_phase_from_output_item_done() {
     let ctx = setup().await;
     let req = Request::builder()
@@ -364,13 +400,16 @@ async fn responses_streaming_reencodes_greedy_merged_items_with_canonical_sse_bo
     assert!(text.contains("\"type\":\"function_call\""));
     assert!(text.contains("\"phase\":\"analysis\""));
     assert!(text.contains("event: response.content_part.added"));
-    assert!(text.contains("\"part\":{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"}"));
+    assert!(text.contains(
+        "\"part\":{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"}"
+    ));
     assert!(!text.contains("\"part\":{\"text\":\"\",\"type\":\"reasoning\"}"));
     assert!(!text.contains("event: response.content_part.added\ndata: {\"content_index\":2"));
 }
 
 #[tokio::test]
-async fn responses_streaming_shared_message_output_adds_item_once_before_each_text_part_lifecycle() {
+async fn responses_streaming_shared_message_output_adds_item_once_before_each_text_part_lifecycle()
+{
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -635,8 +674,7 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
         .filter(|(event, _)| event == "response.reasoning_summary_part.added")
         .count();
     assert_eq!(
-        summary_added_count,
-        1,
+        summary_added_count, 1,
         "reasoning summary part must be added exactly once per reasoning item: {text}"
     );
 
@@ -900,7 +938,11 @@ async fn responses_streaming_response_done_output_is_authoritative_terminal_stat
     let output = completed["response"]["output"]
         .as_array()
         .expect("completed response output array");
-    assert_eq!(output.len(), 2, "terminal output must contain exactly the completed message and tool call: {text}");
+    assert_eq!(
+        output.len(),
+        2,
+        "terminal output must contain exactly the completed message and tool call: {text}"
+    );
     assert_eq!(output[0]["type"].as_str(), Some("message"));
     assert_eq!(output[0]["id"].as_str(), Some("msg_mock"));
     assert_eq!(output[0]["content"][0]["text"].as_str(), Some("Searching"));
@@ -914,7 +956,11 @@ async fn responses_streaming_response_done_output_is_authoritative_terminal_stat
         .filter(|(event, _)| event == "response.output_item.done")
         .map(|(_, payload)| payload)
         .collect();
-    assert_eq!(output_item_done.len(), output.len(), "terminal completed output must match the exact visible item lifecycle cardinality: {text}");
+    assert_eq!(
+        output_item_done.len(),
+        output.len(),
+        "terminal completed output must match the exact visible item lifecycle cardinality: {text}"
+    );
 
     for (index, item) in output.iter().enumerate() {
         let done = output_item_done
@@ -922,12 +968,25 @@ async fn responses_streaming_response_done_output_is_authoritative_terminal_stat
             .find(|payload| payload["output_index"].as_u64() == Some(index as u64))
             .expect("matching output_item.done");
 
-        assert_eq!(done["item"]["type"], item["type"], "response.completed.output must preserve terminal item type for output_index={index}: {text}");
+        assert_eq!(
+            done["item"]["type"], item["type"],
+            "response.completed.output must preserve terminal item type for output_index={index}: {text}"
+        );
         match item["type"].as_str() {
             Some("message") => {
-                assert_eq!(done["item"]["id"], item["id"], "terminal message id must match for output_index={index}: {text}");
-                assert_eq!(done["item"]["role"], item["role"], "terminal message role must match for output_index={index}: {text}");
-                assert_eq!(done["item"]["content"].as_array().map(Vec::len), item["content"].as_array().map(Vec::len), "terminal message content cardinality must match for output_index={index}: {text}");
+                assert_eq!(
+                    done["item"]["id"], item["id"],
+                    "terminal message id must match for output_index={index}: {text}"
+                );
+                assert_eq!(
+                    done["item"]["role"], item["role"],
+                    "terminal message role must match for output_index={index}: {text}"
+                );
+                assert_eq!(
+                    done["item"]["content"].as_array().map(Vec::len),
+                    item["content"].as_array().map(Vec::len),
+                    "terminal message content cardinality must match for output_index={index}: {text}"
+                );
                 assert_eq!(
                     done["item"]["content"][0]["text"].as_str(),
                     item["content"][0]["text"].as_str(),
@@ -935,10 +994,22 @@ async fn responses_streaming_response_done_output_is_authoritative_terminal_stat
                 );
             }
             Some("function_call") => {
-                assert_eq!(done["item"]["id"], item["id"], "terminal tool id must match for output_index={index}: {text}");
-                assert_eq!(done["item"]["call_id"], item["call_id"], "terminal tool call_id must match for output_index={index}: {text}");
-                assert_eq!(done["item"]["name"], item["name"], "terminal tool name must match for output_index={index}: {text}");
-                assert_eq!(done["item"]["arguments"], item["arguments"], "terminal tool arguments must match for output_index={index}: {text}");
+                assert_eq!(
+                    done["item"]["id"], item["id"],
+                    "terminal tool id must match for output_index={index}: {text}"
+                );
+                assert_eq!(
+                    done["item"]["call_id"], item["call_id"],
+                    "terminal tool call_id must match for output_index={index}: {text}"
+                );
+                assert_eq!(
+                    done["item"]["name"], item["name"],
+                    "terminal tool name must match for output_index={index}: {text}"
+                );
+                assert_eq!(
+                    done["item"]["arguments"], item["arguments"],
+                    "terminal tool arguments must match for output_index={index}: {text}"
+                );
             }
             other => panic!("unexpected terminal item type {other:?}: {text}"),
         }
@@ -946,8 +1017,8 @@ async fn responses_streaming_response_done_output_is_authoritative_terminal_stat
 }
 
 #[tokio::test]
-async fn responses_streaming_response_done_does_not_reindex_terminal_tool_outputs_from_node_positions(
-) {
+async fn responses_streaming_response_done_does_not_reindex_terminal_tool_outputs_from_node_positions()
+ {
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -1339,7 +1410,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
-        strip_cross_protocol_nested_extra: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-1),
         })
@@ -1432,7 +1503,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             active_probe_model_override: None,
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
-        strip_cross_protocol_nested_extra: None,
+            strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(-1),
         })

@@ -231,6 +231,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             .get("emit_usage")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let service_tier = body.get("service_tier").cloned();
 
         let mut tool_outputs: Vec<String> = Vec::new();
         if let Some(arr) = input.and_then(|v| v.as_array()) {
@@ -405,22 +406,25 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             json!({ "type": "function_call", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }),
                         ]
                     };
+                    let mut completed = json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_mock",
+                            "object": "response",
+                            "created_at": 0,
+                            "model": model,
+                            "status": "completed",
+                            "output": calls
+                        }
+                    });
+                    if let Some(service_tier) = service_tier.clone()
+                        && let Some(response) = completed.get_mut("response").and_then(Value::as_object_mut)
+                    {
+                        response.insert("service_tier".to_string(), service_tier);
+                    }
                     let stream = futures_util::stream::iter(vec![
                         Ok::<_, Infallible>(
-                            Event::default().event("response.completed").data(
-                                json!({
-                                    "type": "response.completed",
-                                    "response": {
-                                        "id": "resp_mock",
-                                        "object": "response",
-                                        "created_at": 0,
-                                        "model": model,
-                                        "status": "completed",
-                                        "output": calls
-                                    }
-                                })
-                                .to_string(),
-                            ),
+                            Event::default().event("response.completed").data(completed.to_string()),
                         ),
                         Ok::<_, Infallible>(Event::default().data("[DONE]")),
                     ]);
@@ -573,8 +577,8 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             ),
                         ),
                         Ok::<_, Infallible>(
-                            Event::default().event("response.completed").data(
-                                json!({
+                            Event::default().event("response.completed").data({
+                                let mut completed = json!({
                                     "type": "response.completed",
                                     "response": {
                                         "id": "resp_mock",
@@ -599,9 +603,16 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                                             }
                                         ]
                                     }
-                                })
-                                .to_string(),
-                            ),
+                                });
+                                if let Some(service_tier) = service_tier.clone()
+                                    && let Some(response) = completed
+                                        .get_mut("response")
+                                        .and_then(Value::as_object_mut)
+                                {
+                                    response.insert("service_tier".to_string(), service_tier);
+                                }
+                                completed.to_string()
+                            }),
                         ),
                         Ok::<_, Infallible>(Event::default().data("[DONE]")),
                     ]);
@@ -1025,20 +1036,25 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 json!({ "type": "reasoning", "id": "rs_mock", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
             ];
             output.extend(calls);
-            return Json(json!({
+            let mut response = json!({
                 "id": "resp_mock",
                 "object": "response",
                 "created_at": 0,
                 "model": model,
                 "status": "completed",
                 "output": output
-            }))
-            .into_response();
+            });
+            if let Some(service_tier) = service_tier.clone()
+                && let Some(obj) = response.as_object_mut()
+            {
+                obj.insert("service_tier".to_string(), service_tier);
+            }
+            return Json(response).into_response();
         }
 
         if !tool_outputs.is_empty() {
             let joined = tool_outputs.join("|");
-            return Json(json!({
+            let mut response = json!({
                 "id": "resp_mock",
                 "object": "response",
                 "created_at": 0,
@@ -1049,8 +1065,13 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     "role": "assistant",
                     "content": [{ "type": "output_text", "text": format!("tool_ok:{joined}") }]
                 }]
-            }))
-            .into_response();
+            });
+            if let Some(service_tier) = service_tier.clone()
+                && let Some(obj) = response.as_object_mut()
+            {
+                obj.insert("service_tier".to_string(), service_tier);
+            }
+            return Json(response).into_response();
         }
 
         let mut output = Vec::new();
@@ -1064,15 +1085,20 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             "role": "assistant",
             "content": [{ "type": "output_text", "text": text }]
         }));
-        Json(json!({
+        let mut response = json!({
             "id": "resp_mock",
             "object": "response",
             "created_at": 0,
             "model": model,
             "status": "completed",
             "output": output
-        }))
-        .into_response()
+        });
+        if let Some(service_tier) = service_tier
+            && let Some(obj) = response.as_object_mut()
+        {
+            obj.insert("service_tier".to_string(), service_tier);
+        }
+        Json(response).into_response()
     }
 
     async fn chat(

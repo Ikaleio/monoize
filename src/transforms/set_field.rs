@@ -81,7 +81,6 @@ impl Transform for SetFieldTransform {
                 | crate::urp::UrpStreamEvent::Error { extra_body, .. } => {
                     set_extra_path(extra_body, &cfg.path, cfg.value.clone());
                 }
-                _ => {}
             },
         }
         Ok(())
