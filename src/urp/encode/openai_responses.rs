@@ -496,7 +496,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         .unwrap_or_else(|| chrono::Utc::now().timestamp());
     let status = finish_reason_to_status(resp.finish_reason);
     let completed_at = if status == "completed" {
-        Value::Number(serde_json::Number::from(created_at))
+        Value::Number(serde_json::Number::from(chrono::Utc::now().timestamp()))
     } else {
         Value::Null
     };
@@ -699,8 +699,10 @@ fn encode_input_image(
         ImageSource::Base64 { media_type, data } => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), Value::String("input_image".to_string()));
-            obj.insert("image_base64".to_string(), Value::String(data.clone()));
-            obj.insert("media_type".to_string(), Value::String(media_type.clone()));
+            obj.insert(
+                "image_url".to_string(),
+                Value::String(format!("data:{media_type};base64,{data}")),
+            );
             merge_extra(&mut obj, extra_body);
             Value::Object(obj)
         }

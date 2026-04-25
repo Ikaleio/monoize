@@ -169,6 +169,20 @@ async fn responses_streaming_emits_sse_events() {
         "must not wrap payload in data field"
     );
     assert!(created.1["sequence_number"].as_u64().is_some());
+    assert!(
+        created.1["response"].as_object().unwrap().contains_key("user"),
+        "response.created response object must include user, even when null"
+    );
+    assert_eq!(created.1["response"]["user"], Value::Null);
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .expect("response.completed frame");
+    assert!(
+        completed.1["response"].as_object().unwrap().contains_key("user"),
+        "response.completed response object must include user, even when null"
+    );
+    assert_eq!(completed.1["response"]["user"], Value::Null);
     assert_eq!(
         count_done_sentinels(&text),
         1,
@@ -235,6 +249,52 @@ async fn responses_streaming_completed_preserves_service_tier() {
         completed["response"]["service_tier"].as_str(),
         Some("priority")
     );
+}
+
+#[tokio::test]
+async fn responses_streaming_image_generation_completed_emits_output_image() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"generate image"}]}],
+                "tools":[{"type":"image_generation","output_format":"png"}],
+                "stream": true,
+                "stream_mode": "image_generation_completed"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(frames.iter().any(|(event, payload)| {
+        event == "response.content_part.done"
+            && payload["part"]["type"].as_str() == Some("output_image")
+            && payload["part"]["source"]["media_type"].as_str() == Some("image/png")
+    }), "{text}");
+    assert!(frames.iter().any(|(event, payload)| {
+        event == "response.completed"
+            && payload["response"]["output"]
+                .as_array()
+                .is_some_and(|output| output.iter().any(|item| {
+                    item["type"].as_str() == Some("message")
+                        && item["content"].as_array().is_some_and(|content| {
+                            content.iter().any(|part| {
+                                part["type"].as_str() == Some("output_image")
+                                    && part["source"]["media_type"].as_str() == Some("image/png")
+                            })
+                        })
+                }))
+    }), "{text}");
 }
 
 #[tokio::test]

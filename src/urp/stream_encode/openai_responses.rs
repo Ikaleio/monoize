@@ -424,8 +424,10 @@ pub(crate) async fn emit_synthetic_responses_stream(
         )
         .await?;
     }
-    let completed_response =
-        sanitize_responses_completed_for_frame_limit(&encoded, sse_max_frame_length);
+    let mut completed_response = ensure_response_object_user_field(
+        sanitize_responses_completed_for_frame_limit(&encoded, sse_max_frame_length),
+    );
+    completed_response["completed_at"] = json!(now_ts());
     send_responses_event(
         &tx,
         &mut seq,
@@ -684,8 +686,28 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 );
             }
             UrpStreamEvent::NodeDelta {
-                node_index, delta, ..
+                node_index,
+                delta,
+                extra_body,
+                ..
             } => {
+                if !node_states.contains_key(&node_index)
+                    && let Some((output_item, synthesized_state)) =
+                        synthesize_node_state_from_delta(node_index, &delta, &extra_body)
+                {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.output_item.added",
+                        json!({
+                            "output_index": synthesized_state.output_index,
+                            "item": output_item,
+                        }),
+                    )
+                    .await?;
+                    streamed_output_indices.insert(synthesized_state.output_index);
+                    node_states.insert(node_index, synthesized_state);
+                }
                 let Some(node_state) = node_states.get_mut(&node_index) else {
                     continue;
                 };
@@ -1434,13 +1456,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 }
                 let mut rebuild_output_items = completed_output_items.clone();
                 for (output_index, item) in terminal_output.iter().enumerate() {
-                    if rebuild_output_items
-                        .iter()
-                        .any(|(existing_index, _)| *existing_index == output_index)
+                    if let Some((_, existing_item)) = rebuild_output_items
+                        .iter_mut()
+                        .find(|(existing_index, _)| *existing_index == output_index)
                     {
-                        continue;
+                        merge_terminal_output_item(existing_item, item);
+                    } else {
+                        rebuild_output_items.push((output_index, item.clone()));
                     }
-                    rebuild_output_items.push((output_index, item.clone()));
                 }
                 if !completed_output_items.is_empty() && !streamed_output_indices.is_empty() {
                     rebuild_output_items.sort_by_key(|(idx, _)| *idx);
@@ -1469,6 +1492,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
+                sync_completed_output_items_with_terminal_output(
+                    &mut completed_output_items,
+                    &terminal_output,
+                );
                 emit_missing_terminal_output_done_events(
                     &tx,
                     &mut seq,
@@ -1493,8 +1520,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     sse_max_frame_length,
                 )
                 .await?;
-                let completed_response =
-                    sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length);
+                let mut completed_response = ensure_response_object_user_field(
+                    sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length),
+                );
+                completed_response["completed_at"] = json!(now_ts());
                 send_responses_event(
                     &tx,
                     &mut seq,
@@ -1566,6 +1595,57 @@ fn node_header_name(header: &urp::NodeHeader) -> Option<String> {
         urp::NodeHeader::ToolCall { name, .. } => Some(name.clone()),
         _ => None,
     }
+}
+
+fn synthesize_node_state_from_delta(
+    node_index: u32,
+    delta: &urp::NodeDelta,
+    extra_body: &HashMap<String, Value>,
+) -> Option<(Value, StreamedNodeState)> {
+    let (zone, header, call_id, name) = match delta {
+        urp::NodeDelta::Reasoning { .. } => (
+            ResponsesOutputZone::Reasoning,
+            urp::NodeHeader::Reasoning {
+                id: extra_body
+                    .get("reasoning_item_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
+            None,
+            None,
+        ),
+        _ => return None,
+    };
+
+    let output_item = stream_output_item_start_stub_from_node_header(
+        zone,
+        &header,
+        extra_body,
+        &HashMap::new(),
+    );
+    let item_id = output_item
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Some((
+        output_item.clone(),
+        StreamedNodeState {
+            output_index: node_index as usize,
+            zone,
+            content_index: None,
+            item_id,
+            phase: None,
+            call_id,
+            name,
+            reasoning_summary_part_added_sent: false,
+            message_start_emitted: true,
+            header: Some(header),
+            node_extra_body: extra_body.clone(),
+            completed_item: Some(complete_stream_output_item(output_item)),
+            is_shared_message_output: false,
+        },
+    ))
 }
 
 fn ordinary_role_to_str(role: urp::OrdinaryRole) -> &'static str {
@@ -2271,8 +2351,16 @@ fn response_envelope_payload(
             "safety_identifier": null,
             "prompt_cache_key": null,
             "usage": null,
+            "user": null,
         }
     })
+}
+
+fn ensure_response_object_user_field(mut response: Value) -> Value {
+    if let Some(obj) = response.as_object_mut() {
+        obj.entry("user".to_string()).or_insert(Value::Null);
+    }
+    response
 }
 
 fn complete_stream_output_item(mut item: Value) -> Value {
@@ -2287,6 +2375,73 @@ fn rebuild_completed_response_output(completed_output_items: &[(usize, Value)]) 
         .iter()
         .map(|(_, item)| item.clone())
         .collect()
+}
+
+fn sync_completed_output_items_with_terminal_output(
+    completed_output_items: &mut Vec<(usize, Value)>,
+    terminal_output: &[Value],
+) {
+    for (output_index, item) in terminal_output.iter().enumerate() {
+        if let Some((_, existing_item)) = completed_output_items
+            .iter_mut()
+            .find(|(existing_index, _)| *existing_index == output_index)
+        {
+            merge_terminal_output_item(existing_item, item);
+        }
+    }
+}
+
+fn merge_terminal_output_item(existing_item: &mut Value, terminal_item: &Value) {
+    let existing_type = existing_item
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let terminal_type = terminal_item
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if existing_type.is_none() || existing_type != terminal_type {
+        return;
+    }
+
+    let Some(existing_obj) = existing_item.as_object_mut() else {
+        return;
+    };
+    let Some(terminal_obj) = terminal_item.as_object() else {
+        return;
+    };
+
+    match existing_type.as_deref() {
+        Some("message") => {
+            if let Some(content) = terminal_obj.get("content").cloned() {
+                existing_obj.insert("content".to_string(), content);
+            }
+            if let Some(status) = terminal_obj.get("status").cloned() {
+                existing_obj.insert("status".to_string(), status);
+            }
+        }
+        Some("reasoning") => {
+            for key in ["text", "summary", "encrypted_content", "source", "status"] {
+                if let Some(value) = terminal_obj.get(key).cloned() {
+                    existing_obj.insert(key.to_string(), value);
+                }
+            }
+        }
+        Some("function_call") => {
+            for key in ["arguments", "call_id", "name", "status"] {
+                if let Some(value) = terminal_obj.get(key).cloned() {
+                    existing_obj.insert(key.to_string(), value);
+                }
+            }
+        }
+        _ => {
+            for (key, value) in terminal_obj {
+                if key != "id" && key != "type" {
+                    existing_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
 }
 
 async fn emit_missing_terminal_output_done_events(
