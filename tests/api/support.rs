@@ -218,6 +218,15 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             .and_then(|v| v.as_array())
             .map(|a| !a.is_empty())
             .unwrap_or(false);
+        let image_generation_tool = body
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .map(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("type").and_then(|v| v.as_str()) == Some("image_generation")
+                })
+            })
+            .unwrap_or(false);
         let parallel = body
             .get("parallel_tool_calls")
             .and_then(|v| v.as_bool())
@@ -249,6 +258,49 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
 
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
             // If tools are present and no tool outputs were provided yet, stream a tool call.
+            let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("image_generation_completed")
+                && tool_outputs.is_empty()
+                && (image_generation_tool || !tools_present)
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("image_generation.completed").data(
+                            json!({
+                                "type": "image_generation.completed",
+                                "b64_json": image_b64,
+                                "output_format": "png"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": [{
+                                        "type": "image_generation_call",
+                                        "id": "ig_mock",
+                                        "result": image_b64,
+                                        "output_format": "png"
+                                    }]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
             if tools_present && tool_outputs.is_empty() {
                 if body.get("stream_mode").and_then(|v| v.as_str()) == Some("reasoning_text_tool") {
                     let stream = futures_util::stream::iter(vec![
@@ -257,7 +309,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             .data(json!({
                                 "type": "response.output_item.added",
                                 "output_index": 0,
-                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "" }], "text": "" }
+                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "" }], "text": "", "encrypted_content": "mock_sig" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.reasoning_summary_part.added")
@@ -1022,6 +1074,23 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         }
 
         if tools_present && tool_outputs.is_empty() {
+            if image_generation_tool {
+                let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
+                return Json(json!({
+                    "id": "resp_mock",
+                    "object": "response",
+                    "created_at": 0,
+                    "model": model,
+                    "status": "completed",
+                    "output": [{
+                        "type": "image_generation_call",
+                        "id": "ig_mock",
+                        "result": image_b64,
+                        "output_format": "png"
+                    }]
+                }))
+                .into_response();
+            }
             let calls = if parallel {
                 vec![
                     json!({ "type": "function_call", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }),

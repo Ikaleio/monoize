@@ -405,6 +405,7 @@ async fn models_list_respects_api_key_model_limits() {
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
+                reasoning_envelope_enabled: true,
             },
             false,
         )
@@ -459,6 +460,7 @@ async fn models_list_model_limits_disabled_shows_all() {
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
+                reasoning_envelope_enabled: true,
             },
             false,
         )
@@ -516,6 +518,7 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: Vec::new(),
+                reasoning_envelope_enabled: true,
             },
             false,
         )
@@ -573,6 +576,7 @@ async fn forwarding_applies_api_key_model_redirects_before_model_limits_and_rout
                     pattern: ".*opus.*".to_string(),
                     replace: "gpt-5-mini".to_string(),
                 }],
+                reasoning_envelope_enabled: true,
             },
             false,
         )
@@ -630,6 +634,7 @@ async fn image_generation_applies_api_key_model_redirects_before_model_limits() 
                     pattern: ".*opus.*".to_string(),
                     replace: "gpt-5-mini".to_string(),
                 }],
+                reasoning_envelope_enabled: true,
             },
             false,
         )

@@ -170,7 +170,10 @@ async fn responses_streaming_emits_sse_events() {
     );
     assert!(created.1["sequence_number"].as_u64().is_some());
     assert!(
-        created.1["response"].as_object().unwrap().contains_key("user"),
+        created.1["response"]
+            .as_object()
+            .unwrap()
+            .contains_key("user"),
         "response.created response object must include user, even when null"
     );
     assert_eq!(created.1["response"]["user"], Value::Null);
@@ -179,7 +182,10 @@ async fn responses_streaming_emits_sse_events() {
         .find(|(event, _)| event == "response.completed")
         .expect("response.completed frame");
     assert!(
-        completed.1["response"].as_object().unwrap().contains_key("user"),
+        completed.1["response"]
+            .as_object()
+            .unwrap()
+            .contains_key("user"),
         "response.completed response object must include user, even when null"
     );
     assert_eq!(completed.1["response"]["user"], Value::Null);
@@ -276,25 +282,34 @@ async fn responses_streaming_image_generation_completed_emits_output_image() {
     let text = String::from_utf8_lossy(&bytes).to_string();
     let frames = parse_responses_sse_json(&text);
 
-    assert!(frames.iter().any(|(event, payload)| {
-        event == "response.content_part.done"
-            && payload["part"]["type"].as_str() == Some("output_image")
-            && payload["part"]["source"]["media_type"].as_str() == Some("image/png")
-    }), "{text}");
-    assert!(frames.iter().any(|(event, payload)| {
-        event == "response.completed"
-            && payload["response"]["output"]
-                .as_array()
-                .is_some_and(|output| output.iter().any(|item| {
-                    item["type"].as_str() == Some("message")
-                        && item["content"].as_array().is_some_and(|content| {
-                            content.iter().any(|part| {
-                                part["type"].as_str() == Some("output_image")
-                                    && part["source"]["media_type"].as_str() == Some("image/png")
-                            })
+    assert!(
+        frames.iter().any(|(event, payload)| {
+            event == "response.content_part.done"
+                && payload["part"]["type"].as_str() == Some("output_image")
+                && payload["part"]["source"]["media_type"].as_str() == Some("image/png")
+        }),
+        "{text}"
+    );
+    assert!(
+        frames.iter().any(|(event, payload)| {
+            event == "response.completed"
+                && payload["response"]["output"]
+                    .as_array()
+                    .is_some_and(|output| {
+                        output.iter().any(|item| {
+                            item["type"].as_str() == Some("message")
+                                && item["content"].as_array().is_some_and(|content| {
+                                    content.iter().any(|part| {
+                                        part["type"].as_str() == Some("output_image")
+                                            && part["source"]["media_type"].as_str()
+                                                == Some("image/png")
+                                    })
+                                })
                         })
-                }))
-    }), "{text}");
+                    })
+        }),
+        "{text}"
+    );
 }
 
 #[tokio::test]
@@ -459,6 +474,20 @@ async fn responses_streaming_reencodes_greedy_merged_items_with_canonical_sse_bo
     assert!(text.contains("\"type\":\"message\""));
     assert!(text.contains("\"type\":\"function_call\""));
     assert!(text.contains("\"phase\":\"analysis\""));
+    let frames = parse_responses_sse_json(&text);
+    let reasoning_added = frames
+        .iter()
+        .find(|(event, payload)| {
+            event == "response.output_item.added"
+                && payload["item"]["type"].as_str() == Some("reasoning")
+        })
+        .expect("reasoning output_item.added");
+    assert!(
+        reasoning_added.1["item"]["encrypted_content"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("mz2.")),
+        "reasoning output_item.added must wrap encrypted_content for downstream: {text}"
+    );
     assert!(text.contains("event: response.content_part.added"));
     assert!(text.contains(
         "\"part\":{\"annotations\":[],\"logprobs\":[],\"text\":\"\",\"type\":\"output_text\"}"
