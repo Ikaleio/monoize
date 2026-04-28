@@ -291,6 +291,10 @@ async fn messages_streaming_keeps_signature_in_thinking_block_and_delta_order() 
         thinking_start["content_block"]["thinking"].as_str(),
         Some("")
     );
+    assert!(
+        thinking_start["content_block"].get("signature").is_none(),
+        "ordinary thinking content_block_start must not duplicate the later signature_delta: {text}"
+    );
 
     let mut thinking_delta_pos = None;
     let mut signature_delta_pos = None;
@@ -1287,7 +1291,7 @@ async fn messages_stream_signature_delta_carries_sigil_from_responses_upstream()
     });
 
     let combined = match start_signature {
-        Some(prefix) if !prefix.is_empty() => prefix + &signature_payload,
+        Some(ref prefix) if !prefix.is_empty() => prefix.clone() + &signature_payload,
         _ => signature_payload,
     };
 
@@ -1296,11 +1300,11 @@ async fn messages_stream_signature_delta_carries_sigil_from_responses_upstream()
         "expected at least one signature_delta carrying the upstream encrypted reasoning payload"
     );
     assert!(
-        combined.starts_with("mz1.rs_mock."),
-        "signature emitted to downstream MUST carry the sigil `mz1.<item_id>.<original_signature>` so that history round-trip preserves the OpenAI Responses item id; got `{combined}`"
+        combined.starts_with("mz2."),
+        "signature emitted to downstream MUST carry an mz2 envelope so history round-trip preserves item and model metadata; got `{combined}`"
     );
     assert!(
-        combined.ends_with("mock_sig"),
-        "the original mock signature payload must be present after the sigil prefix; got `{combined}`"
+        start_signature.is_none(),
+        "ordinary thinking content_block_start must not duplicate the signature_delta payload"
     );
 }

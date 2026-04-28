@@ -86,8 +86,8 @@ async fn chat_streaming_preserves_encrypted_reasoning_from_chat_upstream() {
         "chat stream should preserve encrypted reasoning detail from chat upstream: {text}"
     );
     assert!(
-        text.contains("\"data\":\"mock_sig\""),
-        "chat stream should preserve encrypted reasoning payload from chat upstream: {text}"
+        text.contains("\"data\":\"mz2."),
+        "chat stream should wrap encrypted reasoning payload from chat upstream: {text}"
     );
 }
 
@@ -150,7 +150,7 @@ async fn chat_streaming_maps_tool_calls_and_reasoning_from_responses_upstream() 
     assert!(text.contains("\"tool_calls\""));
     assert!(text.contains("\"reasoning_details\""));
     assert!(text.contains("\"type\":\"reasoning.encrypted\""));
-    assert!(text.contains("\"data\":\"mock_sig\""));
+    assert!(text.contains("\"data\":\"mz2."));
     assert!(text.contains("[DONE]"));
 }
 
@@ -1101,8 +1101,8 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
         "chat stream should preserve encrypted reasoning detail: {text}"
     );
     assert!(
-        text.contains("\"data\":\"mock_sig\""),
-        "chat stream should preserve encrypted reasoning payload: {text}"
+        text.contains("\"data\":\"mz2."),
+        "chat stream should wrap encrypted reasoning payload: {text}"
     );
 }
 

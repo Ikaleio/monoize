@@ -19,19 +19,15 @@ pub(super) async fn forward_stream_typed(
     let requested_model = req.model.clone();
     let transform_match_model =
         normalized_logical_model_for_matching(&state, &requested_model).await;
-    // Preserve the originally-decoded URP request so each per-attempt iteration
-    // can re-derive the transformed request from a pristine base (see the
-    // matching comment in `execute_nonstream_typed`).
-    let original_req = req.clone();
-    inject_monoize_context(&auth, &mut req);
-    apply_transform_rules_request(&state, &mut req, &auth.transforms, &transform_match_model)
-        .await?;
-    strip_monoize_context(&mut req);
     resolve_model_suffix(&state, &mut req).await;
+    // Preserve the suffix-normalized request so each per-attempt iteration can
+    // re-derive the transformed request from a pristine base (see the matching
+    // comment in `execute_nonstream_typed`).
+    let original_req = req.clone();
     let logical_model = req.model.clone();
     let routing_stub = build_routing_stub(&req, max_multiplier);
-    let attempts =
-        build_monoize_attempts(&state, &routing_stub, auth.effective_groups.clone()).await?;
+    let attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
+    ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
     insert_pending_request_log(
         &state,
         &auth,
@@ -51,13 +47,17 @@ pub(super) async fn forward_stream_typed(
             continue;
         }
 
+        let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
+
         let sse_max_frame_length = effective_sse_max_frame_length(
             &attempt.provider_transforms,
+            &global_transforms,
             &auth.transforms,
             &logical_model,
         );
         let requires_buffered_stream = requires_buffered_response_stream(
             &attempt.provider_transforms,
+            &global_transforms,
             &auth.transforms,
             &logical_model,
             downstream,
@@ -72,8 +72,8 @@ pub(super) async fn forward_stream_typed(
 
             let attempt_number = execution_state.record_upstream_attempt();
             // Clone from the pristine original request (pre-transforms) so
-            // that the cross-family strip runs BEFORE both api-key and
-            // provider transforms; see `execute_nonstream_typed`.
+            // that the cross-family strip runs BEFORE provider, global, and
+            // API-key transforms; see `execute_nonstream_typed`.
             let mut req_attempt = original_req.clone();
             if attempt.strip_cross_protocol_nested_extra
                 && !downstream.is_same_family(attempt.provider_type)
@@ -81,14 +81,6 @@ pub(super) async fn forward_stream_typed(
                 urp::strip_nested_extra_body(&mut req_attempt.input);
             }
             inject_monoize_context(&auth, &mut req_attempt);
-            apply_transform_rules_request(
-                &state,
-                &mut req_attempt,
-                &auth.transforms,
-                &transform_match_model,
-            )
-            .await?;
-            strip_monoize_context(&mut req_attempt);
             req_attempt.model = attempt.upstream_model.clone();
             apply_transform_rules_request(
                 &state,
@@ -97,6 +89,27 @@ pub(super) async fn forward_stream_typed(
                 &transform_match_model,
             )
             .await?;
+            apply_transform_rules_request(
+                &state,
+                &mut req_attempt,
+                &global_transforms,
+                &transform_match_model,
+            )
+            .await?;
+            apply_transform_rules_request(
+                &state,
+                &mut req_attempt,
+                &auth.transforms,
+                &transform_match_model,
+            )
+            .await?;
+            strip_monoize_context(&mut req_attempt);
+            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
+                &mut req_attempt.input,
+                reasoning_envelope_provider_type(attempt.provider_type),
+                &req_attempt.model,
+                auth.reasoning_envelope_enabled,
+            );
 
             if requires_buffered_stream {
                 let mut nonstream_req = req_attempt.clone();
@@ -154,6 +167,13 @@ pub(super) async fn forward_stream_typed(
                         apply_transform_rules_response(
                             &state,
                             &mut resp,
+                            &global_transforms,
+                            &logical_model,
+                        )
+                        .await?;
+                        apply_transform_rules_response(
+                            &state,
+                            &mut resp,
                             &auth.transforms,
                             &logical_model,
                         )
@@ -162,6 +182,13 @@ pub(super) async fn forward_stream_typed(
                             && !matches!(downstream, DownstreamProtocol::Responses)
                         {
                             convert_assistant_images_to_markdown(&mut resp);
+                        }
+                        if auth.reasoning_envelope_enabled {
+                            urp::wrap_reasoning_envelopes_in_response(
+                                &mut resp,
+                                reasoning_envelope_provider_type(attempt.provider_type),
+                                &nonstream_req.model,
+                            );
                         }
                         let charge =
                             maybe_charge_response(&state, &auth, &attempt, &logical_model, &resp)
@@ -346,7 +373,15 @@ pub(super) async fn forward_stream_typed(
                         state.monoize_runtime.read().await.enable_estimated_billing;
                     let state_for_transform = state.clone();
                     let provider_rules_for_transform = attempt.provider_transforms.clone();
+                    let global_rules_for_transform = global_transforms.clone();
                     let auth_rules_for_transform = auth.transforms.clone();
+                    let reasoning_envelope_for_transform =
+                        auth.reasoning_envelope_enabled.then(|| {
+                            (
+                                reasoning_envelope_provider_type(attempt.provider_type).to_string(),
+                                req_attempt.model.clone(),
+                            )
+                        });
                     tokio::spawn(async move {
                         let tx_err = tx.clone();
                         let stream_result = {
@@ -372,13 +407,20 @@ pub(super) async fn forward_stream_typed(
                             };
 
                             let transform_handle = tokio::spawn(async move {
+                                let reasoning_envelope = reasoning_envelope_for_transform
+                                    .as_ref()
+                                    .map(|(provider_type, upstream_model)| {
+                                        (provider_type.as_str(), upstream_model.as_str())
+                                    });
                                 transform_urp_stream(
                                     &state_for_transform,
                                     decoded_rx,
                                     transformed_tx,
                                     &provider_rules_for_transform,
+                                    &global_rules_for_transform,
                                     &auth_rules_for_transform,
                                     &model_for_transform,
+                                    reasoning_envelope,
                                 )
                                 .await
                             });
