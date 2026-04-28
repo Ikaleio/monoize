@@ -7,17 +7,25 @@ use crate::monoize_routing::{
 };
 use crate::settings::normalize_pricing_model_key;
 use crate::urp;
-use crate::users::ModelRedirectRule;
+use crate::users::{ModelRedirectRule, UserRole};
 use axum::http::StatusCode;
 use std::collections::{BTreeSet, HashMap};
 
 const GROUP_ROUTING_MODEL: &str = "gpt-group-routing";
 
 fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {
+    build_test_auth_with_role(effective_groups, UserRole::User)
+}
+
+fn build_test_auth_with_role(
+    effective_groups: Option<Vec<String>>,
+    user_role: UserRole,
+) -> AuthResult {
     AuthResult {
         tenant_id: "tenant-1".to_string(),
         user_id: None,
         username: None,
+        user_role,
         api_key_id: None,
         max_multiplier: None,
         transforms: Vec::new(),
@@ -28,6 +36,7 @@ fn build_test_auth(effective_groups: Option<Vec<String>>) -> AuthResult {
         ip_whitelist: Vec::new(),
         sub_account_enabled: false,
         sub_account_balance_nano: "0".to_string(),
+        reasoning_envelope_enabled: true,
     }
 }
 
@@ -300,6 +309,74 @@ fn normalize_pricing_model_key_strips_recognized_reasoning_suffix() {
     );
 }
 
+#[tokio::test]
+async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+
+    state
+        .monoize_store
+        .create_provider(CreateMonoizeProviderInput {
+            name: "OpenAI".to_string(),
+            provider_type: MonoizeProviderType::Responses,
+            max_retries: 0,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            groups: Vec::new(),
+            enabled: true,
+            priority: Some(0),
+            models: std::collections::HashMap::from([(
+                "gpt-5-mini".to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
+            channels: vec![CreateMonoizeChannelInput {
+                id: None,
+                name: "primary".to_string(),
+                base_url: "https://example.com".to_string(),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                weight: 1,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+        })
+        .await
+        .expect("provider created");
+
+    let mut req = build_test_urp_request("gpt-5-mini-thinking");
+    resolve_model_suffix(&state, &mut req).await;
+    let original_req = req.clone();
+
+    assert_eq!(original_req.model, "gpt-5-mini");
+    assert_eq!(
+        original_req
+            .reasoning
+            .as_ref()
+            .and_then(|reasoning| reasoning.effort.as_deref()),
+        Some("high")
+    );
+}
+
 #[test]
 fn resolve_upstream_model_prefers_non_empty_redirect() {
     let entry = MonoizeModelEntry {
@@ -382,13 +459,101 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
         model: "gpt-unpriced".to_string(),
         max_multiplier: None,
     };
-    let err = build_monoize_attempts(&state, &req, None)
+    let auth = build_test_auth(None);
+    let err = build_monoize_attempts(&state, &req, &auth)
         .await
         .expect_err("must reject unpriced model");
 
     assert_eq!(err.status, StatusCode::FORBIDDEN);
     assert_eq!(err.code, "model_pricing_required");
     assert!(err.message.contains("gpt-unpriced-upstream"));
+}
+
+#[tokio::test]
+async fn build_monoize_attempts_allows_admin_unpriced_models_without_pricing() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+
+    state
+        .monoize_store
+        .create_provider(CreateMonoizeProviderInput {
+            name: "OpenAI".to_string(),
+            provider_type: MonoizeProviderType::Responses,
+            max_retries: 0,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            groups: Vec::new(),
+            enabled: true,
+            priority: Some(0),
+            models: std::collections::HashMap::from([(
+                "gpt-unpriced".to_string(),
+                MonoizeModelEntry {
+                    redirect: Some("gpt-unpriced-upstream".to_string()),
+                    multiplier: 1.0,
+                },
+            )]),
+            channels: vec![CreateMonoizeChannelInput {
+                id: None,
+                name: "primary".to_string(),
+                base_url: "https://example.com".to_string(),
+                api_key: Some("secret".to_string()),
+                enabled: true,
+                weight: 1,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+        })
+        .await
+        .expect("provider created");
+
+    let req = UrpRequest {
+        model: "gpt-unpriced".to_string(),
+        max_multiplier: None,
+    };
+    let auth = build_test_auth_with_role(None, UserRole::Admin);
+    let attempts = build_monoize_attempts(&state, &req, &auth)
+        .await
+        .expect("admin should be allowed to use unpriced models");
+
+    assert_eq!(attempts.len(), 1);
+    assert!(!attempts[0].billable_pricing_available);
+
+    let usage = urp::Usage {
+        input_tokens: 16,
+        output_tokens: 32,
+        input_details: None,
+        output_details: None,
+        extra_body: HashMap::new(),
+    };
+    let charge = maybe_charge_usage(&state, &auth, &attempts[0], &req.model, &usage)
+        .await
+        .expect("admin unpriced request should downgrade to zero-charge");
+
+    assert_eq!(charge.charge_nano_usd, Some(0));
+    let breakdown = charge.billing_breakdown.expect("breakdown exists");
+    assert_eq!(breakdown["exempted"], serde_json::json!(true));
+    assert_eq!(
+        breakdown["exemption_reason"],
+        serde_json::json!("admin_unpriced_model")
+    );
+    assert_eq!(breakdown["final_charge_nano"], serde_json::json!("0"));
 }
 
 #[tokio::test]
@@ -469,7 +634,8 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
         model: "gpt-fallback-src".to_string(),
         max_multiplier: None,
     };
-    let attempts = build_monoize_attempts(&state, &req, None)
+    let auth = build_test_auth(None);
+    let attempts = build_monoize_attempts(&state, &req, &auth)
         .await
         .expect("fallback-priced model should be allowed");
 
@@ -550,13 +716,16 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         max_multiplier: None,
     };
 
-    let unrestricted = build_monoize_attempts(&state, &req, None)
+    let unrestricted_auth = build_test_auth(None);
+    let unrestricted = build_monoize_attempts(&state, &req, &unrestricted_auth)
         .await
         .expect("unrestricted routing succeeds");
-    let team_a = build_monoize_attempts(&state, &req, Some(vec!["team-a".to_string()]))
+    let team_a_auth = build_test_auth(Some(vec!["team-a".to_string()]));
+    let team_a = build_monoize_attempts(&state, &req, &team_a_auth)
         .await
         .expect("team-a routing succeeds");
-    let public_only = build_monoize_attempts(&state, &req, Some(Vec::new()))
+    let public_only_auth = build_test_auth(Some(Vec::new()));
+    let public_only = build_monoize_attempts(&state, &req, &public_only_auth)
         .await
         .expect("public-only routing succeeds");
 
