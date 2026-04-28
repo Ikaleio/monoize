@@ -366,6 +366,16 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                             ),
                         });
                     }
+                    "image" => {
+                        if let Some(node) = parse_image_node_from_obj(bobj, base_role) {
+                            message_nodes.push(node);
+                        }
+                    }
+                    "document" | "file" => {
+                        if let Some(node) = parse_file_node_from_obj(bobj, base_role) {
+                            message_nodes.push(node);
+                        }
+                    }
                     _ => {
                         message_nodes.push(text_node_with_phase(
                             base_role,

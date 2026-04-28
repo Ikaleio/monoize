@@ -5,7 +5,7 @@ use crate::urp::decode::{
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ReasoningConfig, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    ToolResultContent, UrpRequest, UrpResponse, Usage, parse_reasoning_envelope,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -635,7 +635,13 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                     let detail_id = detail_obj
                         .get("id")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            detail_obj
+                                .get("data")
+                                .and_then(parse_reasoning_envelope)
+                                .and_then(|envelope| envelope.item_id)
+                        });
                     if let Some(data) = detail_obj.get("data") {
                         if !matches!(data, Value::Null) {
                             if let Some(s) = data.as_str() {

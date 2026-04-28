@@ -168,7 +168,7 @@ FP6a-NF. Monoize MUST NOT implement any fast path or raw passthrough that bypass
 
 FP6a1. If a streaming request matches only response-phase transform rules that support incremental canonical event rewriting, Monoize MUST keep the request in pass-through streaming mode and apply those response transforms to each canonical URP v2 stream event after stage 1 decoding and before stage 3 encoding.
 
-FP6a2. The pass-through streaming runtime in FP6a1 MUST preserve transform rule order and scope semantics already used for non-streaming responses. Provider response-phase rules run before API-key response-phase rules, using one mutable transform-state vector per rule chain for the lifetime of the request.
+FP6a2. The pass-through streaming runtime in FP6a1 MUST preserve transform rule order and scope semantics already used for non-streaming responses. Provider response-phase rules run before global response-phase rules, and global response-phase rules run before API-key response-phase rules, using one mutable transform-state vector per rule chain for the lifetime of the request.
 
 FP6a3. If a streaming request matches at least one enabled response-phase transform rule that requires whole-response mutation rather than incremental canonical event rewriting, or the selected downstream protocol cannot faithfully represent that transform's incremental output, Monoize MUST use buffered synthetic streaming for that request. In that mode Monoize fetches an upstream non-stream response, applies response transforms to `UrpResponseV2`, then emits protocol-correct synthetic downstream SSE.
 
@@ -240,6 +240,8 @@ T0. For internal URP v2 requests, tool descriptors in `tools[]` MUST use Respons
 
 T1. When a downstream adapter receives non-Responses tool descriptor shapes, for example Chat Completions `{"type":"function","function":{...}}` or Messages `{ "name": "...", "input_schema": ... }`, Monoize MUST normalize them to the internal shape defined by T0 before forwarding.
 
+T1a. Internal URP v2 `tools[]` MAY also contain native Responses non-function tool descriptors. For `type = "image_generation"`, Monoize MUST preserve the tool descriptor as a non-function tool with its typed `type` plus any extra top-level fields carried in `ToolDefinition.extra_body`.
+
 Stateful fields:
 
 S1. Monoize MUST reject `background=true` with `400` code `background_not_supported`.
@@ -295,7 +297,7 @@ TPH3. `phase` belongs only to `Text` nodes. Monoize MUST attach `phase` to text 
 
 TPH4. When Monoize decodes a protocol object whose `phase` is defined at message-item level or text-block level, Monoize MUST copy that `phase` value onto every URP v2 `Text` node produced from that source object.
 
-TPH5. When Monoize re-encodes URP v2 `Text` nodes to a protocol that supports `phase`, Monoize MUST write the text-node `phase` back to the target protocol object at that protocol's supported level.
+TPH5. When Monoize re-encodes URP v2 `Text` nodes to a protocol that supports `phase`, Monoize MUST write the text-node `phase` back to the target protocol object at that protocol's supported level, except where a provider-specific upstream request rule in this specification defines a stricter allow-list.
 
 ### 7.1.3 Reasoning-control normalization
 
@@ -390,6 +392,12 @@ PR1. Monoize MUST call the upstream path `POST /v1/responses`.
 
 PR2. For non-streaming responses, Monoize MUST parse the upstream response as a Responses response object and convert it to `UrpResponseV2`.
 
+PR2b. When a non-streaming upstream Responses `output[]` item has `type = "image_generation_call"` and carries non-empty field `result`, Monoize MUST decode that item as one assistant `Image` node with `Image.source = Base64`.
+
+- The decoded `media_type` MUST be derived from `output_format` when present: `png -> image/png`, `webp -> image/webp`, `jpeg -> image/jpeg`.
+- If `output_format` is absent or unrecognized, Monoize MUST default the decoded `media_type` to `image/png`.
+- Monoize MUST preserve unknown fields from that item in node-local `extra_body`, excluding adapter-consumed keys `type`, `result`, and `output_format`.
+
 PR2a. Responses order preservation:
 
 - When Monoize decodes Responses `input[]` or `output[]`, Monoize MUST process items in source order and preserve that order in the resulting URP v2 node sequence.
@@ -407,6 +415,7 @@ PR4a. Responses `phase` mapping:
 - When decoding Responses `message` items, Monoize MUST read `item.phase` when present and copy it onto every URP v2 `Text` node derived from that message item.
 - When encoding Responses `message` items from URP v2 `Text` nodes, Monoize MUST write `phase` on the generated `message` item when the contiguous text-node run shares the same non-null `phase`.
 - If a contiguous Responses `message` item contains no URP v2 `Text` nodes, Monoize MUST NOT invent a `phase` value.
+- When encoding an upstream Responses create request, Monoize MUST forward a `phase` value on a `message` item or text content part only if the value is exactly `commentary` or exactly `final_answer`. Monoize MUST drop every other `phase` value from the upstream request. This filter applies after downstream decoding and request transforms, and before the HTTP request is sent to the upstream Responses provider.
 
 PR4b. When encoding URP v2 `response_format` to an upstream `type=responses` request:
 
@@ -424,6 +433,36 @@ PR4c. When encoding URP v2 `Reasoning` nodes into upstream `POST /v1/responses` 
 - Monoize MUST NOT forward URP-internal or provider-origin reasoning metadata such as `source` on upstream request `input[]` reasoning items unless the upstream Responses request schema explicitly supports that field.
 - Monoize MUST NOT encode field `text` on upstream request `input[]` reasoning items. Plain reasoning text, when preserved at all, MUST be represented through `summary`.
 
+PR4c.1. When decoding downstream Responses `input[]`, Monoize MUST decode an item with `type = "reasoning"` into one URP v2 `Reasoning` node using the same field mapping as non-streaming Responses `output[]` reasoning items:
+
+- `id` maps to `Reasoning.id`;
+- `encrypted_content` maps to `Reasoning.encrypted`;
+- `summary[]` maps to `Reasoning.summary`;
+- `text`, when present, maps to `Reasoning.content`.
+
+PR4c.2. When encoding an upstream `POST /v1/responses` request, Monoize MUST include `reasoning.encrypted_content` in the top-level `include` array. If the downstream request already supplied an `include` array, Monoize MUST append `reasoning.encrypted_content` only when that exact string is absent.
+
+PR4c.3. When an authenticated API key has `reasoning_envelope_enabled = true`, Monoize MUST wrap every downstream-visible encrypted reasoning payload produced by `/v1/responses`, `/v1/chat/completions`, or `/v1/messages` in a Monoize reasoning envelope before the payload is emitted to the downstream client.
+
+PR4c.4. The Monoize reasoning envelope string format MUST be:
+
+- prefix: `mz2.`;
+- suffix: unpadded base64url encoding of a UTF-8 JSON object;
+- JSON object fields:
+  - `v = 2`;
+  - `provider_type`: the upstream provider type string that produced the encrypted payload;
+  - `model`: the upstream model string that produced the encrypted payload;
+  - `item_id`: the upstream reasoning item id when known, otherwise `null`;
+  - `payload`: the original encrypted reasoning payload as a JSON value.
+
+PR4c.5. Monoize MUST apply PR4c.3 to all downstream surfaces that can carry encrypted reasoning, including non-stream terminal responses, streaming reasoning deltas, streaming `output_item.added`, streaming `output_item.done`, streaming `response.completed`, Chat Completions `reasoning_details[]`, and Anthropic Messages `thinking.signature` or `redacted_thinking.data`.
+
+PR4c.6. Before sending an upstream request, Monoize MUST inspect replayed URP `Reasoning.encrypted` values. If the value is an `mz2.` envelope and `reasoning_envelope_enabled = true`, Monoize MUST unwrap and forward the original `payload` only when both `provider_type` and `model` equal the selected upstream provider type and upstream model for the current attempt. If either value differs, Monoize MUST drop that replayed reasoning node from the upstream request.
+
+PR4c.7. If `reasoning_envelope_enabled = false`, Monoize MUST NOT wrap newly produced downstream encrypted reasoning payloads. If a downstream request nevertheless replays an `mz2.` envelope, Monoize MAY unwrap it before upstream encoding, but MUST NOT enforce the provider/model mismatch drop defined by PR4c.6.
+
+PR4c.8. Monoize MUST accept legacy `mz1.<item_id>.<payload>` reasoning signatures as replay input. When forwarding such a value to a Responses upstream, Monoize MUST set the reasoning item id to `<item_id>` and forward only `<payload>` as `encrypted_content`.
+
 PR4d. When encoding URP v2 ordinary nodes into upstream `POST /v1/responses` request `input[]` messages, Monoize MUST choose content block types by message role:
 
 - `role="user"` content MUST use request or input block types such as `input_text`, `input_image`, and `input_file`.
@@ -435,6 +474,12 @@ PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Respons
 - text deltas are carried in `delta` for `response.output_text.delta`;
 - tool-call items are nested under `item` for `response.output_item.added` and `response.output_item.done`;
 - argument deltas identify the call via `output_index`, not necessarily `call_id`, for `response.function_call_arguments.delta`.
+
+PR5c. When parsing upstream Responses SSE, Monoize MAY receive official image-generation tool events outside the `response.*` namespace.
+
+- For `image_generation.completed`, if the payload carries non-empty `b64_json`, Monoize MUST decode that payload as one assistant `Image` node with `Image.source = Base64`.
+- The decoded media type MUST be derived from `output_format` using the same mapping as PR2b, defaulting to `image/png`.
+- For `image_generation.partial_image`, Monoize MAY ignore the event for canonical URP node emission. Ignoring that event MUST NOT be treated as a stream error.
 
 PR5a. Responses stream node reconstruction:
 
@@ -455,6 +500,7 @@ PR6a. For streaming translation from upstream `type=responses` to downstream `PO
 
 - If upstream sends `response.completed` with `output[]` items and Monoize has not emitted a given output class from earlier granular events, Monoize MUST synthesize the missing downstream stream items from `response.completed.output[]`.
 - Output classes are assistant text, function or tool calls, and reasoning.
+- Output classes also include assistant image outputs recovered from Responses `image_generation_call` items.
 - This fallback MUST only fill classes that were missing in the live stream. It MUST NOT duplicate classes already emitted from earlier upstream stream events.
 
 PR6b. Responses streaming phase preservation:
@@ -600,6 +646,13 @@ PM2a. Messages `phase` mapping:
 - Monoize MUST accept optional extension field `phase` on Anthropic `text` blocks.
 - When decoding an Anthropic `text` block, Monoize MUST copy `phase` onto the URP v2 `Text` node derived from that block.
 - When encoding a URP v2 `Text` node to an Anthropic `text` block, Monoize MUST write `phase` on that block when the text node carries non-null `phase`.
+
+PM2b. For downstream `POST /v1/messages` request parsing, Monoize MUST decode ordinary `messages[].content[]` blocks with `type = "image"` into role-bearing URP `Image` nodes. The decoder MUST support both Anthropic image source shapes below:
+
+- `source: { type: "base64", media_type: <media type>, data: <raw base64> }` -> `ImageSource::Base64`;
+- `source: { type: "url", url: <url> }` -> `ImageSource::Url`.
+
+PM2c. For downstream `POST /v1/messages` request parsing, Monoize MUST decode ordinary `messages[].content[]` blocks with `type = "document"` or `type = "file"` into role-bearing URP `File` nodes when a supported file source is present.
 
 PM2.1. Input coercion for Messages adapter:
 
@@ -1037,6 +1090,8 @@ STR3a. For downstream `POST /v1/responses` streams, every SSE payload MUST inclu
 STR3b. For downstream `POST /v1/responses` SSE, Monoize MUST emit the canonical OpenAI event fields for the selected event family plus Monoize-required top-level `type` and `sequence_number`. Monoize MUST NOT add ad hoc top-level fields such as wrapper `data`, `response_id`, or duplicate text aliases when those fields are not part of the canonical event schema.
 
 STR3c. For downstream `POST /v1/responses` successful SSE streams, Monoize MUST emit exactly one terminal `data: [DONE]` sentinel after the final JSON event payload. The sentinel MUST be a plain `data:` frame and MUST NOT be emitted as a named SSE event.
+
+STR3c.1. For every downstream streaming response emitted by `POST /v1/responses`, `POST /v1/chat/completions`, or `POST /v1/messages`, Monoize MUST configure an SSE heartbeat with an interval of 15 seconds. Each heartbeat MUST be an SSE comment frame whose comment text is `heartbeat`. A heartbeat MUST NOT contain a `data:` line, MUST NOT contain an `event:` line, MUST NOT increment Responses `sequence_number`, MUST NOT count as a Chat Completions `[DONE]` sentinel, and MUST NOT count as an Anthropic Messages protocol event. The heartbeat exists only to keep downstream HTTP intermediaries from treating an otherwise-valid idle stream as inactive after Monoize has started the downstream SSE response.
 
 STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST preserve the distinction between official reasoning summary events and Monoize-specific raw reasoning events. Official summary lifecycle events MUST use the OpenAI names `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done`, and `response.reasoning_summary_part.done`. Raw reasoning content is not an official OpenAI Responses event family. When Monoize emits it as an extension, it MUST use the custom event family `response.reasoning.delta` and `response.reasoning.done`.
 
