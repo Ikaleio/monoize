@@ -30,21 +30,17 @@ pub(super) async fn execute_nonstream_typed(
     let requested_model = req.model.clone();
     let transform_match_model =
         normalized_logical_model_for_matching(state, &requested_model).await;
-    // Preserve the originally-decoded URP request so each per-attempt iteration
-    // can re-derive the transformed request from a pristine base. This matters
+    resolve_model_suffix(state, &mut req).await;
+    // Preserve the suffix-normalized request so each per-attempt iteration can
+    // re-derive the transformed request from a pristine base. This matters
     // because cross-family strip runs BEFORE all transforms per-attempt
     // (auto_cache_* etc. must observe the stripped request so their cache
     // breakpoints actually survive into the upstream encoding).
     let original_req = req.clone();
-    inject_monoize_context(auth, &mut req);
-    apply_transform_rules_request(state, &mut req, &auth.transforms, &transform_match_model)
-        .await?;
-    strip_monoize_context(&mut req);
-    resolve_model_suffix(state, &mut req).await;
     let logical_model = req.model.clone();
     let routing_stub = build_routing_stub(&req, max_multiplier);
-    let attempts =
-        build_monoize_attempts(state, &routing_stub, auth.effective_groups.clone()).await?;
+    let attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
+    ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
     insert_pending_request_log(
         state,
         auth,
@@ -72,8 +68,8 @@ pub(super) async fn execute_nonstream_typed(
 
             let attempt_number = execution_state.record_upstream_attempt();
             // Clone from the pristine original request (pre-transforms) so
-            // that the cross-family strip can run BEFORE both api-key and
-            // provider transforms. This guarantees that transforms which
+            // that the cross-family strip can run BEFORE provider, global,
+            // and API-key transforms. This guarantees that transforms which
             // inject upstream-specific part-level metadata (e.g.
             // `auto_cache_system`, `auto_cache_tool_use`) survive into the
             // encoded upstream request even when the downstream and upstream
@@ -85,14 +81,6 @@ pub(super) async fn execute_nonstream_typed(
                 urp::strip_nested_extra_body(&mut req_attempt.input);
             }
             inject_monoize_context(auth, &mut req_attempt);
-            apply_transform_rules_request(
-                state,
-                &mut req_attempt,
-                &auth.transforms,
-                &transform_match_model,
-            )
-            .await?;
-            strip_monoize_context(&mut req_attempt);
             req_attempt.model = attempt.upstream_model.clone();
             apply_transform_rules_request(
                 state,
@@ -101,6 +89,28 @@ pub(super) async fn execute_nonstream_typed(
                 &transform_match_model,
             )
             .await?;
+            let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
+            apply_transform_rules_request(
+                state,
+                &mut req_attempt,
+                &global_transforms,
+                &transform_match_model,
+            )
+            .await?;
+            apply_transform_rules_request(
+                state,
+                &mut req_attempt,
+                &auth.transforms,
+                &transform_match_model,
+            )
+            .await?;
+            strip_monoize_context(&mut req_attempt);
+            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
+                &mut req_attempt.input,
+                reasoning_envelope_provider_type(attempt.provider_type),
+                &req_attempt.model,
+                auth.reasoning_envelope_enabled,
+            );
 
             let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
             let provider = build_channel_provider_config(&attempt);
@@ -155,12 +165,26 @@ pub(super) async fn execute_nonstream_typed(
                         &req.model,
                     )
                     .await?;
+                    apply_transform_rules_response(
+                        state,
+                        &mut resp,
+                        &global_transforms,
+                        &req.model,
+                    )
+                    .await?;
                     apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
                         .await?;
                     if attempt.provider_type == ProviderType::OpenaiImage
                         && !matches!(downstream, DownstreamProtocol::Responses)
                     {
                         convert_assistant_images_to_markdown(&mut resp);
+                    }
+                    if auth.reasoning_envelope_enabled {
+                        urp::wrap_reasoning_envelopes_in_response(
+                            &mut resp,
+                            reasoning_envelope_provider_type(attempt.provider_type),
+                            &req_attempt.model,
+                        );
                     }
                     let charge =
                         maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;

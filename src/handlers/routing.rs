@@ -148,7 +148,7 @@ pub(super) async fn normalized_logical_model_for_matching(
 pub(super) async fn build_monoize_attempts(
     state: &AppState,
     urp: &UrpRequest,
-    effective_groups: Option<Vec<String>>,
+    auth: &crate::auth::AuthResult,
 ) -> AppResult<Vec<MonoizeAttempt>> {
     let providers =
         state.monoize_store.list_providers().await.map_err(|e| {
@@ -156,7 +156,8 @@ pub(super) async fn build_monoize_attempts(
         })?;
     let mut attempts = Vec::new();
     for provider in providers {
-        collect_provider_attempts(state, urp, &effective_groups, &provider, &mut attempts).await;
+        collect_provider_attempts(state, urp, &auth.effective_groups, &provider, &mut attempts)
+            .await;
     }
     if attempts.is_empty() {
         return Ok(attempts);
@@ -165,9 +166,10 @@ pub(super) async fn build_monoize_attempts(
     let mut pricing_cache: std::collections::HashMap<(String, String), bool> =
         std::collections::HashMap::new();
     let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut priced_attempts = Vec::with_capacity(attempts.len());
+    let mut allowed_attempts = Vec::with_capacity(attempts.len());
+    let allow_unpriced_models = auth.can_bypass_unpriced_models();
 
-    for attempt in attempts {
+    for mut attempt in attempts {
         let cache_key = (attempt.upstream_model.clone(), urp.model.clone());
         let has_pricing = if let Some(cached) = pricing_cache.get(&cache_key) {
             *cached
@@ -180,13 +182,16 @@ pub(super) async fn build_monoize_attempts(
         };
 
         if has_pricing {
-            priced_attempts.push(attempt);
+            attempt.billable_pricing_available = true;
+            allowed_attempts.push(attempt);
+        } else if allow_unpriced_models {
+            allowed_attempts.push(attempt);
         } else {
             blocked_models.insert(attempt.upstream_model);
         }
     }
 
-    if priced_attempts.is_empty() && !blocked_models.is_empty() {
+    if allowed_attempts.is_empty() && !blocked_models.is_empty() {
         let blocked_list = blocked_models.into_iter().collect::<Vec<_>>().join(", ");
         return Err(AppError::new(
             StatusCode::FORBIDDEN,
@@ -194,7 +199,7 @@ pub(super) async fn build_monoize_attempts(
             format!("pricing metadata required for model(s): {blocked_list}"),
         ));
     }
-    Ok(priced_attempts)
+    Ok(allowed_attempts)
 }
 
 pub(super) async fn collect_provider_attempts(
@@ -284,7 +289,7 @@ pub(super) async fn collect_provider_attempts(
             passive_window_seconds,
             passive_rate_limit_cooldown_seconds,
             channel_max_retries: provider.channel_max_retries,
-            channel_retry_interval_ms: provider.channel_retry_interval_ms,
+            channel_retry_interval_ms: provider.channel_retry_interval_ms.max(0) as u64,
             circuit_breaker_enabled: provider.circuit_breaker_enabled,
             per_model_circuit_break: provider.per_model_circuit_break,
             provider_attempt_limit,
@@ -297,6 +302,7 @@ pub(super) async fn collect_provider_attempts(
             strip_cross_protocol_nested_extra: provider
                 .strip_cross_protocol_nested_extra
                 .unwrap_or(runtime.strip_cross_protocol_nested_extra),
+            billable_pricing_available: false,
         });
     }
 }

@@ -104,7 +104,7 @@ pub struct MonoizeProvider {
     pub channels: Vec<MonoizeChannel>,
     pub max_retries: i32,
     pub channel_max_retries: i32,
-    pub channel_retry_interval_ms: u64,
+    pub channel_retry_interval_ms: i32,
     pub circuit_breaker_enabled: bool,
     pub per_model_circuit_break: bool,
     #[serde(default)]
@@ -160,7 +160,7 @@ pub struct CreateMonoizeProviderInput {
     #[serde(default)]
     pub channel_max_retries: i32,
     #[serde(default)]
-    pub channel_retry_interval_ms: u64,
+    pub channel_retry_interval_ms: i32,
     #[serde(default = "default_enabled")]
     pub circuit_breaker_enabled: bool,
     #[serde(default)]
@@ -193,7 +193,7 @@ pub struct UpdateMonoizeProviderInput {
     pub channels: Option<Vec<CreateMonoizeChannelInput>>,
     pub max_retries: Option<i32>,
     pub channel_max_retries: Option<i32>,
-    pub channel_retry_interval_ms: Option<u64>,
+    pub channel_retry_interval_ms: Option<i32>,
     pub circuit_breaker_enabled: Option<bool>,
     pub per_model_circuit_break: Option<bool>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
@@ -228,6 +228,7 @@ pub struct MonoizeRuntimeConfig {
     pub active_success_threshold: u32,
     pub active_method: String,
     pub active_probe_model: Option<String>,
+    pub global_transforms: Vec<TransformRuleConfig>,
     pub extra_fields_whitelist: HashMap<String, Vec<String>>,
     pub strip_cross_protocol_nested_extra: bool,
 }
@@ -246,6 +247,7 @@ impl Default for MonoizeRuntimeConfig {
             active_success_threshold: 1,
             active_method: "completion".to_string(),
             active_probe_model: None,
+            global_transforms: Vec::new(),
             extra_fields_whitelist: HashMap::new(),
             strip_cross_protocol_nested_extra: true,
         }
@@ -421,19 +423,30 @@ impl MonoizeRoutingStore {
             &input.api_type_overrides,
         )?;
         if let Some(v) = input.active_probe_interval_seconds_override {
-            if v == 0 {
-                return Err("active_probe_interval_seconds_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u64).contains(&v) {
+                return Err(
+                    "active_probe_interval_seconds_override must be between 1 and 2147483647"
+                        .to_string(),
+                );
             }
         }
         if let Some(v) = input.active_probe_success_threshold_override {
-            if v == 0 {
-                return Err("active_probe_success_threshold_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u32).contains(&v) {
+                return Err(
+                    "active_probe_success_threshold_override must be between 1 and 2147483647"
+                        .to_string(),
+                );
             }
         }
         if let Some(v) = input.request_timeout_ms_override {
-            if v == 0 {
-                return Err("request_timeout_ms_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u64).contains(&v) {
+                return Err(
+                    "request_timeout_ms_override must be between 1 and 2147483647".to_string(),
+                );
             }
+        }
+        if input.channel_retry_interval_ms < 0 {
+            return Err("channel_retry_interval_ms must be >= 0".to_string());
         }
 
         let id = generate_short_id();
@@ -489,7 +502,7 @@ impl MonoizeRoutingStore {
                         input.provider_type.as_str().into(),
                         SeaValue::Int(Some(input.max_retries)),
                         SeaValue::Int(Some(input.channel_max_retries)),
-                        SeaValue::Int(Some(input.channel_retry_interval_ms as i32)),
+                        SeaValue::Int(Some(input.channel_retry_interval_ms)),
                         SeaValue::Int(Some(if input.circuit_breaker_enabled { 1 } else { 0 })),
                         SeaValue::Int(Some(if input.per_model_circuit_break { 1 } else { 0 })),
                         transforms_json.into(),
@@ -540,18 +553,31 @@ impl MonoizeRoutingStore {
             validate_channels(channels, false)?;
         }
         if let Some(Some(v)) = input.active_probe_interval_seconds_override {
-            if v == 0 {
-                return Err("active_probe_interval_seconds_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u64).contains(&v) {
+                return Err(
+                    "active_probe_interval_seconds_override must be between 1 and 2147483647"
+                        .to_string(),
+                );
             }
         }
         if let Some(Some(v)) = input.active_probe_success_threshold_override {
-            if v == 0 {
-                return Err("active_probe_success_threshold_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u32).contains(&v) {
+                return Err(
+                    "active_probe_success_threshold_override must be between 1 and 2147483647"
+                        .to_string(),
+                );
             }
         }
         if let Some(Some(v)) = input.request_timeout_ms_override {
-            if v == 0 {
-                return Err("request_timeout_ms_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u64).contains(&v) {
+                return Err(
+                    "request_timeout_ms_override must be between 1 and 2147483647".to_string(),
+                );
+            }
+        }
+        if let Some(v) = input.channel_retry_interval_ms {
+            if v < 0 {
+                return Err("channel_retry_interval_ms must be >= 0".to_string());
             }
         }
 
@@ -635,7 +661,7 @@ impl MonoizeRoutingStore {
                 provider_type.as_str().into(),
                 SeaValue::Int(Some(max_retries)),
                 SeaValue::Int(Some(channel_max_retries)),
-                SeaValue::Int(Some(channel_retry_interval_ms as i32)),
+                SeaValue::Int(Some(channel_retry_interval_ms)),
                 SeaValue::Int(Some(if circuit_breaker_enabled { 1 } else { 0 })),
                 SeaValue::Int(Some(if per_model_circuit_break { 1 } else { 0 })),
                 transforms_json.into(),
@@ -819,21 +845,49 @@ impl MonoizeRoutingStore {
                 ExistingChannel {
                     api_key: row.try_get("", "api_key").map_err(|e| e.to_string())?,
                     passive_failure_count_threshold_override: row
-                        .try_get::<Option<i64>>("", "passive_failure_count_threshold_override")
+                        .try_get::<Option<i32>>("", "passive_failure_count_threshold_override")
                         .map_err(|e| e.to_string())?
-                        .map(|v| v as u32),
+                        .map(|v| {
+                            decode_positive_u32(
+                                provider_id,
+                                "passive_failure_count_threshold_override",
+                                i64::from(v),
+                            )
+                        })
+                        .transpose()?,
                     passive_cooldown_seconds_override: row
-                        .try_get::<Option<i64>>("", "passive_cooldown_seconds_override")
+                        .try_get::<Option<i32>>("", "passive_cooldown_seconds_override")
                         .map_err(|e| e.to_string())?
-                        .map(|v| v as u64),
+                        .map(|v| {
+                            decode_positive_u64(
+                                provider_id,
+                                "passive_cooldown_seconds_override",
+                                i64::from(v),
+                            )
+                        })
+                        .transpose()?,
                     passive_window_seconds_override: row
-                        .try_get::<Option<i64>>("", "passive_window_seconds_override")
+                        .try_get::<Option<i32>>("", "passive_window_seconds_override")
                         .map_err(|e| e.to_string())?
-                        .map(|v| v as u64),
+                        .map(|v| {
+                            decode_positive_u64(
+                                provider_id,
+                                "passive_window_seconds_override",
+                                i64::from(v),
+                            )
+                        })
+                        .transpose()?,
                     passive_rate_limit_cooldown_seconds_override: row
-                        .try_get::<Option<i64>>("", "passive_rate_limit_cooldown_seconds_override")
+                        .try_get::<Option<i32>>("", "passive_rate_limit_cooldown_seconds_override")
                         .map_err(|e| e.to_string())?
-                        .map(|v| v as u64),
+                        .map(|v| {
+                            decode_positive_u64(
+                                provider_id,
+                                "passive_rate_limit_cooldown_seconds_override",
+                                i64::from(v),
+                            )
+                        })
+                        .transpose()?,
                 },
             );
         }
@@ -974,21 +1028,41 @@ impl MonoizeRoutingStore {
                     .map_err(|e| e.to_string())?
                     == 1,
                 passive_failure_count_threshold_override: cr
-                    .try_get::<Option<i64>>("", "passive_failure_count_threshold_override")
+                    .try_get::<Option<i32>>("", "passive_failure_count_threshold_override")
                     .map_err(|e| e.to_string())?
-                    .map(|v| v as u32),
+                    .map(|v| {
+                        decode_positive_u32(
+                            &id,
+                            "passive_failure_count_threshold_override",
+                            i64::from(v),
+                        )
+                    })
+                    .transpose()?,
                 passive_cooldown_seconds_override: cr
-                    .try_get::<Option<i64>>("", "passive_cooldown_seconds_override")
+                    .try_get::<Option<i32>>("", "passive_cooldown_seconds_override")
                     .map_err(|e| e.to_string())?
-                    .map(|v| v as u64),
+                    .map(|v| {
+                        decode_positive_u64(&id, "passive_cooldown_seconds_override", i64::from(v))
+                    })
+                    .transpose()?,
                 passive_window_seconds_override: cr
-                    .try_get::<Option<i64>>("", "passive_window_seconds_override")
+                    .try_get::<Option<i32>>("", "passive_window_seconds_override")
                     .map_err(|e| e.to_string())?
-                    .map(|v| v as u64),
+                    .map(|v| {
+                        decode_positive_u64(&id, "passive_window_seconds_override", i64::from(v))
+                    })
+                    .transpose()?,
                 passive_rate_limit_cooldown_seconds_override: cr
-                    .try_get::<Option<i64>>("", "passive_rate_limit_cooldown_seconds_override")
+                    .try_get::<Option<i32>>("", "passive_rate_limit_cooldown_seconds_override")
                     .map_err(|e| e.to_string())?
-                    .map(|v| v as u64),
+                    .map(|v| {
+                        decode_positive_u64(
+                            &id,
+                            "passive_rate_limit_cooldown_seconds_override",
+                            i64::from(v),
+                        )
+                    })
+                    .transpose()?,
                 _healthy: None,
                 _last_success_at: None,
                 _health_status: None,
@@ -1011,24 +1085,31 @@ impl MonoizeRoutingStore {
             .map_err(|e| format!("provider {id} invalid active_probe_enabled_override: {e}"))?
             .map(|v| v != 0);
         let active_probe_interval_seconds_override: Option<u64> = row
-            .try_get::<Option<i64>>("", "active_probe_interval_seconds_override")
+            .try_get::<Option<i32>>("", "active_probe_interval_seconds_override")
             .map_err(|e| {
                 format!("provider {id} invalid active_probe_interval_seconds_override: {e}")
             })?
-            .map(|v| v as u64);
+            .map(|v| {
+                decode_positive_u64(&id, "active_probe_interval_seconds_override", i64::from(v))
+            })
+            .transpose()?;
         let active_probe_success_threshold_override: Option<u32> = row
-            .try_get::<Option<i64>>("", "active_probe_success_threshold_override")
+            .try_get::<Option<i32>>("", "active_probe_success_threshold_override")
             .map_err(|e| {
                 format!("provider {id} invalid active_probe_success_threshold_override: {e}")
             })?
-            .map(|v| v as u32);
+            .map(|v| {
+                decode_positive_u32(&id, "active_probe_success_threshold_override", i64::from(v))
+            })
+            .transpose()?;
         let active_probe_model_override: Option<String> = row
             .try_get("", "active_probe_model_override")
             .map_err(|e| format!("provider {id} invalid active_probe_model_override: {e}"))?;
         let request_timeout_ms_override: Option<u64> = row
-            .try_get::<Option<i64>>("", "request_timeout_ms_override")
+            .try_get::<Option<i32>>("", "request_timeout_ms_override")
             .map_err(|e| format!("provider {id} invalid request_timeout_ms_override: {e}"))?
-            .map(|v| v as u64);
+            .map(|v| decode_positive_u64(&id, "request_timeout_ms_override", i64::from(v)))
+            .transpose()?;
         let extra_fields_whitelist: Option<Vec<String>> = row
             .try_get::<Option<String>>("", "extra_fields_whitelist")
             .unwrap_or(None)
@@ -1057,7 +1138,7 @@ impl MonoizeRoutingStore {
                 .map_err(|e| e.to_string())?,
             channel_retry_interval_ms: row
                 .try_get::<i32>("", "channel_retry_interval_ms")
-                .map_err(|e| e.to_string())? as u64,
+                .map_err(|e| e.to_string())?,
             circuit_breaker_enabled: row
                 .try_get::<i32>("", "circuit_breaker_enabled")
                 .map_err(|e| e.to_string())?
@@ -1100,9 +1181,23 @@ fn opt_bool_to_value(v: Option<bool>) -> SeaValue {
 
 fn opt_u64_to_value(v: Option<u64>) -> SeaValue {
     match v {
-        Some(n) => SeaValue::BigInt(Some(n as i64)),
-        None => SeaValue::BigInt(None),
+        Some(n) => SeaValue::Int(Some(n as i32)),
+        None => SeaValue::Int(None),
     }
+}
+
+fn decode_positive_u32(provider_id: &str, field: &str, value: i64) -> Result<u32, String> {
+    u32::try_from(value)
+        .ok()
+        .filter(|v| *v >= 1)
+        .ok_or_else(|| format!("provider {provider_id} invalid {field}: must be >= 1"))
+}
+
+fn decode_positive_u64(provider_id: &str, field: &str, value: i64) -> Result<u64, String> {
+    u64::try_from(value)
+        .ok()
+        .filter(|v| *v >= 1)
+        .ok_or_else(|| format!("provider {provider_id} invalid {field}: must be >= 1"))
 }
 
 fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), String> {
@@ -1145,26 +1240,32 @@ fn validate_channels(
             return Err("channel weight must be >= 0".to_string());
         }
         if let Some(v) = c.passive_failure_count_threshold_override {
-            if v < 1 {
+            if !(1..=i32::MAX as u32).contains(&v) {
                 return Err(
-                    "channel passive_failure_count_threshold_override must be >= 1".to_string(),
+                    "channel passive_failure_count_threshold_override must be between 1 and 2147483647".to_string(),
                 );
             }
         }
         if let Some(v) = c.passive_cooldown_seconds_override {
-            if v < 1 {
-                return Err("channel passive_cooldown_seconds_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u64).contains(&v) {
+                return Err(
+                    "channel passive_cooldown_seconds_override must be between 1 and 2147483647"
+                        .to_string(),
+                );
             }
         }
         if let Some(v) = c.passive_window_seconds_override {
-            if v < 1 {
-                return Err("channel passive_window_seconds_override must be >= 1".to_string());
+            if !(1..=i32::MAX as u64).contains(&v) {
+                return Err(
+                    "channel passive_window_seconds_override must be between 1 and 2147483647"
+                        .to_string(),
+                );
             }
         }
         if let Some(v) = c.passive_rate_limit_cooldown_seconds_override {
-            if v < 1 {
+            if !(1..=i32::MAX as u64).contains(&v) {
                 return Err(
-                    "channel passive_rate_limit_cooldown_seconds_override must be >= 1".to_string(),
+                    "channel passive_rate_limit_cooldown_seconds_override must be between 1 and 2147483647".to_string(),
                 );
             }
         }
