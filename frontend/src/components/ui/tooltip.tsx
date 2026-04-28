@@ -38,7 +38,10 @@ const Tooltip = (props: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.R
   const [open, setOpen] = React.useState(false)
   const instanceId = React.useId()
   const onOpenChangeRef = React.useRef(props.onOpenChange)
-  onOpenChangeRef.current = props.onOpenChange
+
+  React.useEffect(() => {
+    onOpenChangeRef.current = props.onOpenChange
+  }, [props.onOpenChange])
 
   const setOpenAndNotify = React.useCallback((next: boolean) => {
     setOpen(next)
@@ -95,7 +98,10 @@ const TooltipTrigger = React.forwardRef<
       onFocus={suppress}
       onBlur={suppress}
       onClick={(e) => {
-        ;(e.nativeEvent as any).__tooltipId = ctx.instanceId
+        const target = e.currentTarget
+        if (target instanceof HTMLElement) {
+          target.dataset.tooltipInstanceId = ctx.instanceId
+        }
         ctx.toggle()
         props.onClick?.(e)
       }}
@@ -118,7 +124,13 @@ const TooltipContent = React.forwardRef<
   React.useEffect(() => {
     if (!ctx?.open) return
     const handler = (e: MouseEvent) => {
-      if ((e as any).__tooltipId === ctx.instanceId) return
+      const target = e.target
+      if (
+        target instanceof HTMLElement &&
+        target.closest(`[data-tooltip-instance-id="${ctx.instanceId}"]`)
+      ) {
+        return
+      }
       if (contentRef.current?.contains(e.target as Node)) return
       ctx.close()
     }
@@ -129,10 +141,10 @@ const TooltipContent = React.forwardRef<
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
-        ref={(node) => {
+        ref={(node: React.ElementRef<typeof TooltipPrimitive.Content> | null) => {
           contentRef.current = node
           if (typeof ref === "function") ref(node)
-          else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node
+          else if (ref) ref.current = node
         }}
         sideOffset={sideOffset}
         className={cn(
