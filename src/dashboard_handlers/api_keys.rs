@@ -38,6 +38,12 @@ pub struct CreateApiKeyRequest {
     pub transforms: Vec<TransformRuleConfig>,
     #[serde(default)]
     pub model_redirects: Vec<ModelRedirectRule>,
+    #[serde(default = "default_true")]
+    pub reasoning_envelope_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub(super) fn canonicalize_dashboard_api_key_allowed_groups(groups: &mut Vec<String>) {
@@ -64,6 +70,7 @@ pub struct ApiKeyResponse {
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
+    pub reasoning_envelope_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,6 +91,7 @@ pub struct ApiKeyCreatedResponse {
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
+    pub reasoning_envelope_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +106,7 @@ pub struct UpdateApiKeyRequest {
     pub max_multiplier: Option<f64>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
+    pub reasoning_envelope_enabled: Option<bool>,
     pub expires_at: Option<String>,
 }
 
@@ -142,6 +151,7 @@ pub async fn list_my_api_keys(
                 max_multiplier: k.max_multiplier,
                 transforms: k.transforms,
                 model_redirects: k.model_redirects,
+                reasoning_envelope_enabled: k.reasoning_envelope_enabled,
             }
         })
         .collect();
@@ -193,6 +203,7 @@ pub async fn create_api_key(
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
+        reasoning_envelope_enabled: body.reasoning_envelope_enabled,
     };
 
     let is_admin = user.role.can_manage_system();
@@ -226,6 +237,7 @@ pub async fn create_api_key(
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
+            reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
         }),
     ))
 }
@@ -307,6 +319,7 @@ pub async fn get_api_key(
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
+            reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
         }
     }))
 }
@@ -349,6 +362,7 @@ pub async fn update_api_key(
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
+        reasoning_envelope_enabled: body.reasoning_envelope_enabled,
         expires_at: body.expires_at,
     };
 
@@ -383,6 +397,7 @@ pub async fn update_api_key(
         max_multiplier: updated_key.max_multiplier,
         transforms: updated_key.transforms,
         model_redirects: updated_key.model_redirects,
+        reasoning_envelope_enabled: updated_key.reasoning_envelope_enabled,
     }))
 }
 

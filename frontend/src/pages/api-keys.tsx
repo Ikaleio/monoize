@@ -349,6 +349,7 @@ export function ApiKeysPage() {
   const [newKeyMaxMultiplier, setNewKeyMaxMultiplier] = useState("");
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
   const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
+  const [newKeyReasoningEnvelopeEnabled, setNewKeyReasoningEnvelopeEnabled] = useState(true);
 
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -367,6 +368,7 @@ export function ApiKeysPage() {
     setNewKeyMaxMultiplier("");
     setNewKeyTransforms([]);
     setNewKeyModelRedirects([]);
+    setNewKeyReasoningEnvelopeEnabled(true);
   };
 
   const handleCreate = async () => {
@@ -393,6 +395,7 @@ export function ApiKeysPage() {
         max_multiplier: newKeyMaxMultiplier ? parseFloat(newKeyMaxMultiplier) : undefined,
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
+        reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
       };
       const key = await createApiKeyOptimistic(
         input,
@@ -432,6 +435,7 @@ export function ApiKeysPage() {
         max_multiplier: newKeyMaxMultiplier ? parseFloat(newKeyMaxMultiplier) : undefined,
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
+        reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
       };
       await updateApiKeyOptimistic(
         editKey.id,
@@ -524,6 +528,7 @@ export function ApiKeysPage() {
     setNewKeyMaxMultiplier(key.max_multiplier != null ? String(key.max_multiplier) : "");
     setNewKeyTransforms(key.transforms ?? []);
     setNewKeyModelRedirects(key.model_redirects ?? []);
+    setNewKeyReasoningEnvelopeEnabled(key.reasoning_envelope_enabled ?? true);
   };
 
   const toggleSelectKey = (id: string) => {
@@ -630,6 +635,17 @@ export function ApiKeysPage() {
                     onCheckedChange={setNewKeySubAccountEnabled}
                   />
                   <Label htmlFor="subAccountEnabled">{t("apiKeys.subAccountEnabled")}</Label>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="reasoningEnvelopeEnabled"
+                      checked={newKeyReasoningEnvelopeEnabled}
+                      onCheckedChange={setNewKeyReasoningEnvelopeEnabled}
+                    />
+                    <Label htmlFor="reasoningEnvelopeEnabled">{t("apiKeys.reasoningEnvelopeEnabled")}</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{t("apiKeys.reasoningEnvelopeHelp")}</p>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Switch
@@ -995,6 +1011,17 @@ export function ApiKeysPage() {
                 onCheckedChange={setNewKeySubAccountEnabled}
               />
               <Label htmlFor="editSubAccountEnabled">{t("apiKeys.subAccountEnabled")}</Label>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="editReasoningEnvelopeEnabled"
+                  checked={newKeyReasoningEnvelopeEnabled}
+                  onCheckedChange={setNewKeyReasoningEnvelopeEnabled}
+                />
+                <Label htmlFor="editReasoningEnvelopeEnabled">{t("apiKeys.reasoningEnvelopeEnabled")}</Label>
+              </div>
+              <p className="text-sm text-muted-foreground">{t("apiKeys.reasoningEnvelopeHelp")}</p>
             </div>
             <div className="flex items-center space-x-2">
               <Switch
