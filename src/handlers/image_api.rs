@@ -9,7 +9,6 @@ pub async fn create_image_generation(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    ensure_balance_before_forward(&state, &auth).await?;
 
     let obj = body.as_object().ok_or_else(|| {
         AppError::new(
@@ -89,7 +88,6 @@ pub async fn create_image_edit(
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    ensure_balance_before_forward(&state, &auth).await?;
 
     let mut prompt: Option<String> = None;
     let mut model: Option<String> = None;
@@ -210,6 +208,13 @@ pub async fn create_image_edit(
     let has_mask = mask_data.is_some();
 
     let mut inputs = Vec::new();
+    inputs.push(urp::Node::Text {
+        id: None,
+        role: urp::OrdinaryRole::User,
+        content: prompt,
+        phase: None,
+        extra_body: HashMap::new(),
+    });
     inputs.push(urp::Node::Image {
         id: None,
         role: urp::OrdinaryRole::User,
@@ -241,13 +246,6 @@ pub async fn create_image_edit(
             extra_body: HashMap::new(),
         });
     }
-    inputs.push(urp::Node::Text {
-        id: None,
-        role: urp::OrdinaryRole::User,
-        content: prompt,
-        phase: None,
-        extra_body: HashMap::new(),
-    });
 
     tracing::info!(
         model = %model,
@@ -414,16 +412,7 @@ async fn fan_out_subrequests(
         let rip = request_ip.clone();
 
         join_set.spawn(async move {
-            execute_nonstream_typed(
-                &state,
-                &auth,
-                req,
-                max_multiplier,
-                super::DownstreamProtocol::Responses,
-                rid,
-                rip,
-            )
-            .await
+            execute_image_subrequest_typed(&state, &auth, req, max_multiplier, rid, rip).await
         });
     }
 
@@ -439,6 +428,421 @@ async fn fan_out_subrequests(
         }
     }
     results
+}
+
+async fn execute_image_subrequest_typed(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    req: urp::UrpRequest,
+    max_multiplier: Option<f64>,
+    request_id: Option<String>,
+    request_ip: Option<String>,
+) -> AppResult<(urp::UrpResponse, String)> {
+    let routing_stub = build_routing_stub(&req, max_multiplier);
+    let attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
+    let all_responses = !attempts.is_empty()
+        && attempts
+            .iter()
+            .all(|attempt| attempt.provider_type == ProviderType::Responses);
+
+    if all_responses {
+        return execute_stream_collected_image_typed(
+            state,
+            auth,
+            req,
+            max_multiplier,
+            request_id,
+            request_ip,
+        )
+        .await;
+    }
+
+    execute_nonstream_typed(
+        state,
+        auth,
+        req,
+        max_multiplier,
+        super::DownstreamProtocol::Responses,
+        request_id,
+        request_ip,
+    )
+    .await
+}
+
+async fn execute_stream_collected_image_typed(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    mut req: urp::UrpRequest,
+    max_multiplier: Option<f64>,
+    request_id: Option<String>,
+    request_ip: Option<String>,
+) -> AppResult<(urp::UrpResponse, String)> {
+    let started_at = std::time::Instant::now();
+    let requested_model = req.model.clone();
+    let transform_match_model =
+        normalized_logical_model_for_matching(state, &requested_model).await;
+    resolve_model_suffix(state, &mut req).await;
+    let original_req = req.clone();
+    let logical_model = req.model.clone();
+    let routing_stub = build_routing_stub(&req, max_multiplier);
+    let attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
+    ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
+    insert_pending_request_log(
+        state,
+        auth,
+        &req.model,
+        true,
+        request_id.as_deref(),
+        request_ip.as_deref(),
+        started_at,
+    )
+    .await;
+
+    let mut last_failed_attempt: Option<MonoizeAttempt> = None;
+    let mut tried_providers: Vec<TriedProvider> = Vec::new();
+    let mut execution_state = AttemptExecutionState::default();
+
+    for attempt in attempts {
+        execution_state.enter_provider(&attempt.provider_id);
+        if !execution_state.provider_budget_remaining(&attempt) {
+            continue;
+        }
+
+        let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
+        for channel_attempt in 0..max_channel_attempts {
+            if !execution_state.provider_budget_remaining(&attempt) {
+                break;
+            }
+
+            let attempt_number = execution_state.record_upstream_attempt();
+            let mut req_attempt = original_req.clone();
+            if attempt.strip_cross_protocol_nested_extra
+                && !super::DownstreamProtocol::Responses.is_same_family(attempt.provider_type)
+            {
+                urp::strip_nested_extra_body(&mut req_attempt.input);
+            }
+            inject_monoize_context(auth, &mut req_attempt);
+            req_attempt.model = attempt.upstream_model.clone();
+            apply_transform_rules_request(
+                state,
+                &mut req_attempt,
+                &attempt.provider_transforms,
+                &transform_match_model,
+            )
+            .await?;
+            let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
+            apply_transform_rules_request(
+                state,
+                &mut req_attempt,
+                &global_transforms,
+                &transform_match_model,
+            )
+            .await?;
+            apply_transform_rules_request(
+                state,
+                &mut req_attempt,
+                &auth.transforms,
+                &transform_match_model,
+            )
+            .await?;
+            strip_monoize_context(&mut req_attempt);
+            req_attempt.stream = Some(true);
+
+            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
+            let provider = build_channel_provider_config(&attempt);
+            let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
+            log_outgoing_request_shape(
+                request_id.as_deref(),
+                &logical_model,
+                &req_attempt.model,
+                attempt.provider_type,
+                true,
+                &path,
+                &upstream_body,
+                &req_attempt,
+            );
+            let call = upstream::call_upstream_raw_with_timeout_and_headers(
+                client_http(state),
+                &provider,
+                &attempt.api_key,
+                &path,
+                &upstream_body,
+                attempt.request_timeout_ms.saturating_mul(10).max(600_000),
+                provider_extra_headers(attempt.provider_type),
+            )
+            .await;
+
+            match call {
+                Ok(upstream_resp) => {
+                    update_pending_channel_info(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        true,
+                        request_id.as_deref(),
+                        request_ip.as_deref(),
+                        started_at,
+                    )
+                    .await;
+                    mark_channel_success(state, &attempt).await;
+
+                    let legacy = typed_request_to_legacy(&req_attempt, max_multiplier)?;
+                    let pending_request_envelope_extra =
+                        req.input.clone().into_iter().find_map(|node| match node {
+                            crate::urp::Node::NextDownstreamEnvelopeExtra { extra_body }
+                                if !extra_body.is_empty() =>
+                            {
+                                Some(extra_body)
+                            }
+                            _ => None,
+                        });
+
+                    let (decoded_tx, decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                    let (transformed_tx, mut transformed_rx) =
+                        mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                    let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
+
+                    let decode_handle = {
+                        let runtime_metrics = runtime_metrics.clone();
+                        let provider_type = attempt.provider_type;
+                        tokio::spawn(async move {
+                            crate::urp::stream_decode::stream_upstream_to_urp_events(
+                                &legacy,
+                                pending_request_envelope_extra,
+                                provider_type,
+                                upstream_resp,
+                                decoded_tx,
+                                Some(started_at),
+                                Some(runtime_metrics),
+                            )
+                            .await
+                        })
+                    };
+
+                    let provider_rules = attempt.provider_transforms.clone();
+                    let global_rules = global_transforms.clone();
+                    let auth_rules = auth.transforms.clone();
+                    let state_for_transform = state.clone();
+                    let model_for_transform = logical_model.clone();
+                    let transform_handle = tokio::spawn(async move {
+                        transform_urp_stream(
+                            &state_for_transform,
+                            decoded_rx,
+                            transformed_tx,
+                            &provider_rules,
+                            &global_rules,
+                            &auth_rules,
+                            &model_for_transform,
+                            None,
+                        )
+                        .await
+                    });
+
+                    let mut fallback_output = Vec::new();
+                    let mut final_response: Option<urp::UrpResponse> = None;
+                    let mut stream_error: Option<AppError> = None;
+
+                    while let Some(event) = transformed_rx.recv().await {
+                        match event {
+                            crate::urp::UrpStreamEvent::NodeDone { node, .. } => {
+                                if matches!(node, urp::Node::Image { .. })
+                                    && !fallback_output.contains(&node)
+                                {
+                                    fallback_output.push(node);
+                                }
+                            }
+                            crate::urp::UrpStreamEvent::ResponseDone {
+                                finish_reason,
+                                usage,
+                                mut output,
+                                extra_body,
+                            } => {
+                                if output.is_empty() && !fallback_output.is_empty() {
+                                    output = fallback_output.clone();
+                                } else {
+                                    for node in &fallback_output {
+                                        if !output.contains(node) {
+                                            output.push(node.clone());
+                                        }
+                                    }
+                                }
+                                final_response = Some(urp::UrpResponse {
+                                    id: extra_body
+                                        .get("id")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or("resp_stream_collected")
+                                        .to_string(),
+                                    model: extra_body
+                                        .get("model")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or(&logical_model)
+                                        .to_string(),
+                                    created_at: extra_body
+                                        .get("created_at")
+                                        .and_then(|value| value.as_i64()),
+                                    output,
+                                    finish_reason,
+                                    usage,
+                                    extra_body,
+                                });
+                            }
+                            crate::urp::UrpStreamEvent::Error { code, message, .. } => {
+                                stream_error = Some(AppError::new(
+                                    StatusCode::BAD_GATEWAY,
+                                    code.unwrap_or_else(|| "upstream_stream_error".to_string()),
+                                    message,
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let decode_result = decode_handle.await.map_err(|e| {
+                        AppError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "task_panic",
+                            e.to_string(),
+                        )
+                    })?;
+                    let transform_result = transform_handle.await.map_err(|e| {
+                        AppError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "task_panic",
+                            e.to_string(),
+                        )
+                    })?;
+                    decode_result?;
+                    transform_result?;
+                    if let Some(err) = stream_error {
+                        return Err(err);
+                    }
+
+                    let resp = final_response.ok_or_else(|| {
+                        AppError::new(
+                            StatusCode::BAD_GATEWAY,
+                            "upstream_stream_error",
+                            "stream completed without terminal response",
+                        )
+                    })?;
+
+                    let charge =
+                        maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;
+                    spawn_request_log(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        resp.usage.clone(),
+                        charge.charge_nano_usd,
+                        charge.billing_breakdown,
+                        true,
+                        started_at,
+                        request_id.clone(),
+                        request_ip.clone(),
+                        attempt.channel_id.clone(),
+                        None,
+                        None,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
+                    );
+                    return Ok((resp, logical_model.clone()));
+                }
+                Err(err) => {
+                    let non_retryable = is_non_retryable_client_error(&err);
+                    let retryable = is_retryable_error(&err);
+                    let retryable_failure_class = classify_retryable_failure(&err);
+                    let app_err = upstream_error_to_app(err);
+                    if non_retryable {
+                        spawn_request_log_error(
+                            state,
+                            auth,
+                            &attempt,
+                            &logical_model,
+                            true,
+                            started_at,
+                            request_id.clone(),
+                            request_ip.clone(),
+                            &app_err,
+                            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                            tried_providers,
+                        );
+                        return Err(app_err);
+                    }
+                    if retryable {
+                        tried_providers.push(TriedProvider {
+                            attempt_number,
+                            provider_id: attempt.provider_id.clone(),
+                            channel_id: attempt.channel_id.clone(),
+                            error: app_err.message.clone(),
+                        });
+                        mark_channel_retryable_failure(state, &attempt, retryable_failure_class)
+                            .await;
+                        last_failed_attempt = Some(attempt.clone());
+                        if !is_attempt_channel_healthy(state, &attempt).await {
+                            break;
+                        }
+                        if execution_state.provider_budget_remaining(&attempt) {
+                            if channel_attempt + 1 < max_channel_attempts {
+                                maybe_sleep_before_channel_retry(&attempt).await;
+                            }
+                            continue;
+                        }
+                        break;
+                    }
+                    spawn_request_log_error(
+                        state,
+                        auth,
+                        &attempt,
+                        &logical_model,
+                        true,
+                        started_at,
+                        request_id.clone(),
+                        request_ip.clone(),
+                        &app_err,
+                        req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                        tried_providers,
+                    );
+                    return Err(app_err);
+                }
+            }
+        }
+    }
+
+    let final_err = AppError::new(
+        StatusCode::BAD_GATEWAY,
+        "upstream_error",
+        build_exhausted_error_message(&logical_model, &tried_providers),
+    );
+    if let Some(attempt) = last_failed_attempt {
+        spawn_request_log_error(
+            state,
+            auth,
+            &attempt,
+            &logical_model,
+            true,
+            started_at,
+            request_id,
+            request_ip,
+            &final_err,
+            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            tried_providers,
+        );
+    } else {
+        spawn_request_log_error_no_attempt(
+            state,
+            auth,
+            &logical_model,
+            true,
+            started_at,
+            request_id,
+            request_ip,
+            &final_err,
+            req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+            tried_providers,
+        );
+    }
+    Err(final_err)
 }
 
 /// Represents one extracted image from a URP response.
@@ -466,11 +870,16 @@ struct ExtractedImage {
 fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> {
     let mut images = Vec::new();
     let mut text_parts = Vec::new();
+    let mut seen_base64 = std::collections::HashSet::new();
+    let mut seen_urls = std::collections::HashSet::new();
 
     for item in &resp.output {
         match item {
             urp::Node::Image { source, .. } => match source {
                 urp::ImageSource::Base64 { data, .. } => {
+                    if !seen_base64.insert(data.clone()) {
+                        continue;
+                    }
                     images.push(ExtractedImage {
                         b64_json: Some(data.clone()),
                         url: None,
@@ -478,6 +887,9 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                     });
                 }
                 urp::ImageSource::Url { url, .. } => {
+                    if !seen_urls.insert(url.clone()) {
+                        continue;
+                    }
                     images.push(ExtractedImage {
                         b64_json: None,
                         url: Some(url.clone()),
