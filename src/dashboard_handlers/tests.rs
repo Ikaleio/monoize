@@ -16,6 +16,8 @@ use crate::monoize_routing::{
     MonoizeProviderType, MonoizeRoutingStore, UpdateMonoizeProviderInput,
 };
 use crate::providers::ProviderStore;
+use crate::settings::SettingsStore;
+use crate::transforms::{Phase, TransformRuleConfig};
 use crate::users::{
     CreateApiKeyInput, ModelRedirectRule, RequestLogApiKey, RequestLogBilling, RequestLogChannel,
     RequestLogError, RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens,
@@ -516,6 +518,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 max_multiplier: create_body.max_multiplier,
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
+                reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
             },
             false,
         )
@@ -545,6 +548,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         max_multiplier: created.max_multiplier,
         transforms: created.transforms.clone(),
         model_redirects: created.model_redirects.clone(),
+        reasoning_envelope_enabled: created.reasoning_envelope_enabled,
     })
     .expect("created response serializes");
     assert_eq!(
@@ -577,6 +581,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
+                reasoning_envelope_enabled: None,
                 expires_at: None,
             },
             false,
@@ -622,6 +627,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         max_multiplier: fetched.max_multiplier,
         transforms: fetched.transforms,
         model_redirects: fetched.model_redirects,
+        reasoning_envelope_enabled: fetched.reasoning_envelope_enabled,
     })
     .expect("response serializes");
     assert_eq!(response_value.get("allowed_groups"), Some(&json!(["beta"])));
@@ -671,6 +677,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 max_multiplier: invalid_create_body.max_multiplier,
                 transforms: invalid_create_body.transforms,
                 model_redirects: invalid_create_body.model_redirects,
+                reasoning_envelope_enabled: invalid_create_body.reasoning_envelope_enabled,
             },
             false,
         )
@@ -693,6 +700,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
+                reasoning_envelope_enabled: true,
             },
             false,
         )
@@ -724,6 +732,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
+                reasoning_envelope_enabled: None,
                 expires_at: None,
             },
             false,
@@ -751,6 +760,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
+                reasoning_envelope_enabled: true,
             },
             false,
         )
@@ -800,6 +810,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 max_multiplier: create_body.max_multiplier,
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
+                reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
             },
             false,
         )
@@ -827,6 +838,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                     pattern: ".*sonnet.*".to_string(),
                     replace: "gpt-5.4".to_string(),
                 }]),
+                reasoning_envelope_enabled: None,
                 expires_at: None,
             },
             false,
@@ -854,6 +866,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                     pattern: "(".to_string(),
                     replace: "gpt-5.4".to_string(),
                 }],
+                reasoning_envelope_enabled: true,
             },
             false,
         )
@@ -1020,4 +1033,38 @@ async fn sqlite_migration_creates_request_log_retention_indexes() {
     assert!(index_rows.iter().any(|(name, sql)| {
         name == "idx_request_logs_created_at" && sql.contains("(created_at_unix_ms DESC)")
     }));
+}
+
+#[tokio::test]
+async fn settings_store_round_trips_global_transforms() {
+    let db = DbPool::connect("sqlite::memory:")
+        .await
+        .expect("db connects");
+    {
+        let write = db.write().await;
+        Migrator::up(&*write, None).await.expect("migrates");
+    }
+
+    let store = SettingsStore::new(db).await.expect("store creates");
+    let mut settings = store.get_all().await.expect("settings load");
+    assert!(settings.global_transforms.is_empty());
+
+    settings.global_transforms = vec![TransformRuleConfig {
+        transform: "inject_system_prompt".to_string(),
+        enabled: true,
+        models: Some(vec!["gpt-*".to_string()]),
+        phase: Phase::Request,
+        config: json!({"content": "global", "position": "prepend"}),
+    }];
+    settings.monoize_strip_cross_protocol_nested_extra = false;
+    store.update_all(&settings).await.expect("settings update");
+
+    let updated = store.get_all().await.expect("settings reload");
+    assert_eq!(updated.global_transforms.len(), 1);
+    assert_eq!(
+        updated.global_transforms[0].transform,
+        "inject_system_prompt"
+    );
+    assert_eq!(updated.global_transforms[0].phase, Phase::Request);
+    assert!(!updated.monoize_strip_cross_protocol_nested_extra);
 }

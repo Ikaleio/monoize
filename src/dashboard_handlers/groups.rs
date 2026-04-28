@@ -124,6 +124,7 @@ mod tests {
                     max_multiplier: None,
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
+                    reasoning_envelope_enabled: true,
                 },
                 false,
             )

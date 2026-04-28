@@ -21,7 +21,7 @@ export interface AuthResponse {
 
 export type Phase = "request" | "response";
 
-export type TransformScope = "provider" | "api_key";
+export type TransformScope = "provider" | "global" | "api_key";
 
 export interface TransformRuleConfig {
   transform: string;
@@ -62,6 +62,7 @@ export interface ApiKey {
   max_multiplier?: number;
   transforms: TransformRuleConfig[];
   model_redirects: ModelRedirectRule[];
+  reasoning_envelope_enabled: boolean;
 }
 
 export type ApiKeyCreated = ApiKey;
@@ -77,6 +78,7 @@ export interface CreateApiKeyInput {
   max_multiplier?: number;
   transforms?: TransformRuleConfig[];
   model_redirects?: ModelRedirectRule[];
+  reasoning_envelope_enabled?: boolean;
 }
 
 export interface UpdateApiKeyInput {
@@ -91,6 +93,7 @@ export interface UpdateApiKeyInput {
   transforms?: TransformRuleConfig[];
   expires_at?: string;
   model_redirects?: ModelRedirectRule[];
+  reasoning_envelope_enabled?: boolean;
 }
 
 export interface SystemSettings {
@@ -101,6 +104,7 @@ export interface SystemSettings {
   site_name: string;
   site_description: string;
   api_base_url: string;
+  global_transforms: TransformRuleConfig[];
   reasoning_suffix_map: Record<string, string>;
   monoize_active_probe_enabled: boolean;
   monoize_active_probe_interval_seconds: number;
@@ -109,9 +113,13 @@ export interface SystemSettings {
   monoize_passive_failure_threshold: number;
   monoize_passive_cooldown_seconds: number;
   monoize_passive_window_seconds: number;
+  monoize_passive_min_samples: number;
+  monoize_passive_failure_rate_threshold: number;
   monoize_passive_rate_limit_cooldown_seconds: number;
   monoize_request_timeout_ms: number;
+  monoize_enable_estimated_billing: boolean;
   monoize_extra_fields_whitelist: Record<string, string[]>;
+  monoize_strip_cross_protocol_nested_extra: boolean;
   updated_at: string;
 }
 
@@ -203,6 +211,7 @@ export interface Provider {
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
+  strip_cross_protocol_nested_extra?: boolean | null;
   groups: string[];
   enabled: boolean;
   priority: number;
@@ -242,6 +251,7 @@ export interface CreateProviderInput {
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
+  strip_cross_protocol_nested_extra?: boolean | null;
   groups?: string[];
   enabled?: boolean;
   priority?: number;
@@ -265,6 +275,7 @@ export interface UpdateProviderInput {
   active_probe_model_override?: string | null;
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
+  strip_cross_protocol_nested_extra?: boolean | null;
   groups?: string[];
   enabled?: boolean;
   priority?: number;
