@@ -8,6 +8,7 @@ pub struct AuthResult {
     pub tenant_id: String,
     pub user_id: Option<String>,
     pub username: Option<String>,
+    pub user_role: crate::users::UserRole,
     pub api_key_id: Option<String>,
     pub max_multiplier: Option<f64>,
     pub transforms: Vec<TransformRuleConfig>,
@@ -18,6 +19,13 @@ pub struct AuthResult {
     pub ip_whitelist: Vec<String>,
     pub sub_account_enabled: bool,
     pub sub_account_balance_nano: String,
+    pub reasoning_envelope_enabled: bool,
+}
+
+impl AuthResult {
+    pub fn can_bypass_unpriced_models(&self) -> bool {
+        self.user_role.can_manage_users()
+    }
 }
 
 #[derive(Clone)]
@@ -52,6 +60,7 @@ impl AuthState {
                             tenant_id: user.id.clone(),
                             user_id: Some(user.id),
                             username: Some(user.username.clone()),
+                            user_role: user.role,
                             api_key_id: Some(api_key.id),
                             max_multiplier: api_key.max_multiplier,
                             transforms: api_key.transforms,
@@ -62,6 +71,7 @@ impl AuthState {
                             ip_whitelist: api_key.ip_whitelist,
                             sub_account_enabled: api_key.sub_account_enabled,
                             sub_account_balance_nano: api_key.sub_account_balance_nano,
+                            reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
                         });
                     }
                     Ok(None) => {}
@@ -117,6 +127,7 @@ mod tests {
                     max_multiplier: None,
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
+                    reasoning_envelope_enabled: true,
                 },
                 false,
             )
@@ -159,6 +170,7 @@ mod tests {
                     max_multiplier: None,
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
+                    reasoning_envelope_enabled: true,
                 },
                 false,
             )
@@ -203,6 +215,7 @@ mod tests {
                     max_multiplier: None,
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
+                    reasoning_envelope_enabled: true,
                 },
                 false,
             )

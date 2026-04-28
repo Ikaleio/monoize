@@ -44,7 +44,7 @@ AKP2. If AKP1 holds, Monoize MUST:
 5. If validation succeeds:
    - Monoize MUST update `last_used_at` to the current time.
    - Monoize MUST authenticate the request with `tenant_id = user.id`.
-   - Monoize MUST attach API key routing policy (`max_multiplier`, `effective_groups`, ordered `transforms`) to the authenticated context.
+   - Monoize MUST attach API key routing policy and runtime guards (`max_multiplier`, `effective_groups`, ordered `transforms`, `reasoning_envelope_enabled`) to the authenticated context.
    - The attached `transforms` value MUST already satisfy the API-key transform safety boundary in `api-token-management.spec.md` §2.4a. Stored disallowed transform rules MUST be discarded before request processing continues.
 
 AKP3. If database validation fails or is skipped, Monoize MUST return:
