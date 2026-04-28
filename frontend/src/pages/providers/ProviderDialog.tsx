@@ -665,6 +665,8 @@ export function ProviderDialog({
 			extra_fields_whitelist: form.extra_fields_whitelist.trim()
 				? form.extra_fields_whitelist.split(',').map(s => s.trim()).filter(Boolean)
 				: null,
+			strip_cross_protocol_nested_extra:
+				form.strip_cross_protocol_nested_extra,
 			groups: form.groups.map(group => group.trim()).filter(Boolean),
 			enabled: form.enabled,
 			priority: form.priority

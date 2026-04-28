@@ -45,6 +45,7 @@ export type ProviderForm = {
 	active_probe_model_override: string | null
 	request_timeout_ms_override: string
 	extra_fields_whitelist: string
+	strip_cross_protocol_nested_extra: boolean | null
 	groups: string[]
 	priority?: number
 	models: ModelRow[]
@@ -120,6 +121,7 @@ export function emptyForm(): ProviderForm {
 		active_probe_model_override: null,
 		request_timeout_ms_override: '',
 		extra_fields_whitelist: '',
+		strip_cross_protocol_nested_extra: null,
 		groups: [],
 		priority: undefined,
 		models: [],
@@ -176,6 +178,8 @@ export function fromProvider(provider: Provider): ProviderForm {
 			:	'',
 		extra_fields_whitelist:
 			provider.extra_fields_whitelist?.join(', ') ?? '',
+		strip_cross_protocol_nested_extra:
+			provider.strip_cross_protocol_nested_extra ?? null,
 		groups: provider.groups ?? [],
 		priority: provider.priority,
 		models: Object.entries(provider.models).map(([model, entry]) => ({

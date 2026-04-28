@@ -495,6 +495,37 @@ export function TimeoutEnabledSection({
 					{t('providers.extraFieldsWhitelistDescription')}
 				</p>
 			</div>
+			<div className='space-y-2'>
+				<Label>{t('providers.stripCrossProtocolNestedExtra')}</Label>
+				<Select
+					value={
+						form.strip_cross_protocol_nested_extra === null ?
+							'inherit'
+						: form.strip_cross_protocol_nested_extra ?
+							'enabled'
+						:	'disabled'
+					}
+					onValueChange={value =>
+						onFormChange(prev => ({
+							...prev,
+							strip_cross_protocol_nested_extra:
+								value === 'inherit' ? null : value === 'enabled'
+						}))
+					}
+				>
+					<SelectTrigger>
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value='inherit'>{t('providers.inheritGlobal')}</SelectItem>
+						<SelectItem value='enabled'>{t('common.enabled')}</SelectItem>
+						<SelectItem value='disabled'>{t('common.disabled')}</SelectItem>
+					</SelectContent>
+				</Select>
+				<p className='text-xs text-muted-foreground'>
+					{t('providers.stripCrossProtocolNestedExtraDescription')}
+				</p>
+			</div>
 			<div className='flex items-center gap-2 pt-7'>
 				<Switch
 					checked={form.enabled}
