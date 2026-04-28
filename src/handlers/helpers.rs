@@ -292,11 +292,22 @@ pub(super) async fn transform_urp_stream(
     mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
     tx: mpsc::Sender<urp::UrpStreamEvent>,
     provider_rules: &[TransformRuleConfig],
+    global_rules: &[TransformRuleConfig],
     auth_rules: &[TransformRuleConfig],
     model: &str,
+    reasoning_envelope: Option<(&str, &str)>,
 ) -> AppResult<()> {
     let mut provider_states =
         transforms::build_states_for_rules(provider_rules, state.transform_registry.as_ref())
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "transform_init_failed",
+                    e.to_string(),
+                )
+            })?;
+    let mut global_states =
+        transforms::build_states_for_rules(global_rules, state.transform_registry.as_ref())
             .map_err(|e| {
                 AppError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -339,10 +350,10 @@ pub(super) async fn transform_urp_stream(
         })?;
 
         for provider_event in provider_events {
-            let auth_events = transforms::apply_stream_transforms(
+            let global_events = transforms::apply_stream_transforms(
                 provider_event,
-                auth_rules,
-                &mut auth_states,
+                global_rules,
+                &mut global_states,
                 model,
                 Phase::Response,
                 &context,
@@ -357,14 +368,41 @@ pub(super) async fn transform_urp_stream(
                 )
             })?;
 
-            for auth_event in auth_events {
-                tx.send(auth_event).await.map_err(|_| {
+            for global_event in global_events {
+                let auth_events = transforms::apply_stream_transforms(
+                    global_event,
+                    auth_rules,
+                    &mut auth_states,
+                    model,
+                    Phase::Response,
+                    &context,
+                    state.transform_registry.as_ref(),
+                )
+                .await
+                .map_err(|e| {
                     AppError::new(
-                        StatusCode::BAD_GATEWAY,
-                        "stream_transform_failed",
-                        "failed to forward transformed stream event",
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "transform_apply_failed",
+                        e.to_string(),
                     )
                 })?;
+
+                for mut auth_event in auth_events {
+                    if let Some((provider_type, upstream_model)) = reasoning_envelope {
+                        urp::wrap_reasoning_envelope_in_stream_event(
+                            &mut auth_event,
+                            provider_type,
+                            upstream_model,
+                        );
+                    }
+                    tx.send(auth_event).await.map_err(|_| {
+                        AppError::new(
+                            StatusCode::BAD_GATEWAY,
+                            "stream_transform_failed",
+                            "failed to forward transformed stream event",
+                        )
+                    })?;
+                }
             }
         }
     }
@@ -443,10 +481,12 @@ pub(super) fn resolve_max_multiplier_for_embeddings(
 
 pub(super) fn effective_sse_max_frame_length(
     provider_rules: &[TransformRuleConfig],
+    global_rules: &[TransformRuleConfig],
     auth_rules: &[TransformRuleConfig],
     model: &str,
 ) -> Option<usize> {
     resolve_sse_max_frame_length_from_rules(provider_rules, model)
+        .or_else(|| resolve_sse_max_frame_length_from_rules(global_rules, model))
         .or_else(|| resolve_sse_max_frame_length_from_rules(auth_rules, model))
 }
 
@@ -479,12 +519,14 @@ fn resolve_sse_max_frame_length_from_rules(
 
 pub(super) fn requires_buffered_response_stream(
     provider_rules: &[TransformRuleConfig],
+    global_rules: &[TransformRuleConfig],
     auth_rules: &[TransformRuleConfig],
     model: &str,
     downstream: DownstreamProtocol,
 ) -> bool {
     provider_rules
         .iter()
+        .chain(global_rules.iter())
         .chain(auth_rules.iter())
         .filter(|rule| rule.enabled && rule.phase == Phase::Response)
         .filter(|rule| match &rule.models {
@@ -727,6 +769,7 @@ mod tests {
         assert!(!requires_buffered_response_stream(
             &[response_rule("assistant_markdown_images_to_output")],
             &[],
+            &[],
             "gpt-5-mini",
             DownstreamProtocol::Responses,
         ));
@@ -737,11 +780,13 @@ mod tests {
         assert!(requires_buffered_response_stream(
             &[response_rule("assistant_markdown_images_to_output")],
             &[],
+            &[],
             "gpt-5-mini",
             DownstreamProtocol::ChatCompletions,
         ));
         assert!(requires_buffered_response_stream(
             &[response_rule("assistant_markdown_images_to_output")],
+            &[],
             &[],
             "gpt-5-mini",
             DownstreamProtocol::AnthropicMessages,

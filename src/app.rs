@@ -218,6 +218,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         .monoize_active_probe_success_threshold
         .max(1);
     monoize_runtime.active_probe_model = settings_snapshot.monoize_active_probe_model.clone();
+    monoize_runtime.global_transforms = settings_snapshot.global_transforms.clone();
     monoize_runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
     monoize_runtime.enable_estimated_billing = settings_snapshot.monoize_enable_estimated_billing;
     monoize_runtime.extra_fields_whitelist =
@@ -674,6 +675,9 @@ fn spawn_active_probe_request_log(
     let Some(user_id) = user_id else {
         return;
     };
+    if !status_ok {
+        return;
+    }
     let provider_multiplier = provider_multiplier.unwrap_or(1.0);
     tokio::spawn(async move {
         let parsed_prompt_tokens = usage_snapshot
@@ -691,7 +695,7 @@ fn spawn_active_probe_request_log(
             .unwrap_or_default();
         let pricing_model_key = normalize_pricing_model_key(&model, &reasoning_suffix_map);
 
-        let (charge_nano_usd, billing_breakdown_json) = if status_ok {
+        let (charge_nano_usd, billing_breakdown_json) = {
             if let Some((prompt_tokens, completion_tokens)) = usage_tokens {
                 match model_registry_store
                     .get_model_metadata(&pricing_model_key)
@@ -730,17 +734,11 @@ fn spawn_active_probe_request_log(
             } else {
                 (None, None)
             }
-        } else {
-            (None, None)
         };
 
-        let usage_breakdown_json = if status_ok {
-            usage_tokens.map(|(prompt_tokens, completion_tokens)| {
-                build_probe_usage_breakdown(prompt_tokens, completion_tokens)
-            })
-        } else {
-            None
-        };
+        let usage_breakdown_json = usage_tokens.map(|(prompt_tokens, completion_tokens)| {
+            build_probe_usage_breakdown(prompt_tokens, completion_tokens)
+        });
 
         let log = InsertRequestLog {
             request_id: None,
@@ -761,23 +759,11 @@ fn spawn_active_probe_request_log(
             rejected_prediction_tokens: None,
             provider_multiplier: Some(provider_multiplier),
             charge_nano_usd,
-            status: if status_ok {
-                "success".to_string()
-            } else {
-                "error".to_string()
-            },
+            status: "success".to_string(),
             usage_breakdown_json,
             billing_breakdown_json,
-            error_code: if status_ok {
-                None
-            } else {
-                Some("active_probe_failed".to_string())
-            },
-            error_message: if status_ok {
-                None
-            } else {
-                Some("active probe connectivity test failed".to_string())
-            },
+            error_code: None,
+            error_message: None,
             error_http_status: None,
             duration_ms: Some(duration_ms),
             ttfb_ms: None,

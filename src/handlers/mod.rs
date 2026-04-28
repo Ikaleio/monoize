@@ -25,12 +25,13 @@ use crate::users::{InsertRequestLog, REQUEST_LOG_STATUS_ERROR, REQUEST_LOG_STATU
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::sse::Event;
+use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 
 use billing::*;
@@ -75,6 +76,12 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     state.metrics.render()
 }
 
+fn api_stream_keep_alive() -> KeepAlive {
+    KeepAlive::new()
+        .interval(Duration::from_secs(15))
+        .text("heartbeat")
+}
+
 pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     let providers =
@@ -115,7 +122,6 @@ pub async fn create_response(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    ensure_balance_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     // S2/S3: stateful fields must not be forwarded upstream
@@ -153,8 +159,16 @@ pub async fn create_response(
         )
         .await
         {
-            Ok(stream) => return Ok(Sse::new(stream).into_response()),
-            Err(err) => return Ok(Sse::new(error_to_sse_stream(&err, downstream)).into_response()),
+            Ok(stream) => {
+                return Ok(Sse::new(stream)
+                    .keep_alive(api_stream_keep_alive())
+                    .into_response());
+            }
+            Err(err) => {
+                return Ok(Sse::new(error_to_sse_stream(&err, downstream))
+                    .keep_alive(api_stream_keep_alive())
+                    .into_response());
+            }
         }
     }
 
@@ -177,7 +191,6 @@ pub async fn create_chat_completions(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    ensure_balance_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     apply_model_redirects(&mut req, &auth);
@@ -198,8 +211,16 @@ pub async fn create_chat_completions(
         )
         .await
         {
-            Ok(stream) => return Ok(Sse::new(stream).into_response()),
-            Err(err) => return Ok(Sse::new(error_to_sse_stream(&err, downstream)).into_response()),
+            Ok(stream) => {
+                return Ok(Sse::new(stream)
+                    .keep_alive(api_stream_keep_alive())
+                    .into_response());
+            }
+            Err(err) => {
+                return Ok(Sse::new(error_to_sse_stream(&err, downstream))
+                    .keep_alive(api_stream_keep_alive())
+                    .into_response());
+            }
         }
     }
     let value = forward_nonstream_typed(
@@ -221,7 +242,6 @@ pub async fn create_messages(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    ensure_balance_before_forward(&state, &auth).await?;
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     apply_model_redirects(&mut req, &auth);
@@ -242,8 +262,16 @@ pub async fn create_messages(
         )
         .await
         {
-            Ok(stream) => return Ok(Sse::new(stream).into_response()),
-            Err(err) => return Ok(Sse::new(error_to_sse_stream(&err, downstream)).into_response()),
+            Ok(stream) => {
+                return Ok(Sse::new(stream)
+                    .keep_alive(api_stream_keep_alive())
+                    .into_response());
+            }
+            Err(err) => {
+                return Ok(Sse::new(error_to_sse_stream(&err, downstream))
+                    .keep_alive(api_stream_keep_alive())
+                    .into_response());
+            }
         }
     }
     let value = forward_nonstream_typed(
@@ -265,7 +293,6 @@ pub async fn create_embeddings(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    ensure_balance_before_forward(&state, &auth).await?;
 
     let obj = body.as_object().ok_or_else(|| {
         AppError::new(
@@ -317,8 +344,8 @@ pub async fn create_embeddings(
     let request_ip = extract_client_ip(&headers);
     let started_at = std::time::Instant::now();
     let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
-    let attempts =
-        build_monoize_attempts(&state, &routing_stub, auth.effective_groups.clone()).await?;
+    let attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
+    ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
     insert_pending_request_log(
         &state,
         &auth,
@@ -577,6 +604,19 @@ struct MonoizeAttempt {
     request_timeout_ms: u64,
     extra_fields_whitelist: Option<Vec<String>>,
     strip_cross_protocol_nested_extra: bool,
+    billable_pricing_available: bool,
+}
+
+fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str {
+    match provider_type {
+        ProviderType::Responses => "responses",
+        ProviderType::ChatCompletion => "chat_completion",
+        ProviderType::Messages => "messages",
+        ProviderType::Gemini => "gemini",
+        ProviderType::OpenaiImage => "openai_image",
+        ProviderType::Replicate => "replicate",
+        ProviderType::Group => "group",
+    }
 }
 
 async fn maybe_sleep_before_channel_retry(attempt: &MonoizeAttempt) {
@@ -786,6 +826,23 @@ async fn ensure_balance_before_forward(
             )),
         },
     }
+}
+
+fn attempts_require_balance(attempts: &[MonoizeAttempt]) -> bool {
+    attempts
+        .iter()
+        .any(|attempt| attempt.billable_pricing_available)
+}
+
+async fn ensure_balance_before_forward_for_attempts(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    attempts: &[MonoizeAttempt],
+) -> AppResult<()> {
+    if !attempts_require_balance(attempts) {
+        return Ok(());
+    }
+    ensure_balance_before_forward(state, auth).await
 }
 
 #[allow(clippy::result_large_err)]
