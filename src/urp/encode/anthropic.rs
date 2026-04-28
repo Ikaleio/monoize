@@ -3,8 +3,9 @@ use crate::urp::encode::{
 };
 use crate::urp::{
     FileSource, FinishReason, ImageSource, Node, OrdinaryRole, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
-    Usage, strip_reasoning_signature_sigil, wrap_reasoning_signature_with_item_id,
+    REASONING_KIND_REDACTED_THINKING, REASONING_ENVELOPE_PREFIX, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse, Usage, strip_reasoning_signature_sigil,
+    wrap_reasoning_signature_with_item_id,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -60,6 +61,7 @@ fn encoded_signature_value(
         Some(other) => return Some(other.clone()),
     };
     let processed = match mode {
+        ReasoningSigilMode::EmbedSigil if raw.starts_with(REASONING_ENVELOPE_PREFIX) => raw,
         ReasoningSigilMode::EmbedSigil => id
             .as_deref()
             .filter(|s| !s.is_empty())

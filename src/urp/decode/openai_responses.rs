@@ -11,6 +11,37 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+fn image_media_type_from_output_format(output_format: Option<&str>) -> &'static str {
+    match output_format.unwrap_or("png") {
+        "webp" => "image/webp",
+        "jpeg" => "image/jpeg",
+        _ => "image/png",
+    }
+}
+
+fn decode_image_generation_call_node(item_obj: &Map<String, Value>) -> Option<Node> {
+    let result = item_obj.get("result")?.as_str()?.trim();
+    if result.is_empty() {
+        return None;
+    }
+    Some(Node::Image {
+        id: item_obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+        role: OrdinaryRole::Assistant,
+        source: crate::urp::ImageSource::Base64 {
+            media_type: image_media_type_from_output_format(
+                item_obj.get("output_format").and_then(|v| v.as_str()),
+            )
+            .to_string(),
+            data: result.to_string(),
+        },
+        extra_body: split_extra(item_obj, &["type", "id", "result", "output_format"]),
+    })
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiResponsesUsage {
     #[serde(
@@ -383,6 +414,11 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                 extra_body: split_extra(obj, &["type", "call_id", "output"]),
             });
         }
+        "reasoning" => {
+            if let Some(node) = decode_reasoning_node(obj) {
+                out.push(node);
+            }
+        }
         "message" | "" => {
             let role = match obj.get("role").and_then(|v| v.as_str()).unwrap_or("user") {
                 "system" => Role::System,
@@ -714,6 +750,11 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                 }
                 "reasoning" => {
                     if let Some(node) = decode_reasoning_node(item_obj) {
+                        nodes.push(node);
+                    }
+                }
+                "image_generation_call" => {
+                    if let Some(node) = decode_image_generation_call_node(item_obj) {
                         nodes.push(node);
                     }
                 }

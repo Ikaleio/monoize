@@ -617,7 +617,7 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
 
     for part in parts {
         let Part::Reasoning {
-            id: _,
+            id,
             content,
             encrypted,
             summary,
@@ -669,7 +669,11 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
                 }
 
                 let mut detail = reasoning_encrypted_detail_value(enc.clone(), format);
-                if let Some(id) = extra_body.get("id").and_then(Value::as_str) {
+                if let Some(id) = id
+                    .as_deref()
+                    .filter(|id| !id.is_empty())
+                    .or_else(|| extra_body.get("id").and_then(Value::as_str))
+                {
                     detail["id"] = Value::String(id.to_string());
                 }
                 if !details.iter().any(|existing| existing == &detail) {
