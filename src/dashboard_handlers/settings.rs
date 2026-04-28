@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::dashboard_handlers::auth::UserResponse;
 use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
+use crate::transforms::TransformRuleConfig;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -18,6 +19,7 @@ pub struct UpdateSettingsRequest {
     pub site_name: Option<String>,
     pub site_description: Option<String>,
     pub api_base_url: Option<String>,
+    pub global_transforms: Option<Vec<TransformRuleConfig>>,
     pub reasoning_suffix_map: Option<std::collections::HashMap<String, String>>,
     pub monoize_active_probe_enabled: Option<bool>,
     pub monoize_active_probe_interval_seconds: Option<u64>,
@@ -85,6 +87,9 @@ pub async fn update_settings(
     }
     if let Some(v) = body.api_base_url {
         settings.api_base_url = v;
+    }
+    if let Some(v) = body.global_transforms {
+        settings.global_transforms = v;
     }
     if let Some(v) = body.reasoning_suffix_map {
         settings.reasoning_suffix_map = v;
@@ -164,6 +169,7 @@ pub async fn update_settings(
         rt.active_interval_seconds = updated.monoize_active_probe_interval_seconds.max(1);
         rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
         rt.active_probe_model = updated.monoize_active_probe_model.clone();
+        rt.global_transforms = updated.global_transforms.clone();
         rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
         rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
     }

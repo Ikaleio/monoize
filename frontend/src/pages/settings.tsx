@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Save, X } from "lucide-react";
+import { Plus, Save, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,9 +9,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useSettings, updateSettingsOptimistic } from "@/lib/swr";
+import { useSettings, updateSettingsOptimistic, useTransformRegistry } from "@/lib/swr";
 import type { SystemSettings } from "@/lib/api";
 import { PageWrapper, motion, transitions, StaggerList, StaggerItem } from "@/components/ui/motion";
+import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
+import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
+import { toast } from "sonner";
 
 const EFFORT_VALUES = ["none", "minimum", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -129,12 +132,16 @@ function SuffixMapEditor({
 export function SettingsPage() {
   const { t } = useTranslation();
   const { data: settings, isLoading, mutate } = useSettings();
+  const { data: transformRegistry = [] } = useTransformRegistry();
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Use local state if user has made changes, otherwise use SWR data
   const currentSettings = localSettings ?? settings;
+  const globalTransformRegistry = transformRegistry.filter((item) =>
+    item.supported_scopes.includes("global")
+  );
 
   const handleChange = (updates: Partial<SystemSettings>) => {
     if (!currentSettings) return;
@@ -143,6 +150,18 @@ export function SettingsPage() {
 
   const handleSave = async () => {
     if (!currentSettings) return;
+    const invalidRule = findFirstInvalidTransformRule(
+      currentSettings.global_transforms ?? [],
+      globalTransformRegistry
+    );
+    if (invalidRule) {
+      const firstError = invalidRule.errors[0];
+      toast.error(t("transforms.validationRuleInvalid", {
+        index: invalidRule.index + 1,
+        reason: `${firstError.field} ${firstError.message}`,
+      }));
+      return;
+    }
     setSaving(true);
     try {
       await updateSettingsOptimistic(currentSettings, (error) => {
@@ -354,6 +373,29 @@ export function SettingsPage() {
         <StaggerItem>
           <Card>
             <CardHeader>
+              <CardTitle>{t("settings.globalTransforms")}</CardTitle>
+              <CardDescription>{t("settings.globalTransformsDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Settings2 className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">{t("transforms.titleGlobal")}</h3>
+              </div>
+              <TransformChainEditor
+                value={currentSettings.global_transforms ?? []}
+                registry={globalTransformRegistry}
+                onChange={(next) => handleChange({ global_transforms: next })}
+              />
+              <p className="text-sm text-muted-foreground">
+                {t("settings.globalTransformsHelp")}
+              </p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+
+        <StaggerItem>
+          <Card>
+            <CardHeader>
               <CardTitle>{t("settings.healthMonitoring")}</CardTitle>
               <CardDescription>{t("settings.healthMonitoringDescription")}</CardDescription>
             </CardHeader>
@@ -373,6 +415,44 @@ export function SettingsPage() {
                   checked={currentSettings.monoize_active_probe_enabled}
                   onCheckedChange={(checked) =>
                     handleChange({ monoize_active_probe_enabled: checked })
+                  }
+                />
+              </motion.div>
+              <Separator />
+              <motion.div
+                whileHover={{ x: 4 }}
+                transition={{ type: "spring", stiffness: 300 }}
+                className="flex items-center justify-between"
+              >
+                <div className="space-y-0.5">
+                  <Label>{t("settings.enableEstimatedBilling")}</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.enableEstimatedBillingDescription")}
+                  </p>
+                </div>
+                <Switch
+                  checked={currentSettings.monoize_enable_estimated_billing}
+                  onCheckedChange={(checked) =>
+                    handleChange({ monoize_enable_estimated_billing: checked })
+                  }
+                />
+              </motion.div>
+              <Separator />
+              <motion.div
+                whileHover={{ x: 4 }}
+                transition={{ type: "spring", stiffness: 300 }}
+                className="flex items-center justify-between"
+              >
+                <div className="space-y-0.5">
+                  <Label>{t("settings.stripCrossProtocolNestedExtra")}</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.stripCrossProtocolNestedExtraDescription")}
+                  </p>
+                </div>
+                <Switch
+                  checked={currentSettings.monoize_strip_cross_protocol_nested_extra}
+                  onCheckedChange={(checked) =>
+                    handleChange({ monoize_strip_cross_protocol_nested_extra: checked })
                   }
                 />
               </motion.div>
@@ -481,6 +561,47 @@ export function SettingsPage() {
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveWindowSecondsDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="passive_min_samples">{t("settings.passiveMinSamples")}</Label>
+                <Input
+                  id="passive_min_samples"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_passive_min_samples}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_passive_min_samples: Math.max(1, parseInt(e.target.value) || 20),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveMinSamplesDescription")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="passive_failure_rate_threshold">{t("settings.passiveFailureRateThreshold")}</Label>
+                <Input
+                  id="passive_failure_rate_threshold"
+                  type="number"
+                  min="0.01"
+                  max="1"
+                  step="0.01"
+                  value={currentSettings.monoize_passive_failure_rate_threshold}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_passive_failure_rate_threshold: Math.min(
+                        1,
+                        Math.max(0.01, parseFloat(e.target.value) || 0.6)
+                      ),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.passiveFailureRateThresholdDescription")}
                 </p>
               </div>
               <div className="space-y-2">

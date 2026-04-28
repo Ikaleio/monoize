@@ -181,8 +181,6 @@ PL23. Provider channel edit dialog MUST expose channel-level passive breaker ove
 - `passive_failure_threshold_override`
 - `passive_cooldown_seconds_override`
 - `passive_window_seconds_override`
-- `passive_min_samples_override`
-- `passive_failure_rate_threshold_override`
 - `passive_rate_limit_cooldown_seconds_override`
 
 PL23a. Provider channel edit dialog MUST operate on a draft copy of the selected channel row.
@@ -209,8 +207,14 @@ ST2. Health Monitoring section MUST expose at least these editable fields bound 
 - `monoize_passive_min_samples` (integer >= 1)
 - `monoize_passive_failure_rate_threshold` (number in `[0.01, 1.0]`)
 - `monoize_passive_rate_limit_cooldown_seconds` (integer >= 1)
+- `monoize_enable_estimated_billing` (boolean)
+- `monoize_strip_cross_protocol_nested_extra` (boolean)
 
 ST3. Settings UI MUST perform optimistic update and persist via existing settings save flow; persisted values MUST be reflected after reload.
+
+ST4. `/dashboard/admin-settings` MUST include a global transform editor bound to `GET/PUT /api/dashboard/settings` field `global_transforms`.
+
+ST5. The global transform editor MUST follow the same interaction contract as PL7, PL8, PL9, and PL10, but its option list MUST be filtered to transforms whose registry metadata includes `global` in `supported_scopes`.
 
 PG-L1. `/playground` page MUST be accessible from the main navigation sidebar (below Token Management).
 
