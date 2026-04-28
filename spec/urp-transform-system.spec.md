@@ -151,6 +151,7 @@ TF-7. Built-ins that MUST exist are:
 - `remove_field`
 - `force_stream`
 - `append_empty_user_message`
+- `enable_openai_image_generation_tool`
 - `split_sse_frames`
 - `auto_cache_user_id`
 - `auto_cache_system`
@@ -168,9 +169,10 @@ TF-8. Every transform registry item returned by `/api/dashboard/transforms/regis
 
 TF-9. Scope semantics are exact:
 1. `provider` means the transform MAY be configured in provider transform chains;
-2. `api_key` means the transform MAY be configured in API-key transform chains;
-3. a transform MAY support both scopes; and
-4. dashboard editors MUST hide transforms that do not support the current editor scope.
+2. `global` means the transform MAY be configured in the system settings global transform chain;
+3. `api_key` means the transform MAY be configured in API-key transform chains;
+4. a transform MAY support more than one scope; and
+5. dashboard editors MUST hide transforms that do not support the current editor scope.
 
 ### 4.1 Transform-visible request and response surfaces
 
@@ -268,6 +270,35 @@ SOTU-5. `strip_orphaned_tool_use` MUST preserve all non-`ToolCall` ordinary node
 SOTU-6. `strip_orphaned_tool_use` MUST preserve control nodes unchanged.
 
 ### 4.6 Image transforms on request ordinary nodes
+
+EOIGT-1. `enable_openai_image_generation_tool` is request-phase only.
+
+EOIGT-2. Config MAY contain:
+- `output_format` as one of `png`, `webp`, or `jpeg`; default `png`;
+- `action` as a string; optional; and
+- `extra` as an object whose entries are copied verbatim into the inserted tool descriptor's `extra_body`.
+
+EOIGT-3. The transform MUST inspect only top-level `request.tools`.
+
+EOIGT-4. If `request.tools` is absent, the transform MUST create it as a one-element array containing one tool descriptor with `type = "image_generation"`.
+
+EOIGT-5. If `request.tools` already contains at least one tool descriptor whose `type` is `image_generation`, the transform MUST leave `request.tools` unchanged.
+
+EOIGT-6. When the transform inserts a tool descriptor, it MUST set:
+1. `type = "image_generation"`;
+2. `extra_body.size = request.extra_body.size` when `request.extra_body` contains `size`;
+3. `extra_body.quality = request.extra_body.quality` when `request.extra_body` contains `quality`;
+4. all `extra` object entries into `extra_body` afterward, preserving their JSON values verbatim;
+5. `extra_body.output_format = <configured output_format>`; and
+6. `extra_body.action = <configured action>` only when `action` is configured.
+
+EOIGT-6a. If `extra` contains keys `size` or `quality`, the transform MUST preserve the `extra` values in the inserted tool descriptor and MUST NOT overwrite them with same-named values from `request.extra_body`.
+
+EOIGT-6b. If `extra` contains keys `output_format` or `action`, the transform MUST still apply EOIGT-6.5 and EOIGT-6.6 afterward so that the explicit typed config fields take precedence over colliding `extra` entries.
+
+EOIGT-7. The transform MUST preserve all pre-existing tool descriptors in source order and MUST append the inserted `image_generation` tool after them.
+
+EOIGT-8. The transform MUST NOT modify `request.input`, `request.tool_choice`, or any response-phase payload surface.
 
 CUMI-1. `compress_user_message_images` is request-phase only.
 
@@ -457,7 +488,7 @@ REMS-3. The literal substring `{effort}` inside `suffix` MUST expand to the reso
 
 REMS-4. On apply:
 1. read `request.reasoning.effort`;
-2. if the effort is absent or not one of `low`, `medium`, or `high`, the transform MUST no-op;
+2. if the effort is absent or not one of `none`, `minimum`, `low`, `medium`, `high`, `xhigh`, or `max`, the transform MUST no-op;
 3. otherwise iterate `rules` in order;
 4. for the first matching rule, append the expanded suffix to `request.model`; and
 5. stop after the first match.
@@ -468,17 +499,19 @@ REMS-5. The transform MUST NOT modify `request.reasoning`.
 
 PIPE-1. Non-stream and stream requests MUST execute in this order:
 1. decode the downstream wire payload into URP v2;
-2. apply API-key request-phase transforms;
-3. resolve model suffix;
-4. route to provider and channel using waterfall plus fail-forward;
-5. set `request.model` to the selected upstream model name;
-6. if required, perform cross-family nested passthrough stripping under XSTRIP-3 through XSTRIP-8;
-7. apply provider request-phase transforms;
-8. encode URP v2 to the upstream wire payload using the selected upstream model name;
-9. decode the upstream response or stream into URP v2;
-10. apply provider response-phase transforms;
-11. apply API-key response-phase transforms; and
-12. encode URP v2 to the downstream wire response using the original requested logical model name.
+2. resolve model suffix;
+3. route to provider and channel using waterfall plus fail-forward;
+4. set `request.model` to the selected upstream model name;
+5. if required, perform cross-family nested passthrough stripping under XSTRIP-3 through XSTRIP-8;
+6. apply provider request-phase transforms;
+7. apply global request-phase transforms configured in system settings;
+8. apply API-key request-phase transforms;
+9. encode URP v2 to the upstream wire payload using the selected upstream model name;
+10. decode the upstream response or stream into URP v2;
+11. apply provider response-phase transforms;
+12. apply global response-phase transforms configured in system settings;
+13. apply API-key response-phase transforms; and
+14. encode URP v2 to the downstream wire response using the original requested logical model name.
 
 PIPE-1a. For streaming requests that satisfy STR-9, the runtime MAY call the upstream non-stream endpoint for that attempt, decode to `UrpResponseV2`, apply response transforms, and emit synthesized downstream stream events. The postcondition is that transformed content remains visible on the stream path even when upstream native streaming is bypassed.
 
@@ -491,6 +524,8 @@ PIPE-1c. Transform rule model matching MUST use the normalized logical model rat
 PIPE-2. API-key policy MUST support a default `max_multiplier` routing constraint and ordered transform rules.
 
 PIPE-3. Provider configuration MUST support ordered transform rules.
+
+PIPE-3a. System settings MUST support ordered global transform rules. The default global transform rule list MUST be empty.
 
 PIPE-4. If request max multiplier is absent, the router MUST use the API-key max multiplier when configured.
 

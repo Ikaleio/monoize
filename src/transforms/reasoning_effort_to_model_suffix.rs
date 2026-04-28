@@ -26,6 +26,13 @@ impl TransformConfig for Config {
 
 pub struct ReasoningEffortToModelSuffixTransform;
 
+fn supported_reasoning_effort(effort: Option<&str>) -> Option<&str> {
+    match effort {
+        Some(e @ ("none" | "minimum" | "low" | "medium" | "high" | "xhigh" | "max")) => Some(e),
+        _ => None,
+    }
+}
+
 #[async_trait]
 impl Transform for ReasoningEffortToModelSuffixTransform {
     fn type_id(&self) -> &'static str {
@@ -89,9 +96,10 @@ impl Transform for ReasoningEffortToModelSuffixTransform {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
-        let effort = match req.reasoning.as_ref().and_then(|r| r.effort.as_deref()) {
-            Some(e @ ("low" | "medium" | "high")) => e.to_string(),
-            _ => return Ok(()),
+        let Some(effort) =
+            supported_reasoning_effort(req.reasoning.as_ref().and_then(|r| r.effort.as_deref()))
+        else {
+            return Ok(());
         };
         for rule in &cfg.rules {
             if model_glob_match(&rule.pattern, &req.model) {
@@ -107,3 +115,21 @@ impl Transform for ReasoningEffortToModelSuffixTransform {
 inventory::submit!(TransformEntry {
     factory: || Box::new(ReasoningEffortToModelSuffixTransform),
 });
+
+#[cfg(test)]
+mod tests {
+    use super::supported_reasoning_effort;
+
+    #[test]
+    fn supported_reasoning_effort_accepts_full_effort_domain() {
+        for effort in ["none", "minimum", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(supported_reasoning_effort(Some(effort)), Some(effort));
+        }
+    }
+
+    #[test]
+    fn supported_reasoning_effort_rejects_unknown_values() {
+        assert_eq!(supported_reasoning_effort(None), None);
+        assert_eq!(supported_reasoning_effort(Some("ultra")), None);
+    }
+}
