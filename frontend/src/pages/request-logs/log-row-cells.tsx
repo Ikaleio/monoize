@@ -86,6 +86,11 @@ export function LogRowCells({
 	const billingOutput = asObject(billingSnapshot?.output)
 	const multiplier = readNumber(billingSnapshot?.provider_multiplier)
 	const isEstimatedBilling = billingSnapshot?.estimated === true
+	const billingExemptionReason =
+		typeof billingSnapshot?.exemption_reason === 'string' ?
+			billingSnapshot.exemption_reason
+		:	null
+	const isAdminUnpricedExemption = billingExemptionReason === 'admin_unpriced_model'
 
 	const formatTokenCount = (value: number | null | undefined) =>
 		value == null ? '-' : new Intl.NumberFormat('en-US').format(value)
@@ -255,6 +260,7 @@ export function LogRowCells({
 		outputReasoningCostDetail ||
 		baseCharge ||
 		multiplier != null ||
+		isAdminUnpricedExemption ||
 		!billingSnapshot
 	)
 
@@ -661,6 +667,11 @@ export function LogRowCells({
 								{isEstimatedBilling && (
 									<div className='text-amber-500 text-xs flex items-center gap-1'>
 										⚡ {t('requestLogs.estimatedBilling')}
+									</div>
+								)}
+								{isAdminUnpricedExemption && (
+									<div className='text-amber-500 text-xs flex items-center gap-1'>
+										ℹ {t('requestLogs.adminUnpricedExemption')}
 									</div>
 								)}
 									<div className='border-t border-muted pt-2 mt-2'>

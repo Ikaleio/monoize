@@ -140,7 +140,7 @@ RL16. For successful requests where billing is executed, `billing_breakdown_json
 
 RL17. When a request triggers waterfall fail-forward (one or more provider/channel attempts fail with retryable errors before a final result), `tried_providers_json` MUST record each failed attempt as `{ provider_id, channel_id, error }`. The array MUST be ordered chronologically (first attempt first). When no fallback occurred, the field MUST be null.
 
-RL18. Active probe connectivity tests that can incur upstream token cost MUST be persisted as request logs with `request_kind = "active_probe_connectivity"`.
+RL18. Successful active probe connectivity tests that can incur upstream token cost MUST be persisted as request logs with `request_kind = "active_probe_connectivity"`. Failed active probe connectivity tests MUST NOT be persisted as request logs.
 
 RL19. For active probe logs, `api_key_id` MUST be null and UI token column label MUST be rendered as a localized "Connectivity Test" string.
 
@@ -326,6 +326,8 @@ FL26a. In the cost breakdown tooltip, any per-class line item whose computed cha
 FL26b. *(Removed — "final cost" line is unconditionally removed from the tooltip. See FL26.)*
 
 FL26c. If the cost breakdown tooltip would contain no visible line items (all per-class charges are zero per FL26a, no base charge, no multiplier, and billing snapshot is present), the Cost cell MUST render as plain text without a tooltip wrapper. The displayed cost value remains unchanged.
+
+FL26d. Exception to FL26c: if `billing_breakdown_json.exemption_reason = "admin_unpriced_model"`, the Cost cell MUST still render a tooltip. That tooltip MUST include a localized note stating that an admin-used unpriced model was exempted from billing, so a visible `$0.000000` charge is not mistaken for missing data.
 
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 

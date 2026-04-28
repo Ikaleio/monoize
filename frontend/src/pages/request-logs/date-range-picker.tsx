@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { CalendarIcon } from 'lucide-react'
 import { format, startOfDay, startOfMonth, subDays, subHours, subMonths } from 'date-fns'
 import { Button } from '@/components/ui/button'
@@ -93,13 +93,10 @@ function detectFixedPreset(
 export function DateRangePicker({ from, to, onChange, t }: DateRangePickerProps) {
 	const [open, setOpen] = useState(false)
 	const [activePreset, setActivePreset] = useState<TimeRangePreset | null>(null)
-	const [fromInput, setFromInput] = useState('')
-	const [toInput, setToInput] = useState('')
-
-	useEffect(() => {
-		setFromInput(from ? format(from, 'yyyy-MM-dd HH:mm:ss') : '')
-		setToInput(to ? format(to, 'yyyy-MM-dd HH:mm:ss') : '')
-	}, [from, to])
+	const fromInputRef = useRef<HTMLInputElement | null>(null)
+	const toInputRef = useRef<HTMLInputElement | null>(null)
+	const formattedFromInput = from ? format(from, 'yyyy-MM-dd HH:mm:ss') : ''
+	const formattedToInput = to ? format(to, 'yyyy-MM-dd HH:mm:ss') : ''
 
 	const handlePreset = (preset: TimeRangePreset) => {
 		const range = applyPreset(preset)
@@ -138,8 +135,8 @@ export function DateRangePicker({ from, to, onChange, t }: DateRangePickerProps)
 	}
 
 	const commitDateInputs = () => {
-		const validFrom = parseDatetimeInput(fromInput)
-		const validTo = parseDatetimeInput(toInput, true)
+		const validFrom = parseDatetimeInput(fromInputRef.current?.value ?? '')
+		const validTo = parseDatetimeInput(toInputRef.current?.value ?? '', true)
 		const detected = detectFixedPreset(validFrom, validTo)
 		setActivePreset(detected)
 		onChange(validFrom, validTo)
@@ -225,20 +222,22 @@ export function DateRangePicker({ from, to, onChange, t }: DateRangePickerProps)
 					<div className='p-2 space-y-2'>
 						<div className='flex flex-col gap-1.5 px-1'>
 							<Input
+								key={`from-${formattedFromInput}`}
+								ref={fromInputRef}
 								className='h-7 text-xs font-mono w-full'
 								placeholder={t('requestLogs.timeRangeFrom')}
-								value={fromInput}
-								onChange={e => setFromInput(e.target.value)}
+								defaultValue={formattedFromInput}
 								onBlur={commitDateInputs}
 								onKeyDown={e => {
 									if (e.key === 'Enter') commitDateInputs()
 								}}
 							/>
 							<Input
+								key={`to-${formattedToInput}`}
+								ref={toInputRef}
 								className='h-7 text-xs font-mono w-full'
 								placeholder={t('requestLogs.timeRangeTo')}
-								value={toInput}
-								onChange={e => setToInput(e.target.value)}
+								defaultValue={formattedToInput}
 								onBlur={commitDateInputs}
 								onKeyDown={e => {
 									if (e.key === 'Enter') commitDateInputs()
