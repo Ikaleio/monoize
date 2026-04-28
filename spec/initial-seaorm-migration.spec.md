@@ -108,6 +108,7 @@ ISM4.3. `api_keys` columns:
 - `token_group` TEXT NOT NULL DEFAULT 'default'
 - `max_multiplier` REAL NULL
 - `transforms` TEXT NOT NULL DEFAULT '[]'
+- `reasoning_envelope_enabled` INTEGER NOT NULL DEFAULT 1, added by migration `m20260404_000014_api_key_reasoning_envelope_switch`
 
 ISM4.4. `billing_ledger` columns:
 
@@ -236,6 +237,12 @@ ISM4.11. `monoize_channels` columns:
 - `request_timeout_ms_override` INTEGER NULL
 - `created_at` TEXT NOT NULL
 - `updated_at` TEXT NOT NULL
+
+ISM4.10a. Migration `m20260403_000013_drop_orphan_channel_override_columns` MUST remove these unused `monoize_channels` columns from the effective schema:
+
+- `passive_min_samples_override`
+- `passive_failure_rate_threshold_override`
+- `request_timeout_ms_override`
 
 ISM4.12. `providers` columns:
 

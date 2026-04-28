@@ -1,5 +1,6 @@
 use crate::db::DbPool;
 use crate::entity::system_settings;
+use crate::transforms::TransformRuleConfig;
 use chrono::{DateTime, Utc};
 use sea_orm::{EntityTrait, Set, sea_query::OnConflict};
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,8 @@ pub struct SystemSettings {
     pub site_name: String,
     pub site_description: String,
     pub api_base_url: String,
+    #[serde(default)]
+    pub global_transforms: Vec<TransformRuleConfig>,
     pub reasoning_suffix_map: HashMap<String, String>,
     pub monoize_active_probe_enabled: bool,
     pub monoize_active_probe_interval_seconds: u64,
@@ -95,6 +98,7 @@ impl Default for SystemSettings {
             site_name: "Monoize Dashboard".to_string(),
             site_description: "Unified Responses Proxy".to_string(),
             api_base_url: String::new(),
+            global_transforms: Vec::new(),
             reasoning_suffix_map: default_reasoning_suffix_map(),
             monoize_active_probe_enabled: true,
             monoize_active_probe_interval_seconds: 30,
@@ -149,6 +153,12 @@ impl SettingsStore {
             .await?;
         self.set_if_not_exists("api_base_url", &defaults.api_base_url)
             .await?;
+        self.set_if_not_exists(
+            "global_transforms",
+            &serde_json::to_string(&defaults.global_transforms)
+                .unwrap_or_else(|_| "[]".to_string()),
+        )
+        .await?;
         self.set_if_not_exists(
             "reasoning_suffix_map",
             &serde_json::to_string(&defaults.reasoning_suffix_map).unwrap(),
@@ -332,6 +342,11 @@ impl SettingsStore {
                 "api_base_url" => {
                     settings.api_base_url = row.value;
                 }
+                "global_transforms" => {
+                    if let Ok(transforms) = serde_json::from_str(&row.value) {
+                        settings.global_transforms = transforms;
+                    }
+                }
                 "reasoning_suffix_map" => {
                     if let Ok(map) = serde_json::from_str(&row.value) {
                         settings.reasoning_suffix_map = map;
@@ -387,6 +402,10 @@ impl SettingsStore {
                         settings.monoize_extra_fields_whitelist = map;
                     }
                 }
+                "monoize_strip_cross_protocol_nested_extra" => {
+                    settings.monoize_strip_cross_protocol_nested_extra =
+                        row.value.parse().unwrap_or(true);
+                }
                 _ => {}
             }
         }
@@ -414,6 +433,12 @@ impl SettingsStore {
         self.set("site_description", &settings.site_description)
             .await?;
         self.set("api_base_url", &settings.api_base_url).await?;
+        self.set(
+            "global_transforms",
+            &serde_json::to_string(&settings.global_transforms)
+                .unwrap_or_else(|_| "[]".to_string()),
+        )
+        .await?;
         self.set(
             "reasoning_suffix_map",
             &serde_json::to_string(&settings.reasoning_suffix_map)
@@ -486,6 +511,13 @@ impl SettingsStore {
             "monoize_extra_fields_whitelist",
             &serde_json::to_string(&settings.monoize_extra_fields_whitelist)
                 .unwrap_or_else(|_| "{}".to_string()),
+        )
+        .await?;
+        self.set(
+            "monoize_strip_cross_protocol_nested_extra",
+            &settings
+                .monoize_strip_cross_protocol_nested_extra
+                .to_string(),
         )
         .await?;
         Ok(())
