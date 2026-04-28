@@ -20,11 +20,11 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub api_type_overrides: String,
     pub active_probe_enabled_override: Option<i32>,
-    pub active_probe_interval_seconds_override: Option<i64>,
-    pub active_probe_success_threshold_override: Option<i64>,
+    pub active_probe_interval_seconds_override: Option<i32>,
+    pub active_probe_success_threshold_override: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub active_probe_model_override: Option<String>,
-    pub request_timeout_ms_override: Option<i64>,
+    pub request_timeout_ms_override: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub extra_fields_whitelist: Option<String>,
     pub strip_cross_protocol_nested_extra: Option<i32>,

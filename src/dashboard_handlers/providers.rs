@@ -567,6 +567,13 @@ pub async fn get_transform_registry(State(state): State<AppState>) -> AppResult<
         .transform_registry
         .values()
         .map(|transform| {
+            let mut supported_scopes = transform.supported_scopes().to_vec();
+            if !supported_scopes
+                .iter()
+                .any(|scope| matches!(scope, crate::transforms::TransformScope::Global))
+            {
+                supported_scopes.push(crate::transforms::TransformScope::Global);
+            }
             json!({
                 "type_id": transform.type_id(),
                 "supported_phases": transform
@@ -574,8 +581,7 @@ pub async fn get_transform_registry(State(state): State<AppState>) -> AppResult<
                     .iter()
                     .map(|p| serde_json::to_value(p).unwrap_or(Value::String("request".to_string())))
                     .collect::<Vec<_>>(),
-                "supported_scopes": transform
-                    .supported_scopes()
+                "supported_scopes": supported_scopes
                     .iter()
                     .map(|scope| serde_json::to_value(scope).unwrap_or(Value::String("provider".to_string())))
                     .collect::<Vec<_>>(),
