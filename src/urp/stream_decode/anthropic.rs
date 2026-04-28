@@ -569,6 +569,7 @@ fn finish_reason_name(reason: &FinishReason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::Usage;
     use serde_json::json;
 
     #[test]

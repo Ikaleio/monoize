@@ -106,4 +106,33 @@ mod tests {
         assert_eq!(encoded["n"], json!(2));
         assert!(encoded.get("stream").is_none());
     }
+
+    #[test]
+    fn encodes_gpt_image_2_custom_size() {
+        let req = UrpRequest {
+            model: "logical-model".to_string(),
+            input: vec![Node::Text {
+                id: None,
+                role: OrdinaryRole::User,
+                content: "draw a blue square".to_string(),
+                phase: None,
+                extra_body: empty_map(),
+            }],
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::from([("size".to_string(), json!("1280x720"))]),
+        };
+
+        let encoded = encode_request(&req, "gpt-image-2");
+        assert_eq!(encoded["model"], json!("gpt-image-2"));
+        assert_eq!(encoded["prompt"], json!("draw a blue square"));
+        assert_eq!(encoded["size"], json!("1280x720"));
+    }
 }

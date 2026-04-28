@@ -1617,12 +1617,8 @@ fn synthesize_node_state_from_delta(
         _ => return None,
     };
 
-    let output_item = stream_output_item_start_stub_from_node_header(
-        zone,
-        &header,
-        extra_body,
-        &HashMap::new(),
-    );
+    let output_item =
+        stream_output_item_start_stub_from_node_header(zone, &header, extra_body, &HashMap::new());
     let item_id = output_item
         .get("id")
         .and_then(Value::as_str)

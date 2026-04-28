@@ -18,6 +18,53 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
+fn image_media_type_from_output_format(output_format: Option<&str>) -> &'static str {
+    match output_format.unwrap_or("png") {
+        "webp" => "image/webp",
+        "jpeg" => "image/jpeg",
+        _ => "image/png",
+    }
+}
+
+fn image_node_from_image_generation_payload(payload: &Value) -> Option<Node> {
+    let data = payload
+        .get("b64_json")
+        .or_else(|| payload.get("result"))
+        .and_then(|value| value.as_str())?
+        .trim();
+    if data.is_empty() {
+        return None;
+    }
+    Some(Node::Image {
+        id: payload
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+        role: OrdinaryRole::Assistant,
+        source: crate::urp::ImageSource::Base64 {
+            media_type: image_media_type_from_output_format(
+                payload
+                    .get("output_format")
+                    .and_then(|value| value.as_str()),
+            )
+            .to_string(),
+            data: data.to_string(),
+        },
+        extra_body: split_known_fields(
+            payload.clone(),
+            &[
+                "type",
+                "id",
+                "b64_json",
+                "result",
+                "output_format",
+                "partial_image_index",
+            ],
+        ),
+    })
+}
+
 pub(crate) async fn stream_responses_to_urp_events(
     urp: &HandlerUrpRequest,
     mut pending_request_envelope_extra: Option<HashMap<String, Value>>,
@@ -790,6 +837,8 @@ fn map_responses_event_to_urp_events_with_state(
                 ),
             }]
         }
+        "image_generation.completed" => map_image_generation_completed(data_val, index_state),
+        "image_generation.partial_image" => Vec::new(),
         "response.content_part.done" => map_content_part_done(data_val, index_state),
         "response.output_item.done" => map_output_item_done(data_val, index_state),
         "response.completed" => map_response_completed(data_val, index_state),
@@ -1253,6 +1302,40 @@ fn map_content_part_done(
         usage: None,
         extra_body: part_extra_body_from_value(part),
     }]
+}
+
+fn map_image_generation_completed(
+    data_val: Value,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Vec<UrpStreamEvent> {
+    let Some(node) = image_node_from_image_generation_payload(&data_val) else {
+        return Vec::new();
+    };
+    let node_index = index_state.allocate_fresh_node_index();
+    let extra_body = split_known_fields(
+        data_val,
+        &[
+            "type",
+            "id",
+            "b64_json",
+            "result",
+            "output_format",
+            "partial_image_index",
+        ],
+    );
+    vec![
+        UrpStreamEvent::NodeStart {
+            node_index,
+            header: node_header_from_node(&node),
+            extra_body: extra_body.clone(),
+        },
+        UrpStreamEvent::NodeDone {
+            node_index,
+            node,
+            usage: None,
+            extra_body,
+        },
+    ]
 }
 
 fn map_output_item_done(
@@ -1746,6 +1829,16 @@ fn decode_item_from_value(item: &Value) -> Item {
             parts: vec![decode_part_from_value(item)],
             extra_body: HashMap::new(),
         },
+        "image_generation_call" => Item::Message {
+            id: item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+            role: Role::Assistant,
+            parts: vec![decode_part_from_value(item)],
+            extra_body: HashMap::new(),
+        },
         other => Item::Message {
             id: item
                 .get("id")
@@ -1842,6 +1935,23 @@ fn decode_part_from_value(part: &Value) -> Part {
                 .to_string(),
             extra_body: part_extra_body_from_value(part),
         },
+        "image_generation_call" => image_node_from_image_generation_payload(part)
+            .map(|node| match node {
+                Node::Image {
+                    source, extra_body, ..
+                } => Part::Image { source, extra_body },
+                _ => unreachable!(),
+            })
+            .unwrap_or_else(|| Part::ProviderItem {
+                id: part
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                item_type: "image_generation_call".to_string(),
+                body: part.clone(),
+                extra_body: HashMap::new(),
+            }),
         other => Part::ProviderItem {
             id: part
                 .get("id")

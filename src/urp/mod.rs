@@ -1,3 +1,4 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -37,6 +38,16 @@ pub const REASONING_SIGNATURE_SIGIL_PREFIX: &str = "mz1.";
 /// original block type. See `spec/unified_responses_proxy.spec.md` PM5 / DM5.1.
 pub const REASONING_KIND_EXTRA_KEY: &str = "_monoize_reasoning_kind";
 pub const REASONING_KIND_REDACTED_THINKING: &str = "redacted_thinking";
+pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReasoningEnvelope {
+    pub v: u8,
+    pub provider_type: String,
+    pub model: String,
+    pub item_id: Option<String>,
+    pub payload: Value,
+}
 
 /// Wrap `(item_id, signature)` into a sigil string suitable for smuggling through a downstream
 /// Anthropic `thinking.signature` or `redacted_thinking.data` field. Returns `None` when either
@@ -77,6 +88,220 @@ pub fn strip_reasoning_signature_sigil(signature: &str) -> String {
     unwrap_reasoning_signature_sigil(signature)
         .map(|(_, original)| original)
         .unwrap_or_else(|| signature.to_string())
+}
+
+pub fn parse_reasoning_envelope(value: &Value) -> Option<ReasoningEnvelope> {
+    let raw = value.as_str()?;
+    if let Some(encoded) = raw.strip_prefix(REASONING_ENVELOPE_PREFIX) {
+        let decoded = URL_SAFE_NO_PAD.decode(encoded.as_bytes()).ok()?;
+        let envelope = serde_json::from_slice::<ReasoningEnvelope>(&decoded).ok()?;
+        if envelope.v == 2 && !envelope.provider_type.is_empty() && !envelope.model.is_empty() {
+            return Some(envelope);
+        }
+        return None;
+    }
+
+    let (item_id, payload) = unwrap_reasoning_signature_sigil(raw)?;
+    Some(ReasoningEnvelope {
+        v: 1,
+        provider_type: String::new(),
+        model: String::new(),
+        item_id: Some(item_id),
+        payload: Value::String(payload),
+    })
+}
+
+fn reasoning_envelope_matches(
+    envelope: &ReasoningEnvelope,
+    provider_type: &str,
+    model: &str,
+) -> bool {
+    envelope.v == 1 || (envelope.provider_type == provider_type && envelope.model == model)
+}
+
+fn wrap_reasoning_payload(
+    encrypted: &mut Option<Value>,
+    item_id: Option<&str>,
+    provider_type: &str,
+    model: &str,
+) {
+    let Some(payload) = encrypted.take() else {
+        return;
+    };
+    if parse_reasoning_envelope(&payload).is_some() {
+        *encrypted = Some(payload);
+        return;
+    }
+
+    let envelope = ReasoningEnvelope {
+        v: 2,
+        provider_type: provider_type.to_string(),
+        model: model.to_string(),
+        item_id: item_id.filter(|id| !id.is_empty()).map(str::to_string),
+        payload,
+    };
+    let Ok(bytes) = serde_json::to_vec(&envelope) else {
+        *encrypted = Some(envelope.payload);
+        return;
+    };
+    *encrypted = Some(Value::String(format!(
+        "{REASONING_ENVELOPE_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(bytes)
+    )));
+}
+
+fn wrap_reasoning_extra_body_encrypted_content(
+    extra_body: &mut HashMap<String, Value>,
+    item_id: Option<&str>,
+    provider_type: &str,
+    model: &str,
+) {
+    let Some(value) = extra_body.remove("encrypted_content") else {
+        return;
+    };
+    let mut encrypted = Some(value);
+    wrap_reasoning_payload(&mut encrypted, item_id, provider_type, model);
+    if let Some(value) = encrypted {
+        extra_body.insert("encrypted_content".to_string(), value);
+    }
+}
+
+fn extra_body_is_reasoning_item(extra_body: &HashMap<String, Value>) -> bool {
+    extra_body.contains_key("encrypted_content")
+        || extra_body.get("type").and_then(Value::as_str) == Some("reasoning")
+}
+
+fn wrap_reasoning_node_envelope(node: &mut Node, provider_type: &str, model: &str) {
+    if let Node::Reasoning {
+        id,
+        encrypted,
+        extra_body,
+        ..
+    } = node
+    {
+        wrap_reasoning_payload(encrypted, id.as_deref(), provider_type, model);
+        wrap_reasoning_extra_body_encrypted_content(
+            extra_body,
+            id.as_deref(),
+            provider_type,
+            model,
+        );
+    }
+}
+
+pub fn wrap_reasoning_envelopes_in_response(
+    response: &mut UrpResponse,
+    provider_type: &str,
+    model: &str,
+) {
+    for node in &mut response.output {
+        wrap_reasoning_node_envelope(node, provider_type, model);
+    }
+}
+
+pub fn wrap_reasoning_envelope_in_stream_event(
+    event: &mut UrpStreamEvent,
+    provider_type: &str,
+    model: &str,
+) {
+    match event {
+        UrpStreamEvent::NodeStart {
+            header: NodeHeader::Reasoning { id },
+            extra_body,
+            ..
+        } => wrap_reasoning_extra_body_encrypted_content(
+            extra_body,
+            id.as_deref(),
+            provider_type,
+            model,
+        ),
+        UrpStreamEvent::NodeStart {
+            header: NodeHeader::NextDownstreamEnvelopeExtra,
+            extra_body,
+            ..
+        } if extra_body_is_reasoning_item(extra_body) => {
+            let item_id = extra_body.get("id").and_then(Value::as_str).map(str::to_string);
+            wrap_reasoning_extra_body_encrypted_content(
+                extra_body,
+                item_id.as_deref(),
+                provider_type,
+                model,
+            );
+        }
+        UrpStreamEvent::NodeDelta {
+            delta:
+                NodeDelta::Reasoning {
+                    encrypted,
+                    ..
+                },
+            ..
+        } => wrap_reasoning_payload(encrypted, None, provider_type, model),
+        UrpStreamEvent::NodeDone { node, .. } => {
+            wrap_reasoning_node_envelope(node, provider_type, model);
+            if let Node::NextDownstreamEnvelopeExtra { extra_body } = node
+                && extra_body_is_reasoning_item(extra_body)
+            {
+                let item_id = extra_body.get("id").and_then(Value::as_str).map(str::to_string);
+                wrap_reasoning_extra_body_encrypted_content(
+                    extra_body,
+                    item_id.as_deref(),
+                    provider_type,
+                    model,
+                );
+            }
+        }
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            for node in output {
+                wrap_reasoning_node_envelope(node, provider_type, model);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
+    nodes: &mut Vec<Node>,
+    provider_type: &str,
+    model: &str,
+    enforce_match: bool,
+) {
+    nodes.retain_mut(|node| {
+        let Node::Reasoning {
+            id,
+            encrypted,
+            extra_body,
+            ..
+        } = node
+        else {
+            return true;
+        };
+        if let Some(envelope) = encrypted.as_ref().and_then(parse_reasoning_envelope) {
+            if enforce_match && !reasoning_envelope_matches(&envelope, provider_type, model) {
+                return false;
+            }
+            if let Some(envelope_id) = envelope.item_id {
+                if !envelope_id.is_empty() {
+                    *id = Some(envelope_id);
+                }
+            }
+            *encrypted = Some(envelope.payload);
+        }
+        if let Some(envelope) = extra_body
+            .get("encrypted_content")
+            .and_then(parse_reasoning_envelope)
+        {
+            if enforce_match && !reasoning_envelope_matches(&envelope, provider_type, model) {
+                return false;
+            }
+            if let Some(envelope_id) = envelope.item_id {
+                if !envelope_id.is_empty() {
+                    *id = Some(envelope_id);
+                }
+            }
+            extra_body.insert("encrypted_content".to_string(), envelope.payload);
+        }
+        true
+    });
 }
 
 pub fn synthetic_tool_result_id() -> String {

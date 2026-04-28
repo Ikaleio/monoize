@@ -3,7 +3,8 @@ use crate::urp::encode::anthropic::anthropic_native_input_tokens;
 use crate::urp::stream_helpers::*;
 use crate::urp::{
     self, FinishReason, Node, NodeDelta, NodeHeader, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage, wrap_reasoning_signature_with_item_id,
+    REASONING_KIND_REDACTED_THINKING, REASONING_ENVELOPE_PREFIX, UrpStreamEvent, Usage,
+    wrap_reasoning_signature_with_item_id,
 };
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
@@ -50,6 +51,9 @@ impl PendingAnthropicBlock {
             return None;
         };
         let raw = signature.as_deref().filter(|s| !s.is_empty())?;
+        if raw.starts_with(REASONING_ENVELOPE_PREFIX) {
+            return Some(raw.to_string());
+        }
         match item_id.as_deref().filter(|s| !s.is_empty()) {
             Some(id) => {
                 wrap_reasoning_signature_with_item_id(id, raw).or_else(|| Some(raw.to_string()))
@@ -71,8 +75,7 @@ impl PendingAnthropicBlock {
                 } else {
                     json!({
                         "type": "thinking",
-                        "thinking": "",
-                        "signature": sig_for_start
+                        "thinking": ""
                     })
                 }
             }

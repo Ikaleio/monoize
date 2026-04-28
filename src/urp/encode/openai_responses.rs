@@ -276,6 +276,7 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     let text_value = obj.remove("text");
     obj.remove("source");
     obj.remove("started_at");
+    obj.remove("status");
     if !summary_present {
         let summary = text_value
             .and_then(|value| value.as_str().map(|text| text.to_string()))
@@ -301,6 +302,73 @@ fn ensure_default_responses_reasoning_summary(obj: &mut Map<String, Value>) {
         .entry("summary".to_string())
         .or_insert_with(|| Value::String("detailed".to_string()));
     obj.insert("reasoning".to_string(), Value::Object(reasoning_obj));
+}
+
+fn ensure_responses_encrypted_reasoning_include(obj: &mut Map<String, Value>) {
+    const INCLUDE_REASONING_ENCRYPTED_CONTENT: &str = "reasoning.encrypted_content";
+
+    match obj.get_mut("include") {
+        Some(Value::Array(include)) => {
+            if !include
+                .iter()
+                .any(|value| value.as_str() == Some(INCLUDE_REASONING_ENCRYPTED_CONTENT))
+            {
+                include.push(Value::String(
+                    INCLUDE_REASONING_ENCRYPTED_CONTENT.to_string(),
+                ));
+            }
+        }
+        _ => {
+            obj.insert(
+                "include".to_string(),
+                Value::Array(vec![Value::String(
+                    INCLUDE_REASONING_ENCRYPTED_CONTENT.to_string(),
+                )]),
+            );
+        }
+    }
+}
+
+fn sanitize_request_input_item(item: &mut Value) {
+    let Some(obj) = item.as_object_mut() else {
+        return;
+    };
+
+    match obj.get("type").and_then(Value::as_str) {
+        Some("reasoning") => sanitize_reasoning_request_item(item),
+        Some("message") => {
+            obj.remove("status");
+            obj.remove("annotations");
+            obj.remove("logprobs");
+            if obj.get("phase").and_then(Value::as_str) == Some("analysis") {
+                obj.remove("phase");
+            }
+            if let Some(Value::Array(content)) = obj.get_mut("content") {
+                for part in content {
+                    let Some(part_obj) = part.as_object_mut() else {
+                        continue;
+                    };
+                    if matches!(
+                        part_obj.get("type").and_then(Value::as_str),
+                        Some("output_text" | "input_text" | "text")
+                    ) {
+                        part_obj.remove("annotations");
+                        part_obj.remove("logprobs");
+                        if part_obj.get("phase").and_then(Value::as_str) == Some("analysis") {
+                            part_obj.remove("phase");
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_request_input_items(input_items: &mut [Value]) {
+    for item in input_items {
+        sanitize_request_input_item(item);
+    }
 }
 
 fn encode_tool_call_item(part: &Part) -> Option<Value> {
@@ -354,6 +422,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         }
         encode_message_to_input_items(item, &mut input_items);
     }
+    sanitize_request_input_items(&mut input_items);
 
     let mut body = json!({
         "model": upstream_model,
@@ -405,6 +474,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
     merge_extra(obj, &req.extra_body);
     ensure_default_responses_reasoning_summary(obj);
+    ensure_responses_encrypted_reasoning_include(obj);
     body
 }
 
