@@ -15,6 +15,7 @@ pub mod auto_cache_tool_use;
 pub mod auto_cache_user_id;
 pub mod compress_user_message_images;
 pub mod developer_to_system_role;
+pub mod enable_openai_image_generation_tool;
 pub mod force_stream;
 pub mod inject_system_prompt;
 pub mod merge_consecutive_roles;
@@ -46,6 +47,7 @@ pub enum Phase {
 #[serde(rename_all = "snake_case")]
 pub enum TransformScope {
     Provider,
+    Global,
     ApiKey,
 }
 
@@ -173,6 +175,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(auto_cache_user_id::AutoCacheUserIdTransform),
         Box::new(compress_user_message_images::CompressUserMessageImagesTransform),
         Box::new(developer_to_system_role::DeveloperToSystemRoleTransform),
+        Box::new(enable_openai_image_generation_tool::EnableOpenAiImageGenerationToolTransform),
         Box::new(resolve_image_urls::ResolveImageUrlsTransform),
     ]
 }
@@ -474,6 +477,14 @@ mod registry_tests {
                 .supported_scopes()
                 .iter()
                 .any(|scope| matches!(scope, super::TransformScope::ApiKey))
+        );
+    }
+
+    #[test]
+    fn global_scope_serializes_as_global() {
+        assert_eq!(
+            serde_json::to_value(super::TransformScope::Global).expect("scope serializes"),
+            serde_json::json!("global")
         );
     }
 }

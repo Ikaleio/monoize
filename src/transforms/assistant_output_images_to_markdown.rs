@@ -183,6 +183,7 @@ inventory::submit!(TransformEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urp::{Node, OrdinaryRole};
 
     #[test]
     fn appends_default_markdown_for_output_images() {

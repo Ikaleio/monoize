@@ -109,7 +109,7 @@ ACTU-11. The transform MUST NOT modify any other node, any node content, `req.mo
 
 CTX-1. Before API-key request-phase transforms execute, the request handler MUST inject `req.extra_body["__monoize_username"]` from `auth.username` when `auth.username` is `Some(...)`.
 
-CTX-2. After all request-phase transforms complete (both API-key and provider scopes), the request handler MUST remove `req.extra_body["__monoize_username"]` to prevent leaking internal fields to upstream providers.
+CTX-2. After all request-phase transforms complete (provider, global, and API-key scopes), the request handler MUST remove `req.extra_body["__monoize_username"]` to prevent leaking internal fields to upstream providers.
 
 CTX-3. `auth.username` is populated from `User.username` during API key authentication. If authentication does not resolve to a user record, `auth.username` is `None`.
 
@@ -119,7 +119,7 @@ ORD-1. `auto_cache_system` SHOULD be ordered before `auto_cache_tool_use` in the
 
 ORD-2. `auto_cache_user_id` has no ordering dependency relative to the other two transforms; it does not consume cache breakpoints.
 
-ORD-3. The per-attempt cross-protocol strip of nested `extra_body` (see provider setting `strip_cross_protocol_nested_extra`) MUST run BEFORE any request-phase transform (both API-key and provider scopes) within the same attempt. This guarantees that `cache_control` markers produced by `auto_cache_system` / `auto_cache_tool_use` on part-level `extra_body` survive into the encoded upstream request, even when the downstream and upstream protocol families differ (e.g. downstream OpenAI Responses → upstream Anthropic Messages).
+ORD-3. The per-attempt cross-protocol strip of nested `extra_body` (see provider setting `strip_cross_protocol_nested_extra`) MUST run BEFORE any request-phase transform (provider, global, and API-key scopes) within the same attempt. This guarantees that `cache_control` markers produced by `auto_cache_system` / `auto_cache_tool_use` on part-level `extra_body` survive into the encoded upstream request, even when the downstream and upstream protocol families differ (e.g. downstream OpenAI Responses → upstream Anthropic Messages).
 
 ORD-4. As a consequence of ORD-3, request-phase transforms may be invoked more than once per request across multiple attempts. Each invocation operates on an independent clone of the originally-decoded URP request, so `auto_cache_*` idempotency (INV-3) is sufficient to keep behavior deterministic; non-idempotent transforms MUST likewise produce the same result when applied once to a fresh clone, which is the only pattern exercised here.
 
