@@ -306,6 +306,21 @@ pub(super) fn build_billing_breakdown(
     })
 }
 
+fn build_admin_unpriced_billing_breakdown(logical_model: &str, attempt: &MonoizeAttempt) -> Value {
+    json!({
+        "version": 1,
+        "currency": "nano_usd",
+        "logical_model": logical_model,
+        "upstream_model": attempt.upstream_model,
+        "provider_id": attempt.provider_id,
+        "provider_multiplier": attempt.model_multiplier,
+        "exempted": true,
+        "exemption_reason": "admin_unpriced_model",
+        "base_charge_nano": "0",
+        "final_charge_nano": "0",
+    })
+}
+
 pub(super) fn scale_charge_with_multiplier(
     base_nano: i128,
     provider_multiplier: f64,
@@ -339,13 +354,19 @@ pub(super) async fn maybe_charge_usage(
     logical_model: &str,
     usage: &urp::Usage,
 ) -> AppResult<ChargeComputation> {
-    let Some(user_id) = auth.user_id.as_deref() else {
-        return Ok(ChargeComputation::default());
-    };
     let pricing =
         match resolve_billable_pricing(state, &attempt.upstream_model, logical_model).await? {
             Some(v) => v,
             None => {
+                if auth.can_bypass_unpriced_models() {
+                    return Ok(ChargeComputation {
+                        charge_nano_usd: Some(0),
+                        billing_breakdown: Some(build_admin_unpriced_billing_breakdown(
+                            logical_model,
+                            attempt,
+                        )),
+                    });
+                }
                 return Err(AppError::new(
                     StatusCode::FORBIDDEN,
                     "model_pricing_required",
@@ -356,6 +377,9 @@ pub(super) async fn maybe_charge_usage(
                 ));
             }
         };
+    let Some(user_id) = auth.user_id.as_deref() else {
+        return Ok(ChargeComputation::default());
+    };
 
     let Some(components) = calculate_charge_components(usage, &pricing, attempt.model_multiplier)
     else {

@@ -233,6 +233,7 @@ export function ModelMetadataPage() {
         })
       );
     } catch {
+      return
     } finally {
       setSyncing(false);
     }
@@ -255,6 +256,7 @@ export function ModelMetadataPage() {
       setCreateOpen(false);
       setForm(emptyForm);
     } catch {
+      return
     } finally {
       setSaving(false);
     }
@@ -269,6 +271,7 @@ export function ModelMetadataPage() {
       toast.success(t("modelMetadata.deleteSuccess"));
       setEditRecord(null);
     } catch {
+      return
     }
   };
 

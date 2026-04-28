@@ -91,6 +91,11 @@ BE3. Before upstream forwarding, billing eligibility MUST be checked as follows:
 
 BE4. The legacy `ensure_quota_before_forward` per-call quota check MUST NOT exist. Sub-account billing replaces it entirely (see `api-key-sub-account-billing.spec.md`).
 
+BE5. For authenticated users with role `admin` or `super_admin`, Monoize MUST determine whether the selected candidate attempts have billable pricing before enforcing the pre-forward balance gate:
+
+- if at least one candidate attempt has billable pricing under C1.2, Monoize MUST run the normal balance eligibility check from BE3;
+- if every candidate attempt lacks billable pricing under C1.2, Monoize MUST skip the balance eligibility check and allow the request to proceed without requiring a positive balance.
+
 ## 5. Charge calculation
 
 C1. Charge requires both:
@@ -177,6 +182,13 @@ C6. If C1.2 yields no billable pricing, Monoize MUST reject the request with HTT
 C6.1. `build_monoize_attempts()` SHOULD prevent C6 from being reached by filtering unbillable attempts before upstream forwarding.
 
 C6.2. If C6 is reached during post-response billing, Monoize MUST NOT write any charge ledger row for that request.
+
+C6.3. Exception for authenticated users with role `admin` or `super_admin`: when C1.2 yields no billable pricing for the served attempt, Monoize MUST treat the request as a zero-charge exemption instead of returning `403`. In this case Monoize MUST NOT write any balance deduction or ledger row, and the billing breakdown snapshot persisted to request logs MUST include:
+
+- `exempted = true`
+- `exemption_reason = "admin_unpriced_model"`
+- `base_charge_nano = "0"`
+- `final_charge_nano = "0"`
 
 C7. For embeddings responses, billing MUST treat usage as:
 
