@@ -562,6 +562,365 @@ async fn messages_adapter_nonstream() {
 }
 
 #[tokio::test]
+async fn messages_anthropic_custom_and_builtin_tools_are_forwarded_as_native_descriptors() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "use native tools" }] }],
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "structured_lookup",
+                    "description": "Structured lookup",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"],
+                        "additionalProperties": false
+                    },
+                    "strict": true,
+                    "cache_control": { "type": "ephemeral" },
+                    "defer_loading": true,
+                    "allowed_callers": ["code_execution_20260120"],
+                    "input_examples": [{ "query": "docs" }],
+                    "eager_input_streaming": true
+                },
+                {
+                    "type": "computer_20251124",
+                    "name": "computer",
+                    "display_width_px": 1280,
+                    "display_height_px": 720,
+                    "display_number": 1,
+                    "enable_zoom": true
+                },
+                {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                    "max_uses": 3,
+                    "allowed_domains": ["example.com"],
+                    "user_location": {
+                        "type": "approximate",
+                        "country": "US",
+                        "region": "CA",
+                        "city": "San Francisco"
+                    }
+                },
+                {
+                    "type": "mcp_toolset",
+                    "mcp_server_name": "docs",
+                    "default_config": { "enabled": true },
+                    "configs": {
+                        "search": { "enabled": true, "defer_loading": true }
+                    },
+                    "cache_control": { "type": "ephemeral" }
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("messages upstream tools");
+    assert_eq!(tools.len(), 4, "{upstream}");
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.get("function").is_none() && tool.get("custom").is_none()),
+        "Anthropic tools must stay flat descriptors: {upstream}"
+    );
+
+    assert_eq!(tools[0]["type"], json!("custom"));
+    assert_eq!(tools[0]["name"], json!("structured_lookup"));
+    assert_eq!(tools[0]["description"], json!("Structured lookup"));
+    assert_eq!(tools[0]["strict"], json!(true));
+    assert_eq!(tools[0]["cache_control"], json!({ "type": "ephemeral" }));
+    assert_eq!(tools[0]["defer_loading"], json!(true));
+    assert_eq!(
+        tools[0]["allowed_callers"],
+        json!(["code_execution_20260120"])
+    );
+    assert_eq!(tools[0]["input_examples"], json!([{ "query": "docs" }]));
+    assert_eq!(tools[0]["eager_input_streaming"], json!(true));
+    assert_eq!(
+        tools[0]["input_schema"]["properties"]["query"]["type"],
+        json!("string")
+    );
+    assert!(tools[0]["input_schema"].get("cache_control").is_none());
+    assert!(tools[0]["input_schema"].get("allowed_callers").is_none());
+    assert!(tools[0]["input_schema"].get("input_examples").is_none());
+    assert!(
+        tools[0]["input_schema"]
+            .get("eager_input_streaming")
+            .is_none()
+    );
+
+    assert_eq!(tools[1]["type"], json!("computer_20251124"));
+    assert_eq!(tools[1]["name"], json!("computer"));
+    assert_eq!(tools[1]["display_width_px"], json!(1280));
+    assert_eq!(tools[1]["display_height_px"], json!(720));
+    assert_eq!(tools[1]["display_number"], json!(1));
+    assert_eq!(tools[1]["enable_zoom"], json!(true));
+
+    assert_eq!(tools[2]["type"], json!("web_search_20260209"));
+    assert_eq!(tools[2]["name"], json!("web_search"));
+    assert_eq!(tools[2]["max_uses"], json!(3));
+    assert_eq!(tools[2]["allowed_domains"], json!(["example.com"]));
+    assert_eq!(tools[2]["user_location"]["city"], json!("San Francisco"));
+
+    assert_eq!(tools[3]["type"], json!("mcp_toolset"));
+    assert_eq!(tools[3]["mcp_server_name"], json!("docs"));
+    assert_eq!(tools[3]["default_config"], json!({ "enabled": true }));
+    assert_eq!(tools[3]["configs"]["search"]["defer_loading"], json!(true));
+    assert_eq!(tools[3]["cache_control"], json!({ "type": "ephemeral" }));
+}
+
+#[tokio::test]
+async fn responses_tool_definition_function_extras_preserved_for_responses_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "function extras" }] }],
+            "tools": [{
+                "type": "function",
+                "name": "structured_lookup",
+                "description": "Structured lookup",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"],
+                    "additionalProperties": false
+                },
+                "strict": true,
+                "cache_control": { "type": "ephemeral" },
+                "defer_loading": true,
+                "allowed_callers": ["code_execution_20260120"],
+                "input_examples": [{ "query": "docs" }],
+                "eager_input_streaming": true
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("responses upstream tools");
+    assert_eq!(tools.len(), 1, "{upstream}");
+    let tool = &tools[0];
+    assert_eq!(tool["type"], json!("function"));
+    assert_eq!(tool["name"], json!("structured_lookup"));
+    assert_eq!(tool["description"], json!("Structured lookup"));
+    assert_eq!(tool["strict"], json!(true));
+    assert_eq!(tool["cache_control"], json!({ "type": "ephemeral" }));
+    assert_eq!(tool["defer_loading"], json!(true));
+    assert_eq!(tool["allowed_callers"], json!(["code_execution_20260120"]));
+    assert_eq!(tool["input_examples"], json!([{ "query": "docs" }]));
+    assert_eq!(tool["eager_input_streaming"], json!(true));
+    assert_eq!(
+        tool["parameters"]["properties"]["query"]["type"],
+        json!("string")
+    );
+    assert!(tool.get("function").is_none());
+    assert!(tool.get("input_schema").is_none());
+}
+
+#[tokio::test]
+async fn responses_tool_definition_function_extras_map_to_chat_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "function extras to chat" }] }],
+            "tools": [{
+                "type": "function",
+                "name": "structured_lookup",
+                "parameters": { "type": "object", "properties": { "query": { "type": "string" } } },
+                "strict": true,
+                "defer_loading": true,
+                "cache_control": { "type": "ephemeral" }
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    let tools = upstream["tools"].as_array().expect("chat upstream tools");
+    assert_eq!(tools.len(), 1, "{upstream}");
+    let tool = &tools[0];
+    assert_eq!(tool["type"], json!("function"));
+    assert_eq!(tool["function"]["name"], json!("structured_lookup"));
+    assert_eq!(tool["function"]["strict"], json!(true));
+    assert_eq!(
+        tool["function"]["parameters"]["properties"]["query"]["type"],
+        json!("string")
+    );
+    assert_eq!(tool["defer_loading"], json!(true));
+    assert_eq!(tool["cache_control"], json!({ "type": "ephemeral" }));
+    assert!(tool.get("parameters").is_none());
+    assert!(tool.get("input_schema").is_none());
+}
+
+#[tokio::test]
+async fn messages_tool_definition_metadata_preserved_same_family() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "metadata same family" }] }],
+            "tools": [{
+                "name": "structured_lookup",
+                "description": "Structured lookup",
+                "input_schema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"],
+                    "additionalProperties": false
+                },
+                "strict": true,
+                "cache_control": { "type": "ephemeral" },
+                "defer_loading": true,
+                "allowed_callers": ["code_execution_20260120"],
+                "input_examples": [{ "query": "docs" }],
+                "eager_input_streaming": true
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("messages upstream tools");
+    assert_eq!(tools.len(), 1, "{upstream}");
+    let tool = &tools[0];
+    assert_eq!(tool["name"], json!("structured_lookup"));
+    assert_eq!(tool["description"], json!("Structured lookup"));
+    assert_eq!(tool["strict"], json!(true));
+    assert_eq!(tool["cache_control"], json!({ "type": "ephemeral" }));
+    assert_eq!(tool["defer_loading"], json!(true));
+    assert_eq!(tool["allowed_callers"], json!(["code_execution_20260120"]));
+    assert_eq!(tool["input_examples"], json!([{ "query": "docs" }]));
+    assert_eq!(tool["eager_input_streaming"], json!(true));
+    assert_eq!(
+        tool["input_schema"]["properties"]["query"]["type"],
+        json!("string")
+    );
+    assert!(tool.get("function").is_none());
+    assert!(tool.get("parameters").is_none());
+    assert!(tool["input_schema"].get("cache_control").is_none());
+    assert!(tool["input_schema"].get("strict").is_none());
+}
+
+#[tokio::test]
+async fn messages_tool_definition_metadata_maps_to_responses_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "metadata to responses" }] }],
+            "tools": [{
+                "name": "structured_lookup",
+                "input_schema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "additionalProperties": false
+                },
+                "strict": true,
+                "cache_control": { "type": "ephemeral" },
+                "defer_loading": true,
+                "allowed_callers": ["code_execution_20260120"],
+                "input_examples": [{ "query": "docs" }],
+                "eager_input_streaming": true
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("responses upstream tools");
+    assert_eq!(tools.len(), 1, "{upstream}");
+    let tool = &tools[0];
+    assert_eq!(tool["type"], json!("function"));
+    assert_eq!(tool["name"], json!("structured_lookup"));
+    assert_eq!(tool["strict"], json!(true));
+    assert_eq!(tool["cache_control"], json!({ "type": "ephemeral" }));
+    assert_eq!(tool["defer_loading"], json!(true));
+    assert_eq!(tool["allowed_callers"], json!(["code_execution_20260120"]));
+    assert_eq!(tool["input_examples"], json!([{ "query": "docs" }]));
+    assert_eq!(tool["eager_input_streaming"], json!(true));
+    assert_eq!(
+        tool["parameters"]["properties"]["query"]["type"],
+        json!("string")
+    );
+    assert!(tool.get("function").is_none());
+    assert!(tool.get("input_schema").is_none());
+}
+
+#[tokio::test]
+async fn chat_tool_definition_custom_tool_maps_to_responses_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini",
+            "messages": [{ "role": "user", "content": "custom to responses" }],
+            "tools": [{
+                "type": "custom",
+                "custom": {
+                    "name": "freeform_lookup",
+                    "description": "Freeform lookup",
+                    "format": { "type": "text" },
+                    "defer_loading": true
+                }
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("responses upstream tools");
+    assert_eq!(tools.len(), 1, "{upstream}");
+    let tool = &tools[0];
+    assert_eq!(tool["type"], json!("custom"));
+    assert_eq!(tool["name"], json!("freeform_lookup"));
+    assert_eq!(tool["description"], json!("Freeform lookup"));
+    assert_eq!(tool["format"], json!({ "type": "text" }));
+    assert_eq!(tool["defer_loading"], json!(true));
+    assert!(tool.get("custom").is_none());
+    assert!(tool.get("function").is_none());
+    assert!(tool.get("parameters").is_none());
+    assert!(tool.get("input_schema").is_none());
+}
+
+#[tokio::test]
 async fn cross_family_top_level_extra_survives_while_nested_extra_is_stripped() {
     let ctx = setup().await;
     let (status, body) = json_post(
@@ -912,6 +1271,216 @@ async fn responses_nonstream_image_generation_tool_returns_output_image() {
 }
 
 #[tokio::test]
+async fn responses_custom_and_builtin_tools_are_forwarded_as_native_descriptors() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "use native tools" }] }],
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "freeform_lookup",
+                    "description": "Freeform lookup",
+                    "format": { "type": "grammar", "syntax": "lark", "definition": "start: /[a-z]+/" },
+                    "defer_loading": true
+                },
+                { "type": "file_search", "vector_store_ids": ["vs_1", "vs_2"] },
+                { "type": "code_interpreter", "container": { "type": "auto", "file_ids": ["file_1"] } },
+                {
+                    "type": "web_search",
+                    "search_context_size": "medium",
+                    "user_location": { "type": "approximate", "country": "US" }
+                },
+                {
+                    "type": "mcp",
+                    "server_label": "docs",
+                    "server_url": "https://mcp.example.test",
+                    "allowed_tools": ["search"],
+                    "defer_loading": true
+                },
+                {
+                    "type": "namespace",
+                    "name": "app_tools",
+                    "description": "Application tools",
+                    "tools": [{ "name": "fetch_docs", "description": "Fetch docs" }]
+                },
+                {
+                    "type": "tool_search",
+                    "description": "Discover tools",
+                    "execution": "server",
+                    "parameters": { "type": "object", "properties": {} }
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("responses upstream tools");
+    assert_eq!(tools.len(), 7, "{upstream}");
+    assert!(
+        tools.iter().all(|tool| tool.get("function").is_none()),
+        "Responses custom and built-ins must not be nested function descriptors: {upstream}"
+    );
+    assert_eq!(tools[0]["type"], json!("custom"));
+    assert_eq!(tools[0]["name"], json!("freeform_lookup"));
+    assert_eq!(tools[0]["description"], json!("Freeform lookup"));
+    assert_eq!(tools[0]["format"]["type"], json!("grammar"));
+    assert_eq!(tools[0]["defer_loading"], json!(true));
+    assert!(tools[0].get("custom").is_none());
+
+    assert_eq!(tools[1]["type"], json!("file_search"));
+    assert_eq!(tools[1]["vector_store_ids"], json!(["vs_1", "vs_2"]));
+    assert_eq!(tools[2]["type"], json!("code_interpreter"));
+    assert_eq!(tools[2]["container"]["file_ids"], json!(["file_1"]));
+    assert_eq!(tools[3]["type"], json!("web_search"));
+    assert_eq!(tools[3]["search_context_size"], json!("medium"));
+    assert_eq!(tools[3]["user_location"]["country"], json!("US"));
+    assert_eq!(tools[4]["type"], json!("mcp"));
+    assert_eq!(tools[4]["server_label"], json!("docs"));
+    assert_eq!(tools[4]["allowed_tools"], json!(["search"]));
+    assert_eq!(tools[5]["type"], json!("namespace"));
+    assert_eq!(tools[5]["name"], json!("app_tools"));
+    assert_eq!(tools[5]["tools"][0]["name"], json!("fetch_docs"));
+    assert_eq!(tools[6]["type"], json!("tool_search"));
+    assert_eq!(tools[6]["description"], json!("Discover tools"));
+    assert_eq!(tools[6]["execution"], json!("server"));
+}
+
+#[tokio::test]
+async fn provider_native_tool_preserved_same_family() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "same family native" }] }],
+            "tools": [
+                { "type": "function", "name": "lookup", "parameters": { "type": "object", "additionalProperties": true } },
+                { "type": "custom", "name": "freeform_lookup", "format": { "type": "text" } },
+                { "type": "file_search", "vector_store_ids": ["vs_same"] }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("responses upstream tools");
+    assert_eq!(tools.len(), 3, "{upstream}");
+    assert_eq!(tools[0]["type"], json!("function"));
+    assert_eq!(tools[0]["name"], json!("lookup"));
+    assert_eq!(tools[1]["type"], json!("custom"));
+    assert_eq!(tools[1]["name"], json!("freeform_lookup"));
+    assert_eq!(tools[2]["type"], json!("file_search"));
+    assert_eq!(tools[2]["vector_store_ids"], json!(["vs_same"]));
+    assert!(tools[2].get("function").is_none());
+    assert!(tools[2].get("custom").is_none());
+}
+
+#[tokio::test]
+async fn provider_native_tool_filtered_cross_family() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "cross family native" }] }],
+            "tools": [
+                { "type": "function", "name": "lookup", "parameters": { "type": "object", "additionalProperties": true } },
+                { "type": "custom", "name": "freeform_lookup", "format": { "type": "text" } },
+                { "type": "file_search", "name": "docs_search", "vector_store_ids": ["vs_cross"] }
+            ],
+            "tool_choice": { "type": "file_search" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    let tools = upstream["tools"].as_array().expect("chat upstream tools");
+    assert_eq!(tools.len(), 2, "{upstream}");
+    assert_eq!(tools[0]["type"], json!("function"));
+    assert_eq!(tools[0]["function"]["name"], json!("lookup"));
+    assert_eq!(tools[1]["type"], json!("custom"));
+    assert_eq!(tools[1]["custom"]["name"], json!("freeform_lookup"));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.get("type").and_then(Value::as_str) != Some("file_search")),
+        "Responses-native file_search must not be emitted to Chat: {upstream}"
+    );
+    assert!(
+        tools.iter().all(|tool| {
+            tool.get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                != Some("file_search")
+        }),
+        "filtered native tool identity must not be rewritten as a function: {upstream}"
+    );
+    assert!(
+        upstream.get("tool_choice").is_none(),
+        "tool_choice selecting a filtered descriptor must be omitted: {upstream}"
+    );
+}
+
+#[tokio::test]
+async fn responses_custom_format_tool_filtered_for_messages_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "custom to messages" }] }],
+            "tools": [
+                { "type": "function", "name": "lookup", "parameters": { "type": "object", "additionalProperties": true } },
+                {
+                    "type": "custom",
+                    "name": "freeform_lookup",
+                    "description": "OpenAI freeform custom tool",
+                    "format": { "type": "grammar", "syntax": "lark", "definition": "start: /[a-z]+/" }
+                }
+            ],
+            "tool_choice": { "type": "custom", "name": "freeform_lookup" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let tools = upstream["tools"]
+        .as_array()
+        .expect("messages upstream tools");
+    assert_eq!(tools.len(), 1, "{upstream}");
+    assert_eq!(tools[0]["name"], json!("lookup"));
+    assert_eq!(tools[0]["input_schema"]["type"], json!("object"));
+    assert!(
+        tools.iter().all(|tool| {
+            tool.get("name").and_then(Value::as_str) != Some("freeform_lookup")
+                && tool.get("type").and_then(Value::as_str) != Some("custom")
+                && tool.get("format").is_none()
+        }),
+        "Responses format-only custom tools must not be emitted to Messages: {upstream}"
+    );
+    assert!(
+        upstream.get("tool_choice").is_none(),
+        "tool_choice selecting a filtered custom descriptor must be omitted: {upstream}"
+    );
+}
+
+#[tokio::test]
 async fn responses_input_string_maps_to_chat_upstream_messages() {
     let ctx = setup().await;
     let (status, body) = json_post(
@@ -1113,6 +1682,16 @@ async fn responses_response_style_tools_map_to_chat_upstream() {
             .filter(|x| x.get("type").and_then(|v| v.as_str()) == Some("function_call"))
             .count(),
         2
+    );
+
+    let upstream = last_captured_body(&ctx, "chat");
+    assert_eq!(upstream["parallel_tool_calls"], json!(true));
+    let tools = upstream["tools"].as_array().expect("chat upstream tools");
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.get("parallel_tool_calls").is_none()),
+        "parallel_tool_calls must remain a top-level request field: {upstream}"
     );
 }
 
@@ -1889,6 +2468,150 @@ async fn messages_tool_choice_tool_normalizes_for_chat_upstream() {
         blocks
             .iter()
             .any(|b| b.get("type").and_then(|x| x.as_str()) == Some("tool_use"))
+    );
+
+    let upstream = last_captured_body(&ctx, "chat");
+    assert_eq!(
+        upstream["tool_choice"],
+        json!({ "type": "function", "function": { "name": "tool_a" } })
+    );
+    assert!(
+        upstream["tools"][0]
+            .get("disable_parallel_tool_use")
+            .is_none(),
+        "Anthropic tool_choice controls must not move into tool descriptors: {upstream}"
+    );
+}
+
+#[tokio::test]
+async fn messages_tool_choice_any_roundtrips_for_messages_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "use tools" }] }],
+            "tools": [
+              { "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }
+            ],
+            "tool_choice": { "type": "any" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(upstream["tool_choice"], json!({ "type": "any" }));
+}
+
+#[tokio::test]
+async fn messages_tool_choice_none_roundtrips_for_messages_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "no tools" }] }],
+            "tools": [
+              { "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }
+            ],
+            "tool_choice": { "type": "none" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(upstream["tool_choice"], json!({ "type": "none" }));
+}
+
+#[tokio::test]
+async fn messages_tool_choice_tool_disable_parallel_roundtrips_for_messages_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "use one tool" }] }],
+            "tools": [
+              { "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }
+            ],
+            "tool_choice": { "type": "tool", "name": "tool_a", "disable_parallel_tool_use": true }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(
+        upstream["tool_choice"],
+        json!({ "type": "tool", "name": "tool_a", "disable_parallel_tool_use": true })
+    );
+    assert!(
+        upstream["tools"][0]
+            .get("disable_parallel_tool_use")
+            .is_none(),
+        "disable_parallel_tool_use belongs to request tool_choice, not the tool descriptor: {upstream}"
+    );
+}
+
+#[tokio::test]
+async fn messages_tool_choice_disable_parallel_maps_to_chat_top_level_parallel_false() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "use one tool" }] }],
+            "tools": [
+              { "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }
+            ],
+            "tool_choice": { "type": "tool", "name": "tool_a", "disable_parallel_tool_use": true }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "chat");
+    assert_eq!(upstream["parallel_tool_calls"], json!(false));
+    assert_eq!(
+        upstream["tool_choice"],
+        json!({ "type": "function", "function": { "name": "tool_a" } })
+    );
+    assert!(
+        upstream["tools"][0].get("parallel_tool_calls").is_none(),
+        "parallel_tool_calls must remain top-level for Chat upstream: {upstream}"
+    );
+}
+
+#[tokio::test]
+async fn messages_parallel_false_without_tools_does_not_synthesize_messages_tool_choice() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "no tools here" }] }],
+            "parallel_tool_calls": false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert!(
+        upstream.get("tool_choice").is_none(),
+        "parallel_tool_calls=false without tools must not synthesize Anthropic tool_choice: {upstream}"
     );
 }
 

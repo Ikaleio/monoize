@@ -452,6 +452,17 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         }
     };
 
+    let raw_tool_choice = obj.get("tool_choice").cloned();
+    let parallel_tool_calls = obj
+        .get("parallel_tool_calls")
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            raw_tool_choice
+                .as_ref()
+                .and_then(tool_choice_disable_parallel)
+                .map(|disabled| !disabled)
+        });
+
     Ok(UrpRequest {
         model,
         input: input_nodes,
@@ -461,10 +472,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         max_output_tokens: obj.get("max_tokens").and_then(|v| v.as_u64()),
         reasoning,
         tools,
-        tool_choice: obj
-            .get("tool_choice")
-            .cloned()
-            .map(tool_choice_from_messages_value),
+        tool_choice: raw_tool_choice.map(tool_choice_from_messages_value),
+        parallel_tool_calls,
         response_format: None,
         user: obj
             .get("metadata")
@@ -485,6 +494,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "output_config",
                 "tools",
                 "tool_choice",
+                "parallel_tool_calls",
                 "metadata",
             ],
         ),
@@ -612,16 +622,39 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
 
 fn tool_choice_from_messages_value(v: Value) -> ToolChoice {
     if let Some(obj) = v.as_object() {
+        let disable_parallel = obj
+            .get("disable_parallel_tool_use")
+            .and_then(|x| x.as_bool());
         match obj.get("type").and_then(|x| x.as_str()) {
-            Some("auto") => return ToolChoice::Mode("auto".to_string()),
-            Some("any") => return ToolChoice::Mode("required".to_string()),
+            Some("auto") => {
+                if let Some(disable) = disable_parallel {
+                    return ToolChoice::Specific(serde_json::json!({
+                        "type": "auto",
+                        "disable_parallel_tool_use": disable
+                    }));
+                }
+                return ToolChoice::Mode("auto".to_string());
+            }
+            Some("any") => {
+                if let Some(disable) = disable_parallel {
+                    return ToolChoice::Specific(serde_json::json!({
+                        "type": "required",
+                        "disable_parallel_tool_use": disable
+                    }));
+                }
+                return ToolChoice::Mode("required".to_string());
+            }
             Some("none") => return ToolChoice::Mode("none".to_string()),
             Some("tool") => {
                 if let Some(name) = obj.get("name").and_then(|x| x.as_str()) {
-                    return ToolChoice::Specific(serde_json::json!({
+                    let mut choice = serde_json::json!({
                         "type": "function",
                         "function": { "name": name }
-                    }));
+                    });
+                    if let Some(disable) = disable_parallel {
+                        choice["disable_parallel_tool_use"] = Value::Bool(disable);
+                    }
+                    return ToolChoice::Specific(choice);
                 }
             }
             _ => {}
@@ -631,6 +664,16 @@ fn tool_choice_from_messages_value(v: Value) -> ToolChoice {
         return ToolChoice::Mode(s.to_string());
     }
     ToolChoice::Specific(v)
+}
+
+fn tool_choice_disable_parallel(v: &Value) -> Option<bool> {
+    let obj = v.as_object()?;
+    match obj.get("type").and_then(|x| x.as_str()) {
+        Some("auto" | "any" | "tool") => obj
+            .get("disable_parallel_tool_use")
+            .and_then(|x| x.as_bool()),
+        _ => None,
+    }
 }
 
 fn decode_tool_result_content(content: Option<&Value>) -> Vec<ToolResultContent> {

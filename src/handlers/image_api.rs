@@ -402,6 +402,7 @@ async fn fan_out_subrequests(
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: extra_body.clone(),
@@ -552,7 +553,11 @@ async fn execute_stream_collected_image_typed(
             strip_monoize_context(&mut req_attempt);
             req_attempt.stream = Some(true);
 
-            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
+            let upstream_body = encode_request_for_provider(
+                &mut req_attempt,
+                &attempt,
+                super::DownstreamProtocol::Responses,
+            )?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             log_outgoing_request_shape(

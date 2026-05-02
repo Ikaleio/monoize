@@ -673,6 +673,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),

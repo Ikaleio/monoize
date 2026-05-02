@@ -35,6 +35,26 @@ pub fn tool_choice_to_value(tc: &ToolChoice) -> Value {
     }
 }
 
+pub fn tool_choice_to_openai_value(tc: &ToolChoice) -> Value {
+    match tc {
+        ToolChoice::Mode(s) => Value::String(s.clone()),
+        ToolChoice::Specific(Value::Object(obj)) => match obj.get("type").and_then(Value::as_str) {
+            Some("auto" | "required" | "none") => Value::String(
+                obj.get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+            _ => {
+                let mut out = obj.clone();
+                out.remove("disable_parallel_tool_use");
+                Value::Object(out)
+            }
+        },
+        ToolChoice::Specific(v) => v.clone(),
+    }
+}
+
 pub fn text_parts(parts: &[Part]) -> String {
     let mut out = String::new();
     for p in parts {

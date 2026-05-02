@@ -1,5 +1,5 @@
 use crate::urp::encode::{
-    merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
+    merge_extra, role_to_str, text_parts, tool_choice_to_openai_value, usage_input_details,
     usage_output_details,
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
@@ -464,7 +464,13 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         obj.insert("tools".to_string(), Value::Array(encode_tools(tools)));
     }
     if let Some(choice) = &req.tool_choice {
-        obj.insert("tool_choice".to_string(), tool_choice_to_value(choice));
+        obj.insert(
+            "tool_choice".to_string(),
+            tool_choice_to_openai_value(choice),
+        );
+    }
+    if let Some(parallel) = req.parallel_tool_calls {
+        obj.insert("parallel_tool_calls".to_string(), Value::Bool(parallel));
     }
     if let Some(user) = &req.user {
         obj.insert("user".to_string(), Value::String(user.clone()));
@@ -897,27 +903,65 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
     let mut out = Vec::new();
     for tool in tools {
         if tool.tool_type == "function" {
-            if let Some(function) = &tool.function {
-                let mut item = json!({
-                    "type": "function",
-                    "name": function.name,
-                    "parameters": function.parameters.clone().unwrap_or(json!({
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": true
-                    }))
-                });
-                if let Some(description) = &function.description {
-                    item["description"] = Value::String(description.clone());
-                }
-                if let Some(strict) = function.strict {
-                    item["strict"] = Value::Bool(strict);
-                }
-                out.push(item);
+            let Some(function) = &tool.function else {
+                continue;
+            };
+
+            let mut item = Map::new();
+            item.insert("type".to_string(), Value::String("function".to_string()));
+            item.insert("name".to_string(), Value::String(function.name.clone()));
+            item.insert(
+                "parameters".to_string(),
+                function.parameters.clone().unwrap_or(json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true
+                })),
+            );
+            if let Some(description) = &function.description {
+                item.insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
             }
+            if let Some(strict) = function.strict {
+                item.insert("strict".to_string(), Value::Bool(strict));
+            }
+            merge_extra(&mut item, &function.extra_body);
+            merge_extra(&mut item, &tool.extra_body);
+            out.push(Value::Object(item));
+        } else if tool.tool_type == "custom" {
+            let Some(custom) = &tool.custom else {
+                continue;
+            };
+
+            let mut item = Map::new();
+            item.insert("type".to_string(), Value::String("custom".to_string()));
+            item.insert("name".to_string(), Value::String(custom.name.clone()));
+            if let Some(description) = &custom.description {
+                item.insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
+            }
+            if let Some(format) = &custom.format {
+                item.insert("format".to_string(), format.clone());
+            }
+            merge_extra(&mut item, &custom.extra_body);
+            merge_extra(&mut item, &tool.extra_body);
+            out.push(Value::Object(item));
         } else {
             let mut item = Map::new();
             item.insert("type".to_string(), Value::String(tool.tool_type.clone()));
+            if let Some(name) = &tool.name {
+                item.insert("name".to_string(), Value::String(name.clone()));
+            }
+            if let Some(description) = &tool.description {
+                item.insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
+            }
             merge_extra(&mut item, &tool.extra_body);
             out.push(Value::Object(item));
         }
@@ -966,10 +1010,295 @@ mod tests {
     use super::*;
     use crate::urp::decode::openai_responses as decode_responses;
     use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
-    use crate::urp::{InputDetails, OutputDetails, Usage};
+    use crate::urp::{
+        CustomToolDefinition, FunctionDefinition, InputDetails, OutputDetails, Usage,
+    };
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
+    }
+
+    #[test]
+    fn responses_function_tool_preserves_extras() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(vec![ToolDefinition {
+                tool_type: "function".to_string(),
+                name: None,
+                description: None,
+                function: Some(FunctionDefinition {
+                    name: "lookup".to_string(),
+                    description: Some("Lookup a value".to_string()),
+                    parameters: Some(json!({
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                        "required": ["id"]
+                    })),
+                    strict: Some(true),
+                    extra_body: HashMap::from([("defer_loading".to_string(), json!(true))]),
+                }),
+                custom: None,
+                extra_body: HashMap::from([("x_vendor".to_string(), json!("ok"))]),
+            }]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        let tool = &encoded["tools"].as_array().expect("tools array")[0];
+        assert_eq!(tool["type"], json!("function"));
+        assert_eq!(tool["name"], json!("lookup"));
+        assert_eq!(tool["description"], json!("Lookup a value"));
+        assert_eq!(tool["strict"], json!(true));
+        assert_eq!(
+            tool["parameters"]["properties"]["id"]["type"],
+            json!("string")
+        );
+        assert_eq!(tool["defer_loading"], json!(true));
+        assert_eq!(tool["x_vendor"], json!("ok"));
+    }
+
+    #[test]
+    fn tool_definition_extra_collision_semantic_fields_win() {
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(vec![ToolDefinition {
+                tool_type: "function".to_string(),
+                name: None,
+                description: None,
+                function: Some(FunctionDefinition {
+                    name: "tool_a".to_string(),
+                    description: Some("semantic description".to_string()),
+                    parameters: Some(json!({
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}}
+                    })),
+                    strict: Some(true),
+                    extra_body: HashMap::from([
+                        ("type".to_string(), json!("wrong_function_type")),
+                        ("name".to_string(), json!("wrong_function_name")),
+                        ("parameters".to_string(), json!({"type": "array"})),
+                        (
+                            "description".to_string(),
+                            json!("wrong function description"),
+                        ),
+                        ("strict".to_string(), json!(false)),
+                        ("defer_loading".to_string(), json!(true)),
+                    ]),
+                }),
+                custom: None,
+                extra_body: HashMap::from([
+                    ("type".to_string(), json!("wrong_tool_type")),
+                    ("name".to_string(), json!("wrong_tool_name")),
+                    ("parameters".to_string(), json!({"type": "null"})),
+                    ("description".to_string(), json!("wrong tool description")),
+                    ("strict".to_string(), json!(false)),
+                    ("x_vendor".to_string(), json!("ok")),
+                ]),
+            }]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        let tool = &encoded["tools"].as_array().expect("tools array")[0];
+        assert_eq!(tool["type"], json!("function"));
+        assert_eq!(tool["name"], json!("tool_a"));
+        assert_eq!(tool["parameters"]["type"], json!("object"));
+        assert_eq!(tool["description"], json!("semantic description"));
+        assert_eq!(tool["strict"], json!(true));
+        assert_eq!(tool["defer_loading"], json!(true));
+        assert_eq!(tool["x_vendor"], json!("ok"));
+    }
+
+    #[test]
+    fn responses_custom_tool_preserves_flat_fields() {
+        let encoded = encode_tools(&[ToolDefinition {
+            tool_type: "custom".to_string(),
+            name: None,
+            description: None,
+            function: None,
+            custom: Some(CustomToolDefinition {
+                name: "freeform_lookup".to_string(),
+                description: Some("Freeform lookup".to_string()),
+                format: Some(json!({
+                    "type": "grammar",
+                    "syntax": "lark",
+                    "definition": "start: /[a-z]+/"
+                })),
+                extra_body: HashMap::from([
+                    ("defer_loading".to_string(), json!(true)),
+                    ("x_custom".to_string(), json!("kept")),
+                    ("name".to_string(), json!("wrong_extra_name")),
+                    ("format".to_string(), json!({ "type": "text" })),
+                ]),
+            }),
+            extra_body: HashMap::from([
+                ("type".to_string(), json!("function")),
+                ("description".to_string(), json!("wrong outer description")),
+                ("x_tool".to_string(), json!("kept")),
+            ]),
+        }]);
+
+        let tool = encoded.first().expect("custom tool");
+        assert_eq!(tool["type"], json!("custom"));
+        assert_eq!(tool["name"], json!("freeform_lookup"));
+        assert_eq!(tool["description"], json!("Freeform lookup"));
+        assert_eq!(tool["format"]["type"], json!("grammar"));
+        assert_eq!(tool["defer_loading"], json!(true));
+        assert_eq!(tool["x_custom"], json!("kept"));
+        assert_eq!(tool["x_tool"], json!("kept"));
+        assert!(
+            tool.get("custom").is_none(),
+            "Responses custom tools stay flat"
+        );
+    }
+
+    #[test]
+    fn responses_builtins_remain_native_and_preserve_config() {
+        let encoded = encode_tools(&[
+            ToolDefinition {
+                tool_type: "file_search".to_string(),
+                name: None,
+                description: None,
+                function: None,
+                custom: None,
+                extra_body: HashMap::from([(
+                    "vector_store_ids".to_string(),
+                    json!(["vs_1", "vs_2"]),
+                )]),
+            },
+            ToolDefinition {
+                tool_type: "code_interpreter".to_string(),
+                name: None,
+                description: None,
+                function: None,
+                custom: None,
+                extra_body: HashMap::from([(
+                    "container".to_string(),
+                    json!({ "type": "auto", "file_ids": ["file_1"] }),
+                )]),
+            },
+            ToolDefinition {
+                tool_type: "web_search".to_string(),
+                name: None,
+                description: None,
+                function: None,
+                custom: None,
+                extra_body: HashMap::from([
+                    ("search_context_size".to_string(), json!("medium")),
+                    (
+                        "user_location".to_string(),
+                        json!({ "type": "approximate", "country": "US" }),
+                    ),
+                ]),
+            },
+            ToolDefinition {
+                tool_type: "mcp".to_string(),
+                name: None,
+                description: None,
+                function: None,
+                custom: None,
+                extra_body: HashMap::from([
+                    ("server_label".to_string(), json!("docs")),
+                    ("server_url".to_string(), json!("https://mcp.example.test")),
+                    ("allowed_tools".to_string(), json!(["search"])),
+                    ("defer_loading".to_string(), json!(true)),
+                ]),
+            },
+            ToolDefinition {
+                tool_type: "namespace".to_string(),
+                name: Some("app_tools".to_string()),
+                description: Some("Application tools".to_string()),
+                function: None,
+                custom: None,
+                extra_body: HashMap::from([(
+                    "tools".to_string(),
+                    json!([{ "name": "fetch_docs", "description": "Fetch docs" }]),
+                )]),
+            },
+            ToolDefinition {
+                tool_type: "tool_search".to_string(),
+                name: None,
+                description: Some("Discover tools".to_string()),
+                function: None,
+                custom: None,
+                extra_body: HashMap::from([
+                    ("execution".to_string(), json!("server")),
+                    (
+                        "parameters".to_string(),
+                        json!({ "type": "object", "properties": {} }),
+                    ),
+                ]),
+            },
+            ToolDefinition {
+                tool_type: "image_generation".to_string(),
+                name: None,
+                description: None,
+                function: None,
+                custom: None,
+                extra_body: HashMap::from([("output_format".to_string(), json!("png"))]),
+            },
+        ]);
+
+        for tool in &encoded {
+            assert_ne!(
+                tool["type"],
+                json!("function"),
+                "built-ins stay native: {tool}"
+            );
+            assert!(
+                tool.get("function").is_none(),
+                "built-ins are not wrapped: {tool}"
+            );
+        }
+        assert_eq!(encoded[0]["vector_store_ids"], json!(["vs_1", "vs_2"]));
+        assert_eq!(encoded[1]["container"]["file_ids"], json!(["file_1"]));
+        assert_eq!(encoded[2]["search_context_size"], json!("medium"));
+        assert_eq!(encoded[2]["user_location"]["country"], json!("US"));
+        assert_eq!(encoded[3]["server_label"], json!("docs"));
+        assert_eq!(encoded[3]["allowed_tools"], json!(["search"]));
+        assert_eq!(encoded[4]["name"], json!("app_tools"));
+        assert_eq!(encoded[4]["description"], json!("Application tools"));
+        assert_eq!(encoded[4]["tools"][0]["name"], json!("fetch_docs"));
+        assert_eq!(encoded[5]["description"], json!("Discover tools"));
+        assert_eq!(encoded[5]["parameters"]["type"], json!("object"));
+        assert_eq!(encoded[6]["type"], json!("image_generation"));
+        assert_eq!(encoded[6]["output_format"], json!("png"));
     }
 
     #[test]
@@ -1155,6 +1484,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -1200,6 +1530,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -1256,6 +1587,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -1289,6 +1621,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -1322,6 +1655,7 @@ mod tests {
             }),
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -1535,6 +1869,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: Some(ResponseFormat::JsonObject),
             user: None,
             extra_body: empty_map(),

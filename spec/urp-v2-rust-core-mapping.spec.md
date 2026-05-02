@@ -52,6 +52,7 @@ UrpRequest {
   reasoning: Option<ReasoningConfig>,
   tools: Option<Vec<ToolDefinition>>,
   tool_choice: Option<ToolChoice>,
+  parallel_tool_calls: Option<bool>,
   response_format: Option<ResponseFormat>,
   user: Option<String>,
   extra_body: HashMap<String, JsonValue>
@@ -66,6 +67,52 @@ UrpResponse {
   extra_body: HashMap<String, JsonValue>
 }
 ```
+
+RTYPE-4A. The Rust core layer MUST define exactly one canonical request tool-definition shape:
+
+```text
+ToolDefinition {
+  tool_type: String,
+  name: Option<String>,
+  description: Option<String>,
+  function: Option<FunctionDefinition>,
+  custom: Option<CustomToolDefinition>,
+  extra_body: HashMap<String, JsonValue>
+}
+```
+
+RTYPE-4B. `tool_type` MUST contain the provider-visible tool discriminator, such as `function`, `custom`, `file_search`, `web_search`, `code_interpreter`, `mcp`, `computer`, or another provider-native value.
+
+RTYPE-4C. `name` and `description` are top-level tool metadata. They MAY be absent when the provider shape nests the semantic name and description inside `function` or `custom`.
+
+RTYPE-4D. The Rust core layer MUST define exactly one canonical function tool shape:
+
+```text
+FunctionDefinition {
+  name: String,
+  description: Option<String>,
+  parameters: JsonValue,
+  strict: Option<bool>,
+  extra_body: HashMap<String, JsonValue>
+}
+```
+
+RTYPE-4E. `FunctionDefinition.parameters` is the only canonical Rust field for a function input schema. Anthropic `input_schema` is an adapter alias that maps into `parameters` during decode and maps out of `parameters` during encode.
+
+RTYPE-4F. The Rust core layer MUST define exactly one canonical custom tool shape:
+
+```text
+CustomToolDefinition {
+  name: String,
+  description: Option<String>,
+  format: Option<JsonValue>,
+  extra_body: HashMap<String, JsonValue>
+}
+```
+
+RTYPE-4G. `ToolDefinition.function` MUST be present when `tool_type = "function"` and the tool has parsed function semantics. `ToolDefinition.custom` MUST be present when `tool_type = "custom"` and the tool has parsed custom semantics. Provider-native or built-in tools MAY leave both fields absent and store their provider-specific config in `ToolDefinition.extra_body`.
+
+RTYPE-4H. The Rust core layer MUST NOT require a distinct strongly typed Rust config struct for every OpenAI, Anthropic, or other provider-native built-in tool. Optional fields added to `ToolDefinition` MUST remain default-compatible for provider-native constructors that only know `tool_type` and `extra_body`.
 
 RTYPE-5. The Rust core module MUST define exactly one canonical top-level conversational enum:
 
@@ -201,6 +248,24 @@ MAP-8. Any pre-RTYPE-11 stream lifecycle `{ ItemStart, PartStart, Delta, PartDon
 
 MAP-9. `ResponseDone.output` is the only authoritative terminal flat stream state. There is no Rust helper contract in which `ResponseDone` authority depends on first rebuilding grouped `Item::Message` values.
 
+MAP-10. Request tool definitions are top-level request metadata. They MUST NOT be represented as `Node` values, `ToolResultContent` values, grouped message parts, or grouped tool-result storage.
+
+MAP-11. OpenAI Chat nested function tools, OpenAI Responses flat function tools, and Anthropic user-defined tools MUST all map to `ToolDefinition { tool_type = "function", function = Some(FunctionDefinition { ... }) }` when their function semantics are parsed.
+
+MAP-12. A function tool's semantic schema MUST map to `FunctionDefinition.parameters`. On Anthropic Messages, `input_schema` is not a second canonical field. A decoder MUST translate `input_schema` to `parameters`; an encoder targeting Anthropic Messages MUST translate `parameters` to `input_schema`.
+
+MAP-13. A function tool's semantic `name`, `description`, and `strict` fields MUST map to `FunctionDefinition.name`, `FunctionDefinition.description`, and `FunctionDefinition.strict` respectively. Function-payload fields not represented by those fields or by `parameters` MUST map to `FunctionDefinition.extra_body`.
+
+MAP-14. Custom tools with parsed custom semantics MUST map to `ToolDefinition { tool_type = "custom", custom = Some(CustomToolDefinition { ... }) }`. Their semantic `name`, `description`, and `format` fields MUST map to `CustomToolDefinition.name`, `CustomToolDefinition.description`, and `CustomToolDefinition.format` respectively.
+
+MAP-15. Provider-native or built-in tool config fields MAY remain in `ToolDefinition.extra_body` when preserving them at the tool-definition layer is the correct ownership layer. Examples include `file_search.vector_store_ids`, `computer.display_width_px`, MCP server fields, and future provider-native tool fields.
+
+MAP-16. `ToolDefinition.name` and `ToolDefinition.description` own top-level tool metadata only. They MUST NOT replace `FunctionDefinition.name`, `FunctionDefinition.description`, `CustomToolDefinition.name`, or `CustomToolDefinition.description` when the parsed semantics belong inside `function` or `custom`.
+
+MAP-17. `UrpRequest.parallel_tool_calls` owns request-level parallel tool-use permission. A decoder MUST map OpenAI-compatible top-level `parallel_tool_calls` into this field when the value is boolean. An encoder targeting an OpenAI-compatible upstream MUST emit this field as top-level `parallel_tool_calls` and MUST NOT move it into any `ToolDefinition`, `FunctionDefinition`, or `CustomToolDefinition` extras.
+
+MAP-18. Anthropic Messages `tool_choice.disable_parallel_tool_use` is a request-level tool-choice control, not a tool-definition field. A decoder MUST preserve it inside the canonical `ToolChoice` value for Anthropic `auto`, `any`, and named `tool` choices. If the flag is `true`, the decoder MUST also set `UrpRequest.parallel_tool_calls = Some(false)` so cross-family OpenAI-compatible encoders can preserve the no-parallel semantics at top level.
+
 ## 3. Node-family helper invariants
 
 ### 3.1 Ordinary role-bearing nodes
@@ -269,6 +334,16 @@ NH-26. The nested-passthrough stripping helper that replaces current grouped `st
 4. remove each `NextDownstreamEnvelopeExtra` node.
 
 NH-27. The stripping helper in NH-26 MUST NOT remove or mutate top-level request or response `extra_body`.
+
+NH-28. `ToolDefinition.extra_body` owns only fields that belong to exactly one request tool-definition object and are not represented by `tool_type`, `name`, `description`, `function`, or `custom`.
+
+NH-29. `FunctionDefinition.extra_body` owns only fields that belong to exactly one function-definition payload and are not represented by `name`, `description`, `parameters`, or `strict`. An Anthropic `input_schema` field belongs to `parameters`, not to `FunctionDefinition.extra_body`.
+
+NH-30. `CustomToolDefinition.extra_body` owns only fields that belong to exactly one custom-tool payload and are not represented by `name`, `description`, or `format`.
+
+NH-31. Shared decode helpers MUST assign request tool-definition unknown fields to exactly one of these layers: top-level request `extra_body`, `ToolDefinition.extra_body`, `FunctionDefinition.extra_body`, or `CustomToolDefinition.extra_body`. The same unknown field MUST NOT be duplicated across those layers.
+
+NH-32. Shared encode helpers MUST consume request tool-definition unknown fields from the ownership layer that matches the target wire object being emitted. A helper MUST NOT read provider-native built-in config from top-level request `extra_body` when that config belongs to one `ToolDefinition.extra_body`.
 
 ## 4. Deterministic encoder grouping invariants
 

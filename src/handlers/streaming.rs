@@ -115,7 +115,8 @@ pub(super) async fn forward_stream_typed(
             if requires_buffered_stream {
                 let mut nonstream_req = req_attempt.clone();
                 nonstream_req.stream = Some(false);
-                let upstream_body = encode_request_for_provider(&mut nonstream_req, &attempt)?;
+                let upstream_body =
+                    encode_request_for_provider(&mut nonstream_req, &attempt, downstream)?;
                 let provider = build_channel_provider_config(&attempt);
                 let path =
                     upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
@@ -394,7 +395,8 @@ pub(super) async fn forward_stream_typed(
                 }
             }
 
-            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
+            let upstream_body =
+                encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
             log_outgoing_request_shape(

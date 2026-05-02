@@ -367,6 +367,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         reasoning,
         tools,
         tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
+        parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
         response_format: obj
             .get("response_format")
             .cloned()
@@ -389,6 +390,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "reasoning",
                 "tools",
                 "tool_choice",
+                "parallel_tool_calls",
                 "response_format",
                 "user",
             ],

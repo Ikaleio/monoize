@@ -200,7 +200,14 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     if let Some(choice) = &req.tool_choice {
         obj.insert(
             "tool_choice".to_string(),
-            encode_tool_choice_for_anthropic(choice),
+            encode_tool_choice_for_anthropic(choice, req.parallel_tool_calls),
+        );
+    } else if req.parallel_tool_calls == Some(false)
+        && req.tools.as_ref().is_some_and(|tools| !tools.is_empty())
+    {
+        obj.insert(
+            "tool_choice".to_string(),
+            json!({ "type": "auto", "disable_parallel_tool_use": true }),
         );
     }
     if let Some(reasoning) = &req.reasoning {
@@ -672,48 +679,132 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
     for tool in tools {
         if tool.tool_type == "function" {
             if let Some(function) = &tool.function {
-                out.push(json!({
-                    "name": function.name,
-                    "description": function.description,
-                    "input_schema": function.parameters.clone().unwrap_or(json!({
+                let mut item = Map::new();
+                item.insert("name".to_string(), Value::String(function.name.clone()));
+                if let Some(description) = &function.description {
+                    item.insert(
+                        "description".to_string(),
+                        Value::String(description.clone()),
+                    );
+                }
+                item.insert(
+                    "input_schema".to_string(),
+                    function.parameters.clone().unwrap_or(json!({
                         "type": "object",
                         "properties": {},
                         "additionalProperties": true
-                    }))
-                }));
+                    })),
+                );
+                if let Some(strict) = function.strict {
+                    item.insert("strict".to_string(), Value::Bool(strict));
+                }
+                merge_extra(&mut item, &function.extra_body);
+                merge_extra(&mut item, &tool.extra_body);
+                out.push(Value::Object(item));
+            }
+        } else if tool.tool_type == "custom" {
+            if let Some(custom) = &tool.custom {
+                let mut item = Map::new();
+                item.insert("type".to_string(), Value::String("custom".to_string()));
+                item.insert("name".to_string(), Value::String(custom.name.clone()));
+                if let Some(description) = &custom.description {
+                    item.insert(
+                        "description".to_string(),
+                        Value::String(description.clone()),
+                    );
+                }
+                if let Some(format) = &custom.format {
+                    item.insert("format".to_string(), format.clone());
+                }
+                merge_extra(&mut item, &custom.extra_body);
+                merge_extra(&mut item, &tool.extra_body);
+                out.push(Value::Object(item));
             }
         } else {
-            let mut obj = HashMap::new();
-            obj.insert("name".to_string(), Value::String(tool.tool_type.clone()));
-            for (k, v) in &tool.extra_body {
-                obj.entry(k.clone()).or_insert_with(|| v.clone());
+            let mut item = Map::new();
+            item.insert("type".to_string(), Value::String(tool.tool_type.clone()));
+            if let Some(name) = &tool.name {
+                item.insert("name".to_string(), Value::String(name.clone()));
             }
-            out.push(Value::Object(obj.into_iter().collect()));
+            if let Some(description) = &tool.description {
+                item.insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
+            }
+            merge_extra(&mut item, &tool.extra_body);
+            out.push(Value::Object(item));
         }
     }
     out
 }
 
-fn encode_tool_choice_for_anthropic(choice: &crate::urp::ToolChoice) -> Value {
+fn encode_tool_choice_for_anthropic(
+    choice: &crate::urp::ToolChoice,
+    parallel_tool_calls: Option<bool>,
+) -> Value {
     match tool_choice_to_value(choice) {
         Value::String(mode) => match mode.as_str() {
-            "auto" => json!({ "type": "auto" }),
-            "required" => json!({ "type": "any" }),
+            "auto" => anthropic_tool_choice_object("auto", None, parallel_tool_calls),
+            "required" => anthropic_tool_choice_object("any", None, parallel_tool_calls),
             "none" => json!({ "type": "none" }),
             _ => Value::String(mode),
         },
         Value::Object(obj) => {
+            let explicit_disable = obj
+                .get("disable_parallel_tool_use")
+                .and_then(|v| v.as_bool());
             if let Some(name) = obj
                 .get("function")
                 .and_then(|v| v.get("name"))
                 .and_then(|v| v.as_str())
             {
-                json!({ "type": "tool", "name": name })
+                let mut out = Map::new();
+                out.insert("type".to_string(), Value::String("tool".to_string()));
+                out.insert("name".to_string(), Value::String(name.to_string()));
+                insert_anthropic_disable_parallel(&mut out, explicit_disable, parallel_tool_calls);
+                Value::Object(out)
+            } else if let Some(mode) = obj.get("type").and_then(|v| v.as_str()) {
+                match mode {
+                    "auto" => {
+                        anthropic_tool_choice_object("auto", explicit_disable, parallel_tool_calls)
+                    }
+                    "required" | "any" => {
+                        anthropic_tool_choice_object("any", explicit_disable, parallel_tool_calls)
+                    }
+                    "none" => json!({ "type": "none" }),
+                    _ => Value::Object(obj),
+                }
             } else {
                 Value::Object(obj)
             }
         }
         other => other,
+    }
+}
+
+fn anthropic_tool_choice_object(
+    mode: &str,
+    explicit_disable: Option<bool>,
+    parallel_tool_calls: Option<bool>,
+) -> Value {
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), Value::String(mode.to_string()));
+    insert_anthropic_disable_parallel(&mut obj, explicit_disable, parallel_tool_calls);
+    Value::Object(obj)
+}
+
+fn insert_anthropic_disable_parallel(
+    obj: &mut Map<String, Value>,
+    explicit_disable: Option<bool>,
+    parallel_tool_calls: Option<bool>,
+) {
+    let disable = explicit_disable.or_else(|| (parallel_tool_calls == Some(false)).then_some(true));
+    if let Some(disable) = disable {
+        obj.insert(
+            "disable_parallel_tool_use".to_string(),
+            Value::Bool(disable),
+        );
     }
 }
 
@@ -820,12 +911,321 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
 mod tests {
     use super::*;
     use crate::urp::decode::anthropic as decode_anthropic;
+    use crate::urp::decode::parse_tool_definition;
     use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
-    use crate::urp::{OutputDetails, ResponseFormat, UrpRequest, UrpResponse, Usage};
+    use crate::urp::{
+        FunctionDefinition, OutputDetails, ResponseFormat, UrpRequest, UrpResponse, Usage,
+    };
     use std::collections::HashMap;
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
+    }
+
+    #[test]
+    fn anthropic_function_tool_preserves_extras_and_strict() {
+        let mut function_extra = HashMap::new();
+        function_extra.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
+        function_extra.insert("defer_loading".to_string(), json!(true));
+
+        let mut tool_extra = HashMap::new();
+        tool_extra.insert(
+            "input_examples".to_string(),
+            json!([{ "location": "Paris" }]),
+        );
+        tool_extra.insert(
+            "allowed_callers".to_string(),
+            json!(["code_execution_20260120"]),
+        );
+        tool_extra.insert("eager_input_streaming".to_string(), json!(true));
+
+        let req = UrpRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            input: items_to_nodes(vec![Item::text(Role::User, "weather")]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(vec![ToolDefinition {
+                tool_type: "function".to_string(),
+                name: None,
+                description: None,
+                function: Some(FunctionDefinition {
+                    name: "get_weather".to_string(),
+                    description: Some("Get weather".to_string()),
+                    parameters: Some(json!({
+                        "type": "object",
+                        "properties": {
+                            "location": { "type": "string" }
+                        },
+                        "required": ["location"],
+                        "additionalProperties": false
+                    })),
+                    strict: Some(true),
+                    extra_body: function_extra,
+                }),
+                custom: None,
+                extra_body: tool_extra,
+            }]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "claude-sonnet-4-5");
+        let tool = &encoded["tools"].as_array().expect("tools array")[0];
+
+        assert_eq!(tool["name"], json!("get_weather"));
+        assert_eq!(tool["description"], json!("Get weather"));
+        assert_eq!(tool["strict"], json!(true));
+        assert_eq!(tool["cache_control"], json!({ "type": "ephemeral" }));
+        assert_eq!(tool["defer_loading"], json!(true));
+        assert_eq!(tool["input_examples"], json!([{ "location": "Paris" }]));
+        assert_eq!(tool["allowed_callers"], json!(["code_execution_20260120"]));
+        assert_eq!(tool["eager_input_streaming"], json!(true));
+
+        let input_schema = tool["input_schema"].as_object().expect("input schema");
+        for key in [
+            "cache_control",
+            "defer_loading",
+            "input_examples",
+            "allowed_callers",
+            "eager_input_streaming",
+        ] {
+            assert!(
+                !input_schema.contains_key(key),
+                "{key} must stay on the Anthropic tool object"
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_tool_extra_layering_is_stable() {
+        let mut function_extra = HashMap::new();
+        function_extra.insert("name".to_string(), json!("bad_function_name"));
+        function_extra.insert("description".to_string(), json!("bad function description"));
+        function_extra.insert("input_schema".to_string(), json!({ "type": "string" }));
+        function_extra.insert("strict".to_string(), json!(false));
+        function_extra.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
+
+        let mut tool_extra = HashMap::new();
+        tool_extra.insert("name".to_string(), json!("bad_tool_name"));
+        tool_extra.insert("description".to_string(), json!("bad tool description"));
+        tool_extra.insert("input_schema".to_string(), json!({ "type": "array" }));
+        tool_extra.insert("strict".to_string(), json!(true));
+        tool_extra.insert("cache_control".to_string(), json!({ "type": "tool" }));
+        tool_extra.insert("input_examples".to_string(), json!([{ "city": "Berlin" }]));
+
+        let req = UrpRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            input: items_to_nodes(vec![Item::text(Role::User, "weather")]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(vec![ToolDefinition {
+                tool_type: "function".to_string(),
+                name: None,
+                description: None,
+                function: Some(FunctionDefinition {
+                    name: "stable_weather".to_string(),
+                    description: Some("Stable weather".to_string()),
+                    parameters: Some(json!({
+                        "type": "object",
+                        "properties": {
+                            "city": { "type": "string" }
+                        },
+                        "additionalProperties": false
+                    })),
+                    strict: Some(false),
+                    extra_body: function_extra,
+                }),
+                custom: None,
+                extra_body: tool_extra,
+            }]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "claude-sonnet-4-5");
+        let tool = &encoded["tools"].as_array().expect("tools array")[0];
+
+        assert_eq!(tool["name"], json!("stable_weather"));
+        assert_eq!(tool["description"], json!("Stable weather"));
+        assert_eq!(tool["input_schema"]["type"], json!("object"));
+        assert_eq!(
+            tool["input_schema"]["properties"]["city"]["type"],
+            json!("string")
+        );
+        assert_eq!(tool["strict"], json!(false));
+        assert_eq!(tool["cache_control"], json!({ "type": "ephemeral" }));
+        assert_eq!(tool["input_examples"], json!([{ "city": "Berlin" }]));
+        assert!(
+            tool["input_schema"].get("cache_control").is_none(),
+            "provider metadata must not be nested in input_schema"
+        );
+    }
+
+    #[test]
+    fn anthropic_tool_metadata_round_trips() {
+        let raw_tool = json!({
+            "type": "custom",
+            "name": "structured_lookup",
+            "description": "Structured lookup",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            "strict": true,
+            "cache_control": { "type": "ephemeral" },
+            "defer_loading": true,
+            "allowed_callers": ["code_execution_20260120"],
+            "input_examples": [{ "query": "docs" }],
+            "eager_input_streaming": true
+        });
+        let parsed_tool = parse_tool_definition(&raw_tool).expect("Anthropic custom tool");
+        let req = UrpRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            input: items_to_nodes(vec![Item::text(Role::User, "lookup")]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(vec![parsed_tool]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "claude-sonnet-4-5");
+        let tool = &encoded["tools"].as_array().expect("tools array")[0];
+
+        assert_eq!(tool["type"], json!("custom"));
+        assert_eq!(tool["name"], json!("structured_lookup"));
+        assert_eq!(tool["description"], json!("Structured lookup"));
+        assert_eq!(tool["strict"], json!(true));
+        assert_eq!(tool["cache_control"], json!({ "type": "ephemeral" }));
+        assert_eq!(tool["defer_loading"], json!(true));
+        assert_eq!(tool["allowed_callers"], json!(["code_execution_20260120"]));
+        assert_eq!(tool["input_examples"], json!([{ "query": "docs" }]));
+        assert_eq!(tool["eager_input_streaming"], json!(true));
+        assert_eq!(
+            tool["input_schema"]["properties"]["query"]["type"],
+            json!("string")
+        );
+
+        let input_schema = tool["input_schema"]
+            .as_object()
+            .expect("input_schema object");
+        for key in [
+            "cache_control",
+            "defer_loading",
+            "allowed_callers",
+            "input_examples",
+            "eager_input_streaming",
+        ] {
+            assert!(
+                !input_schema.contains_key(key),
+                "{key} must stay on the Anthropic tool object"
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_builtin_tool_stays_non_function() {
+        let tools = [
+            json!({
+                "type": "computer_20251124",
+                "name": "computer",
+                "display_width_px": 1280,
+                "display_height_px": 720,
+                "display_number": 1,
+                "enable_zoom": true
+            }),
+            json!({
+                "type": "web_search_20260209",
+                "name": "web_search",
+                "max_uses": 3,
+                "allowed_domains": ["example.com"],
+                "user_location": {
+                    "type": "approximate",
+                    "country": "US",
+                    "region": "CA",
+                    "city": "San Francisco"
+                }
+            }),
+            json!({
+                "type": "mcp_toolset",
+                "mcp_server_name": "docs",
+                "default_config": { "enabled": true },
+                "configs": {
+                    "search": { "enabled": true, "defer_loading": true }
+                },
+                "cache_control": { "type": "ephemeral" }
+            }),
+        ]
+        .into_iter()
+        .map(|tool| parse_tool_definition(&tool).expect("Anthropic builtin tool"))
+        .collect::<Vec<_>>();
+
+        let req = UrpRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            input: items_to_nodes(vec![Item::text(Role::User, "use native tools")]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(tools),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "claude-sonnet-4-5");
+        let tools = encoded["tools"].as_array().expect("tools array");
+
+        assert_eq!(tools.len(), 3);
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool.get("function").is_none() && tool.get("custom").is_none()),
+            "Anthropic built-ins must stay flat non-function descriptors: {encoded}"
+        );
+        assert_eq!(tools[0]["type"], json!("computer_20251124"));
+        assert_eq!(tools[0]["name"], json!("computer"));
+        assert_eq!(tools[0]["display_width_px"], json!(1280));
+        assert_eq!(tools[0]["display_height_px"], json!(720));
+        assert_eq!(tools[0]["display_number"], json!(1));
+        assert_eq!(tools[0]["enable_zoom"], json!(true));
+
+        assert_eq!(tools[1]["type"], json!("web_search_20260209"));
+        assert_eq!(tools[1]["name"], json!("web_search"));
+        assert_eq!(tools[1]["max_uses"], json!(3));
+        assert_eq!(tools[1]["allowed_domains"], json!(["example.com"]));
+        assert_eq!(tools[1]["user_location"]["city"], json!("San Francisco"));
+
+        assert_eq!(tools[2]["type"], json!("mcp_toolset"));
+        assert_eq!(tools[2]["mcp_server_name"], json!("docs"));
+        assert_eq!(tools[2]["default_config"], json!({ "enabled": true }));
+        assert_eq!(tools[2]["configs"]["search"]["defer_loading"], json!(true));
+        assert_eq!(tools[2]["cache_control"], json!({ "type": "ephemeral" }));
     }
 
     #[test]
@@ -848,6 +1248,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: Some(ResponseFormat::JsonObject),
             user: None,
             extra_body: empty_map(),
@@ -885,6 +1286,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -1088,6 +1490,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -1129,6 +1532,7 @@ mod tests {
             }),
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),

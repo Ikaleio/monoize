@@ -242,6 +242,38 @@ T1. When a downstream adapter receives non-Responses tool descriptor shapes, for
 
 T1a. Internal URP v2 `tools[]` MAY also contain native Responses non-function tool descriptors. For `type = "image_generation"`, Monoize MUST preserve the tool descriptor as a non-function tool with its typed `type` plus any extra top-level fields carried in `ToolDefinition.extra_body`.
 
+#### 7.1.0a Tool definition compatibility
+
+T1b. The semantic tool fields for request decode, IR storage, and request encode are:
+
+- tool descriptor `type`;
+- Chat Completions `function` wrapper and its owned fields;
+- tool `name`;
+- tool `description`;
+- OpenAI `parameters` JSON Schema object;
+- OpenAI Responses custom-tool `format` object;
+- Anthropic `input_schema` JSON Schema object;
+- `strict` when present on a tool descriptor or on the Chat Completions `function` object;
+- request-level `tool_choice`;
+- request-level `parallel_tool_calls`;
+- Anthropic request-level `disable_parallel_tool_use` inside `tool_choice` objects whose `type` is `auto`, `any`, or `tool`.
+
+T1c. Monoize MUST normalize semantic tool fields before any unknown-field fallback is applied. The Anthropic `input_schema` field and OpenAI `parameters` field are the same semantic parameter-schema field in URP v2. Monoize MUST preserve the JSON value of that schema object byte-equivalently after JSON decode and encode, but Monoize MUST NOT be required to validate every JSON Schema keyword.
+
+T1c1. For OpenAI Responses `type = "custom"` tool descriptors, Monoize MUST preserve the descriptor as a flat tool object. The fields `name`, `description`, and `format` MUST remain fields of the emitted custom tool object. Non-semantic custom-tool fields such as `defer_loading` MUST remain at the same tool object layer through decode, IR storage, and encode.
+
+T1c2. For Anthropic Messages tool descriptors, Monoize MUST preserve user-defined tool fields as a flat Anthropic tool object. The fields `name`, `description`, `input_schema`, optional `type = "custom"`, and `strict` MUST remain at the tool object layer. Anthropic tool metadata fields including `cache_control`, `defer_loading`, `allowed_callers`, `input_examples`, and `eager_input_streaming` MUST remain at the same tool object layer and MUST NOT be moved into `input_schema`. Anthropic provider-native built-in or versioned descriptors, including `computer_20251124`, `web_search_20260209`, `web_search_20250305`, and `mcp_toolset`, MUST remain flat non-function descriptors with their explicit `type`, native `name` when present, and config fields in the same tool object.
+
+T1d. `extra_body` fallback for tool definitions is allowed only for fields that are not semantic tool fields for the source protocol layer. A decoder MAY place an unknown or private tool field into `ToolDefinition.extra_body` or a function-owned extra map only if the owning layer is preserved through decode, IR storage, and encode. The owner MUST distinguish at least tool-descriptor scope from Chat Completions `function` scope. A later encoder MUST NOT move a preserved function-owned field to tool-descriptor scope, and MUST NOT move a preserved tool-descriptor field into the Chat Completions `function` object.
+
+T1e. Tool-definition merge precedence is fixed: encoder-owned semantic fields win, and `extra_body` fills absent keys only. When an encoder constructs an outbound tool descriptor, it MUST write all semantic fields required by the target protocol from typed URP state. It MAY then merge preserved `extra_body` keys at the same owner layer. If a preserved `extra_body` key conflicts with an encoder-owned semantic key, Monoize MUST keep the encoder-owned semantic value and MUST drop the conflicting preserved key from that outbound object.
+
+T1f. Request-level tool controls are typed request semantics, not top-level `extra_body` passthrough. Monoize MUST decode and encode `tool_choice` and `parallel_tool_calls` through typed URP request fields. For Anthropic Messages, Monoize MUST decode and encode `tool_choice.disable_parallel_tool_use` as part of tool-choice semantics. Top-level request `extra_body` MAY fill only absent request keys under §7.6, and XF6 through XF6e still apply to top-level request `extra_body`.
+
+T1g. Provider-native tool descriptors MUST be gated by provider family. When the source family and target family are the same, Monoize MUST preserve provider-native tool descriptors that the target provider type supports, including Responses native tool types carried under T1a and Anthropic native tool types carried through a Messages request. When the source family and target family differ, Monoize MAY emit a provider-native tool descriptor only when this specification or provider-adapter code explicitly supports that target shape. Otherwise Monoize MUST filter that provider-native tool descriptor from the outbound payload for that upstream attempt while keeping the IR value intact for later attempts or downstream response rendering. If a specific `tool_choice` names only a descriptor filtered by this rule, Monoize MUST omit that `tool_choice` from the same outbound attempt.
+
+T1h. Tool-definition compatibility rules describe request forwarding only. They MUST NOT authorize local tool execution. Monoize MUST NOT execute tools locally, as required by TCI2.
+
 Stateful fields:
 
 S1. Monoize MUST reject `background=true` with `400` code `background_not_supported`.
@@ -591,8 +623,12 @@ PC2.4. Assistant message history preservation for chat adapter:
 
 PC3. Tool descriptor normalization:
 
-- For `type=chat_completion` upstreams, Monoize MUST ensure upstream `tools[]` contains only `type=function` tool descriptors.
-- For each URP tool with `type != "function"`, Monoize MUST convert it into a `type=function` tool with `function.name = <tool.type>` and a permissive JSON schema.
+- For `type=chat_completion` upstreams, Monoize MUST ensure upstream `tools[]` contains only Chat-valid tool descriptors.
+- A URP tool with `type = "function"` MUST encode as a Chat tool descriptor with shape `{ "type": "function", "function": { ... } }`.
+- A URP tool with `type = "custom"` MUST encode as a Chat tool descriptor with shape `{ "type": "custom", "custom": { ... } }`.
+- For Chat custom tools, unknown fields owned by the nested `custom` object MUST remain inside that nested `custom` object after re-encoding.
+- For Chat custom tools, unknown fields owned by the top-level tool descriptor MAY be emitted only at the top-level Chat tool descriptor layer.
+- A URP tool with `type` other than `"function"` or `"custom"` MUST NOT be emitted as a raw Chat tool descriptor unless a later rule explicitly defines a Chat-valid encoding for that tool type.
 
 PC4. Monoize MUST convert chat-completions non-stream output into `UrpResponseV2` output nodes.
 
@@ -741,6 +777,10 @@ PM7. Messages `tool_choice` normalization:
   - `{ "type": "auto" }` -> `"auto"`
   - `{ "type": "any" }` -> `"required"`
   - `{ "type": "tool", "name": "<N>" }` -> `{ "type": "function", "function": { "name": "<N>" } }`
+- If an Anthropic Messages `tool_choice` object has boolean `disable_parallel_tool_use` and `type` is `auto`, `any`, or `tool`, Monoize MUST preserve that flag as request-level tool-choice semantics. It MUST NOT store the flag in any tool descriptor or tool descriptor `extra_body`.
+- When a preserved Anthropic `any` choice is encoded back to a Messages upstream, Monoize MUST emit `{ "type": "any" }`, not `{ "type": "required" }`. If `disable_parallel_tool_use` was present, the emitted object MUST include the same boolean flag.
+- When a preserved Anthropic named `tool` choice is encoded back to a Messages upstream, Monoize MUST emit `{ "type": "tool", "name": "<N>" }`. If `disable_parallel_tool_use` was present, the emitted object MUST include the same boolean flag.
+- For OpenAI-compatible upstream requests, `parallel_tool_calls` is a top-level request field. Monoize MUST emit it at the request object top level when the canonical request carries a boolean value, and MUST NOT nest it under `tools[]`, `function`, `custom`, or any other tool descriptor object.
 
 PM8. When calling a `type=messages` upstream, Monoize MUST send HTTP header `anthropic-version` with value `2023-06-01`.
 

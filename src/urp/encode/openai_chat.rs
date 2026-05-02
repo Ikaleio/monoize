@@ -1,5 +1,5 @@
 use crate::urp::encode::{
-    merge_extra, role_to_str, text_parts, tool_choice_to_value, usage_input_details,
+    merge_extra, role_to_str, text_parts, tool_choice_to_openai_value, usage_input_details,
     usage_output_details,
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
@@ -236,7 +236,10 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         obj.insert("tools".to_string(), Value::Array(encode_tools(tools)));
     }
     if let Some(tc) = &req.tool_choice {
-        obj.insert("tool_choice".to_string(), tool_choice_to_value(tc));
+        obj.insert("tool_choice".to_string(), tool_choice_to_openai_value(tc));
+    }
+    if let Some(parallel) = req.parallel_tool_calls {
+        obj.insert("parallel_tool_calls".to_string(), Value::Bool(parallel));
     }
     if let Some(format) = &req.response_format {
         obj.insert(
@@ -576,9 +579,22 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
                 super::merge_extra(&mut obj, &tool.extra_body);
                 out.push(Value::Object(obj));
             }
-        } else {
+        } else if tool.tool_type == "custom"
+            && let Some(custom) = &tool.custom
+        {
+            let mut custom_obj = Map::new();
+            custom_obj.insert("name".to_string(), Value::String(custom.name.clone()));
+            if let Some(desc) = &custom.description {
+                custom_obj.insert("description".to_string(), Value::String(desc.clone()));
+            }
+            if let Some(format) = &custom.format {
+                custom_obj.insert("format".to_string(), format.clone());
+            }
+            super::merge_extra(&mut custom_obj, &custom.extra_body);
+
             let mut obj = Map::new();
-            obj.insert("type".to_string(), Value::String(tool.tool_type.clone()));
+            obj.insert("type".to_string(), Value::String("custom".to_string()));
+            obj.insert("custom".to_string(), Value::Object(custom_obj));
             super::merge_extra(&mut obj, &tool.extra_body);
             out.push(Value::Object(obj));
         }
@@ -732,10 +748,121 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
         }
+    }
+
+    #[test]
+    fn openai_chat_custom_tool_round_trips() {
+        let downstream = json!({
+            "model": "gpt-5.4",
+            "messages": [{ "role": "user", "content": "use the grammar" }],
+            "tools": [{
+                "type": "custom",
+                "custom": {
+                    "name": "freeform_nested",
+                    "description": "Nested custom tool",
+                    "format": {
+                        "type": "grammar",
+                        "grammar": {
+                            "syntax": "lark",
+                            "definition": "start: /[a-z]+/"
+                        }
+                    },
+                    "x_custom": 7
+                },
+                "cache_control": { "type": "ephemeral" }
+            }]
+        });
+
+        let decoded = decode_chat::decode_request(&downstream).expect("decode chat request");
+        let decoded_tools = decoded.tools.as_ref().expect("tools decoded");
+        let decoded_custom = decoded_tools[0].custom.as_ref().expect("custom IR");
+        assert_eq!(decoded_custom.name, "freeform_nested");
+        assert_eq!(decoded_custom.extra_body.get("x_custom"), Some(&json!(7)));
+        assert_eq!(
+            decoded_tools[0].extra_body.get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+
+        let encoded = encode_request(&decoded, "gpt-5.4");
+        let encoded_tools = encoded["tools"].as_array().expect("encoded tools");
+        assert_eq!(encoded_tools.len(), 1);
+
+        let tool = encoded_tools[0].as_object().expect("tool object");
+        assert_eq!(tool.get("type"), Some(&json!("custom")));
+        assert!(tool.get("name").is_none());
+        assert_eq!(
+            tool.get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+        assert!(tool.get("x_custom").is_none());
+
+        let custom = tool
+            .get("custom")
+            .and_then(Value::as_object)
+            .expect("nested custom object");
+        assert_eq!(custom.get("name"), Some(&json!("freeform_nested")));
+        assert_eq!(
+            custom.get("description"),
+            Some(&json!("Nested custom tool"))
+        );
+        assert_eq!(custom.get("x_custom"), Some(&json!(7)));
+        assert_eq!(
+            custom.get("format"),
+            Some(&json!({
+                "type": "grammar",
+                "grammar": {
+                    "syntax": "lark",
+                    "definition": "start: /[a-z]+/"
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn openai_chat_unsupported_builtin_tool_is_not_blindly_emitted() {
+        let downstream = json!({
+            "model": "gpt-5.4",
+            "messages": [{ "role": "user", "content": "search if allowed" }],
+            "tools": [
+                {
+                    "type": "file_search",
+                    "name": "docs_search",
+                    "vector_store_ids": ["vs_1"]
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "description": "Lookup docs",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": { "type": "string" }
+                            }
+                        }
+                    }
+                }
+            ]
+        });
+
+        let decoded = decode_chat::decode_request(&downstream).expect("decode chat request");
+        assert_eq!(decoded.tools.as_ref().expect("decoded tools").len(), 2);
+
+        let encoded = encode_request(&decoded, "gpt-5.4");
+        let encoded_tools = encoded["tools"].as_array().expect("encoded tools");
+        assert_eq!(encoded_tools.len(), 1);
+        assert!(
+            encoded_tools
+                .iter()
+                .all(|tool| { tool.get("type").and_then(Value::as_str) != Some("file_search") })
+        );
+        assert_eq!(encoded_tools[0]["type"], json!("function"));
+        assert_eq!(encoded_tools[0]["function"]["name"], json!("lookup"));
     }
 
     #[test]

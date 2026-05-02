@@ -150,7 +150,8 @@ pub(super) async fn execute_nonstream_typed(
                 auth.reasoning_envelope_enabled,
             );
 
-            let upstream_body = encode_request_for_provider(&mut req_attempt, &attempt)?;
+            let upstream_body =
+                encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(
                 attempt.provider_type,
@@ -469,8 +470,10 @@ pub(super) async fn forward_nonstream_typed(
 pub(super) fn encode_request_for_provider(
     req: &mut urp::UrpRequest,
     attempt: &MonoizeAttempt,
+    downstream: DownstreamProtocol,
 ) -> AppResult<Value> {
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
+    filter_tools_for_provider(req, attempt.provider_type, downstream);
     strip_orphaned_tool_calls(req);
     if attempt.provider_type == ProviderType::Responses {
         strip_plaintext_reasoning_from_responses_tool_replay(req);

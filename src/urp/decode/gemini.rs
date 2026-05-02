@@ -240,6 +240,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         reasoning,
         tools,
         tool_choice,
+        parallel_tool_calls: None,
         response_format: None,
         user: None,
         extra_body: split_extra(
@@ -340,6 +341,8 @@ fn decode_tools(tools: &Vec<Value>) -> Vec<crate::urp::ToolDefinition> {
             };
             out.push(crate::urp::ToolDefinition {
                 tool_type: "function".to_string(),
+                name: None,
+                description: None,
                 function: Some(crate::urp::FunctionDefinition {
                     name: name.to_string(),
                     description: decl_obj
@@ -350,6 +353,7 @@ fn decode_tools(tools: &Vec<Value>) -> Vec<crate::urp::ToolDefinition> {
                     strict: None,
                     extra_body: split_extra(decl_obj, &["name", "description", "parameters"]),
                 }),
+                custom: None,
                 extra_body: HashMap::new(),
             });
         }

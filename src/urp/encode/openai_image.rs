@@ -88,6 +88,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::from([
@@ -125,6 +126,7 @@ mod tests {
             reasoning: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::from([("size".to_string(), json!("1280x720"))]),

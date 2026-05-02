@@ -750,6 +750,181 @@ pub(super) fn filter_extra_body_for_provider(
         .retain(|k, _| defaults.contains(&k.as_str()) || override_set.contains(k.as_str()));
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderNativeToolFamily {
+    Responses,
+    Messages,
+}
+
+const RESPONSES_NATIVE_TOOL_TYPES: &[&str] = &[
+    "file_search",
+    "code_interpreter",
+    "web_search",
+    "web_search_preview",
+    "mcp",
+    "namespace",
+    "tool_search",
+    "image_generation",
+    "computer",
+    "computer_use_preview",
+    "local_shell",
+    "shell",
+    "apply_patch",
+];
+
+const MESSAGES_NATIVE_TOOL_PREFIXES: &[&str] = &[
+    "computer_",
+    "web_search_",
+    "web_fetch_",
+    "code_execution_",
+    "tool_search_tool_",
+    "bash_",
+    "text_editor_",
+    "memory_",
+    "advisor_",
+];
+
+const MESSAGES_NATIVE_TOOL_TYPES: &[&str] = &[
+    "mcp_toolset",
+    "tool_search_tool_bm25",
+    "tool_search_tool_regex",
+];
+
+fn provider_native_tool_family(tool_type: &str) -> Option<ProviderNativeToolFamily> {
+    if RESPONSES_NATIVE_TOOL_TYPES.contains(&tool_type) {
+        return Some(ProviderNativeToolFamily::Responses);
+    }
+    if MESSAGES_NATIVE_TOOL_TYPES.contains(&tool_type)
+        || MESSAGES_NATIVE_TOOL_PREFIXES
+            .iter()
+            .any(|prefix| tool_type.starts_with(prefix))
+        || has_versioned_messages_native_tool_suffix(tool_type)
+    {
+        return Some(ProviderNativeToolFamily::Messages);
+    }
+    None
+}
+
+fn has_versioned_messages_native_tool_suffix(tool_type: &str) -> bool {
+    tool_type
+        .rsplit_once('_')
+        .map(|(_, suffix)| suffix.len() == 8 && suffix.chars().all(|ch| ch.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
+fn provider_supports_native_tool_family(
+    provider_type: ProviderType,
+    family: ProviderNativeToolFamily,
+) -> bool {
+    matches!(
+        (provider_type, family),
+        (ProviderType::Responses, ProviderNativeToolFamily::Responses)
+            | (ProviderType::Messages, ProviderNativeToolFamily::Messages)
+    )
+}
+
+fn provider_supports_tool_definition(
+    tool: &urp::ToolDefinition,
+    provider_type: ProviderType,
+    downstream: DownstreamProtocol,
+) -> bool {
+    if tool.tool_type == "function" {
+        return true;
+    }
+
+    if tool.tool_type == "custom" {
+        return provider_supports_custom_tool(tool, provider_type);
+    }
+
+    if let Some(family) = provider_native_tool_family(&tool.tool_type) {
+        return provider_supports_native_tool_family(provider_type, family);
+    }
+
+    downstream.is_same_family(provider_type)
+        && matches!(
+            provider_type,
+            ProviderType::Responses | ProviderType::Messages
+        )
+}
+
+fn provider_supports_custom_tool(tool: &urp::ToolDefinition, provider_type: ProviderType) -> bool {
+    match provider_type {
+        ProviderType::ChatCompletion | ProviderType::Responses => tool.custom.is_some(),
+        ProviderType::Messages => tool.custom.as_ref().is_some_and(|custom| {
+            custom.extra_body.contains_key("input_schema")
+                || tool.extra_body.contains_key("input_schema")
+        }),
+        _ => false,
+    }
+}
+
+fn insert_tool_identifiers(out: &mut HashSet<String>, tool: &urp::ToolDefinition) {
+    out.insert(tool.tool_type.clone());
+    if let Some(name) = &tool.name {
+        out.insert(name.clone());
+    }
+    if let Some(function) = &tool.function {
+        out.insert(function.name.clone());
+    }
+    if let Some(custom) = &tool.custom {
+        out.insert(custom.name.clone());
+    }
+}
+
+fn selected_tool_choice_identifier(choice: &urp::ToolChoice) -> Option<String> {
+    let urp::ToolChoice::Specific(Value::Object(obj)) = choice else {
+        return None;
+    };
+
+    obj.get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            obj.get("custom")
+                .and_then(|custom| custom.get("name"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| obj.get("name").and_then(Value::as_str))
+        .or_else(|| match obj.get("type").and_then(Value::as_str) {
+            Some("auto" | "required" | "any" | "none" | "function" | "custom") | None => None,
+            Some(native_type) => Some(native_type),
+        })
+        .map(str::to_string)
+}
+
+pub(super) fn filter_tools_for_provider(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+    downstream: DownstreamProtocol,
+) {
+    let Some(tools) = req.tools.as_mut() else {
+        return;
+    };
+
+    tools.retain(|tool| provider_supports_tool_definition(tool, provider_type, downstream));
+    if tools.is_empty() {
+        req.tools = None;
+        req.tool_choice = None;
+        return;
+    }
+
+    if let Some(selected) = req
+        .tool_choice
+        .as_ref()
+        .and_then(selected_tool_choice_identifier)
+    {
+        let mut available = HashSet::new();
+        if let Some(tools) = &req.tools {
+            for tool in tools {
+                insert_tool_identifiers(&mut available, tool);
+            }
+        }
+        if !available.contains(&selected) {
+            req.tool_choice = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

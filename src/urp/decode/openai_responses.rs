@@ -276,6 +276,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         reasoning,
         tools,
         tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
+        parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
         response_format: obj
             .get("response_format")
             .cloned()
@@ -297,6 +298,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "reasoning",
                 "tools",
                 "tool_choice",
+                "parallel_tool_calls",
                 "response_format",
                 "text",
                 "user",
@@ -1044,5 +1046,144 @@ mod tests {
                 if call_id == "call_1"
                     && matches!(&content[0], ToolResultContent::Text { text } if text == "ok")
         ));
+    }
+
+    #[test]
+    fn decodes_responses_custom_and_builtin_tools_locally() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": "use tools",
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "freeform_lookup",
+                    "description": "Freeform lookup",
+                    "format": {
+                        "type": "grammar",
+                        "syntax": "lark",
+                        "definition": "start: /[a-z]+/"
+                    },
+                    "defer_loading": true
+                },
+                {
+                    "type": "file_search",
+                    "vector_store_ids": ["vs_1", "vs_2"]
+                },
+                {
+                    "type": "code_interpreter",
+                    "container": { "type": "auto", "file_ids": ["file_1"] }
+                },
+                {
+                    "type": "web_search",
+                    "search_context_size": "medium",
+                    "user_location": { "type": "approximate", "country": "US" }
+                },
+                {
+                    "type": "mcp",
+                    "server_label": "docs",
+                    "server_url": "https://mcp.example.test",
+                    "allowed_tools": ["search"],
+                    "defer_loading": true
+                },
+                {
+                    "type": "namespace",
+                    "name": "app_tools",
+                    "description": "Application tools",
+                    "tools": [{ "name": "fetch_docs", "description": "Fetch docs" }]
+                },
+                {
+                    "type": "tool_search",
+                    "description": "Discover tools",
+                    "execution": "server",
+                    "parameters": { "type": "object", "properties": {} }
+                }
+            ]
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        let tools = decoded.tools.expect("tools");
+        let custom_tool = tools
+            .iter()
+            .find(|tool| tool.tool_type == "custom")
+            .expect("custom tool");
+        let custom = custom_tool.custom.as_ref().expect("custom IR");
+        assert_eq!(custom.name, "freeform_lookup");
+        assert_eq!(custom.description.as_deref(), Some("Freeform lookup"));
+        assert_eq!(
+            custom.format.as_ref().expect("format")["type"],
+            json!("grammar")
+        );
+        assert_eq!(custom.extra_body.get("defer_loading"), Some(&json!(true)));
+        assert!(custom_tool.function.is_none());
+        assert!(custom_tool.extra_body.is_empty());
+
+        let file_search = tools
+            .iter()
+            .find(|tool| tool.tool_type == "file_search")
+            .expect("file_search tool");
+        assert!(file_search.function.is_none());
+        assert!(file_search.custom.is_none());
+        assert_eq!(
+            file_search.extra_body.get("vector_store_ids"),
+            Some(&json!(["vs_1", "vs_2"]))
+        );
+
+        let code_interpreter = tools
+            .iter()
+            .find(|tool| tool.tool_type == "code_interpreter")
+            .expect("code_interpreter tool");
+        assert_eq!(
+            code_interpreter.extra_body.get("container"),
+            Some(&json!({ "type": "auto", "file_ids": ["file_1"] }))
+        );
+
+        let web_search = tools
+            .iter()
+            .find(|tool| tool.tool_type == "web_search")
+            .expect("web_search tool");
+        assert_eq!(
+            web_search.extra_body.get("search_context_size"),
+            Some(&json!("medium"))
+        );
+        assert_eq!(
+            web_search.extra_body.get("user_location"),
+            Some(&json!({ "type": "approximate", "country": "US" }))
+        );
+
+        let mcp = tools
+            .iter()
+            .find(|tool| tool.tool_type == "mcp")
+            .expect("mcp tool");
+        assert_eq!(mcp.extra_body.get("server_label"), Some(&json!("docs")));
+        assert_eq!(
+            mcp.extra_body.get("allowed_tools"),
+            Some(&json!(["search"]))
+        );
+        assert_eq!(mcp.extra_body.get("defer_loading"), Some(&json!(true)));
+
+        let namespace = tools
+            .iter()
+            .find(|tool| tool.tool_type == "namespace")
+            .expect("namespace tool");
+        assert_eq!(namespace.name.as_deref(), Some("app_tools"));
+        assert_eq!(namespace.description.as_deref(), Some("Application tools"));
+        assert_eq!(
+            namespace.extra_body.get("tools"),
+            Some(&json!([{ "name": "fetch_docs", "description": "Fetch docs" }]))
+        );
+
+        let tool_search = tools
+            .iter()
+            .find(|tool| tool.tool_type == "tool_search")
+            .expect("tool_search tool");
+        assert_eq!(tool_search.description.as_deref(), Some("Discover tools"));
+        assert_eq!(
+            tool_search.extra_body.get("execution"),
+            Some(&json!("server"))
+        );
+        assert_eq!(
+            tool_search.extra_body.get("parameters"),
+            Some(&json!({ "type": "object", "properties": {} }))
+        );
     }
 }

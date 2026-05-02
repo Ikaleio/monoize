@@ -118,7 +118,10 @@ impl Transform for EnableOpenAiImageGenerationToolTransform {
         }
         tools.push(ToolDefinition {
             tool_type: "image_generation".to_string(),
+            name: None,
+            description: None,
             function: None,
+            custom: None,
             extra_body,
         });
         Ok(())
@@ -169,6 +172,7 @@ mod tests {
             reasoning: None,
             tools: Some(Vec::new()),
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::new(),
@@ -209,13 +213,17 @@ mod tests {
             reasoning: None,
             tools: Some(vec![ToolDefinition {
                 tool_type: "image_generation".to_string(),
+                name: None,
+                description: None,
                 function: None,
+                custom: None,
                 extra_body: HashMap::from([(
                     "output_format".to_string(),
                     Value::String("webp".to_string()),
                 )]),
             }]),
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::new(),
@@ -264,6 +272,7 @@ mod tests {
             reasoning: None,
             tools: Some(Vec::new()),
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::new(),
@@ -309,6 +318,7 @@ mod tests {
             reasoning: None,
             tools: Some(Vec::new()),
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::from([
@@ -358,6 +368,7 @@ mod tests {
             reasoning: None,
             tools: Some(Vec::new()),
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::from([
@@ -408,6 +419,7 @@ mod tests {
             reasoning: None,
             tools: Some(Vec::new()),
             tool_choice: None,
+            parallel_tool_calls: None,
             response_format: None,
             user: None,
             extra_body: HashMap::new(),

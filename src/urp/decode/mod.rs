@@ -6,7 +6,10 @@ pub mod openai_responses;
 pub mod replicate;
 
 use crate::urp::internal_legacy_bridge::Part;
-use crate::urp::{FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole, ToolDefinition};
+use crate::urp::{
+    CustomToolDefinition, FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole,
+    ToolDefinition,
+};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -46,60 +49,83 @@ fn normalize_tool_parameters(params: Option<Value>) -> Option<Value> {
     Some(v)
 }
 
+fn string_field(obj: &Map<String, Value>, key: &str) -> Option<String> {
+    obj.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn parse_function_definition(function_obj: &Map<String, Value>) -> Option<FunctionDefinition> {
+    Some(FunctionDefinition {
+        name: string_field(function_obj, "name")?,
+        description: string_field(function_obj, "description"),
+        parameters: normalize_tool_parameters(
+            function_obj
+                .get("parameters")
+                .cloned()
+                .or_else(|| function_obj.get("input_schema").cloned()),
+        ),
+        strict: function_obj.get("strict").and_then(|v| v.as_bool()),
+        extra_body: split_extra(
+            function_obj,
+            &[
+                "name",
+                "description",
+                "parameters",
+                "input_schema",
+                "strict",
+            ],
+        ),
+    })
+}
+
+fn parse_custom_tool_definition(
+    custom_obj: &Map<String, Value>,
+    known_fields: &[&str],
+) -> Option<CustomToolDefinition> {
+    Some(CustomToolDefinition {
+        name: string_field(custom_obj, "name")?,
+        description: string_field(custom_obj, "description"),
+        format: custom_obj.get("format").cloned(),
+        extra_body: split_extra(custom_obj, known_fields),
+    })
+}
+
+fn native_tool_definition(tool_type: String, obj: &Map<String, Value>) -> ToolDefinition {
+    ToolDefinition {
+        tool_type,
+        name: string_field(obj, "name"),
+        description: string_field(obj, "description"),
+        function: None,
+        custom: None,
+        extra_body: split_extra(obj, &["type", "name", "description"]),
+    }
+}
+
 pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
     let obj = raw.as_object()?;
-    let tool_type = obj
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("function")
-        .to_string();
+    let explicit_tool_type = obj.get("type").and_then(|v| v.as_str());
+    let tool_type = explicit_tool_type.unwrap_or("function").to_string();
 
     if tool_type == "function" {
         let function_obj = obj.get("function").and_then(|v| v.as_object());
         if let Some(function_obj) = function_obj {
-            let name = function_obj
-                .get("name")
-                .and_then(|v| v.as_str())?
-                .to_string();
-            let mut fn_extra = HashMap::new();
-            for (k, v) in function_obj {
-                if !["name", "description", "parameters", "strict"].contains(&k.as_str()) {
-                    fn_extra.insert(k.clone(), v.clone());
-                }
-            }
             return Some(ToolDefinition {
                 tool_type,
-                function: Some(FunctionDefinition {
-                    name,
-                    description: function_obj
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    parameters: normalize_tool_parameters(function_obj.get("parameters").cloned()),
-                    strict: function_obj.get("strict").and_then(|v| v.as_bool()),
-                    extra_body: fn_extra,
-                }),
+                name: None,
+                description: None,
+                function: Some(parse_function_definition(function_obj)?),
+                custom: None,
                 extra_body: split_extra(obj, &["type", "function"]),
             });
         }
 
-        let name = obj.get("name").and_then(|v| v.as_str())?.to_string();
+        let mut function = parse_function_definition(obj)?;
+        function.extra_body = HashMap::new();
         return Some(ToolDefinition {
             tool_type,
-            function: Some(FunctionDefinition {
-                name,
-                description: obj
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                parameters: normalize_tool_parameters(
-                    obj.get("parameters")
-                        .cloned()
-                        .or_else(|| obj.get("input_schema").cloned()),
-                ),
-                strict: obj.get("strict").and_then(|v| v.as_bool()),
-                extra_body: HashMap::new(),
-            }),
+            name: None,
+            description: None,
+            function: Some(function),
+            custom: None,
             extra_body: split_extra(
                 obj,
                 &[
@@ -114,11 +140,37 @@ pub fn parse_tool_definition(raw: &Value) -> Option<ToolDefinition> {
         });
     }
 
-    Some(ToolDefinition {
-        tool_type,
-        function: None,
-        extra_body: split_extra(obj, &["type"]),
-    })
+    if tool_type == "custom" {
+        if let Some(custom_obj) = obj.get("custom").and_then(|v| v.as_object()) {
+            if let Some(custom) =
+                parse_custom_tool_definition(custom_obj, &["name", "description", "format"])
+            {
+                return Some(ToolDefinition {
+                    tool_type,
+                    name: None,
+                    description: None,
+                    function: None,
+                    custom: Some(custom),
+                    extra_body: split_extra(obj, &["type", "custom"]),
+                });
+            }
+        }
+
+        if let Some(custom) =
+            parse_custom_tool_definition(obj, &["type", "name", "description", "format"])
+        {
+            return Some(ToolDefinition {
+                tool_type,
+                name: None,
+                description: None,
+                function: None,
+                custom: Some(custom),
+                extra_body: HashMap::new(),
+            });
+        }
+    }
+
+    explicit_tool_type.map(|_| native_tool_definition(tool_type, obj))
 }
 
 pub fn parse_tool_call_arguments_value(obj: &Map<String, Value>) -> Option<Value> {
@@ -449,4 +501,381 @@ pub fn value_to_text(v: &Value) -> String {
         return out;
     }
     serde_json::to_string(v).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_tool_definition_accepts_function_and_custom_shapes() {
+        let nested_function = json!({
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "Lookup a value",
+                "parameters": {
+                    "properties": {
+                        "id": { "type": "string" }
+                    },
+                    "required": ["id"]
+                },
+                "input_schema": {
+                    "properties": {
+                        "ignored": { "type": "boolean" }
+                    }
+                },
+                "strict": true,
+                "defer_loading": true
+            },
+            "x_tool": "outer"
+        });
+        let tool = parse_tool_definition(&nested_function).expect("nested function tool");
+        assert_eq!(tool.tool_type, "function");
+        assert_eq!(tool.name, None);
+        assert_eq!(tool.description, None);
+        assert!(tool.custom.is_none());
+        assert_eq!(tool.extra_body.get("x_tool"), Some(&json!("outer")));
+
+        let function = tool.function.as_ref().expect("function IR");
+        assert_eq!(function.name, "lookup");
+        assert_eq!(function.description.as_deref(), Some("Lookup a value"));
+        assert_eq!(function.strict, Some(true));
+        let parameters = function.parameters.as_ref().expect("parameters");
+        assert_eq!(parameters["type"], json!("object"));
+        assert_eq!(parameters["properties"]["id"]["type"], json!("string"));
+        assert!(parameters["properties"].get("ignored").is_none());
+        assert_eq!(function.extra_body.get("defer_loading"), Some(&json!(true)));
+
+        let missing_type_function = json!({
+            "name": "from_input_schema",
+            "description": "Uses Anthropic schema alias",
+            "input_schema": {
+                "properties": {
+                    "query": { "type": "string" }
+                }
+            },
+            "strict": false
+        });
+        let tool = parse_tool_definition(&missing_type_function).expect("missing type function");
+        assert_eq!(tool.tool_type, "function");
+        let function = tool.function.as_ref().expect("function IR");
+        assert_eq!(function.name, "from_input_schema");
+        assert_eq!(function.strict, Some(false));
+        assert_eq!(
+            function.parameters.as_ref(),
+            Some(&json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                }
+            }))
+        );
+
+        let non_object_schema = json!({
+            "name": "schema_reference",
+            "input_schema": "schema://opaque"
+        });
+        let tool = parse_tool_definition(&non_object_schema).expect("non-object schema function");
+        let function = tool.function.as_ref().expect("function IR");
+        assert_eq!(
+            function.parameters.as_ref(),
+            Some(&json!("schema://opaque"))
+        );
+
+        let nested_custom = json!({
+            "type": "custom",
+            "custom": {
+                "name": "freeform_nested",
+                "description": "Nested custom tool",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "lark",
+                    "definition": "start: /[a-z]+/"
+                },
+                "x_custom": 7
+            },
+            "cache_control": { "type": "ephemeral" }
+        });
+        let tool = parse_tool_definition(&nested_custom).expect("nested custom tool");
+        assert_eq!(tool.tool_type, "custom");
+        assert_eq!(tool.name, None);
+        assert_eq!(tool.description, None);
+        assert!(tool.function.is_none());
+        assert_eq!(
+            tool.extra_body.get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+        let custom = tool.custom.as_ref().expect("custom IR");
+        assert_eq!(custom.name, "freeform_nested");
+        assert_eq!(custom.description.as_deref(), Some("Nested custom tool"));
+        assert_eq!(
+            custom.format.as_ref().expect("format")["type"],
+            json!("grammar")
+        );
+        assert_eq!(custom.extra_body.get("x_custom"), Some(&json!(7)));
+
+        let flat_custom = json!({
+            "type": "custom",
+            "name": "freeform_flat",
+            "description": "Flat custom tool",
+            "format": { "type": "text" },
+            "defer_loading": true
+        });
+        let tool = parse_tool_definition(&flat_custom).expect("flat custom tool");
+        assert_eq!(tool.tool_type, "custom");
+        assert!(tool.function.is_none());
+        assert!(tool.extra_body.is_empty());
+        let custom = tool.custom.as_ref().expect("custom IR");
+        assert_eq!(custom.name, "freeform_flat");
+        assert_eq!(custom.description.as_deref(), Some("Flat custom tool"));
+        assert_eq!(
+            custom.format.as_ref().expect("format")["type"],
+            json!("text")
+        );
+        assert_eq!(custom.extra_body.get("defer_loading"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn parse_tool_definition_preserves_builtin_config() {
+        let builtin = json!({
+            "type": "file_search",
+            "name": "docs_search",
+            "description": "Search documentation",
+            "vector_store_ids": ["vs_1", "vs_2"],
+            "filters": {
+                "type": "eq",
+                "key": "tenant",
+                "value": "monoize"
+            },
+            "ranking_options": {
+                "ranker": "default-2024-11-15",
+                "score_threshold": 0.25
+            }
+        });
+        let tool = parse_tool_definition(&builtin).expect("builtin tool");
+        assert_eq!(tool.tool_type, "file_search");
+        assert_eq!(tool.name.as_deref(), Some("docs_search"));
+        assert_eq!(tool.description.as_deref(), Some("Search documentation"));
+        assert!(tool.function.is_none());
+        assert!(tool.custom.is_none());
+        assert_eq!(
+            tool.extra_body.get("vector_store_ids"),
+            Some(&json!(["vs_1", "vs_2"]))
+        );
+        assert_eq!(
+            tool.extra_body.get("filters"),
+            Some(&json!({
+                "type": "eq",
+                "key": "tenant",
+                "value": "monoize"
+            }))
+        );
+        assert_eq!(
+            tool.extra_body.get("ranking_options"),
+            Some(&json!({
+                "ranker": "default-2024-11-15",
+                "score_threshold": 0.25
+            }))
+        );
+        assert!(!tool.extra_body.contains_key("type"));
+        assert!(!tool.extra_body.contains_key("name"));
+        assert!(!tool.extra_body.contains_key("description"));
+
+        let unknown_native = json!({
+            "type": "vendor_native",
+            "name": "native_tool",
+            "description": "Native provider tool",
+            "enabled": true,
+            "schema": "opaque"
+        });
+        let tool = parse_tool_definition(&unknown_native).expect("unknown native tool");
+        assert_eq!(tool.tool_type, "vendor_native");
+        assert_eq!(tool.name.as_deref(), Some("native_tool"));
+        assert_eq!(tool.description.as_deref(), Some("Native provider tool"));
+        assert!(tool.function.is_none());
+        assert!(tool.custom.is_none());
+        assert_eq!(tool.extra_body.get("enabled"), Some(&json!(true)));
+        assert_eq!(tool.extra_body.get("schema"), Some(&json!("opaque")));
+
+        let web_search = json!({
+            "type": "web_search",
+            "search_context_size": "medium",
+            "user_location": {
+                "type": "approximate",
+                "country": "US",
+                "city": "San Francisco"
+            },
+            "filters": {
+                "allowed_domains": ["example.com"]
+            }
+        });
+        let tool = parse_tool_definition(&web_search).expect("web_search tool");
+        assert_eq!(tool.tool_type, "web_search");
+        assert_eq!(tool.name, None);
+        assert_eq!(tool.description, None);
+        assert!(tool.function.is_none());
+        assert!(tool.custom.is_none());
+        assert_eq!(
+            tool.extra_body.get("search_context_size"),
+            Some(&json!("medium"))
+        );
+        assert_eq!(
+            tool.extra_body.get("user_location"),
+            Some(&json!({
+                "type": "approximate",
+                "country": "US",
+                "city": "San Francisco"
+            }))
+        );
+        assert_eq!(
+            tool.extra_body.get("filters"),
+            Some(&json!({ "allowed_domains": ["example.com"] }))
+        );
+
+        let computer = json!({
+            "type": "computer_20251124",
+            "name": "desktop",
+            "description": "Computer use beta tool",
+            "display_width_px": 1024,
+            "display_height_px": 768,
+            "display_number": 1,
+            "cache_control": { "type": "ephemeral" }
+        });
+        let tool = parse_tool_definition(&computer).expect("computer_20251124 tool");
+        assert_eq!(tool.tool_type, "computer_20251124");
+        assert_eq!(tool.name.as_deref(), Some("desktop"));
+        assert_eq!(tool.description.as_deref(), Some("Computer use beta tool"));
+        assert!(tool.function.is_none());
+        assert!(tool.custom.is_none());
+        assert_eq!(tool.extra_body.get("display_width_px"), Some(&json!(1024)));
+        assert_eq!(tool.extra_body.get("display_height_px"), Some(&json!(768)));
+        assert_eq!(tool.extra_body.get("display_number"), Some(&json!(1)));
+        assert_eq!(
+            tool.extra_body.get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+
+        let web_search_versioned = json!({
+            "type": "web_search_20260209",
+            "name": "web_search",
+            "max_uses": 4,
+            "allowed_domains": ["example.com"],
+            "user_location": {
+                "type": "approximate",
+                "country": "US",
+                "region": "CA",
+                "city": "San Francisco"
+            }
+        });
+        let tool = parse_tool_definition(&web_search_versioned).expect("web_search_20260209 tool");
+        assert_eq!(tool.tool_type, "web_search_20260209");
+        assert_eq!(tool.name.as_deref(), Some("web_search"));
+        assert!(tool.function.is_none());
+        assert!(tool.custom.is_none());
+        assert_eq!(tool.extra_body.get("max_uses"), Some(&json!(4)));
+        assert_eq!(
+            tool.extra_body.get("allowed_domains"),
+            Some(&json!(["example.com"]))
+        );
+        assert_eq!(
+            tool.extra_body.get("user_location"),
+            Some(&json!({
+                "type": "approximate",
+                "country": "US",
+                "region": "CA",
+                "city": "San Francisco"
+            }))
+        );
+
+        let mcp_toolset = json!({
+            "type": "mcp_toolset",
+            "mcp_server_name": "docs",
+            "default_config": { "enabled": true },
+            "configs": {
+                "search": { "enabled": true, "defer_loading": true }
+            },
+            "cache_control": { "type": "ephemeral" }
+        });
+        let tool = parse_tool_definition(&mcp_toolset).expect("mcp_toolset tool");
+        assert_eq!(tool.tool_type, "mcp_toolset");
+        assert_eq!(tool.name, None);
+        assert!(tool.function.is_none());
+        assert!(tool.custom.is_none());
+        assert_eq!(tool.extra_body.get("mcp_server_name"), Some(&json!("docs")));
+        assert_eq!(
+            tool.extra_body.get("default_config"),
+            Some(&json!({ "enabled": true }))
+        );
+        assert_eq!(
+            tool.extra_body.get("configs"),
+            Some(&json!({
+                "search": { "enabled": true, "defer_loading": true }
+            }))
+        );
+        assert_eq!(
+            tool.extra_body.get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+    }
+
+    #[test]
+    fn parse_tool_definition_parameters_precede_input_schema_alias() {
+        let raw = json!({
+            "type": "function",
+            "function": {
+                "name": "schema_precedence",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "canonical": { "type": "string" }
+                    }
+                },
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "alias": { "type": "boolean" }
+                    }
+                }
+            }
+        });
+
+        let tool = parse_tool_definition(&raw).expect("function tool");
+        let function = tool.function.as_ref().expect("function IR");
+
+        assert_eq!(
+            function.parameters.as_ref(),
+            Some(&json!({
+                "type": "object",
+                "properties": {
+                    "canonical": { "type": "string" }
+                }
+            })),
+            "parameters is the canonical schema field and deterministically wins over input_schema"
+        );
+        assert!(
+            function.extra_body.get("input_schema").is_none(),
+            "the losing input_schema alias is consumed, not preserved as an extra collision"
+        );
+    }
+
+    #[test]
+    fn parse_tool_definition_preserves_non_object_schema_values() {
+        for schema in [json!("schema://opaque"), json!(false), json!(["ref", "v1"])] {
+            let raw = json!({
+                "name": "schema_reference",
+                "input_schema": schema.clone()
+            });
+
+            let tool = parse_tool_definition(&raw).expect("non-object schema function");
+            let function = tool.function.as_ref().expect("function IR");
+
+            assert_eq!(
+                function.parameters.as_ref(),
+                Some(&schema),
+                "non-object schema values are preserved without normalization or panic"
+            );
+        }
+    }
 }
