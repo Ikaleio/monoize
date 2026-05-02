@@ -350,12 +350,11 @@ pub(super) async fn forward_stream_typed(
                             return Err(app_err);
                         }
                         if retryable {
-                            tried_providers.push(TriedProvider {
+                            tried_providers.push(TriedProvider::from_app_error(
                                 attempt_number,
-                                provider_id: attempt.provider_id.clone(),
-                                channel_id: attempt.channel_id.clone(),
-                                error: app_err.message.clone(),
-                            });
+                                &attempt,
+                                &app_err,
+                            ));
                             mark_channel_retryable_failure(
                                 &state,
                                 &attempt,
@@ -662,27 +661,21 @@ pub(super) async fn forward_stream_typed(
                         let stream_failed = stream_result.is_err();
                         if let Err(ref err) = stream_result {
                             tracing::warn!("stream passthrough adapter failed: {}", err.message);
-                            let error_json = json!({
-                                "error": {
-                                    "message": err.message,
-                                    "type": err.error_type,
-                                    "code": err.code,
-                                    "param": err.param,
-                                }
-                            });
+                            let error_json = openai_error_json(err);
                             match downstream {
                                 DownstreamProtocol::Responses => {
+                                    let responses_error = responses_stream_error_json(1, err);
                                     if let Some(frames) = capture_frames_for_task.as_ref() {
                                         frames.lock().await.push(format!(
                                             "event: error\ndata: {}\n\n",
-                                            error_json
+                                            responses_error
                                         ));
                                     }
                                     let _ = tx_err
                                         .send(
                                             Event::default()
                                                 .event("error")
-                                                .data(error_json.to_string()),
+                                                .data(responses_error.to_string()),
                                         )
                                         .await;
                                 }
@@ -808,12 +801,11 @@ pub(super) async fn forward_stream_typed(
                         return Err(app_err);
                     }
                     if retryable {
-                        tried_providers.push(TriedProvider {
+                        tried_providers.push(TriedProvider::from_app_error(
                             attempt_number,
-                            provider_id: attempt.provider_id.clone(),
-                            channel_id: attempt.channel_id.clone(),
-                            error: app_err.message.clone(),
-                        });
+                            &attempt,
+                            &app_err,
+                        ));
                         mark_channel_retryable_failure(&state, &attempt, retryable_failure_class)
                             .await;
                         last_failed_attempt = Some(attempt.clone());
@@ -849,11 +841,7 @@ pub(super) async fn forward_stream_typed(
             }
         }
     }
-    let final_err = AppError::new(
-        StatusCode::BAD_GATEWAY,
-        "upstream_error",
-        build_exhausted_error_message(&logical_model, &tried_providers),
-    );
+    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
             &state,

@@ -1217,8 +1217,12 @@ When a streaming request, `stream=true`, encounters an error, either before any 
 SE1. If an error occurs before any data has been streamed, Monoize MUST return an SSE response, not a JSON error response, containing:
 
 - for `POST /v1/chat/completions`: one `data` event with an OpenAI-compatible error JSON object, followed by `data: [DONE]`;
-- for `POST /v1/responses`: one named `event: response.failed` with a sequence-numbered Responses failure payload, followed by `data: [DONE]`;
+- for `POST /v1/responses`: one named `event: error` whose JSON payload contains top-level `type = "error"`, `sequence_number`, `code`, `message`, and `param`, followed by `data: [DONE]`;
 - for `POST /v1/messages`: one named `event: error` with an Anthropic-compatible error object, then close the SSE stream without appending `data: [DONE]`.
+
+For `POST /v1/responses`, Monoize MUST NOT emit `response.failed` for the SE1 pre-stream error case. The `response.failed` event is reserved for a Responses response object that has failed after the Responses stream exists.
+
+SE1a. If the pre-stream error was caused by an upstream HTTP error response and that response body contains JSON field `error.code`, `error.type`, or `error.param`, Monoize MUST preserve those values on the downstream error object using `upstream_code`, `upstream_type`, and `upstream_param` for non-stream JSON errors, and MUST use `upstream_code` as the top-level `code` of downstream Responses `event: error` SSE payloads.
 
 ### 9.2 Mid-stream errors
 
@@ -1228,5 +1232,7 @@ SE2. If an error occurs after streaming has begun, for example upstream disconne
 - for downstream `POST /v1/messages`, close the stream without appending `data: [DONE]`.
 
 SE3. If the downstream channel sender is already closed, client disconnected, Monoize MAY silently discard the error event.
+
+SE3a. For downstream `POST /v1/responses`, Monoize-generated `event: error` SSE payloads MUST NOT nest the error under an `error` object. The fields `type`, `sequence_number`, `code`, `message`, and `param` MUST be top-level fields of the SSE JSON payload.
 
 SE4. If an upstream Responses stream emits an `error` event or `response.failed` event, Monoize MUST treat that event as terminal. Monoize MUST NOT consume or forward any later upstream `response.completed` event or `response.failed` event for that request, and MUST NOT synthesize a successful `ResponseDone` after the error. For downstream `POST /v1/responses`, the externally visible terminal JSON event MUST be `response.failed`. If the upstream failure contains `type`, `code`, `message`, or `param`, Monoize MUST preserve those fields in `response.failed.response.error`.

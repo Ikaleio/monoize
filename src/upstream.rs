@@ -14,6 +14,8 @@ pub struct UpstreamCallError {
     pub kind: UpstreamErrorKind,
     pub status: Option<StatusCode>,
     pub code: Option<String>,
+    pub error_type: Option<String>,
+    pub param: Option<String>,
     pub message: String,
 }
 
@@ -23,14 +25,26 @@ impl UpstreamCallError {
             kind,
             status,
             code: None,
+            error_type: None,
+            param: None,
             message,
         }
     }
 
-    pub fn with_code(mut self, code: Option<String>) -> Self {
-        self.code = code;
+    pub fn with_error_info(mut self, info: UpstreamErrorInfo) -> Self {
+        self.code = info.code;
+        self.error_type = info.error_type;
+        self.param = info.param;
         self
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UpstreamErrorInfo {
+    pub code: Option<String>,
+    pub error_type: Option<String>,
+    pub param: Option<String>,
+    pub message: Option<String>,
 }
 
 pub async fn call_upstream(
@@ -167,13 +181,18 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        let code = extract_error_code(&text);
-        return Err(UpstreamCallError::new(
-            UpstreamErrorKind::Http,
-            Some(status),
-            format!("upstream status {status}: {text}"),
-        )
-        .with_code(code));
+        let info = extract_error_info(&text);
+        let message = info.message.clone().unwrap_or_else(|| {
+            if text.is_empty() {
+                "upstream returned an empty error body".to_string()
+            } else {
+                text
+            }
+        });
+        return Err(
+            UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
+                .with_error_info(info),
+        );
     }
     Ok(resp)
 }
@@ -247,11 +266,29 @@ fn join_url(base: &str, path: &str) -> String {
     }
 }
 
-fn extract_error_code(text: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(text).ok()?;
-    value
-        .get("error")
-        .and_then(|v| v.get("code"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+fn extract_error_info(text: &str) -> UpstreamErrorInfo {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return UpstreamErrorInfo::default();
+    };
+    let Some(error) = value.get("error") else {
+        return UpstreamErrorInfo::default();
+    };
+    UpstreamErrorInfo {
+        code: error
+            .get("code")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        error_type: error
+            .get("type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        param: error
+            .get("param")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        message: error
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+    }
 }

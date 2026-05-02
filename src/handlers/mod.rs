@@ -512,12 +512,11 @@ pub async fn create_embeddings(
                         return Err(app_err);
                     }
                     if retryable {
-                        tried_providers.push(TriedProvider {
+                        tried_providers.push(TriedProvider::from_app_error(
                             attempt_number,
-                            provider_id: attempt.provider_id.clone(),
-                            channel_id: attempt.channel_id.clone(),
-                            error: app_err.message.clone(),
-                        });
+                            &attempt,
+                            &app_err,
+                        ));
                         mark_channel_retryable_failure(&state, &attempt, retryable_failure_class)
                             .await;
                         last_failed_attempt = Some(attempt.clone());
@@ -550,11 +549,7 @@ pub async fn create_embeddings(
             }
         }
     }
-    let final_err = AppError::new(
-        StatusCode::BAD_GATEWAY,
-        "upstream_error",
-        build_exhausted_error_message(&logical_model, &tried_providers),
-    );
+    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
             &state,
@@ -722,6 +717,25 @@ struct TriedProvider {
     provider_id: String,
     channel_id: String,
     error: String,
+    upstream_status: Option<u16>,
+    upstream_code: Option<String>,
+    upstream_type: Option<String>,
+    upstream_param: Option<String>,
+}
+
+impl TriedProvider {
+    fn from_app_error(attempt_number: u32, attempt: &MonoizeAttempt, app_err: &AppError) -> Self {
+        Self {
+            attempt_number,
+            provider_id: attempt.provider_id.clone(),
+            channel_id: attempt.channel_id.clone(),
+            error: app_err.message.clone(),
+            upstream_status: app_err.upstream_status,
+            upstream_code: app_err.upstream_code.clone(),
+            upstream_type: app_err.upstream_type.clone(),
+            upstream_param: app_err.upstream_param.clone(),
+        }
+    }
 }
 
 #[derive(Default)]

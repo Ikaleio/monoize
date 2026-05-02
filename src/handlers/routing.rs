@@ -461,6 +461,21 @@ pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]
     )
 }
 
+pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider]) -> AppError {
+    let mut err = AppError::new(
+        StatusCode::BAD_GATEWAY,
+        "upstream_error",
+        build_exhausted_error_message(model, tried),
+    );
+    if let Some(last) = tried.last() {
+        err.upstream_status = last.upstream_status;
+        err.upstream_code = last.upstream_code.clone();
+        err.upstream_type = last.upstream_type.clone();
+        err.upstream_param = last.upstream_param.clone();
+    }
+    err
+}
+
 pub(super) fn is_non_retryable_client_error(err: &UpstreamCallError) -> bool {
     matches!(
         err.status,
@@ -592,51 +607,56 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError) -> AppError {
     let status = err.status.unwrap_or(StatusCode::BAD_GATEWAY);
     tracing::warn!(status = %status, upstream_error = %err.message, "upstream request failed");
     let user_message = format!("upstream status {status}: {}", err.message);
-    AppError::new(status, "upstream_error", user_message)
+    let mut app_err = AppError::new(status, "upstream_error", user_message).with_upstream_error(
+        err.status,
+        err.code,
+        err.error_type.clone(),
+        err.param.clone(),
+    );
+    if let Some(error_type) = err.error_type {
+        app_err = app_err.with_type(error_type);
+    }
+    if let Some(param) = err.param {
+        app_err = app_err.with_param(param);
+    }
+    app_err
+}
+
+pub(super) fn openai_error_json(err: &AppError) -> Value {
+    json!({
+        "error": {
+            "message": err.message,
+            "type": err.error_type,
+            "code": err.code,
+            "param": err.param,
+            "upstream_status": err.upstream_status,
+            "upstream_code": err.upstream_code,
+            "upstream_type": err.upstream_type,
+            "upstream_param": err.upstream_param,
+        }
+    })
+}
+
+pub(super) fn responses_stream_error_json(seq: u64, err: &AppError) -> Value {
+    json!({
+        "type": "error",
+        "sequence_number": seq,
+        "code": err.upstream_code.as_ref().unwrap_or(&err.code),
+        "message": err.message,
+        "param": err.upstream_param.as_ref().or(err.param.as_ref()),
+    })
 }
 
 pub(super) fn error_to_sse_stream(
     err: &AppError,
     downstream: DownstreamProtocol,
 ) -> impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static {
-    let error_json = json!({
-        "error": {
-            "message": err.message,
-            "type": err.error_type,
-            "code": err.code,
-            "param": err.param,
-        }
-    });
+    let error_json = openai_error_json(err);
     let mut events: Vec<Event> = Vec::new();
     match downstream {
         DownstreamProtocol::Responses => {
-            let seq: u64 = 1;
-            let now = now_ts();
-            let response = json!({
-                "id": format!("resp_{}", uuid::Uuid::new_v4()),
-                "object": "response",
-                "created_at": now,
-                "completed_at": now,
-                "model": null,
-                "status": "failed",
-                "output": [],
-                "error": {
-                    "message": err.message,
-                    "type": err.error_type,
-                    "code": err.code,
-                    "param": err.param,
-                }
-            });
-            let payload = crate::urp::stream_helpers::normalize_responses_payload(
-                seq,
-                "response.failed",
-                json!({ "response": response }),
-            );
-            events.push(
-                Event::default()
-                    .event("response.failed")
-                    .data(payload.to_string()),
-            );
+            let payload = responses_stream_error_json(1, err);
+            events.push(Event::default().event("error").data(payload.to_string()));
         }
         DownstreamProtocol::ChatCompletions => {
             events.push(Event::default().data(error_json.to_string()));

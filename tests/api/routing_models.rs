@@ -680,3 +680,36 @@ async fn unknown_model_returns_error() {
     let v: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["error"]["code"].as_str(), Some("upstream_error"));
 }
+
+#[tokio::test]
+async fn exhausted_upstream_error_preserves_last_upstream_error_fields() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model":"gpt-5-mini",
+            "input":"force retryable upstream error",
+            "force_upstream_error_status": 429,
+            "force_upstream_error_code": "forced_daily_limit",
+            "force_upstream_error_message": "daily usage limit exceeded"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["code"].as_str(), Some("upstream_error"));
+    assert_eq!(v["error"]["upstream_status"].as_u64(), Some(429));
+    assert_eq!(
+        v["error"]["upstream_code"].as_str(),
+        Some("forced_daily_limit")
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("daily usage limit exceeded"),
+        "downstream error message must include final upstream detail: {body}"
+    );
+}

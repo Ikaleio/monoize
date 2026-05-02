@@ -358,12 +358,11 @@ pub(super) async fn execute_nonstream_typed(
                         return Err(app_err);
                     }
                     if retryable {
-                        tried_providers.push(TriedProvider {
+                        tried_providers.push(TriedProvider::from_app_error(
                             attempt_number,
-                            provider_id: attempt.provider_id.clone(),
-                            channel_id: attempt.channel_id.clone(),
-                            error: app_err.message.clone(),
-                        });
+                            &attempt,
+                            &app_err,
+                        ));
                         mark_channel_retryable_failure(state, &attempt, retryable_failure_class)
                             .await;
                         last_failed_attempt = Some(attempt.clone());
@@ -399,11 +398,7 @@ pub(super) async fn execute_nonstream_typed(
             }
         }
     }
-    let final_err = AppError::new(
-        StatusCode::BAD_GATEWAY,
-        "upstream_error",
-        build_exhausted_error_message(&logical_model, &tried_providers),
-    );
+    let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
     if let Some(attempt) = last_failed_attempt {
         spawn_request_log_error(
             state,

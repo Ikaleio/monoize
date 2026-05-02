@@ -257,7 +257,7 @@ async fn responses_streaming_upstream_error_is_terminal() {
 }
 
 #[tokio::test]
-async fn responses_streaming_pre_upstream_error_uses_response_failed() {
+async fn responses_streaming_prestream_upstream_error_uses_top_level_error_event() {
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -266,9 +266,12 @@ async fn responses_streaming_pre_upstream_error_uses_response_failed() {
         .header(AUTHORIZATION, ctx.auth_header.clone())
         .body(Body::from(
             json!({
-                "model":"missing-model",
+                "model":"gpt-5-mini",
                 "input":"stream",
-                "stream": true
+                "stream": true,
+                "force_upstream_error_status": 429,
+                "force_upstream_error_code": "forced_daily_limit",
+                "force_upstream_error_message": "daily usage limit exceeded"
             })
             .to_string(),
         ))
@@ -280,33 +283,26 @@ async fn responses_streaming_pre_upstream_error_uses_response_failed() {
     let text = String::from_utf8_lossy(&bytes).to_string();
     let frames = parse_responses_sse_json(&text);
 
+    assert_eq!(frames.len(), 1, "expected one error frame: {text}");
+    assert_eq!(frames[0].0, "error");
+    let payload = &frames[0].1;
+    assert_eq!(payload["type"].as_str(), Some("error"));
+    assert_eq!(payload["code"].as_str(), Some("forced_daily_limit"));
     assert!(
-        !text.contains("event: error"),
-        "responses pre-upstream errors must use response.failed: {text}"
+        payload["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("daily usage limit exceeded"),
+        "error message should expose upstream detail: {text}"
     );
-    let failed = frames
-        .iter()
-        .filter(|(event, _)| event == "response.failed")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        failed.len(),
-        1,
-        "expected exactly one response.failed: {text}"
-    );
-    assert_eq!(
-        failed[0].1["response"]["status"].as_str(),
-        Some("failed"),
-        "response.failed payload must carry failed status: {text}"
-    );
-    assert_eq!(
-        failed[0].1["response"]["error"]["code"].as_str(),
-        Some("upstream_error"),
-        "response.failed payload must preserve error code: {text}"
+    assert!(
+        payload.get("error").is_none(),
+        "Responses error SSE payload must not nest the error object: {text}"
     );
     assert_eq!(
         count_done_sentinels(&text),
         1,
-        "responses pre-upstream error stream must emit exactly one [DONE]: {text}"
+        "responses pre-stream error must emit exactly one [DONE]: {text}"
     );
 }
 
