@@ -215,7 +215,10 @@
 		"maxMultiplier": "最大課金倍率",
 		"maxMultiplierHelp": "このキーを使用するリクエストの最大課金倍率を制限します。ヘッダーで指定された倍率はこの値を超えることができません。空欄で制限なし。",
 		"reasoningEnvelopeEnabled": "暗号化推論ガード",
-		"reasoningEnvelopeHelp": "暗号化推論に上流モデルのメタデータを付与し、不一致の暗号化ブロックを転送前に破棄します。"
+		"reasoningEnvelopeHelp": "暗号化推論に上流モデルのメタデータを付与し、不一致の暗号化ブロックを転送前に破棄します。",
+		"requestCaptureEnabled": "リクエストキャプチャダンプ",
+		"requestCaptureHelp": "この API キーの生のリクエスト/レスポンス診断ダンプを保存します。システム全体のキャプチャスイッチも有効である必要があります。",
+		"captureBadge": "dump"
 	},
 	"settings": {
 		"title": "設定",
@@ -251,6 +254,10 @@
 		"activeProbeEnabledDescription": "有効時、unhealthy チャネルの復旧可否を定期的に確認します。",
 		"enableEstimatedBilling": "推定課金を有効化",
 		"enableEstimatedBillingDescription": "有効時、上流が使用量を返さない場合に Monoize が推定使用量で課金できます。",
+		"requestCaptureEnabled": "リクエストキャプチャを有効化",
+		"requestCaptureEnabledDescription": "API キー単位のキャプチャを制御するマスタースイッチです。オフの場合、dump ファイルは書き込まれません。",
+		"requestCaptureRetentionDays": "キャプチャ保持期間（日）",
+		"requestCaptureRetentionDaysDescription": "この日数より古いキャプチャ dump ファイルを自動削除します。",
 		"stripCrossProtocolNestedExtra": "クロスプロトコルのネスト追加情報を除去",
 		"stripCrossProtocolNestedExtraDescription": "プロトコルファミリーをまたぐ転送前に、下流専用のネストされた透過状態を削除します。",
 		"activeProbeIntervalSeconds": "プローブ間隔（秒）",

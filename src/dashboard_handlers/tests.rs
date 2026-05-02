@@ -519,6 +519,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
+                request_capture_enabled: create_body.request_capture_enabled,
             },
             false,
         )
@@ -549,6 +550,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         transforms: created.transforms.clone(),
         model_redirects: created.model_redirects.clone(),
         reasoning_envelope_enabled: created.reasoning_envelope_enabled,
+        request_capture_enabled: created.request_capture_enabled,
     })
     .expect("created response serializes");
     assert_eq!(
@@ -557,7 +559,8 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
     );
 
     let mut update_body: UpdateApiKeyRequest = serde_json::from_value(json!({
-        "allowed_groups": [" Beta ", ""]
+        "allowed_groups": [" Beta ", ""],
+        "request_capture_enabled": true
     }))
     .expect("update payload deserializes");
     canonicalize_dashboard_api_key_allowed_groups(
@@ -582,6 +585,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 transforms: None,
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
+                request_capture_enabled: update_body.request_capture_enabled,
                 expires_at: None,
             },
             false,
@@ -590,6 +594,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         .expect("api key updated");
 
     assert_eq!(updated.allowed_groups, vec!["beta".to_string()]);
+    assert!(updated.request_capture_enabled);
 
     let fetched = store
         .get_api_key_by_id(&updated.id)
@@ -628,9 +633,11 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         transforms: fetched.transforms,
         model_redirects: fetched.model_redirects,
         reasoning_envelope_enabled: fetched.reasoning_envelope_enabled,
+        request_capture_enabled: fetched.request_capture_enabled,
     })
     .expect("response serializes");
     assert_eq!(response_value.get("allowed_groups"), Some(&json!(["beta"])));
+    assert_eq!(response_value.get("request_capture_enabled"), Some(&json!(true)));
 }
 
 #[tokio::test]
@@ -678,6 +685,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: invalid_create_body.transforms,
                 model_redirects: invalid_create_body.model_redirects,
                 reasoning_envelope_enabled: invalid_create_body.reasoning_envelope_enabled,
+                request_capture_enabled: invalid_create_body.request_capture_enabled,
             },
             false,
         )
@@ -701,6 +709,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
+                request_capture_enabled: false,
             },
             false,
         )
@@ -733,6 +742,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: None,
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
+                request_capture_enabled: None,
                 expires_at: None,
             },
             false,
@@ -761,6 +771,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
+                request_capture_enabled: false,
             },
             false,
         )
@@ -811,6 +822,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
+                request_capture_enabled: create_body.request_capture_enabled,
             },
             false,
         )
@@ -839,6 +851,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                     replace: "gpt-5.4".to_string(),
                 }]),
                 reasoning_envelope_enabled: None,
+                request_capture_enabled: None,
                 expires_at: None,
             },
             false,
@@ -867,6 +880,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                     replace: "gpt-5.4".to_string(),
                 }],
                 reasoning_envelope_enabled: true,
+                request_capture_enabled: false,
             },
             false,
         )
@@ -1048,6 +1062,8 @@ async fn settings_store_round_trips_global_transforms() {
     let store = SettingsStore::new(db).await.expect("store creates");
     let mut settings = store.get_all().await.expect("settings load");
     assert!(settings.global_transforms.is_empty());
+    assert!(!settings.monoize_request_capture_enabled);
+    assert_eq!(settings.monoize_request_capture_retention_days, 1);
 
     settings.global_transforms = vec![TransformRuleConfig {
         transform: "inject_system_prompt".to_string(),
@@ -1057,6 +1073,8 @@ async fn settings_store_round_trips_global_transforms() {
         config: json!({"content": "global", "position": "prepend"}),
     }];
     settings.monoize_strip_cross_protocol_nested_extra = false;
+    settings.monoize_request_capture_enabled = true;
+    settings.monoize_request_capture_retention_days = 0;
     store.update_all(&settings).await.expect("settings update");
 
     let updated = store.get_all().await.expect("settings reload");
@@ -1067,4 +1085,6 @@ async fn settings_store_round_trips_global_transforms() {
     );
     assert_eq!(updated.global_transforms[0].phase, Phase::Request);
     assert!(!updated.monoize_strip_cross_protocol_nested_extra);
+    assert!(updated.monoize_request_capture_enabled);
+    assert_eq!(updated.monoize_request_capture_retention_days, 1);
 }

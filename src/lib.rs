@@ -17,6 +17,7 @@ pub mod name_cache;
 pub mod presets;
 pub mod providers;
 pub mod rate_limit;
+pub mod request_capture;
 pub mod settings;
 pub mod transforms;
 pub mod upstream;

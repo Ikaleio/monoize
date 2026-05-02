@@ -20,3 +20,6 @@ mod streaming_chat;
 
 #[path = "api/streaming_messages.rs"]
 mod streaming_messages;
+
+#[path = "api/request_capture.rs"]
+mod request_capture;

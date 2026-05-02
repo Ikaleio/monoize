@@ -209,6 +209,8 @@ ST2. Health Monitoring section MUST expose at least these editable fields bound 
 - `monoize_passive_rate_limit_cooldown_seconds` (integer >= 1)
 - `monoize_enable_estimated_billing` (boolean)
 - `monoize_strip_cross_protocol_nested_extra` (boolean)
+- `monoize_request_capture_enabled` (boolean switch, default off)
+- `monoize_request_capture_retention_days` (integer >= 1, default 1)
 
 ST3. Settings UI MUST perform optimistic update and persist via existing settings save flow; persisted values MUST be reflected after reload.
 
@@ -235,6 +237,14 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 - Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
 
 AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_content_delta` for response-phase rules.
+
+AK4. API key create and edit dialogs MUST include a `request_capture_enabled` boolean switch.
+
+AK5. The `request_capture_enabled` switch MUST default to off when creating an API key.
+
+AK6. The API key list MUST display a visible indicator for keys whose `request_capture_enabled` value is true.
+
+AK7. The `request_capture_enabled` switch label or help text MUST state that the system-wide capture switch must also be enabled before dumps are written.
 
 ## 5. Dashboard Home Page
 

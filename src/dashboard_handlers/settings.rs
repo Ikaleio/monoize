@@ -35,6 +35,8 @@ pub struct UpdateSettingsRequest {
     pub monoize_enable_estimated_billing: Option<bool>,
     pub monoize_extra_fields_whitelist: Option<std::collections::HashMap<String, Vec<String>>>,
     pub monoize_strip_cross_protocol_nested_extra: Option<bool>,
+    pub monoize_request_capture_enabled: Option<bool>,
+    pub monoize_request_capture_retention_days: Option<u64>,
 }
 
 pub async fn get_settings(
@@ -145,6 +147,12 @@ pub async fn update_settings(
     if let Some(v) = body.monoize_strip_cross_protocol_nested_extra {
         settings.monoize_strip_cross_protocol_nested_extra = v;
     }
+    if let Some(v) = body.monoize_request_capture_enabled {
+        settings.monoize_request_capture_enabled = v;
+    }
+    if let Some(v) = body.monoize_request_capture_retention_days {
+        settings.monoize_request_capture_retention_days = v.max(1);
+    }
 
     settings_store
         .update_all(&settings)
@@ -172,6 +180,8 @@ pub async fn update_settings(
         rt.global_transforms = updated.global_transforms.clone();
         rt.extra_fields_whitelist = updated.monoize_extra_fields_whitelist.clone();
         rt.strip_cross_protocol_nested_extra = updated.monoize_strip_cross_protocol_nested_extra;
+        rt.request_capture_enabled = updated.monoize_request_capture_enabled;
+        rt.request_capture_retention_days = updated.monoize_request_capture_retention_days.max(1);
     }
 
     Ok(Json(updated))

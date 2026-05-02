@@ -163,6 +163,8 @@ pub struct ApiKey {
     pub model_redirects: Vec<ModelRedirectRule>,
     #[serde(default = "default_true")]
     pub reasoning_envelope_enabled: bool,
+    #[serde(default)]
+    pub request_capture_enabled: bool,
 }
 
 /// Input for creating a new API key with extended fields
@@ -188,6 +190,8 @@ pub struct CreateApiKeyInput {
     pub model_redirects: Vec<ModelRedirectRule>,
     #[serde(default = "default_true")]
     pub reasoning_envelope_enabled: bool,
+    #[serde(default)]
+    pub request_capture_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -306,6 +310,7 @@ pub struct UpdateApiKeyInput {
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_envelope_enabled: Option<bool>,
+    pub request_capture_enabled: Option<bool>,
     pub expires_at: Option<String>, // RFC3339 format or null
 }
 

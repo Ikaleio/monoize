@@ -5,6 +5,7 @@ use crate::urp::{self, ToolResultContent, UrpStreamEvent};
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +40,7 @@ struct StreamedNodeState {
     node_extra_body: HashMap<String, Value>,
     completed_item: Option<Value>,
     is_shared_message_output: bool,
+    reasoning_started_at: Option<Instant>,
 }
 
 fn terminal_output_node_matches_state(node: &urp::Node, state: &StreamedNodeState) -> bool {
@@ -181,6 +183,7 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
 pub(crate) async fn emit_synthetic_responses_stream(
     logical_model: &str,
     resp: &urp::UrpResponse,
+    synthetic_reasoning_duration_secs: Option<u64>,
     sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
@@ -412,7 +415,10 @@ pub(crate) async fn emit_synthetic_responses_stream(
             _ => {}
         }
 
-        let done_item = sanitize_responses_output_item_for_frame_limit(item, sse_max_frame_length);
+        let done_item = sanitize_responses_output_item_for_frame_limit(
+            &reasoning_item_with_duration(item.clone(), synthetic_reasoning_duration_secs),
+            sse_max_frame_length,
+        );
         send_responses_event(
             &tx,
             &mut seq,
@@ -424,9 +430,11 @@ pub(crate) async fn emit_synthetic_responses_stream(
         )
         .await?;
     }
-    let mut completed_response = ensure_response_object_user_field(
-        sanitize_responses_completed_for_frame_limit(&encoded, sse_max_frame_length),
-    );
+    let mut completed_response =
+        ensure_response_object_user_field(sanitize_responses_completed_for_frame_limit(
+            &response_with_reasoning_durations(encoded, synthetic_reasoning_duration_secs),
+            sse_max_frame_length,
+        ));
     completed_response["completed_at"] = json!(now_ts());
     send_responses_event(
         &tx,
@@ -443,6 +451,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
     mut rx: mpsc::Receiver<UrpStreamEvent>,
     tx: mpsc::Sender<Event>,
     logical_model: &str,
+    stream_started_at: Instant,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     let mut seq = 1u64;
@@ -463,7 +472,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut function_args_done_indices: HashSet<usize> = HashSet::new();
     let mut pending_envelope_extra: HashMap<String, Value> = HashMap::new();
     let mut active_node_message_output: Option<ActiveResponsesOutputItem> = None;
-
     async fn ensure_node_message_start_emitted(
         tx: &mpsc::Sender<Event>,
         seq: &mut u64,
@@ -613,11 +621,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 } else if zone != ResponsesOutputZone::Message {
                     let output_index = next_output_index;
                     next_output_index += 1;
-                    let item = stream_output_item_start_stub_from_node_header(
+                    let mut item = stream_output_item_start_stub_from_node_header(
                         zone,
                         &header,
                         &extra_body,
                         &pending_envelope_extra,
+                    );
+                    item = maybe_reasoning_added_item_with_duration(
+                        item,
+                        stream_started_at.elapsed().as_secs(),
                     );
                     pending_envelope_extra.clear();
                     send_responses_event(
@@ -652,6 +664,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             node_extra_body: extra_body.clone(),
                             completed_item: Some(complete_stream_output_item(item)),
                             is_shared_message_output: false,
+                            reasoning_started_at: (zone == ResponsesOutputZone::Reasoning)
+                                .then_some(Instant::now()),
                         },
                     );
                     continue;
@@ -682,6 +696,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         node_extra_body: extra_body.clone(),
                         completed_item,
                         is_shared_message_output,
+                        reasoning_started_at: None,
                     },
                 );
             }
@@ -1066,10 +1081,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         sse_max_frame_length,
                     )
                 } else {
+                    let item = node_state.completed_item.take().unwrap_or_else(|| {
+                        complete_stream_output_item(encode_stream_output_item_from_node(&node))
+                    });
                     sanitize_responses_output_item_for_frame_limit(
-                        &node_state.completed_item.take().unwrap_or_else(|| {
-                            complete_stream_output_item(encode_stream_output_item_from_node(&node))
-                        }),
+                        &reasoning_item_with_duration(
+                            item,
+                            reasoning_duration_secs(&node_state, stream_started_at),
+                        ),
                         sse_max_frame_length,
                     )
                 };
@@ -1382,12 +1401,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             sse_max_frame_length,
                         )
                     } else {
+                        let item = node_state.completed_item.take().unwrap_or_else(|| {
+                            complete_stream_output_item(encode_stream_output_item_from_node(&node))
+                        });
                         sanitize_responses_output_item_for_frame_limit(
-                            &node_state.completed_item.take().unwrap_or_else(|| {
-                                complete_stream_output_item(encode_stream_output_item_from_node(
-                                    &node,
-                                ))
-                            }),
+                            &reasoning_item_with_duration(
+                                item,
+                                reasoning_duration_secs(&node_state, stream_started_at),
+                            ),
                             sse_max_frame_length,
                         )
                     };
@@ -1502,9 +1523,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     &mut completed_output_indices,
                     &mut completed_output_items,
                     &terminal_output,
+                    stream_started_at.elapsed().as_secs(),
                     sse_max_frame_length,
                 )
                 .await?;
+                if !completed_output_items.is_empty() {
+                    completed_output_items.sort_by_key(|(idx, _)| *idx);
+                    response["output"] =
+                        Value::Array(rebuild_completed_response_output(&completed_output_items));
+                }
                 emit_missing_terminal_sub_lifecycles(
                     &tx,
                     &mut seq,
@@ -1640,6 +1667,7 @@ fn synthesize_node_state_from_delta(
             node_extra_body: extra_body.clone(),
             completed_item: Some(complete_stream_output_item(output_item)),
             is_shared_message_output: false,
+            reasoning_started_at: Some(Instant::now()),
         },
     ))
 }
@@ -2366,6 +2394,89 @@ fn complete_stream_output_item(mut item: Value) -> Value {
     item
 }
 
+fn reasoning_item_with_duration(mut item: Value, duration_secs: Option<u64>) -> Value {
+    if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return item;
+    }
+    let Some(duration_secs) = duration_secs else {
+        return item;
+    };
+    if let Some(obj) = item.as_object_mut() {
+        obj.entry("duration".to_string())
+            .or_insert_with(|| json!(duration_secs));
+    }
+    item
+}
+
+fn maybe_reasoning_added_item_with_duration(item: Value, duration_secs: u64) -> Value {
+    if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return item;
+    }
+    let completed_or_terminal = item.get("status").and_then(Value::as_str) == Some("completed")
+        || item
+            .get("summary")
+            .and_then(Value::as_array)
+            .is_some_and(|summary| summary.iter().any(summary_part_has_text))
+        || item
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| content.iter().any(content_part_has_text))
+        || item
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty());
+    if completed_or_terminal {
+        reasoning_item_with_duration(item, Some(duration_secs))
+    } else {
+        item
+    }
+}
+
+fn summary_part_has_text(part: &Value) -> bool {
+    part.get("text")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.is_empty())
+}
+
+fn content_part_has_text(part: &Value) -> bool {
+    part.get("text")
+        .and_then(Value::as_str)
+        .or_else(|| part.get("summary").and_then(Value::as_str))
+        .is_some_and(|text| !text.is_empty())
+}
+
+fn reasoning_duration_secs(
+    node_state: &StreamedNodeState,
+    stream_started_at: Instant,
+) -> Option<u64> {
+    if node_state.zone != ResponsesOutputZone::Reasoning {
+        return None;
+    }
+    let stream_elapsed = stream_started_at.elapsed().as_secs();
+    Some(match node_state.reasoning_started_at {
+        Some(started_at) => stream_elapsed.max(started_at.elapsed().as_secs()),
+        None => stream_elapsed,
+    })
+}
+
+fn response_with_reasoning_durations(mut response: Value, duration_secs: Option<u64>) -> Value {
+    let Some(duration_secs) = duration_secs else {
+        return response;
+    };
+    let Some(output) = response.get_mut("output").and_then(Value::as_array_mut) else {
+        return response;
+    };
+    for item in output {
+        if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+            if let Some(obj) = item.as_object_mut() {
+                obj.entry("duration".to_string())
+                    .or_insert_with(|| json!(duration_secs));
+            }
+        }
+    }
+    response
+}
+
 fn rebuild_completed_response_output(completed_output_items: &[(usize, Value)]) -> Vec<Value> {
     completed_output_items
         .iter()
@@ -2446,13 +2557,17 @@ async fn emit_missing_terminal_output_done_events(
     completed_output_indices: &mut HashSet<usize>,
     completed_output_items: &mut Vec<(usize, Value)>,
     terminal_output: &[Value],
+    default_reasoning_duration_secs: u64,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     for (output_index, item) in terminal_output.iter().enumerate() {
         if completed_output_indices.contains(&output_index) {
             continue;
         }
-        let done_item = sanitize_responses_output_item_for_frame_limit(item, sse_max_frame_length);
+        let done_item = sanitize_responses_output_item_for_frame_limit(
+            &reasoning_item_with_duration(item.clone(), Some(default_reasoning_duration_secs)),
+            sse_max_frame_length,
+        );
         send_responses_event(
             tx,
             seq,
@@ -2464,7 +2579,7 @@ async fn emit_missing_terminal_output_done_events(
         )
         .await?;
         completed_output_indices.insert(output_index);
-        completed_output_items.push((output_index, item.clone()));
+        completed_output_items.push((output_index, done_item));
     }
     Ok(())
 }
@@ -2809,5 +2924,86 @@ mod tests {
         assert_eq!(output[1]["phase"], json!("analysis"));
         assert_eq!(output[1]["custom_message_field"], json!(true));
         assert_eq!(output[2]["type"], json!("function_call"));
+    }
+
+    #[test]
+    fn reasoning_duration_helper_preserves_existing_duration() {
+        let item = json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [{ "type": "summary_text", "text": "summary" }],
+            "duration": 7
+        });
+
+        let with_duration = reasoning_item_with_duration(item, Some(3));
+
+        assert_eq!(with_duration["duration"], json!(7));
+    }
+
+    #[test]
+    fn reasoning_duration_helper_synthesizes_missing_duration() {
+        let item = json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [{ "type": "summary_text", "text": "summary" }]
+        });
+
+        let with_duration = reasoning_item_with_duration(item, Some(3));
+
+        assert_eq!(with_duration["duration"], json!(3));
+    }
+
+    #[test]
+    fn reasoning_duration_uses_stream_elapsed_when_node_lifecycle_is_short() {
+        let stream_started_at = Instant::now() - std::time::Duration::from_secs(5);
+        let node_state = StreamedNodeState {
+            output_index: 0,
+            zone: ResponsesOutputZone::Reasoning,
+            content_index: None,
+            item_id: "rs_1".to_string(),
+            phase: None,
+            call_id: None,
+            name: None,
+            reasoning_summary_part_added_sent: false,
+            message_start_emitted: true,
+            header: None,
+            node_extra_body: HashMap::new(),
+            completed_item: None,
+            is_shared_message_output: false,
+            reasoning_started_at: Some(Instant::now()),
+        };
+
+        assert_eq!(
+            reasoning_duration_secs(&node_state, stream_started_at),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn terminal_reasoning_added_item_gets_duration_for_openwebui_intermediate_render() {
+        let item = json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "status": "completed",
+            "summary": [{ "type": "summary_text", "text": "summary" }]
+        });
+
+        let item = maybe_reasoning_added_item_with_duration(item, 9);
+
+        assert_eq!(item["duration"], json!(9));
+    }
+
+    #[test]
+    fn live_empty_reasoning_added_item_does_not_get_duration() {
+        let item = json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "status": "in_progress",
+            "summary": []
+        });
+
+        let item = maybe_reasoning_added_item_with_duration(item, 9);
+
+        assert!(item.get("duration").is_none());
     }
 }

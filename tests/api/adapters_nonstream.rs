@@ -265,6 +265,7 @@ async fn responses_reasoning_envelope_can_be_disabled_per_api_key() {
                 transforms: None,
                 model_redirects: None,
                 reasoning_envelope_enabled: Some(false),
+                request_capture_enabled: None,
                 expires_at: None,
             },
             false,
@@ -700,16 +701,29 @@ async fn messages_cross_family_strips_next_downstream_envelope_extra() {
         json!({
             "model": "gpt-5-mini",
             "max_tokens": 64,
-            "messages": [{
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "call_x",
-                    "content": "R1",
-                    "tool_result_extra": "strip-before-responses"
-                }],
-                "message_extra": "strip-too"
-            }]
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "call_x",
+                        "name": "tool_x",
+                        "input": {},
+                        "tool_use_extra": "strip-before-responses"
+                    }],
+                    "message_extra": "strip-too"
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "call_x",
+                        "content": "R1",
+                        "tool_result_extra": "strip-before-responses"
+                    }],
+                    "message_extra": "strip-too"
+                }
+            ]
         }),
     )
     .await;
@@ -717,10 +731,13 @@ async fn messages_cross_family_strips_next_downstream_envelope_extra() {
 
     let upstream = last_captured_body(&ctx, "responses");
     let input = upstream["input"].as_array().expect("responses input array");
-    assert_eq!(input.len(), 1);
-    assert_eq!(input[0]["type"], json!("function_call_output"));
+    assert_eq!(input.len(), 2);
+    assert_eq!(input[0]["type"], json!("function_call"));
+    assert_eq!(input[1]["type"], json!("function_call_output"));
     assert!(input[0].get("message_extra").is_none());
-    assert!(input[0].get("tool_result_extra").is_none());
+    assert!(input[0].get("tool_use_extra").is_none());
+    assert!(input[1].get("message_extra").is_none());
+    assert!(input[1].get("tool_result_extra").is_none());
 }
 
 #[tokio::test]
@@ -803,6 +820,8 @@ async fn responses_tool_call_flow_nonstream_via_chat_upstream_parallel() {
         json!({
             "model": "gpt-5-mini-chat",
             "input": [
+              { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "tool_a", "arguments": "{}" },
+              { "type": "function_call", "id": "fc_2", "call_id": "call_2", "name": "tool_b", "arguments": "{}" },
               { "type": "function_call_output", "call_id": "call_1", "output": "R1" },
               { "type": "function_call_output", "call_id": "call_2", "output": "R2" }
             ]
@@ -826,6 +845,13 @@ async fn responses_tool_result_multipart_roundtrip_via_responses_upstream() {
         json!({
             "model": "gpt-5-mini",
             "input": [
+              {
+                "type": "function_call",
+                "id": "fc_multipart",
+                "call_id": "call_multipart",
+                "name": "tool_multipart",
+                "arguments": "{}"
+              },
               {
                 "type": "function_call_output",
                 "call_id": "call_multipart",
@@ -1190,13 +1216,22 @@ async fn messages_tool_call_flow_nonstream_via_responses_upstream_parallel() {
         json!({
             "model": "gpt-5-mini",
             "max_tokens": 64,
-            "messages": [{
-              "role": "user",
-              "content": [
-                { "type": "tool_result", "tool_use_id": "call_1", "content": "R1" },
-                { "type": "tool_result", "tool_use_id": "call_2", "content": "R2" }
-              ]
-            }]
+            "messages": [
+              {
+                "role": "assistant",
+                "content": [
+                  { "type": "tool_use", "id": "call_1", "name": "tool_a", "input": {} },
+                  { "type": "tool_use", "id": "call_2", "name": "tool_b", "input": {} }
+                ]
+              },
+              {
+                "role": "user",
+                "content": [
+                  { "type": "tool_result", "tool_use_id": "call_1", "content": "R1" },
+                  { "type": "tool_result", "tool_use_id": "call_2", "content": "R2" }
+                ]
+              }
+            ]
         }),
     )
     .await;
@@ -1212,6 +1247,72 @@ async fn messages_tool_call_flow_nonstream_via_responses_upstream_parallel() {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     assert!(text2.contains("tool_ok:R1|R2"));
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let input = upstream["input"].as_array().expect("responses input array");
+    let input_types: Vec<&str> = input
+        .iter()
+        .filter_map(|item| item.get("type").and_then(|v| v.as_str()))
+        .collect();
+    assert_eq!(
+        input_types,
+        vec![
+            "function_call",
+            "function_call",
+            "function_call_output",
+            "function_call_output"
+        ],
+        "messages->responses tool replay must stay self-contained and ordered: {upstream}"
+    );
+}
+
+#[tokio::test]
+async fn messages_plaintext_thinking_is_not_replayed_to_responses_upstream_during_tool_loop() {
+    let ctx = setup().await;
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "thinking", "thinking": "plain transformed summary" },
+                        { "type": "tool_use", "id": "call_1", "name": "tool_a", "input": {} },
+                        { "type": "tool_use", "id": "call_2", "name": "tool_b", "input": {} }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "tool_result", "tool_use_id": "call_1", "content": "R1" },
+                        { "type": "tool_result", "tool_use_id": "call_2", "content": "R2" }
+                    ]
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let input = upstream["input"].as_array().expect("responses input array");
+    let input_types: Vec<&str> = input
+        .iter()
+        .filter_map(|item| item.get("type").and_then(|v| v.as_str()))
+        .collect();
+    assert_eq!(
+        input_types,
+        vec![
+            "function_call",
+            "function_call",
+            "function_call_output",
+            "function_call_output"
+        ],
+        "plaintext-only thinking must be dropped before responses tool replay: {upstream}"
+    );
 }
 
 #[tokio::test]
@@ -1225,18 +1326,26 @@ async fn messages_tool_result_multipart_roundtrip_via_messages_upstream() {
         json!({
             "model": "gpt-5-mini-msg",
             "max_tokens": 64,
-            "messages": [{
-              "role": "user",
-              "content": [{
-                "type": "tool_result",
-                "tool_use_id": "call_multipart",
+            "messages": [
+              {
+                "role": "assistant",
                 "content": [
-                  { "type": "text", "text": "R1" },
-                  { "type": "image", "source": { "type": "url", "url": image_url } },
-                  { "type": "document", "source": { "type": "url", "url": file_url } }
+                  { "type": "tool_use", "id": "call_multipart", "name": "tool_multipart", "input": {} }
                 ]
-              }]
-            }]
+              },
+              {
+                "role": "user",
+                "content": [{
+                  "type": "tool_result",
+                  "tool_use_id": "call_multipart",
+                  "content": [
+                    { "type": "text", "text": "R1" },
+                    { "type": "image", "source": { "type": "url", "url": image_url } },
+                    { "type": "document", "source": { "type": "url", "url": file_url } }
+                  ]
+                }]
+              }
+            ]
         }),
     )
     .await;

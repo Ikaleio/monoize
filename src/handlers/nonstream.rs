@@ -2,6 +2,14 @@ use super::*;
 use std::collections::HashSet;
 
 pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
+    let calls: HashSet<String> = req
+        .input
+        .iter()
+        .filter_map(|node| match node {
+            urp::Node::ToolCall { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
     let answered: HashSet<String> = req
         .input
         .iter()
@@ -12,8 +20,37 @@ pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
         .collect();
     req.input.retain_mut(|node| match node {
         urp::Node::ToolCall { call_id, .. } => answered.contains(&*call_id),
+        urp::Node::ToolResult { call_id, .. } => calls.contains(&*call_id),
         urp::Node::NextDownstreamEnvelopeExtra { .. } => true,
         _ => true,
+    });
+}
+
+fn has_replayable_encrypted_reasoning_payload(encrypted: &Option<serde_json::Value>) -> bool {
+    match encrypted {
+        Some(serde_json::Value::String(value)) => !value.is_empty(),
+        Some(serde_json::Value::Null) | None => false,
+        Some(_) => true,
+    }
+}
+
+pub(crate) fn strip_plaintext_reasoning_from_responses_tool_replay(req: &mut urp::UrpRequest) {
+    let has_tool_history = req.input.iter().any(|node| {
+        matches!(
+            node,
+            urp::Node::ToolCall { .. } | urp::Node::ToolResult { .. }
+        )
+    });
+    if !has_tool_history {
+        return;
+    }
+
+    req.input.retain(|node| {
+        !matches!(
+            node,
+            urp::Node::Reasoning { encrypted, .. }
+                if !has_replayable_encrypted_reasoning_payload(encrypted)
+        )
     });
 }
 
@@ -25,6 +62,7 @@ pub(super) async fn execute_nonstream_typed(
     downstream: DownstreamProtocol,
     request_id: Option<String>,
     request_ip: Option<String>,
+    capture: RequestCaptureContext,
 ) -> AppResult<(urp::UrpResponse, String)> {
     let started_at = std::time::Instant::now();
     let requested_model = req.model.clone();
@@ -141,6 +179,25 @@ pub(super) async fn execute_nonstream_typed(
             .await;
             match call {
                 Ok(value) => {
+                    if let Some(session) = capture.session.as_ref() {
+                        session
+                            .push_attempt(crate::request_capture::build_attempt_dump(
+                                attempt_number,
+                                &attempt.provider_id,
+                                Some(&attempt.channel_id),
+                                attempt.provider_type,
+                                &logical_model,
+                                &req_attempt.model,
+                                &path,
+                                capture.raw_input.clone(),
+                                &req_attempt,
+                                upstream_body.clone(),
+                                Some(value.clone()),
+                                None,
+                                None,
+                            ))
+                            .await;
+                    }
                     update_pending_channel_info(
                         state,
                         auth,
@@ -153,27 +210,54 @@ pub(super) async fn execute_nonstream_typed(
                     )
                     .await;
                     mark_channel_success(state, &attempt).await;
-                    let mut resp = decode_response_from_provider(
+                    let mut resp = match decode_response_from_provider(
                         attempt.provider_type,
                         &value,
                         &req_attempt.model,
-                    )?;
-                    apply_transform_rules_response(
+                    ) {
+                        Ok(resp) => resp,
+                        Err(err) => {
+                            if let Some(session) = capture.session.as_ref() {
+                                session.persist().await;
+                            }
+                            return Err(err);
+                        }
+                    };
+                    if let Err(err) = apply_transform_rules_response(
                         state,
                         &mut resp,
                         &attempt.provider_transforms,
                         &req.model,
                     )
-                    .await?;
-                    apply_transform_rules_response(
+                    .await
+                    {
+                        if let Some(session) = capture.session.as_ref() {
+                            session.persist().await;
+                        }
+                        return Err(err);
+                    }
+                    if let Err(err) = apply_transform_rules_response(
                         state,
                         &mut resp,
                         &global_transforms,
                         &req.model,
                     )
-                    .await?;
-                    apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
-                        .await?;
+                    .await
+                    {
+                        if let Some(session) = capture.session.as_ref() {
+                            session.persist().await;
+                        }
+                        return Err(err);
+                    }
+                    if let Err(err) =
+                        apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
+                            .await
+                    {
+                        if let Some(session) = capture.session.as_ref() {
+                            session.persist().await;
+                        }
+                        return Err(err);
+                    }
                     if attempt.provider_type == ProviderType::OpenaiImage
                         && !matches!(downstream, DownstreamProtocol::Responses)
                     {
@@ -187,7 +271,15 @@ pub(super) async fn execute_nonstream_typed(
                         );
                     }
                     let charge =
-                        maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;
+                        match maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await {
+                            Ok(charge) => charge,
+                            Err(err) => {
+                                if let Some(session) = capture.session.as_ref() {
+                                    session.persist().await;
+                                }
+                                return Err(err);
+                            }
+                        };
                     spawn_request_log(
                         state,
                         auth,
@@ -206,9 +298,35 @@ pub(super) async fn execute_nonstream_typed(
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                     );
+                    if let Some(session) = capture.session.as_ref() {
+                        session.persist().await;
+                    }
                     return Ok((resp, logical_model.clone()));
                 }
                 Err(err) => {
+                    if let Some(session) = capture.session.as_ref() {
+                        session
+                            .push_attempt(crate::request_capture::build_attempt_dump(
+                                attempt_number,
+                                &attempt.provider_id,
+                                Some(&attempt.channel_id),
+                                attempt.provider_type,
+                                &logical_model,
+                                &req_attempt.model,
+                                &path,
+                                capture.raw_input.clone(),
+                                &req_attempt,
+                                upstream_body.clone(),
+                                None,
+                                None,
+                                Some(json!({
+                                    "message": err.message,
+                                    "code": err.code,
+                                    "status": err.status.map(|status| status.as_u16()),
+                                })),
+                            ))
+                            .await;
+                    }
                     let non_retryable = is_non_retryable_client_error(&err);
                     let retryable = is_retryable_error(&err);
                     let retryable_failure_class = classify_retryable_failure(&err);
@@ -227,6 +345,9 @@ pub(super) async fn execute_nonstream_typed(
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
                         );
+                        if let Some(session) = capture.session.as_ref() {
+                            session.persist().await;
+                        }
                         return Err(app_err);
                     }
                     if retryable {
@@ -263,6 +384,9 @@ pub(super) async fn execute_nonstream_typed(
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                     );
+                    if let Some(session) = capture.session.as_ref() {
+                        session.persist().await;
+                    }
                     return Err(app_err);
                 }
             }
@@ -301,6 +425,9 @@ pub(super) async fn execute_nonstream_typed(
             tried_providers,
         );
     }
+    if let Some(session) = capture.session.as_ref() {
+        session.persist().await;
+    }
     Err(final_err)
 }
 
@@ -312,6 +439,7 @@ pub(super) async fn forward_nonstream_typed(
     downstream: DownstreamProtocol,
     request_id: Option<String>,
     request_ip: Option<String>,
+    capture: RequestCaptureContext,
 ) -> AppResult<Value> {
     let (resp, logical_model) = execute_nonstream_typed(
         state,
@@ -321,6 +449,7 @@ pub(super) async fn forward_nonstream_typed(
         downstream,
         request_id,
         request_ip,
+        capture,
     )
     .await?;
     Ok(encode_response_for_downstream(
@@ -337,6 +466,9 @@ pub(super) fn encode_request_for_provider(
 ) -> AppResult<Value> {
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
     strip_orphaned_tool_calls(req);
+    if attempt.provider_type == ProviderType::Responses {
+        strip_plaintext_reasoning_from_responses_tool_replay(req);
+    }
     let model = req.model.clone();
     let value = match attempt.provider_type {
         ProviderType::Responses => urp::encode::openai_responses::encode_request(req, &model),

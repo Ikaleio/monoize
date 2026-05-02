@@ -63,6 +63,7 @@ export interface ApiKey {
   transforms: TransformRuleConfig[];
   model_redirects: ModelRedirectRule[];
   reasoning_envelope_enabled: boolean;
+  request_capture_enabled: boolean;
 }
 
 export type ApiKeyCreated = ApiKey;
@@ -79,6 +80,7 @@ export interface CreateApiKeyInput {
   transforms?: TransformRuleConfig[];
   model_redirects?: ModelRedirectRule[];
   reasoning_envelope_enabled?: boolean;
+  request_capture_enabled?: boolean;
 }
 
 export interface UpdateApiKeyInput {
@@ -94,6 +96,7 @@ export interface UpdateApiKeyInput {
   expires_at?: string;
   model_redirects?: ModelRedirectRule[];
   reasoning_envelope_enabled?: boolean;
+  request_capture_enabled?: boolean;
 }
 
 export interface SystemSettings {
@@ -120,6 +123,8 @@ export interface SystemSettings {
   monoize_enable_estimated_billing: boolean;
   monoize_extra_fields_whitelist: Record<string, string[]>;
   monoize_strip_cross_protocol_nested_extra: boolean;
+  monoize_request_capture_enabled: boolean;
+  monoize_request_capture_retention_days: number;
   updated_at: string;
 }
 

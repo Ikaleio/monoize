@@ -41,6 +41,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub model_redirects: String,
     pub reasoning_envelope_enabled: i32,
+    pub request_capture_enabled: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

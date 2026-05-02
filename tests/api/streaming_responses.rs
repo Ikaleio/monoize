@@ -784,6 +784,36 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
         .find(|(event, _)| event == "response.reasoning.done")
         .expect("reasoning done");
     assert_eq!(reasoning_done.1["text"].as_str(), Some("mock_reasoning"));
+
+    let output_item_done = frames
+        .iter()
+        .find(|(event, payload)| {
+            event == "response.output_item.done"
+                && payload["item"]["type"].as_str() == Some("reasoning")
+        })
+        .map(|(_, payload)| payload)
+        .expect("reasoning output_item.done");
+    assert!(
+        output_item_done["item"]["duration"].as_u64().is_some(),
+        "completed reasoning item must include OpenWebUI-compatible duration: {text}"
+    );
+
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .expect("response.completed");
+    let completed_reasoning = completed["response"]["output"]
+        .as_array()
+        .expect("completed output array")
+        .iter()
+        .find(|item| item["type"].as_str() == Some("reasoning"))
+        .expect("completed reasoning output item");
+    assert_eq!(
+        completed_reasoning["duration"].as_u64(),
+        output_item_done["item"]["duration"].as_u64(),
+        "response.completed must preserve the same reasoning duration as output_item.done: {text}"
+    );
 }
 
 #[tokio::test]

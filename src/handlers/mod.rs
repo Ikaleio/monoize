@@ -16,6 +16,7 @@ use crate::app::AppState;
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType};
 use crate::error::{AppError, AppResult};
 use crate::model_registry_store::ModelPricing;
+use crate::request_capture::RequestCaptureSession;
 use crate::settings::normalize_pricing_model_key;
 use crate::transforms::{self, Phase, TransformRuleConfig};
 use crate::upstream::{self, UpstreamCallError, UpstreamErrorKind};
@@ -122,6 +123,7 @@ pub async fn create_response(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
+    let raw_input = body.clone();
     let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     // S2/S3: stateful fields must not be forwarded upstream
@@ -133,6 +135,19 @@ pub async fn create_response(
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
+    let capture = RequestCaptureContext {
+        raw_input,
+        session: state
+            .request_capture
+            .maybe_start_session(
+                &state.monoize_runtime,
+                &auth,
+                request_id.clone(),
+                DownstreamProtocol::Responses,
+                req.stream.unwrap_or(false),
+            )
+            .await,
+    };
     if req
         .extra_body
         .get("background")
@@ -156,6 +171,7 @@ pub async fn create_response(
             downstream,
             request_id.clone(),
             request_ip.clone(),
+            capture.clone(),
         )
         .await
         {
@@ -180,6 +196,7 @@ pub async fn create_response(
         DownstreamProtocol::Responses,
         request_id,
         request_ip,
+        capture,
     )
     .await?;
     Ok(Json(value).into_response())
@@ -191,6 +208,7 @@ pub async fn create_chat_completions(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
+    let raw_input = body.clone();
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     apply_model_redirects(&mut req, &auth);
@@ -198,6 +216,19 @@ pub async fn create_chat_completions(
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
+    let capture = RequestCaptureContext {
+        raw_input,
+        session: state
+            .request_capture
+            .maybe_start_session(
+                &state.monoize_runtime,
+                &auth,
+                request_id.clone(),
+                DownstreamProtocol::ChatCompletions,
+                req.stream.unwrap_or(false),
+            )
+            .await,
+    };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::ChatCompletions;
         match forward_stream_typed(
@@ -208,6 +239,7 @@ pub async fn create_chat_completions(
             downstream,
             request_id.clone(),
             request_ip.clone(),
+            capture.clone(),
         )
         .await
         {
@@ -231,6 +263,7 @@ pub async fn create_chat_completions(
         DownstreamProtocol::ChatCompletions,
         request_id,
         request_ip,
+        capture,
     )
     .await?;
     Ok(Json(value).into_response())
@@ -242,6 +275,7 @@ pub async fn create_messages(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
+    let raw_input = body.clone();
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     apply_model_redirects(&mut req, &auth);
@@ -249,6 +283,19 @@ pub async fn create_messages(
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
+    let capture = RequestCaptureContext {
+        raw_input,
+        session: state
+            .request_capture
+            .maybe_start_session(
+                &state.monoize_runtime,
+                &auth,
+                request_id.clone(),
+                DownstreamProtocol::AnthropicMessages,
+                req.stream.unwrap_or(false),
+            )
+            .await,
+    };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::AnthropicMessages;
         match forward_stream_typed(
@@ -259,6 +306,7 @@ pub async fn create_messages(
             downstream,
             request_id.clone(),
             request_ip.clone(),
+            capture.clone(),
         )
         .await
         {
@@ -282,6 +330,7 @@ pub async fn create_messages(
         DownstreamProtocol::AnthropicMessages,
         request_id,
         request_ip,
+        capture,
     )
     .await?;
     Ok(Json(value).into_response())
@@ -710,6 +759,12 @@ pub(crate) enum DownstreamProtocol {
     Responses,
     ChatCompletions,
     AnthropicMessages,
+}
+
+#[derive(Clone)]
+pub(crate) struct RequestCaptureContext {
+    raw_input: Value,
+    session: Option<RequestCaptureSession>,
 }
 
 impl DownstreamProtocol {

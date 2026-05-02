@@ -396,6 +396,7 @@ async fn sub_account_zero_balance_returns_402() {
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
+                request_capture_enabled: false,
             },
             false,
         )
@@ -446,6 +447,7 @@ async fn ip_whitelist_blocks_non_whitelisted() {
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
+                request_capture_enabled: false,
             },
             false,
         )

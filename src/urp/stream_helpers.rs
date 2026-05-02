@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 pub(crate) async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: String) -> AppResult<()> {
+    crate::request_capture::capture_sse_frame(format!("data: {data}\n\n")).await;
     tx.send(Event::default().data(data))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
@@ -15,7 +16,10 @@ pub(crate) async fn send_named_sse_json(
     name: &str,
     data: Value,
 ) -> AppResult<()> {
-    tx.send(Event::default().event(name).data(data.to_string()))
+    let data = data.to_string();
+    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {data}\n\n"))
+        .await;
+    tx.send(Event::default().event(name).data(data))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
 }
@@ -26,7 +30,11 @@ pub(crate) async fn send_responses_event(
     name: &str,
     data: Value,
 ) -> AppResult<()> {
-    tx.send(wrap_responses_event(seq, name, data))
+    let payload = normalize_responses_payload(*seq, name, data).to_string();
+    *seq += 1;
+    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {payload}\n\n"))
+        .await;
+    tx.send(Event::default().event(name).data(payload))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
 }
@@ -175,12 +183,6 @@ pub(crate) fn split_json_by_estimated_limit(
             value
         })
         .collect()
-}
-
-pub(crate) fn wrap_responses_event(seq: &mut u64, name: &str, data: Value) -> Event {
-    let payload = normalize_responses_payload(*seq, name, data);
-    *seq += 1;
-    Event::default().event(name).data(payload.to_string())
 }
 
 pub(crate) fn normalize_responses_payload(seq: u64, name: &str, data: Value) -> Value {
@@ -696,7 +698,10 @@ pub(crate) fn responses_text_delta_payload(
 #[cfg(test)]
 mod tests {
     use super::{extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks};
+    use crate::request_capture::with_sse_capture;
     use serde_json::{Value, json};
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, mpsc};
 
     #[test]
     fn extract_chat_reasoning_delta_chunks_read_legacy_reasoning_content() {
@@ -756,5 +761,21 @@ mod tests {
         assert_eq!(sig_parts.len(), 1);
         assert_eq!(sig_parts[0].text, "sig_1");
         assert_eq!(sig_parts[0].format.as_deref(), Some("anthropic"));
+    }
+
+    #[tokio::test]
+    async fn send_plain_sse_data_records_frame_inside_capture_scope() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let frames = Arc::new(Mutex::new(Vec::new()));
+
+        with_sse_capture(frames.clone(), async {
+            super::send_plain_sse_data(&tx, "[DONE]".to_string())
+                .await
+                .expect("send succeeds");
+        })
+        .await;
+
+        let _event = rx.recv().await.expect("receives sse event");
+        assert_eq!(frames.lock().await.as_slice(), ["data: [DONE]\n\n"]);
     }
 }

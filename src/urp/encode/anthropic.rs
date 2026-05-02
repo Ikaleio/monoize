@@ -2,9 +2,9 @@ use crate::urp::encode::{
     merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, REASONING_ENVELOPE_PREFIX, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse, Usage, strip_reasoning_signature_sigil,
+    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, REASONING_ENVELOPE_PREFIX,
+    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING, ToolDefinition, ToolResultContent,
+    UrpRequest, UrpResponse, Usage, strip_reasoning_signature_sigil,
     wrap_reasoning_signature_with_item_id,
 };
 use serde_json::{Map, Value, json};

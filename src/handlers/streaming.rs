@@ -10,6 +10,7 @@ pub(super) async fn forward_stream_typed(
     downstream: DownstreamProtocol,
     request_id: Option<String>,
     request_ip: Option<String>,
+    capture: RequestCaptureContext,
 ) -> AppResult<
     impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static,
 > {
@@ -140,6 +141,26 @@ pub(super) async fn forward_stream_typed(
                 .await;
                 match call {
                     Ok(value) => {
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .push_attempt(crate::request_capture::build_attempt_dump(
+                                    attempt_number,
+                                    &attempt.provider_id,
+                                    Some(&attempt.channel_id),
+                                    attempt.provider_type,
+                                    &logical_model,
+                                    &nonstream_req.model,
+                                    &path,
+                                    capture.raw_input.clone(),
+                                    &nonstream_req,
+                                    upstream_body.clone(),
+                                    Some(value.clone()),
+                                    None,
+                                    None,
+                                ))
+                                .await;
+                            session.persist().await;
+                        }
                         update_pending_channel_info(
                             &state,
                             &auth,
@@ -152,32 +173,58 @@ pub(super) async fn forward_stream_typed(
                         )
                         .await;
                         mark_channel_success(&state, &attempt).await;
-                        let mut resp = decode_response_from_provider(
+                        let mut resp = match decode_response_from_provider(
                             attempt.provider_type,
                             &value,
                             &nonstream_req.model,
-                        )?;
-                        apply_transform_rules_response(
+                        ) {
+                            Ok(resp) => resp,
+                            Err(err) => {
+                                if let Some(session) = capture.session.as_ref() {
+                                    session.persist().await;
+                                }
+                                return Err(err);
+                            }
+                        };
+                        if let Err(err) = apply_transform_rules_response(
                             &state,
                             &mut resp,
                             &attempt.provider_transforms,
                             &logical_model,
                         )
-                        .await?;
-                        apply_transform_rules_response(
+                        .await
+                        {
+                            if let Some(session) = capture.session.as_ref() {
+                                session.persist().await;
+                            }
+                            return Err(err);
+                        }
+                        if let Err(err) = apply_transform_rules_response(
                             &state,
                             &mut resp,
                             &global_transforms,
                             &logical_model,
                         )
-                        .await?;
-                        apply_transform_rules_response(
+                        .await
+                        {
+                            if let Some(session) = capture.session.as_ref() {
+                                session.persist().await;
+                            }
+                            return Err(err);
+                        }
+                        if let Err(err) = apply_transform_rules_response(
                             &state,
                             &mut resp,
                             &auth.transforms,
                             &logical_model,
                         )
-                        .await?;
+                        .await
+                        {
+                            if let Some(session) = capture.session.as_ref() {
+                                session.persist().await;
+                            }
+                            return Err(err);
+                        }
                         if attempt.provider_type == ProviderType::OpenaiImage
                             && !matches!(downstream, DownstreamProtocol::Responses)
                         {
@@ -190,9 +237,23 @@ pub(super) async fn forward_stream_typed(
                                 &nonstream_req.model,
                             );
                         }
-                        let charge =
-                            maybe_charge_response(&state, &auth, &attempt, &logical_model, &resp)
-                                .await?;
+                        let charge = match maybe_charge_response(
+                            &state,
+                            &auth,
+                            &attempt,
+                            &logical_model,
+                            &resp,
+                        )
+                        .await
+                        {
+                            Ok(charge) => charge,
+                            Err(err) => {
+                                if let Some(session) = capture.session.as_ref() {
+                                    session.persist().await;
+                                }
+                                return Err(err);
+                            }
+                        };
                         spawn_request_log(
                             &state,
                             &auth,
@@ -215,15 +276,18 @@ pub(super) async fn forward_stream_typed(
                         let logical_model_for_stream = logical_model.clone();
                         tokio::spawn(async move {
                             let tx_err = tx.clone();
+                            let synthetic_reasoning_duration_secs =
+                                Some(started_at.elapsed().as_secs());
                             let stream_result =
                                 crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                                    downstream,
-                                    &logical_model_for_stream,
-                                    &resp,
-                                    sse_max_frame_length,
-                                    tx,
-                                )
-                                .await;
+                                downstream,
+                                &logical_model_for_stream,
+                                &resp,
+                                synthetic_reasoning_duration_secs,
+                                sse_max_frame_length,
+                                tx,
+                            )
+                            .await;
                             if let Err(err) = stream_result {
                                 tracing::warn!("synthetic stream failed: {}", err.message);
                                 if matches!(
@@ -238,6 +302,29 @@ pub(super) async fn forward_stream_typed(
                         return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
                     }
                     Err(err) => {
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .push_attempt(crate::request_capture::build_attempt_dump(
+                                    attempt_number,
+                                    &attempt.provider_id,
+                                    Some(&attempt.channel_id),
+                                    attempt.provider_type,
+                                    &logical_model,
+                                    &nonstream_req.model,
+                                    &path,
+                                    capture.raw_input.clone(),
+                                    &nonstream_req,
+                                    upstream_body.clone(),
+                                    None,
+                                    None,
+                                    Some(json!({
+                                        "message": err.message,
+                                        "code": err.code,
+                                        "status": err.status.map(|status| status.as_u16()),
+                                    })),
+                                ))
+                                .await;
+                        }
                         let non_retryable = is_non_retryable_client_error(&err);
                         let retryable = is_retryable_error(&err);
                         let retryable_failure_class = classify_retryable_failure(&err);
@@ -256,6 +343,9 @@ pub(super) async fn forward_stream_typed(
                                 req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                                 tried_providers,
                             );
+                            if let Some(session) = capture.session.as_ref() {
+                                session.persist().await;
+                            }
                             return Err(app_err);
                         }
                         if retryable {
@@ -296,6 +386,9 @@ pub(super) async fn forward_stream_typed(
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
                         );
+                        if let Some(session) = capture.session.as_ref() {
+                            session.persist().await;
+                        }
                         return Err(app_err);
                     }
                 }
@@ -350,6 +443,9 @@ pub(super) async fn forward_stream_typed(
                         });
                     let provider_type = attempt.provider_type;
                     let (tx, rx) = mpsc::channel::<Event>(64);
+                    let capture_frames = capture.session.as_ref().map(|_| {
+                        std::sync::Arc::new(Mutex::new(Vec::<String>::new()))
+                    });
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                         ttfb_ms: None,
                         usage: None,
@@ -366,6 +462,18 @@ pub(super) async fn forward_stream_typed(
                     let request_id_for_log = request_id.clone();
                     let request_ip_for_log = request_ip.clone();
                     let channel_id_for_log = attempt.channel_id.clone();
+                    let capture_session = capture.session.clone();
+                    let capture_raw_input = capture.raw_input.clone();
+                    let capture_req_attempt = req_attempt.clone();
+                    let capture_upstream_body = upstream_body.clone();
+                    let capture_path = path.clone();
+                    let capture_provider_id = attempt.provider_id.clone();
+                    let capture_channel_id = attempt.channel_id.clone();
+                    let capture_provider_type = attempt.provider_type;
+                    let capture_upstream_model = req_attempt.model.clone();
+                    let capture_logical_model = logical_model.clone();
+                    let capture_attempt_number = attempt_number;
+                    let capture_frames_for_task = capture_frames.clone();
                     let reasoning_effort_for_log =
                         req.reasoning.as_ref().and_then(|r| r.effort.clone());
                     let tried_providers_for_log = tried_providers.clone();
@@ -384,7 +492,7 @@ pub(super) async fn forward_stream_typed(
                         });
                     tokio::spawn(async move {
                         let tx_err = tx.clone();
-                        let stream_result = {
+                        let stream_future = async {
                             let (decoded_tx, decoded_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
                             let (transformed_tx, transformed_rx) =
@@ -425,22 +533,18 @@ pub(super) async fn forward_stream_typed(
                                 .await
                             });
 
-                            let encode_handle = {
-                                let tx = tx;
-                                tokio::spawn(async move {
-                                    encode_urp_stream(
-                                        downstream,
-                                        transformed_rx,
-                                        tx,
-                                        &model_for_encode,
-                                        sse_max_frame_length,
-                                    )
-                                    .await
-                                })
-                            };
+                            let encode_result = encode_urp_stream(
+                                downstream,
+                                transformed_rx,
+                                tx,
+                                &model_for_encode,
+                                started_at,
+                                sse_max_frame_length,
+                            )
+                            .await;
 
-                            let (decode_result, transform_result, encode_result) =
-                                tokio::join!(decode_handle, transform_handle, encode_handle);
+                            let (decode_result, transform_result) =
+                                tokio::join!(decode_handle, transform_handle);
                             decode_result
                                 .unwrap_or_else(|e| {
                                     Err(AppError::new(
@@ -456,13 +560,12 @@ pub(super) async fn forward_stream_typed(
                                         e.to_string(),
                                     ))
                                 }))
-                                .and(encode_result.unwrap_or_else(|e| {
-                                    Err(AppError::new(
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        "task_panic",
-                                        e.to_string(),
-                                    ))
-                                }))
+                                .and(encode_result)
+                        };
+                        let stream_result = if let Some(frames) = capture_frames_for_task.clone() {
+                            crate::request_capture::with_sse_capture(frames, stream_future).await
+                        } else {
+                            stream_future.await
                         };
 
                         let (ttfb_ms, usage, is_estimated, terminal_diagnostics) = {
@@ -556,6 +659,12 @@ pub(super) async fn forward_stream_typed(
                             });
                             match downstream {
                                 DownstreamProtocol::Responses => {
+                                    if let Some(frames) = capture_frames_for_task.as_ref() {
+                                        frames
+                                            .lock()
+                                            .await
+                                            .push(format!("event: error\ndata: {}\n\n", error_json));
+                                    }
                                     let _ = tx_err
                                         .send(
                                             Event::default()
@@ -565,15 +674,26 @@ pub(super) async fn forward_stream_typed(
                                         .await;
                                 }
                                 DownstreamProtocol::ChatCompletions => {
+                                    if let Some(frames) = capture_frames_for_task.as_ref() {
+                                        frames
+                                            .lock()
+                                            .await
+                                            .push(format!("data: {}\n\n", error_json));
+                                    }
                                     let _ = tx_err
                                         .send(Event::default().data(error_json.to_string()))
                                         .await;
                                 }
                                 DownstreamProtocol::AnthropicMessages => {
+                                    let anthropic_error = json!({"type": "error", "error": {"type": err.code, "message": err.message}});
+                                    if let Some(frames) = capture_frames_for_task.as_ref() {
+                                        frames.lock().await.push(format!(
+                                            "event: error\ndata: {}\n\n",
+                                            anthropic_error
+                                        ));
+                                    }
                                     let _ = tx_err
-                                        .send(Event::default().event("error").data(
-                                            json!({"type": "error", "error": {"type": err.code, "message": err.message}}).to_string()
-                                        ))
+                                        .send(Event::default().event("error").data(anthropic_error.to_string()))
                                         .await;
                                 }
                             }
@@ -584,12 +704,69 @@ pub(super) async fn forward_stream_typed(
                                 DownstreamProtocol::ChatCompletions | DownstreamProtocol::Responses
                             )
                         {
+                            if let Some(frames) = capture_frames_for_task.as_ref() {
+                                frames.lock().await.push("data: [DONE]\n\n".to_string());
+                            }
                             let _ = tx_err.send(Event::default().data("[DONE]")).await;
+                        }
+                        if let Some(session) = capture_session.as_ref() {
+                            let frames = if let Some(frames) = capture_frames_for_task.as_ref() {
+                                frames.lock().await.clone()
+                            } else {
+                                Vec::new()
+                            };
+                            session
+                                .push_attempt(crate::request_capture::build_attempt_dump(
+                                    capture_attempt_number,
+                                    &capture_provider_id,
+                                    Some(&capture_channel_id),
+                                    capture_provider_type,
+                                    &capture_logical_model,
+                                    &capture_upstream_model,
+                                    &capture_path,
+                                    capture_raw_input,
+                                    &capture_req_attempt,
+                                    capture_upstream_body,
+                                    None,
+                                    Some(frames),
+                                    stream_result.as_ref().err().map(|err| {
+                                        json!({
+                                            "message": err.message,
+                                            "code": err.code,
+                                            "status": err.status.as_u16(),
+                                        })
+                                    }),
+                                ))
+                                .await;
+                            session.persist().await;
                         }
                     });
                     return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
                 }
                 Err(err) => {
+                    if let Some(session) = capture.session.as_ref() {
+                        session
+                            .push_attempt(crate::request_capture::build_attempt_dump(
+                                attempt_number,
+                                &attempt.provider_id,
+                                Some(&attempt.channel_id),
+                                attempt.provider_type,
+                                &logical_model,
+                                &req_attempt.model,
+                                &path,
+                                capture.raw_input.clone(),
+                                &req_attempt,
+                                upstream_body.clone(),
+                                None,
+                                None,
+                                Some(json!({
+                                    "message": err.message,
+                                    "code": err.code,
+                                    "status": err.status.map(|status| status.as_u16()),
+                                })),
+                            ))
+                            .await;
+                    }
                     let non_retryable = is_non_retryable_client_error(&err);
                     let retryable = is_retryable_error(&err);
                     let retryable_failure_class = classify_retryable_failure(&err);
@@ -608,6 +785,9 @@ pub(super) async fn forward_stream_typed(
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
                         );
+                        if let Some(session) = capture.session.as_ref() {
+                            session.persist().await;
+                        }
                         return Err(app_err);
                     }
                     if retryable {
@@ -644,6 +824,9 @@ pub(super) async fn forward_stream_typed(
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                     );
+                    if let Some(session) = capture.session.as_ref() {
+                        session.persist().await;
+                    }
                     return Err(app_err);
                 }
             }
@@ -681,6 +864,9 @@ pub(super) async fn forward_stream_typed(
             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
             tried_providers,
         );
+    }
+    if let Some(session) = capture.session.as_ref() {
+        session.persist().await;
     }
     Err(final_err)
 }

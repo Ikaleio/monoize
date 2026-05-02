@@ -218,7 +218,10 @@
 		"maxMultiplier": "Max Billing Multiplier",
 		"maxMultiplierHelp": "Limits the maximum billing multiplier for requests using this key. Header-specified multiplier cannot exceed this value. Leave empty for no limit.",
 		"reasoningEnvelopeEnabled": "Reasoning Envelope Guard",
-		"reasoningEnvelopeHelp": "Wrap encrypted reasoning with upstream model metadata and drop mismatched encrypted blocks before forwarding."
+		"reasoningEnvelopeHelp": "Wrap encrypted reasoning with upstream model metadata and drop mismatched encrypted blocks before forwarding.",
+		"requestCaptureEnabled": "Request Capture Dump",
+		"requestCaptureHelp": "Persist raw request/response diagnostic dumps for this API key. The system-wide capture switch must also be enabled.",
+		"captureBadge": "dump"
 	},
 	"settings": {
 		"title": "Settings",
@@ -254,6 +257,10 @@
 		"activeProbeEnabledDescription": "When enabled, unhealthy channels are periodically probed for recovery.",
 		"enableEstimatedBilling": "Enable Estimated Billing",
 		"enableEstimatedBillingDescription": "When enabled, Monoize may charge from estimated usage when upstream usage is missing.",
+		"requestCaptureEnabled": "Enable Request Capture",
+		"requestCaptureEnabledDescription": "Master switch for per-API-key request capture dumps. When off, no dump files are written.",
+		"requestCaptureRetentionDays": "Capture Retention (days)",
+		"requestCaptureRetentionDaysDescription": "Automatically delete capture dump files older than this number of days.",
 		"stripCrossProtocolNestedExtra": "Strip Cross-Protocol Nested Extra",
 		"stripCrossProtocolNestedExtraDescription": "Remove nested downstream-only passthrough state before cross-family upstream encoding.",
 		"activeProbeIntervalSeconds": "Probe Interval (seconds)",

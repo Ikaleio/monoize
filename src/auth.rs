@@ -20,6 +20,7 @@ pub struct AuthResult {
     pub sub_account_enabled: bool,
     pub sub_account_balance_nano: String,
     pub reasoning_envelope_enabled: bool,
+    pub request_capture_enabled: bool,
 }
 
 impl AuthResult {
@@ -72,6 +73,7 @@ impl AuthState {
                             sub_account_enabled: api_key.sub_account_enabled,
                             sub_account_balance_nano: api_key.sub_account_balance_nano,
                             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
+                            request_capture_enabled: api_key.request_capture_enabled,
                         });
                     }
                     Ok(None) => {}
@@ -128,6 +130,7 @@ mod tests {
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
+                    request_capture_enabled: false,
                 },
                 false,
             )
@@ -171,6 +174,7 @@ mod tests {
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
+                    request_capture_enabled: false,
                 },
                 false,
             )
@@ -216,6 +220,7 @@ mod tests {
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
+                    request_capture_enabled: false,
                 },
                 false,
             )

@@ -350,6 +350,7 @@ export function ApiKeysPage() {
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
   const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
   const [newKeyReasoningEnvelopeEnabled, setNewKeyReasoningEnvelopeEnabled] = useState(true);
+  const [newKeyRequestCaptureEnabled, setNewKeyRequestCaptureEnabled] = useState(false);
 
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -369,6 +370,7 @@ export function ApiKeysPage() {
     setNewKeyTransforms([]);
     setNewKeyModelRedirects([]);
     setNewKeyReasoningEnvelopeEnabled(true);
+    setNewKeyRequestCaptureEnabled(false);
   };
 
   const handleCreate = async () => {
@@ -396,6 +398,7 @@ export function ApiKeysPage() {
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
         reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
+        request_capture_enabled: newKeyRequestCaptureEnabled,
       };
       const key = await createApiKeyOptimistic(
         input,
@@ -436,6 +439,7 @@ export function ApiKeysPage() {
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
         reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
+        request_capture_enabled: newKeyRequestCaptureEnabled,
       };
       await updateApiKeyOptimistic(
         editKey.id,
@@ -529,6 +533,7 @@ export function ApiKeysPage() {
     setNewKeyTransforms(key.transforms ?? []);
     setNewKeyModelRedirects(key.model_redirects ?? []);
     setNewKeyReasoningEnvelopeEnabled(key.reasoning_envelope_enabled ?? true);
+    setNewKeyRequestCaptureEnabled(key.request_capture_enabled ?? false);
   };
 
   const toggleSelectKey = (id: string) => {
@@ -646,6 +651,17 @@ export function ApiKeysPage() {
                     <Label htmlFor="reasoningEnvelopeEnabled">{t("apiKeys.reasoningEnvelopeEnabled")}</Label>
                   </div>
                   <p className="text-sm text-muted-foreground">{t("apiKeys.reasoningEnvelopeHelp")}</p>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="requestCaptureEnabled"
+                      checked={newKeyRequestCaptureEnabled}
+                      onCheckedChange={setNewKeyRequestCaptureEnabled}
+                    />
+                    <Label htmlFor="requestCaptureEnabled">{t("apiKeys.requestCaptureEnabled")}</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureHelp")}</p>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Switch
@@ -924,7 +940,19 @@ export function ApiKeysPage() {
                               </TooltipContent>
                             </Tooltip>
                           )}
-                          {!key.model_limits_enabled && key.ip_whitelist.length === 0 && key.max_multiplier == null && (
+                          {key.request_capture_enabled && (
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Badge variant="outline" className="px-1.5 text-xs whitespace-nowrap">
+                                  {t("apiKeys.captureBadge")}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{t("apiKeys.requestCaptureHelp")}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                          {!key.model_limits_enabled && key.ip_whitelist.length === 0 && key.max_multiplier == null && !key.request_capture_enabled && (
                             <span className="text-muted-foreground">-</span>
                           )}
                         </div>
@@ -1022,6 +1050,17 @@ export function ApiKeysPage() {
                 <Label htmlFor="editReasoningEnvelopeEnabled">{t("apiKeys.reasoningEnvelopeEnabled")}</Label>
               </div>
               <p className="text-sm text-muted-foreground">{t("apiKeys.reasoningEnvelopeHelp")}</p>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="editRequestCaptureEnabled"
+                  checked={newKeyRequestCaptureEnabled}
+                  onCheckedChange={setNewKeyRequestCaptureEnabled}
+                />
+                <Label htmlFor="editRequestCaptureEnabled">{t("apiKeys.requestCaptureEnabled")}</Label>
+              </div>
+              <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureHelp")}</p>
             </div>
             <div className="flex items-center space-x-2">
               <Switch

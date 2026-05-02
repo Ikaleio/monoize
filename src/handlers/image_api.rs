@@ -465,6 +465,10 @@ async fn execute_image_subrequest_typed(
         super::DownstreamProtocol::Responses,
         request_id,
         request_ip,
+        super::RequestCaptureContext {
+            raw_input: Value::Object(serde_json::Map::new()),
+            session: None,
+        },
     )
     .await
 }

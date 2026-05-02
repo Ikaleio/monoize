@@ -37,6 +37,7 @@ fn build_test_auth_with_role(
         sub_account_enabled: false,
         sub_account_balance_nano: "0".to_string(),
         reasoning_envelope_enabled: true,
+        request_capture_enabled: false,
     }
 }
 
@@ -68,6 +69,162 @@ fn build_model_redirect_rule(pattern: &str, replace: &str) -> ModelRedirectRule 
         pattern: pattern.to_string(),
         replace: replace.to_string(),
     }
+}
+
+#[test]
+fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
+    let mut req = urp::UrpRequest {
+        model: "gpt-5.5".to_string(),
+        input: vec![
+            urp::Node::Text {
+                id: None,
+                role: urp::OrdinaryRole::User,
+                content: "start".to_string(),
+                phase: None,
+                extra_body: HashMap::new(),
+            },
+            urp::Node::ToolCall {
+                id: Some("fc_answered".to_string()),
+                call_id: "call_answered".to_string(),
+                name: "tool".to_string(),
+                arguments: "{}".to_string(),
+                extra_body: HashMap::new(),
+            },
+            urp::Node::ToolCall {
+                id: Some("fc_unanswered".to_string()),
+                call_id: "call_unanswered".to_string(),
+                name: "tool".to_string(),
+                arguments: "{}".to_string(),
+                extra_body: HashMap::new(),
+            },
+            urp::Node::ToolResult {
+                id: None,
+                call_id: "call_answered".to_string(),
+                is_error: false,
+                content: vec![urp::ToolResultContent::Text {
+                    text: "ok".to_string(),
+                }],
+                extra_body: HashMap::new(),
+            },
+            urp::Node::ToolResult {
+                id: None,
+                call_id: "call_missing".to_string(),
+                is_error: false,
+                content: vec![urp::ToolResultContent::Text {
+                    text: "orphan".to_string(),
+                }],
+                extra_body: HashMap::new(),
+            },
+            urp::Node::Text {
+                id: None,
+                role: urp::OrdinaryRole::User,
+                content: "interrupt".to_string(),
+                phase: None,
+                extra_body: HashMap::new(),
+            },
+        ],
+        stream: None,
+        temperature: None,
+        top_p: None,
+        max_output_tokens: None,
+        reasoning: None,
+        tools: None,
+        tool_choice: None,
+        response_format: None,
+        user: None,
+        extra_body: HashMap::new(),
+    };
+
+    strip_orphaned_tool_calls(&mut req);
+
+    let call_ids: Vec<&str> = req
+        .input
+        .iter()
+        .filter_map(|node| match node {
+            urp::Node::ToolCall { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let result_ids: Vec<&str> = req
+        .input
+        .iter()
+        .filter_map(|node| match node {
+            urp::Node::ToolResult { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(call_ids, vec!["call_answered"]);
+    assert_eq!(result_ids, vec!["call_answered"]);
+    assert!(
+        req.input
+            .iter()
+            .any(|node| matches!(node, urp::Node::Text { content, .. } if content == "interrupt"))
+    );
+}
+
+#[test]
+fn strip_plaintext_reasoning_from_responses_tool_replay_keeps_only_encrypted_reasoning() {
+    let mut req = urp::UrpRequest {
+        model: "gpt-5.5".to_string(),
+        input: vec![
+            urp::Node::Reasoning {
+                id: Some("rs_plain".to_string()),
+                content: Some("plain summary".to_string()),
+                encrypted: None,
+                summary: Some("plain summary".to_string()),
+                source: None,
+                extra_body: HashMap::new(),
+            },
+            urp::Node::ToolCall {
+                id: Some("fc_answered".to_string()),
+                call_id: "call_answered".to_string(),
+                name: "tool".to_string(),
+                arguments: "{}".to_string(),
+                extra_body: HashMap::new(),
+            },
+            urp::Node::ToolResult {
+                id: None,
+                call_id: "call_answered".to_string(),
+                is_error: false,
+                content: vec![urp::ToolResultContent::Text {
+                    text: "ok".to_string(),
+                }],
+                extra_body: HashMap::new(),
+            },
+            urp::Node::Reasoning {
+                id: Some("rs_encrypted".to_string()),
+                content: Some("kept".to_string()),
+                encrypted: Some(serde_json::json!("sig_kept")),
+                summary: Some("kept".to_string()),
+                source: None,
+                extra_body: HashMap::new(),
+            },
+        ],
+        stream: None,
+        temperature: None,
+        top_p: None,
+        max_output_tokens: None,
+        reasoning: None,
+        tools: None,
+        tool_choice: None,
+        response_format: None,
+        user: None,
+        extra_body: HashMap::new(),
+    };
+
+    super::nonstream::strip_plaintext_reasoning_from_responses_tool_replay(&mut req);
+
+    let reasoning_ids: Vec<&str> = req
+        .input
+        .iter()
+        .filter_map(|node| match node {
+            urp::Node::Reasoning { id: Some(id), .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(reasoning_ids, vec!["rs_encrypted"]);
 }
 
 async fn seed_group_routing_provider(
@@ -777,6 +934,10 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         DownstreamProtocol::ChatCompletions,
         None,
         None,
+        RequestCaptureContext {
+            raw_input: json!({}),
+            session: None,
+        },
     )
     .await
     .expect_err("public-only restriction should leave no attempts");

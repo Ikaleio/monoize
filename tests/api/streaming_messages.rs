@@ -1031,6 +1031,44 @@ async fn messages_stream_tool_use_from_responses_completed_fallback() {
 }
 
 #[tokio::test]
+async fn messages_stream_tool_use_stop_reason_uses_accumulated_responses_items() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "tool stream" }] }],
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }],
+            "stream": true,
+            "stream_mode": "tool_item_done_completed_without_tool_snapshot"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "resp accumulated tool stream");
+
+    let tool_start = events.iter().find(|e| {
+        e["type"].as_str() == Some("content_block_start")
+            && e["content_block"]["type"].as_str() == Some("tool_use")
+    });
+    assert!(
+        tool_start.is_some(),
+        "expected accumulated tool_use content_block_start"
+    );
+
+    let msg_delta = events
+        .iter()
+        .find(|e| e["type"].as_str() == Some("message_delta"))
+        .expect("message_delta");
+    assert_eq!(
+        msg_delta["delta"]["stop_reason"].as_str(),
+        Some("tool_use"),
+        "stop_reason must use accumulated tool calls even when response.completed.output omits them"
+    );
+}
+
+#[tokio::test]
 async fn messages_stream_parallel_tool_use_from_chat_upstream() {
     let ctx = setup().await;
     let events = collect_messages_stream_events(

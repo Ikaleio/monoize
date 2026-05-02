@@ -265,6 +265,13 @@ TCI2. Monoize MUST NOT execute tools locally. Tool execution is always performed
 
 TCI3. When Monoize forwards a request, Monoize MUST forward any tool-calling nodes present in `UrpRequestV2.input` by adapting them into the selected upstream provider's request format under §7.2 through §7.8.
 
+TCI4. Immediately before encoding any URP v2 request to an upstream provider, Monoize MUST remove incomplete stateless tool exchanges from `UrpRequestV2.input`:
+
+- remove every `ToolCall` node whose `call_id` does not appear in at least one `ToolResult` node in the same request;
+- remove every `ToolResult` node whose `call_id` does not appear in at least one `ToolCall` node in the same request.
+
+TCI5. The TCI4 filter exists because Monoize ignores `previous_response_id` and requires replayed tool history to be self-contained. A downstream client MAY interrupt a parallel tool-call batch by appending a user message before all tool results are available. In that case Monoize MUST forward only the completed `ToolCall`/`ToolResult` pairs and MUST drop incomplete or orphaned pairs before the upstream HTTP request is sent.
+
 ### 7.1.1a ToolResultContent type
 
 TRC1. `ToolResultContent` is an enum representing typed content within `ToolResult.content`. The variants are:
@@ -441,6 +448,8 @@ PR4c.1. When decoding downstream Responses `input[]`, Monoize MUST decode an ite
 - `text`, when present, maps to `Reasoning.content`.
 
 PR4c.2. When encoding an upstream `POST /v1/responses` request, Monoize MUST include `reasoning.encrypted_content` in the top-level `include` array. If the downstream request already supplied an `include` array, Monoize MUST append `reasoning.encrypted_content` only when that exact string is absent.
+
+PR4c.2a. When encoding an upstream `POST /v1/responses` request whose replayed `input[]` history also contains one or more tool-calling nodes, Monoize MUST drop every replayed `Reasoning` node that lacks a non-empty encrypted payload. This drop occurs after request-phase transforms and before HTTP request emission. The purpose is to prevent downstream-visible plaintext-only reasoning summaries, including summaries produced by Monoize response transforms, from being replayed upstream as authoritative Responses reasoning items during stateless tool-loop continuation.
 
 PR4c.3. When an authenticated API key has `reasoning_envelope_enabled = true`, Monoize MUST wrap every downstream-visible encrypted reasoning payload produced by `/v1/responses`, `/v1/chat/completions`, or `/v1/messages` in a Monoize reasoning envelope before the payload is emitted to the downstream client.
 
@@ -946,6 +955,7 @@ DM4. Tool-calling:
 
 - For non-streaming responses, if `UrpResponseV2.output` contains assistant `ToolCall` nodes, Monoize MUST render them as Messages `tool_use` content blocks.
 - For streaming responses, Monoize MUST stream tool calls as `content_block_start` blocks with `type="tool_use"` and tool input deltas.
+- For streaming responses translated from Responses upstream events, if any accumulated output item is a function call, the downstream Messages terminal `message_delta.delta.stop_reason` MUST be `"tool_use"` even when the upstream `response.completed.status` is `"completed"` and the `response.completed.response.output` snapshot omits that function call.
 - For downstream requests, Monoize MUST parse `tool_result` blocks into top-level URP `ToolResult` nodes.
 
 DM4.1. For downstream `tool_result` blocks that carry block-array content, Monoize MUST preserve image and file payloads when routing through URP v2 and when encoding to eligible upstream formats.
@@ -1126,6 +1136,8 @@ STR3l. Downstream `/v1/responses` SSE MUST preserve externally visible item iden
 STR3m. Downstream `/v1/responses` SSE MUST preserve `phase` on reconstructed message items and text deltas when that metadata is present in URP v2 `Text` nodes.
 
 STR3n. `ResponseDone.output` is the only authoritative terminal flat state used to reconstruct the final downstream `response.completed.response.output` array. Monoize MUST NOT duplicate final outputs by replaying items that were already emitted as completed downstream lifecycles.
+
+STR3o. For downstream `/v1/responses` reasoning items, Monoize MUST preserve item-local `duration` when that field is present on the reconstructed reasoning item. If a streamed reasoning item completes without item-local `duration`, Monoize MUST synthesize integer-second `duration` on that reasoning item before any downstream event can cause a completed or non-last reasoning item to be rendered without duration. At minimum this means the reasoning item carried by `response.output_item.added`, the reasoning item carried by `response.output_item.done`, and the matching item in `response.completed.response.output` MUST all contain `duration` once Monoize can infer that the upstream reasoning item represents completed or terminal reasoning state. The synthesized value MUST be non-negative. The synthesized value SHOULD use elapsed time from the downstream request start when the upstream does not provide item-local duration. Monoize MUST NOT delay or pace SSE frames to fabricate reasoning duration.
 
 ### 8.1 Canonical internal stream events
 

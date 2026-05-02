@@ -2,8 +2,8 @@ use crate::error::AppResult;
 use crate::urp::encode::anthropic::anthropic_native_input_tokens;
 use crate::urp::stream_helpers::*;
 use crate::urp::{
-    self, FinishReason, Node, NodeDelta, NodeHeader, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, REASONING_ENVELOPE_PREFIX, UrpStreamEvent, Usage,
+    self, FinishReason, Node, NodeDelta, NodeHeader, REASONING_ENVELOPE_PREFIX,
+    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage,
     wrap_reasoning_signature_with_item_id,
 };
 use axum::response::sse::Event;
@@ -840,13 +840,16 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     output_details: None,
                     extra_body: HashMap::new(),
                 });
-                let stop_reason = match finish_reason {
-                    Some(FinishReason::Stop) => "end_turn",
-                    Some(FinishReason::ToolCalls) => "tool_use",
-                    Some(FinishReason::Length) => "max_tokens",
-                    Some(FinishReason::Other | FinishReason::ContentFilter) => "end_turn",
-                    None if saw_tool_use => "tool_use",
-                    None => "end_turn",
+                let stop_reason = if saw_tool_use {
+                    "tool_use"
+                } else {
+                    match finish_reason {
+                        Some(FinishReason::Length) => "max_tokens",
+                        Some(FinishReason::ToolCalls) => "tool_use",
+                        Some(FinishReason::Stop)
+                        | Some(FinishReason::Other | FinishReason::ContentFilter)
+                        | None => "end_turn",
+                    }
                 };
                 let message_delta = json!({
                     "type": "message_delta",

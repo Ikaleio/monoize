@@ -457,6 +457,43 @@ export function SettingsPage() {
                 />
               </motion.div>
               <Separator />
+              <motion.div
+                whileHover={{ x: 4 }}
+                transition={{ type: "spring", stiffness: 300 }}
+                className="flex items-center justify-between"
+              >
+                <div className="space-y-0.5">
+                  <Label>{t("settings.requestCaptureEnabled")}</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.requestCaptureEnabledDescription")}
+                  </p>
+                </div>
+                <Switch
+                  checked={currentSettings.monoize_request_capture_enabled}
+                  onCheckedChange={(checked) =>
+                    handleChange({ monoize_request_capture_enabled: checked })
+                  }
+                />
+              </motion.div>
+              <div className="space-y-2">
+                <Label htmlFor="request_capture_retention_days">{t("settings.requestCaptureRetentionDays")}</Label>
+                <Input
+                  id="request_capture_retention_days"
+                  type="number"
+                  min="1"
+                  value={currentSettings.monoize_request_capture_retention_days}
+                  onChange={(e) =>
+                    handleChange({
+                      monoize_request_capture_retention_days: Math.max(1, parseInt(e.target.value) || 1),
+                    })
+                  }
+                  className="transition-all focus:scale-[1.01]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.requestCaptureRetentionDaysDescription")}
+                </p>
+              </div>
+              <Separator />
               <div className="space-y-2">
                 <Label htmlFor="probe_interval_seconds">{t("settings.activeProbeIntervalSeconds")}</Label>
                 <Input

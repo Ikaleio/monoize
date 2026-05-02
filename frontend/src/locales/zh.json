@@ -218,7 +218,10 @@
 		"maxMultiplier": "最大计费倍率",
 		"maxMultiplierHelp": "限制使用此密钥的请求的最大计费倍率。通过 header 指定的倍率不能超过此值。留空表示不限制。",
 		"reasoningEnvelopeEnabled": "加密推理保护",
-		"reasoningEnvelopeHelp": "为加密推理附加上游模型元数据，并在转发前丢弃不匹配的加密推理块。"
+		"reasoningEnvelopeHelp": "为加密推理附加上游模型元数据，并在转发前丢弃不匹配的加密推理块。",
+		"requestCaptureEnabled": "请求抓包导出",
+		"requestCaptureHelp": "为此 API Key 持久化原始请求/响应诊断 dump。还需要同时开启系统总开关。",
+		"captureBadge": "抓包"
 	},
 	"settings": {
 		"title": "系统设置",
@@ -254,6 +257,10 @@
 		"activeProbeEnabledDescription": "开启后，会周期性探测不健康通道是否恢复。",
 		"enableEstimatedBilling": "启用估算计费",
 		"enableEstimatedBillingDescription": "开启后，当上游未返回用量时 Monoize 可以根据估算用量扣费。",
+		"requestCaptureEnabled": "启用请求抓包",
+		"requestCaptureEnabledDescription": "按 API Key 抓包的总开关。关闭时不会写入任何 dump 文件。",
+		"requestCaptureRetentionDays": "抓包保留期（天）",
+		"requestCaptureRetentionDaysDescription": "自动删除早于该天数的抓包 dump 文件。",
 		"stripCrossProtocolNestedExtra": "剥离跨协议嵌套扩展字段",
 		"stripCrossProtocolNestedExtraDescription": "跨协议族转发前移除下游协议专用的嵌套透传状态。",
 		"activeProbeIntervalSeconds": "探测间隔（秒）",

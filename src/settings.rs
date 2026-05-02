@@ -34,6 +34,8 @@ pub struct SystemSettings {
     pub monoize_extra_fields_whitelist: HashMap<String, Vec<String>>,
     #[serde(default = "default_true")]
     pub monoize_strip_cross_protocol_nested_extra: bool,
+    pub monoize_request_capture_enabled: bool,
+    pub monoize_request_capture_retention_days: u64,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -114,6 +116,8 @@ impl Default for SystemSettings {
             monoize_enable_estimated_billing: true,
             monoize_extra_fields_whitelist: HashMap::new(),
             monoize_strip_cross_protocol_nested_extra: true,
+            monoize_request_capture_enabled: false,
+            monoize_request_capture_retention_days: 1,
             updated_at: Utc::now(),
         }
     }
@@ -240,6 +244,16 @@ impl SettingsStore {
             &defaults
                 .monoize_strip_cross_protocol_nested_extra
                 .to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_request_capture_enabled",
+            &defaults.monoize_request_capture_enabled.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_request_capture_retention_days",
+            &defaults.monoize_request_capture_retention_days.to_string(),
         )
         .await?;
         Ok(())
@@ -406,6 +420,12 @@ impl SettingsStore {
                     settings.monoize_strip_cross_protocol_nested_extra =
                         row.value.parse().unwrap_or(true);
                 }
+                "monoize_request_capture_enabled" => {
+                    settings.monoize_request_capture_enabled = row.value.parse().unwrap_or(false);
+                }
+                "monoize_request_capture_retention_days" => {
+                    settings.monoize_request_capture_retention_days = row.value.parse().unwrap_or(1);
+                }
                 _ => {}
             }
         }
@@ -518,6 +538,16 @@ impl SettingsStore {
             &settings
                 .monoize_strip_cross_protocol_nested_extra
                 .to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_request_capture_enabled",
+            &settings.monoize_request_capture_enabled.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_request_capture_retention_days",
+            &settings.monoize_request_capture_retention_days.max(1).to_string(),
         )
         .await?;
         Ok(())

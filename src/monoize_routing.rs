@@ -231,6 +231,8 @@ pub struct MonoizeRuntimeConfig {
     pub global_transforms: Vec<TransformRuleConfig>,
     pub extra_fields_whitelist: HashMap<String, Vec<String>>,
     pub strip_cross_protocol_nested_extra: bool,
+    pub request_capture_enabled: bool,
+    pub request_capture_retention_days: u64,
 }
 
 impl Default for MonoizeRuntimeConfig {
@@ -250,6 +252,8 @@ impl Default for MonoizeRuntimeConfig {
             global_transforms: Vec::new(),
             extra_fields_whitelist: HashMap::new(),
             strip_cross_protocol_nested_extra: true,
+            request_capture_enabled: false,
+            request_capture_retention_days: 1,
         }
     }
 }

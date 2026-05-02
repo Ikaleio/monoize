@@ -11,6 +11,7 @@ use crate::monoize_routing::{
 use crate::name_cache::NameCaches;
 use crate::providers::ProviderStore;
 use crate::rate_limit::RateLimiter;
+use crate::request_capture::RequestCaptureStore;
 use crate::settings::{SettingsStore, normalize_pricing_model_key};
 use crate::transforms::TransformRegistry;
 use crate::users::{InsertRequestLog, UserRole, UserStore};
@@ -52,6 +53,7 @@ pub struct AppState {
     pub log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
     pub sse_connections: Arc<DashMap<String, AtomicUsize>>,
     pub image_transform_cache: Arc<ImageTransformCache>,
+    pub request_capture: RequestCaptureStore,
 }
 
 const ACTIVE_PROBE_CONNECTIVITY_KIND: &str = "active_probe_connectivity";
@@ -225,6 +227,10 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         settings_snapshot.monoize_extra_fields_whitelist.clone();
     monoize_runtime.strip_cross_protocol_nested_extra =
         settings_snapshot.monoize_strip_cross_protocol_nested_extra;
+    monoize_runtime.request_capture_enabled = settings_snapshot.monoize_request_capture_enabled;
+    monoize_runtime.request_capture_retention_days = settings_snapshot
+        .monoize_request_capture_retention_days
+        .max(1);
     let channel_health = Arc::new(Mutex::new(HashMap::new()));
     let transform_registry = Arc::new(crate::transforms::registry());
     let image_transform_cache = Arc::new(ImageTransformCache::from_env().await.map_err(|err| {
@@ -243,6 +249,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     let probe_store = monoize_store.clone();
     let probe_http = http.clone();
     let monoize_runtime = Arc::new(tokio::sync::RwLock::new(monoize_runtime));
+    let request_capture = RequestCaptureStore::new(&runtime.database_dsn);
+    request_capture.spawn_cleanup_task(monoize_runtime.clone());
     let probe_runtime = monoize_runtime.clone();
     let probe_health = channel_health.clone();
     let probe_user_store = user_store.clone();
@@ -450,6 +458,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         log_broadcast,
         sse_connections: Arc::new(DashMap::new()),
         image_transform_cache,
+        request_capture,
     })
 }
 

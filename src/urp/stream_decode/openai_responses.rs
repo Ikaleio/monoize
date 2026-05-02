@@ -1664,21 +1664,21 @@ fn map_response_completed_with_accumulated(
                 .unwrap_or_default()
         });
     let outputs = merge_response_completed_outputs(terminal_outputs, accumulated_outputs);
-    let finish_reason = decoded
-        .as_ref()
-        .and_then(|resp| resp.finish_reason)
-        .or_else(
-            || match response_obj.get("status").and_then(|v| v.as_str()) {
-                Some("completed") => Some(if outputs_have_tool_calls(&outputs) {
-                    FinishReason::ToolCalls
-                } else {
-                    FinishReason::Stop
-                }),
-                Some("incomplete") => Some(FinishReason::Length),
-                Some("failed") => Some(FinishReason::Other),
-                _ => None,
-            },
-        );
+    let finish_reason = if outputs_have_tool_calls(&outputs) {
+        Some(FinishReason::ToolCalls)
+    } else {
+        decoded
+            .as_ref()
+            .and_then(|resp| resp.finish_reason)
+            .or_else(
+                || match response_obj.get("status").and_then(|v| v.as_str()) {
+                    Some("completed") => Some(FinishReason::Stop),
+                    Some("incomplete") => Some(FinishReason::Length),
+                    Some("failed") => Some(FinishReason::Other),
+                    _ => None,
+                },
+            )
+    };
     events.push(UrpStreamEvent::ResponseDone {
         finish_reason,
         usage: decoded

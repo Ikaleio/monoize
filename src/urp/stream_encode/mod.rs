@@ -6,12 +6,14 @@ use crate::error::AppResult;
 use crate::handlers::DownstreamProtocol;
 use crate::urp::{self, UrpStreamEvent};
 use axum::response::sse::Event;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 pub(crate) async fn emit_synthetic_stream_from_urp_response(
     downstream: DownstreamProtocol,
     logical_model: &str,
     resp: &urp::UrpResponse,
+    synthetic_reasoning_duration_secs: Option<u64>,
     sse_max_frame_length: Option<usize>,
     tx: mpsc::Sender<Event>,
 ) -> AppResult<()> {
@@ -20,6 +22,7 @@ pub(crate) async fn emit_synthetic_stream_from_urp_response(
             openai_responses::emit_synthetic_responses_stream(
                 logical_model,
                 resp,
+                synthetic_reasoning_duration_secs,
                 sse_max_frame_length,
                 tx,
             )
@@ -41,6 +44,7 @@ pub(crate) async fn encode_urp_stream(
     rx: mpsc::Receiver<UrpStreamEvent>,
     tx: mpsc::Sender<Event>,
     logical_model: &str,
+    stream_started_at: Instant,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     match downstream {
@@ -49,6 +53,7 @@ pub(crate) async fn encode_urp_stream(
                 rx,
                 tx,
                 logical_model,
+                stream_started_at,
                 sse_max_frame_length,
             )
             .await

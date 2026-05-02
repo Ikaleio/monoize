@@ -483,6 +483,61 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     return Sse::new(stream).into_response();
                 }
                 if body.get("stream_mode").and_then(|v| v.as_str())
+                    == Some("tool_item_done_completed_without_tool_snapshot")
+                {
+                    let stream = futures_util::stream::iter(vec![
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": 0,
+                                    "item": { "type": "function_call", "id": "fc_mock", "call_id": "call_1", "name": "tool_a", "arguments": "" }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.function_call_arguments.delta").data(
+                                json!({
+                                    "type": "response.function_call_arguments.delta",
+                                    "output_index": 0,
+                                    "item_id": "fc_mock",
+                                    "delta": "{\"a\":1}"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.done").data(
+                                json!({
+                                    "type": "response.output_item.done",
+                                    "output_index": 0,
+                                    "item": { "type": "function_call", "id": "fc_mock", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.completed").data(
+                                json!({
+                                    "type": "response.completed",
+                                    "response": {
+                                        "id": "resp_mock",
+                                        "object": "response",
+                                        "created_at": 0,
+                                        "model": model,
+                                        "status": "completed",
+                                        "output": []
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                    ]);
+                    return Sse::new(stream).into_response();
+                }
+                if body.get("stream_mode").and_then(|v| v.as_str())
                     == Some("message_then_tool_then_completed")
                 {
                     let stream = futures_util::stream::iter(vec![

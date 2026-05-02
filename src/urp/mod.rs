@@ -220,7 +220,10 @@ pub fn wrap_reasoning_envelope_in_stream_event(
             extra_body,
             ..
         } if extra_body_is_reasoning_item(extra_body) => {
-            let item_id = extra_body.get("id").and_then(Value::as_str).map(str::to_string);
+            let item_id = extra_body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             wrap_reasoning_extra_body_encrypted_content(
                 extra_body,
                 item_id.as_deref(),
@@ -229,11 +232,7 @@ pub fn wrap_reasoning_envelope_in_stream_event(
             );
         }
         UrpStreamEvent::NodeDelta {
-            delta:
-                NodeDelta::Reasoning {
-                    encrypted,
-                    ..
-                },
+            delta: NodeDelta::Reasoning { encrypted, .. },
             ..
         } => wrap_reasoning_payload(encrypted, None, provider_type, model),
         UrpStreamEvent::NodeDone { node, .. } => {
@@ -241,7 +240,10 @@ pub fn wrap_reasoning_envelope_in_stream_event(
             if let Node::NextDownstreamEnvelopeExtra { extra_body } = node
                 && extra_body_is_reasoning_item(extra_body)
             {
-                let item_id = extra_body.get("id").and_then(Value::as_str).map(str::to_string);
+                let item_id = extra_body
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 wrap_reasoning_extra_body_encrypted_content(
                     extra_body,
                     item_id.as_deref(),
