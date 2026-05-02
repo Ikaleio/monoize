@@ -610,12 +610,33 @@ pub(super) fn error_to_sse_stream(
     let mut events: Vec<Event> = Vec::new();
     match downstream {
         DownstreamProtocol::Responses => {
-            let mut seq: u64 = 1;
-            let payload =
-                crate::urp::stream_helpers::normalize_responses_payload(seq, "error", error_json);
-            seq += 1;
-            events.push(Event::default().event("error").data(payload.to_string()));
-            let _ = seq;
+            let seq: u64 = 1;
+            let now = now_ts();
+            let response = json!({
+                "id": format!("resp_{}", uuid::Uuid::new_v4()),
+                "object": "response",
+                "created_at": now,
+                "completed_at": now,
+                "model": null,
+                "status": "failed",
+                "output": [],
+                "error": {
+                    "message": err.message,
+                    "type": err.error_type,
+                    "code": err.code,
+                    "param": err.param,
+                }
+            });
+            let payload = crate::urp::stream_helpers::normalize_responses_payload(
+                seq,
+                "response.failed",
+                json!({ "response": response }),
+            );
+            events.push(
+                Event::default()
+                    .event("response.failed")
+                    .data(payload.to_string()),
+            );
         }
         DownstreamProtocol::ChatCompletions => {
             events.push(Event::default().data(error_json.to_string()));

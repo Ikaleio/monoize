@@ -257,6 +257,60 @@ async fn responses_streaming_upstream_error_is_terminal() {
 }
 
 #[tokio::test]
+async fn responses_streaming_pre_upstream_error_uses_response_failed() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"missing-model",
+                "input":"stream",
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(
+        !text.contains("event: error"),
+        "responses pre-upstream errors must use response.failed: {text}"
+    );
+    let failed = frames
+        .iter()
+        .filter(|(event, _)| event == "response.failed")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        failed.len(),
+        1,
+        "expected exactly one response.failed: {text}"
+    );
+    assert_eq!(
+        failed[0].1["response"]["status"].as_str(),
+        Some("failed"),
+        "response.failed payload must carry failed status: {text}"
+    );
+    assert_eq!(
+        failed[0].1["response"]["error"]["code"].as_str(),
+        Some("upstream_error"),
+        "response.failed payload must preserve error code: {text}"
+    );
+    assert_eq!(
+        count_done_sentinels(&text),
+        1,
+        "responses pre-upstream error stream must emit exactly one [DONE]: {text}"
+    );
+}
+
+#[tokio::test]
 async fn responses_streaming_preserves_upstream_response_failure_error() {
     let ctx = setup().await;
     let req = Request::builder()
