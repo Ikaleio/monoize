@@ -1067,20 +1067,110 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             .to_string(),
                         ),
                     ),
-                    Ok::<_, Infallible>(Event::default().event("response.completed").data(
-                        json!({
-                            "type": "response.completed",
-                            "response": {
-                                "id": "resp_mock",
-                                "object": "response",
-                                "created_at": 0,
-                                "model": model,
-                                "status": "completed",
-                                "output": []
-                            }
-                        })
-                        .to_string(),
-                    )),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": []
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("error_event") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("error").data(
+                            json!({
+                                "code": "mock_stream_error",
+                                "message": "mock streaming error"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("error_then_completed") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("error").data(
+                            json!({
+                                "code": "mock_stream_error",
+                                "message": "mock streaming error"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": []
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("error_then_failed") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("error").data(
+                            json!({
+                                "type": "invalid_request_error",
+                                "code": "context_length_exceeded",
+                                "message": "mock context length exceeded",
+                                "param": "input"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.failed").data(
+                            json!({
+                                "type": "response.failed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "failed",
+                                    "output": [],
+                                    "error": {
+                                        "type": "invalid_request_error",
+                                        "code": "context_length_exceeded",
+                                        "message": "mock context length exceeded",
+                                        "param": "input"
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
                     Ok::<_, Infallible>(Event::default().data("[DONE]")),
                 ]);
                 return Sse::new(stream).into_response();

@@ -48,7 +48,8 @@ impl MigrationTrait for Migration {
             DbBackend::Postgres => {
                 conn.execute(Statement::from_string(
                     DbBackend::Postgres,
-                    "ALTER TABLE api_keys DROP COLUMN IF EXISTS request_capture_enabled".to_string(),
+                    "ALTER TABLE api_keys DROP COLUMN IF EXISTS request_capture_enabled"
+                        .to_string(),
                 ))
                 .await?;
             }

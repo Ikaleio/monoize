@@ -637,7 +637,10 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
     })
     .expect("response serializes");
     assert_eq!(response_value.get("allowed_groups"), Some(&json!(["beta"])));
-    assert_eq!(response_value.get("request_capture_enabled"), Some(&json!(true)));
+    assert_eq!(
+        response_value.get("request_capture_enabled"),
+        Some(&json!(true))
+    );
 }
 
 #[tokio::test]

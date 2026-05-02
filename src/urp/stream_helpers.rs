@@ -17,8 +17,7 @@ pub(crate) async fn send_named_sse_json(
     data: Value,
 ) -> AppResult<()> {
     let data = data.to_string();
-    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {data}\n\n"))
-        .await;
+    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {data}\n\n")).await;
     tx.send(Event::default().event(name).data(data))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
@@ -32,8 +31,7 @@ pub(crate) async fn send_responses_event(
 ) -> AppResult<()> {
     let payload = normalize_responses_payload(*seq, name, data).to_string();
     *seq += 1;
-    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {payload}\n\n"))
-        .await;
+    crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {payload}\n\n")).await;
     tx.send(Event::default().event(name).data(payload))
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))

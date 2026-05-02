@@ -249,9 +249,13 @@ pub(super) async fn execute_nonstream_typed(
                         }
                         return Err(err);
                     }
-                    if let Err(err) =
-                        apply_transform_rules_response(state, &mut resp, &auth.transforms, &req.model)
-                            .await
+                    if let Err(err) = apply_transform_rules_response(
+                        state,
+                        &mut resp,
+                        &auth.transforms,
+                        &req.model,
+                    )
+                    .await
                     {
                         if let Some(session) = capture.session.as_ref() {
                             session.persist().await;
@@ -271,7 +275,9 @@ pub(super) async fn execute_nonstream_typed(
                         );
                     }
                     let charge =
-                        match maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await {
+                        match maybe_charge_response(state, auth, &attempt, &logical_model, &resp)
+                            .await
+                        {
                             Ok(charge) => charge,
                             Err(err) => {
                                 if let Some(session) = capture.session.as_ref() {

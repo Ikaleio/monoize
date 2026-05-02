@@ -280,14 +280,14 @@ pub(super) async fn forward_stream_typed(
                                 Some(started_at.elapsed().as_secs());
                             let stream_result =
                                 crate::urp::stream_encode::emit_synthetic_stream_from_urp_response(
-                                downstream,
-                                &logical_model_for_stream,
-                                &resp,
-                                synthetic_reasoning_duration_secs,
-                                sse_max_frame_length,
-                                tx,
-                            )
-                            .await;
+                                    downstream,
+                                    &logical_model_for_stream,
+                                    &resp,
+                                    synthetic_reasoning_duration_secs,
+                                    sse_max_frame_length,
+                                    tx,
+                                )
+                                .await;
                             if let Err(err) = stream_result {
                                 tracing::warn!("synthetic stream failed: {}", err.message);
                                 if matches!(
@@ -443,9 +443,10 @@ pub(super) async fn forward_stream_typed(
                         });
                     let provider_type = attempt.provider_type;
                     let (tx, rx) = mpsc::channel::<Event>(64);
-                    let capture_frames = capture.session.as_ref().map(|_| {
-                        std::sync::Arc::new(Mutex::new(Vec::<String>::new()))
-                    });
+                    let capture_frames = capture
+                        .session
+                        .as_ref()
+                        .map(|_| std::sync::Arc::new(Mutex::new(Vec::<String>::new())));
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                         ttfb_ms: None,
                         usage: None,
@@ -500,7 +501,7 @@ pub(super) async fn forward_stream_typed(
 
                             let decode_handle = {
                                 let metrics = metrics_for_stream.clone();
-                                tokio::spawn(async move {
+                                crate::request_capture::spawn_with_sse_capture(async move {
                                     stream_upstream_to_urp_events(
                                         &legacy,
                                         pending_request_envelope_extra,
@@ -514,37 +515,41 @@ pub(super) async fn forward_stream_typed(
                                 })
                             };
 
-                            let transform_handle = tokio::spawn(async move {
-                                let reasoning_envelope = reasoning_envelope_for_transform
-                                    .as_ref()
-                                    .map(|(provider_type, upstream_model)| {
-                                        (provider_type.as_str(), upstream_model.as_str())
-                                    });
-                                transform_urp_stream(
-                                    &state_for_transform,
-                                    decoded_rx,
-                                    transformed_tx,
-                                    &provider_rules_for_transform,
-                                    &global_rules_for_transform,
-                                    &auth_rules_for_transform,
-                                    &model_for_transform,
-                                    reasoning_envelope,
-                                )
-                                .await
-                            });
+                            let transform_handle =
+                                crate::request_capture::spawn_with_sse_capture(async move {
+                                    let reasoning_envelope = reasoning_envelope_for_transform
+                                        .as_ref()
+                                        .map(|(provider_type, upstream_model)| {
+                                            (provider_type.as_str(), upstream_model.as_str())
+                                        });
+                                    transform_urp_stream(
+                                        &state_for_transform,
+                                        decoded_rx,
+                                        transformed_tx,
+                                        &provider_rules_for_transform,
+                                        &global_rules_for_transform,
+                                        &auth_rules_for_transform,
+                                        &model_for_transform,
+                                        reasoning_envelope,
+                                    )
+                                    .await
+                                });
 
-                            let encode_result = encode_urp_stream(
-                                downstream,
-                                transformed_rx,
-                                tx,
-                                &model_for_encode,
-                                started_at,
-                                sse_max_frame_length,
-                            )
-                            .await;
+                            let encode_handle =
+                                crate::request_capture::spawn_with_sse_capture(async move {
+                                    encode_urp_stream(
+                                        downstream,
+                                        transformed_rx,
+                                        tx,
+                                        &model_for_encode,
+                                        started_at,
+                                        sse_max_frame_length,
+                                    )
+                                    .await
+                                });
 
-                            let (decode_result, transform_result) =
-                                tokio::join!(decode_handle, transform_handle);
+                            let (decode_result, transform_result, encode_result) =
+                                tokio::join!(decode_handle, transform_handle, encode_handle);
                             decode_result
                                 .unwrap_or_else(|e| {
                                     Err(AppError::new(
@@ -560,7 +565,13 @@ pub(super) async fn forward_stream_typed(
                                         e.to_string(),
                                     ))
                                 }))
-                                .and(encode_result)
+                                .and(encode_result.unwrap_or_else(|e| {
+                                    Err(AppError::new(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        "task_panic",
+                                        e.to_string(),
+                                    ))
+                                }))
                         };
                         let stream_result = if let Some(frames) = capture_frames_for_task.clone() {
                             crate::request_capture::with_sse_capture(frames, stream_future).await
@@ -660,10 +671,10 @@ pub(super) async fn forward_stream_typed(
                             match downstream {
                                 DownstreamProtocol::Responses => {
                                     if let Some(frames) = capture_frames_for_task.as_ref() {
-                                        frames
-                                            .lock()
-                                            .await
-                                            .push(format!("event: error\ndata: {}\n\n", error_json));
+                                        frames.lock().await.push(format!(
+                                            "event: error\ndata: {}\n\n",
+                                            error_json
+                                        ));
                                     }
                                     let _ = tx_err
                                         .send(
@@ -693,7 +704,11 @@ pub(super) async fn forward_stream_typed(
                                         ));
                                     }
                                     let _ = tx_err
-                                        .send(Event::default().event("error").data(anthropic_error.to_string()))
+                                        .send(
+                                            Event::default()
+                                                .event("error")
+                                                .data(anthropic_error.to_string()),
+                                        )
                                         .await;
                                 }
                             }

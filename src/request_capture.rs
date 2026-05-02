@@ -1,12 +1,13 @@
 use crate::auth::AuthResult;
+use crate::config::ProviderType;
 use crate::handlers::DownstreamProtocol;
 use crate::monoize_routing::MonoizeRuntimeConfig;
-use crate::config::ProviderType;
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 pub(crate) type SseFrameCapture = Arc<Mutex<Vec<String>>>;
@@ -26,6 +27,21 @@ where
     F: std::future::Future<Output = T>,
 {
     CURRENT_SSE_CAPTURE.scope(capture, future).await
+}
+
+pub(crate) fn spawn_with_sse_capture<F, T>(future: F) -> JoinHandle<T>
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let capture = CURRENT_SSE_CAPTURE.try_with(Clone::clone).ok();
+    tokio::spawn(async move {
+        if let Some(capture) = capture {
+            with_sse_capture(capture, future).await
+        } else {
+            future.await
+        }
+    })
 }
 
 #[derive(Clone)]
@@ -132,7 +148,10 @@ impl RequestCaptureStore {
         });
     }
 
-    async fn cleanup_expired(&self, runtime: Arc<RwLock<MonoizeRuntimeConfig>>) -> Result<(), String> {
+    async fn cleanup_expired(
+        &self,
+        runtime: Arc<RwLock<MonoizeRuntimeConfig>>,
+    ) -> Result<(), String> {
         let retention_days = runtime.read().await.request_capture_retention_days.max(1);
         let dump_dir = self.dump_dir.clone();
         tokio::task::spawn_blocking(move || cleanup_expired_sync(&dump_dir, retention_days))
@@ -161,7 +180,11 @@ impl RequestCaptureSession {
             "is_stream": self.is_stream,
             "attempts": attempts,
         });
-        if let Err(err) = self.store.write_dump(self.request_id.as_deref(), self.created_at, payload).await {
+        if let Err(err) = self
+            .store
+            .write_dump(self.request_id.as_deref(), self.created_at, payload)
+            .await
+        {
             tracing::warn!("failed to write request capture dump: {err}");
         }
     }
@@ -242,7 +265,9 @@ fn cleanup_expired_sync(dump_dir: &Path, retention_days: u64) -> Result<(), Stri
         return Ok(());
     }
     let cutoff = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(retention_days.saturating_mul(86_400)))
+        .checked_sub(std::time::Duration::from_secs(
+            retention_days.saturating_mul(86_400),
+        ))
         .unwrap_or(std::time::UNIX_EPOCH);
     for entry in std::fs::read_dir(dump_dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
@@ -332,41 +357,47 @@ mod tests {
             request_capture_enabled: false,
             ..MonoizeRuntimeConfig::default()
         });
-        assert!(store
-            .maybe_start_session(
-                &runtime,
-                &test_auth(true),
-                Some("req_12345678".to_string()),
-                DownstreamProtocol::Responses,
-                false,
-            )
-            .await
-            .is_none());
+        assert!(
+            store
+                .maybe_start_session(
+                    &runtime,
+                    &test_auth(true),
+                    Some("req_12345678".to_string()),
+                    DownstreamProtocol::Responses,
+                    false,
+                )
+                .await
+                .is_none()
+        );
 
         let runtime = RwLock::new(MonoizeRuntimeConfig {
             request_capture_enabled: true,
             ..MonoizeRuntimeConfig::default()
         });
-        assert!(store
-            .maybe_start_session(
-                &runtime,
-                &test_auth(false),
-                Some("req_12345678".to_string()),
-                DownstreamProtocol::Responses,
-                false,
-            )
-            .await
-            .is_none());
+        assert!(
+            store
+                .maybe_start_session(
+                    &runtime,
+                    &test_auth(false),
+                    Some("req_12345678".to_string()),
+                    DownstreamProtocol::Responses,
+                    false,
+                )
+                .await
+                .is_none()
+        );
 
-        assert!(store
-            .maybe_start_session(
-                &runtime,
-                &test_auth(true),
-                Some("req_12345678".to_string()),
-                DownstreamProtocol::Responses,
-                false,
-            )
-            .await
-            .is_some());
+        assert!(
+            store
+                .maybe_start_session(
+                    &runtime,
+                    &test_auth(true),
+                    Some("req_12345678".to_string()),
+                    DownstreamProtocol::Responses,
+                    false,
+                )
+                .await
+                .is_some()
+        );
     }
 }

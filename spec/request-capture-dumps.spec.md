@@ -105,6 +105,8 @@ RCD-D8. For a buffered synthetic stream, `downstream_response` MUST be the provi
 
 RCD-D9. For a pass-through streaming response, `downstream_sse_frames` MUST contain the SSE frame data strings emitted to the downstream client in emission order after response transforms and downstream encoding.
 
+RCD-D9a. If downstream SSE frame emission occurs inside asynchronous tasks spawned by the pass-through streaming pipeline, all such tasks MUST record emitted frames into the same per-attempt `downstream_sse_frames` array.
+
 RCD-D10. For a pass-through streaming response, `downstream_response` MUST be null or absent.
 
 RCD-D11. If an upstream call fails before a response body is available, the attempt entry MUST include `error` with at least `message` and `code` when available.

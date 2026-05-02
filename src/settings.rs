@@ -424,7 +424,8 @@ impl SettingsStore {
                     settings.monoize_request_capture_enabled = row.value.parse().unwrap_or(false);
                 }
                 "monoize_request_capture_retention_days" => {
-                    settings.monoize_request_capture_retention_days = row.value.parse().unwrap_or(1);
+                    settings.monoize_request_capture_retention_days =
+                        row.value.parse().unwrap_or(1);
                 }
                 _ => {}
             }
@@ -547,7 +548,10 @@ impl SettingsStore {
         .await?;
         self.set(
             "monoize_request_capture_retention_days",
-            &settings.monoize_request_capture_retention_days.max(1).to_string(),
+            &settings
+                .monoize_request_capture_retention_days
+                .max(1)
+                .to_string(),
         )
         .await?;
         Ok(())

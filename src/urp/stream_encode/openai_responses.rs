@@ -457,6 +457,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut seq = 1u64;
     let mut response_id = "resp".to_string();
     let mut created: Option<i64> = None;
+    let mut error_terminal_sent = false;
     let mut next_output_index = 0usize;
     let mut node_states: HashMap<u32, StreamedNodeState> = HashMap::new();
     let mut completed_output_items: Vec<(usize, Value)> = Vec::new();
@@ -555,6 +556,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
     }
 
     while let Some(event) = rx.recv().await {
+        if error_terminal_sent {
+            continue;
+        }
+
         match event {
             UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
                 response_id = id.clone();
@@ -1560,17 +1565,29 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 .await?;
                 send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
             }
-            UrpStreamEvent::Error { code, message, .. } => {
+            UrpStreamEvent::Error {
+                code,
+                message,
+                extra_body,
+            } => {
+                let created_at = created.unwrap_or_else(now_ts);
+                let failed_response = response_failed_payload(
+                    &response_id,
+                    created_at,
+                    logical_model,
+                    code.as_deref(),
+                    &message,
+                    &extra_body,
+                );
                 send_responses_event(
                     &tx,
                     &mut seq,
-                    "error",
-                    json!({
-                        "code": code,
-                        "message": message,
-                    }),
+                    "response.failed",
+                    json!({ "response": failed_response }),
                 )
                 .await?;
+                send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
+                error_terminal_sent = true;
             }
         }
     }
@@ -2377,6 +2394,41 @@ fn response_envelope_payload(
             "usage": null,
             "user": null,
         }
+    })
+}
+
+fn response_failed_payload(
+    id: &str,
+    created_at: i64,
+    model: &str,
+    code: Option<&str>,
+    message: &str,
+    error_extra_body: &HashMap<String, Value>,
+) -> Value {
+    let mut response =
+        response_envelope_payload(id, created_at, model, "failed", Value::Array(Vec::new()));
+    let mut error = json!({
+        "code": code.unwrap_or("upstream_error"),
+        "message": message,
+    });
+    if let Some(error_obj) = error.as_object_mut() {
+        merge_json_extra(error_obj, error_extra_body);
+    }
+    if let Some(obj) = response.get_mut("response").and_then(Value::as_object_mut) {
+        obj.insert("completed_at".to_string(), json!(now_ts()));
+        obj.insert("error".to_string(), error.clone());
+    }
+    response.get("response").cloned().unwrap_or_else(|| {
+        json!({
+            "id": id,
+            "object": "response",
+            "created_at": created_at,
+            "completed_at": now_ts(),
+            "model": model,
+            "status": "failed",
+            "output": [],
+            "error": error
+        })
     })
 }
 

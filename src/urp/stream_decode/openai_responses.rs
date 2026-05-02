@@ -140,6 +140,19 @@ pub(crate) async fn stream_responses_to_urp_events(
         )
         .await;
 
+        if ev.event == "error" || ev.event == "response.failed" {
+            let (code, message, extra_body) = responses_stream_error_parts(&ev.event, data_val);
+            let _ = tx
+                .send(UrpStreamEvent::Error {
+                    code,
+                    message,
+                    extra_body,
+                })
+                .await;
+            record_stream_terminal_event(&runtime_metrics, &ev.event, None).await;
+            return Ok(());
+        }
+
         if ev.event == "response.output_text.delta" {
             if let Some(text) = data_val.get("delta").and_then(|v| v.as_str()) {
                 let output_index = data_val
@@ -922,6 +935,41 @@ fn reasoning_source_from_value(value: &Value) -> Option<String> {
         .and_then(|value| value.as_str())
         .filter(|source| !source.is_empty())
         .map(|source| source.to_string())
+}
+
+fn responses_stream_error_parts(
+    event_name: &str,
+    data_val: Value,
+) -> (Option<String>, String, HashMap<String, Value>) {
+    let error_value = if event_name == "response.failed" {
+        data_val
+            .get("response")
+            .and_then(|response| response.get("error"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    } else {
+        data_val
+            .get("error")
+            .cloned()
+            .unwrap_or_else(|| data_val.clone())
+    };
+    let code = error_value
+        .get("code")
+        .and_then(|v| v.as_str())
+        .or_else(|| data_val.get("code").and_then(|v| v.as_str()))
+        .map(|s| s.to_string());
+    let message = error_value
+        .get("message")
+        .and_then(|v| v.as_str())
+        .or_else(|| data_val.get("message").and_then(|v| v.as_str()))
+        .unwrap_or_else(|| data_val.as_str().unwrap_or("upstream error"))
+        .to_string();
+    let mut extra_body = split_known_fields(error_value, &["code", "message"]);
+    extra_body.extend(split_known_fields(
+        data_val,
+        &["code", "message", "error", "response"],
+    ));
+    (code, message, extra_body)
 }
 
 fn output_state_for<'a>(
