@@ -144,6 +144,11 @@ fn assert_messages_stream_invariants(events: &[Value], label: &str) {
         .filter(|e| e["type"].as_str() == Some("content_block_stop"))
         .filter_map(|e| e["index"].as_u64())
         .collect();
+    assert_eq!(
+        starts,
+        (0..starts.len() as u64).collect::<Vec<_>>(),
+        "{label}: content_block_start indices must be contiguous zero-based in emission order"
+    );
     for idx in &starts {
         assert!(
             stops.contains(idx),

@@ -200,7 +200,6 @@ fn payload_is_redacted(extra: &HashMap<String, Value>) -> bool {
 
 #[derive(Debug, Clone)]
 struct LiveNodeBlockState {
-    block_index: u32,
     payload: AnthropicBlockPayload,
 }
 
@@ -508,14 +507,72 @@ async fn flush_ready_node_blocks(
     tx: &mpsc::Sender<Event>,
     pending_blocks: &mut HashMap<u32, PendingAnthropicBlock>,
     next_flush_node_index: &mut u32,
+    next_content_block_index: &mut u32,
     saw_tool_use: &mut bool,
     emitted_node_owned_surfaces: &mut HashSet<MessagesSurfaceKind>,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    while let Some(block) = pending_blocks.remove(next_flush_node_index) {
+    while let Some(mut block) = pending_blocks.remove(next_flush_node_index) {
         emitted_node_owned_surfaces.insert(surface_kind_for_payload(&block.payload));
+        block.block_index = *next_content_block_index;
         block.emit(tx, saw_tool_use, sse_max_frame_length).await?;
+        *next_content_block_index += 1;
         *next_flush_node_index += 1;
+    }
+    Ok(())
+}
+
+async fn mark_node_without_messages_block(
+    tx: &mpsc::Sender<Event>,
+    pending_blocks: &mut HashMap<u32, PendingAnthropicBlock>,
+    node_index: u32,
+    next_flush_node_index: &mut u32,
+    next_content_block_index: &mut u32,
+    saw_tool_use: &mut bool,
+    emitted_node_owned_surfaces: &mut HashSet<MessagesSurfaceKind>,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    if node_index == *next_flush_node_index {
+        *next_flush_node_index += 1;
+        flush_ready_node_blocks(
+            tx,
+            pending_blocks,
+            next_flush_node_index,
+            next_content_block_index,
+            saw_tool_use,
+            emitted_node_owned_surfaces,
+            sse_max_frame_length,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn flush_all_remaining_node_blocks(
+    tx: &mpsc::Sender<Event>,
+    pending_blocks: &mut HashMap<u32, PendingAnthropicBlock>,
+    next_flush_node_index: &mut u32,
+    next_content_block_index: &mut u32,
+    saw_tool_use: &mut bool,
+    emitted_node_owned_surfaces: &mut HashSet<MessagesSurfaceKind>,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    while !pending_blocks.is_empty() {
+        if !pending_blocks.contains_key(next_flush_node_index) {
+            if let Some(next_ready) = pending_blocks.keys().min().copied() {
+                *next_flush_node_index = next_ready;
+            }
+        }
+        flush_ready_node_blocks(
+            tx,
+            pending_blocks,
+            next_flush_node_index,
+            next_content_block_index,
+            saw_tool_use,
+            emitted_node_owned_surfaces,
+            sse_max_frame_length,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -682,14 +739,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 if matches!(surface, MessagesSurfaceKind::ToolUse) {
                     saw_tool_use = true;
                 }
-                live_node_blocks.insert(
-                    node_index,
-                    LiveNodeBlockState {
-                        block_index: next_content_block_index,
-                        payload,
-                    },
-                );
-                next_content_block_index += 1;
+                live_node_blocks.insert(node_index, LiveNodeBlockState { payload });
             }
             UrpStreamEvent::NodeDelta {
                 node_index,
@@ -716,25 +766,40 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     response_usage = Some(usage);
                 }
                 if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
+                    mark_node_without_messages_block(
+                        &tx,
+                        &mut pending_node_blocks,
+                        node_index,
+                        &mut next_flush_node_index,
+                        &mut next_content_block_index,
+                        &mut saw_tool_use,
+                        &mut emitted_node_owned_surfaces,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                     continue;
                 }
-                let block_index = live_node_blocks
-                    .get(&node_index)
-                    .map(|state| state.block_index)
-                    .unwrap_or(next_content_block_index);
                 let mut payload = live_node_blocks
                     .get(&node_index)
                     .map(|state| state.payload.clone())
                     .or_else(|| anthropic_block_from_node(&node));
                 let Some(mut payload) = payload.take() else {
                     live_node_blocks.remove(&node_index);
+                    mark_node_without_messages_block(
+                        &tx,
+                        &mut pending_node_blocks,
+                        node_index,
+                        &mut next_flush_node_index,
+                        &mut next_content_block_index,
+                        &mut saw_tool_use,
+                        &mut emitted_node_owned_surfaces,
+                        sse_max_frame_length,
+                    )
+                    .await?;
                     continue;
                 };
                 merge_node_payload_with_terminal(&mut payload, &node);
-                let used_existing_index = live_node_blocks.remove(&node_index).is_some();
-                if !used_existing_index {
-                    next_content_block_index += 1;
-                }
+                live_node_blocks.remove(&node_index);
                 if matches!(
                     surface_kind_for_payload(&payload),
                     MessagesSurfaceKind::ToolUse
@@ -747,7 +812,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 pending_node_blocks.insert(
                     node_index,
                     PendingAnthropicBlock {
-                        block_index,
+                        block_index: 0,
                         payload,
                     },
                 );
@@ -755,6 +820,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     &tx,
                     &mut pending_node_blocks,
                     &mut next_flush_node_index,
+                    &mut next_content_block_index,
                     &mut saw_tool_use,
                     &mut emitted_node_owned_surfaces,
                     sse_max_frame_length,
@@ -808,15 +874,16 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     pending_node_blocks.insert(
                         node_index,
                         PendingAnthropicBlock {
-                            block_index: block_state.block_index,
+                            block_index: 0,
                             payload: block_state.payload,
                         },
                     );
                 }
-                flush_ready_node_blocks(
+                flush_all_remaining_node_blocks(
                     &tx,
                     &mut pending_node_blocks,
                     &mut next_flush_node_index,
+                    &mut next_content_block_index,
                     &mut saw_tool_use,
                     &mut emitted_node_owned_surfaces,
                     sse_max_frame_length,

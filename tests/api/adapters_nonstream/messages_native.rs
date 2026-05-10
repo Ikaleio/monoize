@@ -98,6 +98,25 @@ async fn messages_upstream_defaults_max_tokens_to_anthropic_max_when_omitted() {
 }
 
 #[tokio::test]
+async fn messages_upstream_forwards_explicit_max_tokens_unchanged() {
+    let ctx = setup().await;
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 1234,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "yo" }] }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(upstream["max_tokens"], json!(1234));
+}
+
+#[tokio::test]
 async fn messages_request_forwards_ordinary_base64_image_to_messages_upstream() {
     let ctx = setup().await;
     let data = base64::engine::general_purpose::STANDARD.encode(b"tiny-image");

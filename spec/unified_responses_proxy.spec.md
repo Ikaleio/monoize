@@ -421,7 +421,7 @@ ENC8. Structured reasoning in Chat Completions responses MUST be encoded in `rea
 
 ENC9. The Anthropic Messages encoder MUST reconstruct Anthropic `message` and `content[]` envelopes from flat URP v2 nodes. Block order MUST preserve flat node order after protocol-required grouping.
 
-ENC9a. When encoding an upstream Anthropic Messages request, Monoize MUST always send `max_tokens`. If the downstream request omits an explicit output-token cap, Monoize MUST encode `max_tokens: 64000`. If the downstream request provides an explicit output-token cap, Monoize MUST forward that explicit value unchanged.
+ENC9a. When decoding a downstream Anthropic Messages request, Monoize MUST store request field `max_tokens` as the URP request field `max_output_tokens`. When encoding an upstream Anthropic Messages request, Monoize MUST always send `max_tokens`. If the downstream request omits an explicit output-token cap, Monoize MUST encode `max_tokens: 64000`. If the downstream request provides an explicit output-token cap, Monoize MUST forward that explicit value unchanged.
 
 ENC10. `ToolResult` remains a distinct top-level semantic unit. The Anthropic Messages encoder MUST render a `ToolResult` node as a distinct `tool_result` protocol object or block container. It MUST NOT rewrite that node as ordinary role-bearing content.
 
@@ -799,6 +799,8 @@ PM9. For downstream `POST /v1/messages` streaming responses synthesized or trans
 3. one `message_delta`
 4. `message_stop`
 
+PM9a. For PM9 streams, each emitted content block lifecycle MUST use one integer `index`. The `content_block_start` indices MUST equal `0, 1, ..., N - 1` in content block emission order, where `N` is the number of emitted content blocks in the stream. Every `content_block_delta` and `content_block_stop` for a block MUST use the same `index` as that block's `content_block_start`. Skipped URP nodes, buffered URP nodes, and non-content control nodes MUST NOT create gaps in the emitted index sequence.
+
 PM10. For PM9 streams, `message_start.message` MUST include at least:
 
 - `id`
@@ -1048,6 +1050,8 @@ DM8. For downstream `POST /v1/messages` SSE streams, every content block index M
 - zero or more `content_block_delta` events for that index;
 - exactly one `content_block_stop` for that index;
 - no events for a later-emitted block may appear between `content_block_start` and `content_block_stop` of an earlier-emitted block.
+
+DM8a. For downstream `POST /v1/messages` SSE streams, the set of emitted content block indices MUST be exactly the contiguous zero-based integer range `0..N`, where `N` is the number of emitted content blocks. The ordering of first `content_block_start` events MUST be ascending by one from `0` with no skipped value.
 
 DM9. For downstream `POST /v1/messages` SSE streams, Monoize MUST NOT emit duplicate `content_block_start`, duplicate `content_block_stop`, or duplicate final-content replays for a block whose streamed deltas already carried the same text, thinking, or input-json bytes.
 
