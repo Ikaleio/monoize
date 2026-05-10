@@ -219,9 +219,15 @@
 		"maxMultiplierHelp": "Limits the maximum billing multiplier for requests using this key. Header-specified multiplier cannot exceed this value. Leave empty for no limit.",
 		"reasoningEnvelopeEnabled": "Reasoning Envelope Guard",
 		"reasoningEnvelopeHelp": "Wrap encrypted reasoning with upstream model metadata and drop mismatched encrypted blocks before forwarding.",
-		"requestCaptureEnabled": "Request Capture Dump",
-		"requestCaptureHelp": "Persist raw request/response diagnostic dumps for this API key. The system-wide capture switch must also be enabled.",
-		"captureBadge": "dump"
+		"requestCaptureMode": "Request Capture Dump",
+		"requestCaptureModeOff": "Off",
+		"requestCaptureModeAll": "Capture all",
+		"requestCaptureModeAbnormal": "Only abnormal",
+		"requestCaptureModeAllHelp": "Persist raw request/response diagnostic dumps for every request made with this API key.",
+		"requestCaptureModeAbnormalHelp": "Persist dumps only for upstream errors, missing usage, or zero-usage responses.",
+		"requestCaptureHelp": "The system-wide capture switch must also be enabled before dumps are written.",
+		"captureBadgeAll": "dump",
+		"captureBadgeAbnormal": "abnormal"
 	},
 	"settings": {
 		"title": "Settings",

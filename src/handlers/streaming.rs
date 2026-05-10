@@ -160,7 +160,6 @@ pub(super) async fn forward_stream_typed(
                                     None,
                                 ))
                                 .await;
-                            session.persist().await;
                         }
                         update_pending_channel_info(
                             &state,
@@ -182,7 +181,7 @@ pub(super) async fn forward_stream_typed(
                             Ok(resp) => resp,
                             Err(err) => {
                                 if let Some(session) = capture.session.as_ref() {
-                                    session.persist().await;
+                                    session.persist_with_result(None, false).await;
                                 }
                                 return Err(err);
                             }
@@ -196,7 +195,7 @@ pub(super) async fn forward_stream_typed(
                         .await
                         {
                             if let Some(session) = capture.session.as_ref() {
-                                session.persist().await;
+                                session.persist_with_result(None, false).await;
                             }
                             return Err(err);
                         }
@@ -209,7 +208,7 @@ pub(super) async fn forward_stream_typed(
                         .await
                         {
                             if let Some(session) = capture.session.as_ref() {
-                                session.persist().await;
+                                session.persist_with_result(None, false).await;
                             }
                             return Err(err);
                         }
@@ -222,7 +221,7 @@ pub(super) async fn forward_stream_typed(
                         .await
                         {
                             if let Some(session) = capture.session.as_ref() {
-                                session.persist().await;
+                                session.persist_with_result(None, false).await;
                             }
                             return Err(err);
                         }
@@ -250,7 +249,7 @@ pub(super) async fn forward_stream_typed(
                             Ok(charge) => charge,
                             Err(err) => {
                                 if let Some(session) = capture.session.as_ref() {
-                                    session.persist().await;
+                                    session.persist_with_result(None, false).await;
                                 }
                                 return Err(err);
                             }
@@ -273,6 +272,11 @@ pub(super) async fn forward_stream_typed(
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
                         );
+                        if let Some(session) = capture.session.as_ref() {
+                            session
+                                .persist_with_result(resp.usage.as_ref(), false)
+                                .await;
+                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         tokio::spawn(async move {
@@ -345,7 +349,7 @@ pub(super) async fn forward_stream_typed(
                                 tried_providers,
                             );
                             if let Some(session) = capture.session.as_ref() {
-                                session.persist().await;
+                                session.persist_with_result(None, false).await;
                             }
                             return Err(app_err);
                         }
@@ -387,7 +391,7 @@ pub(super) async fn forward_stream_typed(
                             tried_providers,
                         );
                         if let Some(session) = capture.session.as_ref() {
-                            session.persist().await;
+                            session.persist_with_result(None, true).await;
                         }
                         return Err(app_err);
                     }
@@ -580,8 +584,15 @@ pub(super) async fn forward_stream_typed(
                             stream_future.await
                         };
 
-                        let (ttfb_ms, usage, is_estimated, terminal_diagnostics) = {
+                        let (
+                            ttfb_ms,
+                            actual_upstream_usage,
+                            usage,
+                            is_estimated,
+                            terminal_diagnostics,
+                        ) = {
                             let guard = runtime_metrics.lock().await;
+                            let actual_upstream_usage = guard.usage.clone();
                             let (usage, is_estimated) = match guard.usage.clone() {
                                 Some(u) => (Some(u), false),
                                 None if enable_estimated_billing
@@ -604,7 +615,13 @@ pub(super) async fn forward_stream_typed(
                                 }
                                 _ => (None, false),
                             };
-                            (guard.ttfb_ms, usage, is_estimated, guard.terminal.clone())
+                            (
+                                guard.ttfb_ms,
+                                actual_upstream_usage,
+                                usage,
+                                is_estimated,
+                                guard.terminal.clone(),
+                            )
                         };
 
                         let mut charge = match usage.as_ref() {
@@ -748,7 +765,12 @@ pub(super) async fn forward_stream_typed(
                                     }),
                                 ))
                                 .await;
-                            session.persist().await;
+                            session
+                                .persist_with_result(
+                                    actual_upstream_usage.as_ref(),
+                                    stream_result.is_err(),
+                                )
+                                .await;
                         }
                     });
                     return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
@@ -796,7 +818,7 @@ pub(super) async fn forward_stream_typed(
                             tried_providers,
                         );
                         if let Some(session) = capture.session.as_ref() {
-                            session.persist().await;
+                            session.persist_with_result(None, true).await;
                         }
                         return Err(app_err);
                     }
@@ -834,7 +856,7 @@ pub(super) async fn forward_stream_typed(
                         tried_providers,
                     );
                     if let Some(session) = capture.session.as_ref() {
-                        session.persist().await;
+                        session.persist_with_result(None, true).await;
                     }
                     return Err(app_err);
                 }
@@ -871,7 +893,7 @@ pub(super) async fn forward_stream_typed(
         );
     }
     if let Some(session) = capture.session.as_ref() {
-        session.persist().await;
+        session.persist_with_result(None, true).await;
     }
     Err(final_err)
 }

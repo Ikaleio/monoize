@@ -223,6 +223,8 @@ pub fn wrap_reasoning_envelope_in_stream_event(
             let item_id = extra_body
                 .get("id")
                 .and_then(Value::as_str)
+                .or_else(|| extra_body.get("reasoning_item_id").and_then(Value::as_str))
+                .or_else(|| extra_body.get("item_id").and_then(Value::as_str))
                 .map(str::to_string);
             wrap_reasoning_extra_body_encrypted_content(
                 extra_body,
@@ -233,8 +235,15 @@ pub fn wrap_reasoning_envelope_in_stream_event(
         }
         UrpStreamEvent::NodeDelta {
             delta: NodeDelta::Reasoning { encrypted, .. },
+            extra_body,
             ..
-        } => wrap_reasoning_payload(encrypted, None, provider_type, model),
+        } => {
+            let item_id = extra_body
+                .get("reasoning_item_id")
+                .and_then(Value::as_str)
+                .or_else(|| extra_body.get("item_id").and_then(Value::as_str));
+            wrap_reasoning_payload(encrypted, item_id, provider_type, model);
+        }
         UrpStreamEvent::NodeDone { node, .. } => {
             wrap_reasoning_node_envelope(node, provider_type, model);
             if let Node::NextDownstreamEnvelopeExtra { extra_body } = node
@@ -1024,6 +1033,70 @@ mod tests {
 
         strip_nested_extra_body(&mut nodes);
         assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn streaming_reasoning_delta_envelope_uses_reasoning_item_id_extra() {
+        let mut event = UrpStreamEvent::NodeDelta {
+            node_index: 0,
+            delta: NodeDelta::Reasoning {
+                content: None,
+                encrypted: Some(serde_json::json!("opaque_payload")),
+                summary: None,
+                source: None,
+            },
+            usage: None,
+            extra_body: [(
+                "reasoning_item_id".to_string(),
+                serde_json::json!("rs_original"),
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        wrap_reasoning_envelope_in_stream_event(&mut event, "responses", "gpt-5.5");
+        let UrpStreamEvent::NodeDelta {
+            delta:
+                NodeDelta::Reasoning {
+                    encrypted: Some(encrypted),
+                    ..
+                },
+            ..
+        } = event
+        else {
+            panic!("expected reasoning delta");
+        };
+        let envelope = parse_reasoning_envelope(&encrypted).expect("mz2 envelope");
+        assert_eq!(envelope.item_id.as_deref(), Some("rs_original"));
+        assert_eq!(envelope.payload, serde_json::json!("opaque_payload"));
+    }
+
+    #[test]
+    fn streaming_reasoning_envelope_extra_uses_item_id() {
+        let mut event = UrpStreamEvent::NodeStart {
+            node_index: 0,
+            header: NodeHeader::NextDownstreamEnvelopeExtra,
+            extra_body: [
+                ("id".to_string(), serde_json::json!("rs_original")),
+                (
+                    "encrypted_content".to_string(),
+                    serde_json::json!("opaque_payload"),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        wrap_reasoning_envelope_in_stream_event(&mut event, "responses", "gpt-5.5");
+        let UrpStreamEvent::NodeStart { extra_body, .. } = event else {
+            panic!("expected envelope extra start");
+        };
+        let encrypted = extra_body
+            .get("encrypted_content")
+            .expect("encrypted content");
+        let envelope = parse_reasoning_envelope(encrypted).expect("mz2 envelope");
+        assert_eq!(envelope.item_id.as_deref(), Some("rs_original"));
+        assert_eq!(envelope.payload, serde_json::json!("opaque_payload"));
     }
 
     #[test]

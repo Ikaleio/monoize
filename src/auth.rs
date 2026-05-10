@@ -1,5 +1,5 @@
 use crate::transforms::TransformRuleConfig;
-use crate::users::{UserStore, compute_effective_groups};
+use crate::users::{RequestCaptureMode, UserStore, compute_effective_groups};
 
 /// Result of authentication containing the tenant_id and optionally the user_id
 /// if authenticated via database API key.
@@ -20,7 +20,7 @@ pub struct AuthResult {
     pub sub_account_enabled: bool,
     pub sub_account_balance_nano: String,
     pub reasoning_envelope_enabled: bool,
-    pub request_capture_enabled: bool,
+    pub request_capture_mode: RequestCaptureMode,
 }
 
 impl AuthResult {
@@ -73,7 +73,7 @@ impl AuthState {
                             sub_account_enabled: api_key.sub_account_enabled,
                             sub_account_balance_nano: api_key.sub_account_balance_nano,
                             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
-                            request_capture_enabled: api_key.request_capture_enabled,
+                            request_capture_mode: api_key.request_capture_mode,
                         });
                     }
                     Ok(None) => {}
@@ -92,7 +92,7 @@ mod tests {
     use super::AuthState;
     use crate::db::DbPool;
     use crate::migration::Migrator;
-    use crate::users::{CreateApiKeyInput, UserRole, UserStore};
+    use crate::users::{CreateApiKeyInput, RequestCaptureMode, UserRole, UserStore};
     use sea_orm_migration::MigratorTrait;
 
     async fn make_user_store() -> UserStore {
@@ -130,7 +130,7 @@ mod tests {
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
-                    request_capture_enabled: false,
+                    request_capture_mode: RequestCaptureMode::Off,
                 },
                 false,
             )
@@ -174,7 +174,7 @@ mod tests {
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
-                    request_capture_enabled: false,
+                    request_capture_mode: RequestCaptureMode::Off,
                 },
                 false,
             )
@@ -220,7 +220,7 @@ mod tests {
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
-                    request_capture_enabled: false,
+                    request_capture_mode: RequestCaptureMode::Off,
                 },
                 false,
             )

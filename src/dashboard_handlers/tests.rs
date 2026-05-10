@@ -519,7 +519,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
-                request_capture_enabled: create_body.request_capture_enabled,
+                request_capture_mode: create_body.request_capture_mode,
             },
             false,
         )
@@ -550,7 +550,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         transforms: created.transforms.clone(),
         model_redirects: created.model_redirects.clone(),
         reasoning_envelope_enabled: created.reasoning_envelope_enabled,
-        request_capture_enabled: created.request_capture_enabled,
+        request_capture_mode: created.request_capture_mode,
     })
     .expect("created response serializes");
     assert_eq!(
@@ -560,7 +560,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
 
     let mut update_body: UpdateApiKeyRequest = serde_json::from_value(json!({
         "allowed_groups": [" Beta ", ""],
-        "request_capture_enabled": true
+        "request_capture_mode": "capture-all"
     }))
     .expect("update payload deserializes");
     canonicalize_dashboard_api_key_allowed_groups(
@@ -585,7 +585,7 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
                 transforms: None,
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
-                request_capture_enabled: update_body.request_capture_enabled,
+                request_capture_mode: update_body.request_capture_mode,
                 expires_at: None,
             },
             false,
@@ -594,7 +594,10 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         .expect("api key updated");
 
     assert_eq!(updated.allowed_groups, vec!["beta".to_string()]);
-    assert!(updated.request_capture_enabled);
+    assert_eq!(
+        updated.request_capture_mode,
+        crate::users::RequestCaptureMode::CaptureAll
+    );
 
     let fetched = store
         .get_api_key_by_id(&updated.id)
@@ -633,13 +636,13 @@ async fn dashboard_api_key_allowed_groups_round_trip_through_store_and_responses
         transforms: fetched.transforms,
         model_redirects: fetched.model_redirects,
         reasoning_envelope_enabled: fetched.reasoning_envelope_enabled,
-        request_capture_enabled: fetched.request_capture_enabled,
+        request_capture_mode: fetched.request_capture_mode,
     })
     .expect("response serializes");
     assert_eq!(response_value.get("allowed_groups"), Some(&json!(["beta"])));
     assert_eq!(
-        response_value.get("request_capture_enabled"),
-        Some(&json!(true))
+        response_value.get("request_capture_mode"),
+        Some(&json!("capture-all"))
     );
 }
 
@@ -688,7 +691,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: invalid_create_body.transforms,
                 model_redirects: invalid_create_body.model_redirects,
                 reasoning_envelope_enabled: invalid_create_body.reasoning_envelope_enabled,
-                request_capture_enabled: invalid_create_body.request_capture_enabled,
+                request_capture_mode: invalid_create_body.request_capture_mode,
             },
             false,
         )
@@ -712,7 +715,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
-                request_capture_enabled: false,
+                request_capture_mode: crate::users::RequestCaptureMode::Off,
             },
             false,
         )
@@ -745,7 +748,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: None,
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
-                request_capture_enabled: None,
+                request_capture_mode: None,
                 expires_at: None,
             },
             false,
@@ -774,7 +777,7 @@ async fn dashboard_api_key_allowed_groups_enforces_user_ceiling() {
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
-                request_capture_enabled: false,
+                request_capture_mode: crate::users::RequestCaptureMode::Off,
             },
             false,
         )
@@ -825,7 +828,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                 transforms: create_body.transforms,
                 model_redirects: create_body.model_redirects,
                 reasoning_envelope_enabled: create_body.reasoning_envelope_enabled,
-                request_capture_enabled: create_body.request_capture_enabled,
+                request_capture_mode: create_body.request_capture_mode,
             },
             false,
         )
@@ -854,7 +857,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                     replace: "gpt-5.4".to_string(),
                 }]),
                 reasoning_envelope_enabled: None,
-                request_capture_enabled: None,
+                request_capture_mode: None,
                 expires_at: None,
             },
             false,
@@ -883,7 +886,7 @@ async fn dashboard_api_key_model_redirects_round_trip_and_validate() {
                     replace: "gpt-5.4".to_string(),
                 }],
                 reasoning_envelope_enabled: true,
-                request_capture_enabled: false,
+                request_capture_mode: crate::users::RequestCaptureMode::Off,
             },
             false,
         )

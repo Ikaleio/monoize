@@ -164,7 +164,54 @@ pub struct ApiKey {
     #[serde(default = "default_true")]
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
-    pub request_capture_enabled: bool,
+    pub request_capture_mode: RequestCaptureMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequestCaptureMode {
+    #[default]
+    Off,
+    CaptureAll,
+    CaptureOnlyAbnormal,
+}
+
+impl RequestCaptureMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::CaptureAll => "capture-all",
+            Self::CaptureOnlyAbnormal => "capture-only-abnormal",
+        }
+    }
+
+    pub fn should_start_capture(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub fn should_persist(
+        self,
+        upstream_usage: Option<&crate::urp::Usage>,
+        upstream_error_seen: bool,
+    ) -> bool {
+        match self {
+            Self::Off => false,
+            Self::CaptureAll => true,
+            Self::CaptureOnlyAbnormal => {
+                upstream_error_seen
+                    || upstream_usage.is_none()
+                    || upstream_usage.is_some_and(|usage| usage.total_tokens() == 0)
+            }
+        }
+    }
+
+    pub fn from_db_value(raw: &str) -> Self {
+        match raw.trim() {
+            "capture-all" => Self::CaptureAll,
+            "capture-only-abnormal" => Self::CaptureOnlyAbnormal,
+            _ => Self::Off,
+        }
+    }
 }
 
 /// Input for creating a new API key with extended fields
@@ -191,7 +238,7 @@ pub struct CreateApiKeyInput {
     #[serde(default = "default_true")]
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
-    pub request_capture_enabled: bool,
+    pub request_capture_mode: RequestCaptureMode,
 }
 
 fn default_true() -> bool {
@@ -310,7 +357,7 @@ pub struct UpdateApiKeyInput {
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_envelope_enabled: Option<bool>,
-    pub request_capture_enabled: Option<bool>,
+    pub request_capture_mode: Option<RequestCaptureMode>,
     pub expires_at: Option<String>, // RFC3339 format or null
 }
 

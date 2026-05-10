@@ -56,7 +56,7 @@ async fn enable_request_capture(ctx: &TestContext) {
                 transforms: None,
                 model_redirects: None,
                 reasoning_envelope_enabled: None,
-                request_capture_enabled: Some(true),
+                request_capture_mode: Some(monoize::users::RequestCaptureMode::CaptureAll),
                 expires_at: None,
             },
             false,

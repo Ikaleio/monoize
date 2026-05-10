@@ -2,6 +2,7 @@ use crate::auth::AuthResult;
 use crate::config::ProviderType;
 use crate::handlers::DownstreamProtocol;
 use crate::monoize_routing::MonoizeRuntimeConfig;
+use crate::users::RequestCaptureMode;
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -58,6 +59,7 @@ pub(crate) struct RequestCaptureSession {
     user_id: String,
     downstream_protocol: DownstreamProtocol,
     is_stream: bool,
+    mode: RequestCaptureMode,
     attempts: Arc<Mutex<Vec<Value>>>,
 }
 
@@ -114,7 +116,7 @@ impl RequestCaptureStore {
         is_stream: bool,
     ) -> Option<RequestCaptureSession> {
         let rt = runtime.read().await;
-        if !rt.request_capture_enabled || !auth.request_capture_enabled {
+        if !rt.request_capture_enabled || !auth.request_capture_mode.should_start_capture() {
             return None;
         }
         let api_key_id = auth.api_key_id.clone()?;
@@ -127,6 +129,7 @@ impl RequestCaptureStore {
             user_id,
             downstream_protocol,
             is_stream,
+            mode: auth.request_capture_mode,
             attempts: Arc::new(Mutex::new(Vec::new())),
         })
     }
@@ -165,9 +168,19 @@ impl RequestCaptureSession {
         self.attempts.lock().await.push(attempt);
     }
 
-    pub(crate) async fn persist(&self) {
+    pub(crate) async fn persist_with_result(
+        &self,
+        upstream_usage: Option<&crate::urp::Usage>,
+        upstream_error_seen: bool,
+    ) {
         let attempts = self.attempts.lock().await.clone();
         if attempts.is_empty() {
+            return;
+        }
+        if !self
+            .mode
+            .should_persist(upstream_usage, upstream_error_seen)
+        {
             return;
         }
         let payload = json!({
@@ -311,7 +324,7 @@ mod tests {
     use crate::users::UserRole;
     use tokio::sync::RwLock;
 
-    fn test_auth(request_capture_enabled: bool) -> AuthResult {
+    fn test_auth(request_capture_mode: RequestCaptureMode) -> AuthResult {
         AuthResult {
             tenant_id: "tenant-1".to_string(),
             user_id: Some("user-1".to_string()),
@@ -328,7 +341,7 @@ mod tests {
             sub_account_enabled: false,
             sub_account_balance_nano: "0".to_string(),
             reasoning_envelope_enabled: true,
-            request_capture_enabled,
+            request_capture_mode,
         }
     }
 
@@ -361,7 +374,7 @@ mod tests {
             store
                 .maybe_start_session(
                     &runtime,
-                    &test_auth(true),
+                    &test_auth(RequestCaptureMode::CaptureAll),
                     Some("req_12345678".to_string()),
                     DownstreamProtocol::Responses,
                     false,
@@ -378,7 +391,7 @@ mod tests {
             store
                 .maybe_start_session(
                     &runtime,
-                    &test_auth(false),
+                    &test_auth(RequestCaptureMode::Off),
                     Some("req_12345678".to_string()),
                     DownstreamProtocol::Responses,
                     false,
@@ -391,7 +404,7 @@ mod tests {
             store
                 .maybe_start_session(
                     &runtime,
-                    &test_auth(true),
+                    &test_auth(RequestCaptureMode::CaptureAll),
                     Some("req_12345678".to_string()),
                     DownstreamProtocol::Responses,
                     false,

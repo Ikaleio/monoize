@@ -417,7 +417,7 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
             });
         }
         "reasoning" => {
-            if let Some(node) = decode_reasoning_node(obj) {
+            if let Some(node) = decode_reasoning_node(obj, false) {
                 out.push(node);
             }
         }
@@ -624,7 +624,10 @@ fn decode_response_message_nodes(
     nodes
 }
 
-fn decode_reasoning_node(item_obj: &Map<String, Value>) -> Option<Node> {
+fn decode_reasoning_node(
+    item_obj: &Map<String, Value>,
+    synthesize_missing_id: bool,
+) -> Option<Node> {
     let shared_extra = split_extra(
         item_obj,
         &["type", "encrypted_content", "summary", "text", "source"],
@@ -645,17 +648,19 @@ fn decode_reasoning_node(item_obj: &Map<String, Value>) -> Option<Node> {
         .get("source")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    (text.is_some() || summary.is_some() || encrypted.is_some()).then(|| Node::Reasoning {
-        id: item_obj
+    (text.is_some() || summary.is_some() || encrypted.is_some()).then(|| {
+        let id = item_obj
             .get("id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| Some(crate::urp::synthetic_reasoning_id())),
-        content: text.or_else(|| summary.clone()),
-        encrypted,
-        summary,
-        source,
-        extra_body: shared_extra,
+            .map(|s| s.to_string());
+        Node::Reasoning {
+            id: id.or_else(|| synthesize_missing_id.then(crate::urp::synthetic_reasoning_id)),
+            content: text.or_else(|| summary.clone()),
+            encrypted,
+            summary,
+            source,
+            extra_body: shared_extra,
+        }
     })
 }
 
@@ -751,7 +756,7 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                     });
                 }
                 "reasoning" => {
-                    if let Some(node) = decode_reasoning_node(item_obj) {
+                    if let Some(node) = decode_reasoning_node(item_obj, true) {
                         nodes.push(node);
                     }
                 }
@@ -1045,6 +1050,27 @@ mod tests {
             Node::ToolResult { call_id, content, .. }
                 if call_id == "call_1"
                     && matches!(&content[0], ToolResultContent::Text { text } if text == "ok")
+        ));
+    }
+
+    #[test]
+    fn decode_request_reasoning_input_without_id_preserves_missing_id() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": "opaque_without_item_id"
+                }
+            ]
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::Reasoning { id: None, encrypted: Some(value), .. }
+                if value.as_str() == Some("opaque_without_item_id")
         ));
     }
 

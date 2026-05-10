@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -45,7 +46,7 @@ import {
   useDashboardGroups,
   useTransformRegistry,
 } from "@/lib/swr";
-import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, ModelRedirectRule, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
+import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { api as apiClient } from "@/lib/api";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
@@ -79,6 +80,10 @@ function logHandledOptimisticError(action: string, error: unknown, details: Reco
     ...details,
     error,
   });
+}
+
+function requestCaptureBadgeVariant(mode: RequestCaptureMode): "secondary" | "outline" {
+  return mode === "capture-only-abnormal" ? "secondary" : "outline";
 }
 
 interface AllowedGroupsInputProps {
@@ -350,7 +355,7 @@ export function ApiKeysPage() {
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
   const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
   const [newKeyReasoningEnvelopeEnabled, setNewKeyReasoningEnvelopeEnabled] = useState(true);
-  const [newKeyRequestCaptureEnabled, setNewKeyRequestCaptureEnabled] = useState(false);
+  const [newKeyRequestCaptureMode, setNewKeyRequestCaptureMode] = useState<RequestCaptureMode>("off");
 
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -370,7 +375,7 @@ export function ApiKeysPage() {
     setNewKeyTransforms([]);
     setNewKeyModelRedirects([]);
     setNewKeyReasoningEnvelopeEnabled(true);
-    setNewKeyRequestCaptureEnabled(false);
+    setNewKeyRequestCaptureMode("off");
   };
 
   const handleCreate = async () => {
@@ -398,7 +403,7 @@ export function ApiKeysPage() {
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
         reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
-        request_capture_enabled: newKeyRequestCaptureEnabled,
+        request_capture_mode: newKeyRequestCaptureMode,
       };
       const key = await createApiKeyOptimistic(
         input,
@@ -439,7 +444,7 @@ export function ApiKeysPage() {
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
         reasoning_envelope_enabled: newKeyReasoningEnvelopeEnabled,
-        request_capture_enabled: newKeyRequestCaptureEnabled,
+        request_capture_mode: newKeyRequestCaptureMode,
       };
       await updateApiKeyOptimistic(
         editKey.id,
@@ -533,7 +538,7 @@ export function ApiKeysPage() {
     setNewKeyTransforms(key.transforms ?? []);
     setNewKeyModelRedirects(key.model_redirects ?? []);
     setNewKeyReasoningEnvelopeEnabled(key.reasoning_envelope_enabled ?? true);
-    setNewKeyRequestCaptureEnabled(key.request_capture_enabled ?? false);
+    setNewKeyRequestCaptureMode(key.request_capture_mode ?? "off");
   };
 
   const toggleSelectKey = (id: string) => {
@@ -654,13 +659,18 @@ export function ApiKeysPage() {
                 </div>
                 <div className="space-y-1">
                   <div className="flex items-center space-x-2">
-                    <Switch
-                      id="requestCaptureEnabled"
-                      checked={newKeyRequestCaptureEnabled}
-                      onCheckedChange={setNewKeyRequestCaptureEnabled}
-                    />
-                    <Label htmlFor="requestCaptureEnabled">{t("apiKeys.requestCaptureEnabled")}</Label>
+                    <Label htmlFor="requestCaptureMode">{t("apiKeys.requestCaptureMode")}</Label>
                   </div>
+                  <Select value={newKeyRequestCaptureMode} onValueChange={(value) => setNewKeyRequestCaptureMode(value as RequestCaptureMode)}>
+                    <SelectTrigger id="requestCaptureMode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off">{t("apiKeys.requestCaptureModeOff")}</SelectItem>
+                      <SelectItem value="capture-all">{t("apiKeys.requestCaptureModeAll")}</SelectItem>
+                      <SelectItem value="capture-only-abnormal">{t("apiKeys.requestCaptureModeAbnormal")}</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureHelp")}</p>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -940,19 +950,25 @@ export function ApiKeysPage() {
                               </TooltipContent>
                             </Tooltip>
                           )}
-                          {key.request_capture_enabled && (
+                          {key.request_capture_mode !== "off" && (
                             <Tooltip>
                               <TooltipTrigger>
-                                <Badge variant="outline" className="px-1.5 text-xs whitespace-nowrap">
-                                  {t("apiKeys.captureBadge")}
+                                <Badge variant={requestCaptureBadgeVariant(key.request_capture_mode)} className="px-1.5 text-xs whitespace-nowrap">
+                                  {key.request_capture_mode === "capture-only-abnormal"
+                                    ? t("apiKeys.captureBadgeAbnormal")
+                                    : t("apiKeys.captureBadgeAll")}
                                 </Badge>
                               </TooltipTrigger>
                               <TooltipContent>
-                                <p>{t("apiKeys.requestCaptureHelp")}</p>
+                                <p>
+                                  {key.request_capture_mode === "capture-only-abnormal"
+                                    ? t("apiKeys.requestCaptureModeAbnormalHelp")
+                                    : t("apiKeys.requestCaptureModeAllHelp")}
+                                </p>
                               </TooltipContent>
                             </Tooltip>
                           )}
-                          {!key.model_limits_enabled && key.ip_whitelist.length === 0 && key.max_multiplier == null && !key.request_capture_enabled && (
+                          {!key.model_limits_enabled && key.ip_whitelist.length === 0 && key.max_multiplier == null && key.request_capture_mode === "off" && (
                             <span className="text-muted-foreground">-</span>
                           )}
                         </div>
@@ -1051,15 +1067,20 @@ export function ApiKeysPage() {
               </div>
               <p className="text-sm text-muted-foreground">{t("apiKeys.reasoningEnvelopeHelp")}</p>
             </div>
-            <div className="space-y-1">
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="editRequestCaptureEnabled"
-                  checked={newKeyRequestCaptureEnabled}
-                  onCheckedChange={setNewKeyRequestCaptureEnabled}
-                />
-                <Label htmlFor="editRequestCaptureEnabled">{t("apiKeys.requestCaptureEnabled")}</Label>
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                <Label htmlFor="editRequestCaptureMode">{t("apiKeys.requestCaptureMode")}</Label>
               </div>
+              <Select value={newKeyRequestCaptureMode} onValueChange={(value) => setNewKeyRequestCaptureMode(value as RequestCaptureMode)}>
+                <SelectTrigger id="editRequestCaptureMode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">{t("apiKeys.requestCaptureModeOff")}</SelectItem>
+                  <SelectItem value="capture-all">{t("apiKeys.requestCaptureModeAll")}</SelectItem>
+                  <SelectItem value="capture-only-abnormal">{t("apiKeys.requestCaptureModeAbnormal")}</SelectItem>
+                </SelectContent>
+              </Select>
               <p className="text-sm text-muted-foreground">{t("apiKeys.requestCaptureHelp")}</p>
             </div>
             <div className="flex items-center space-x-2">

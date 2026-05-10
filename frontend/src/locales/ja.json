@@ -216,9 +216,15 @@
 		"maxMultiplierHelp": "このキーを使用するリクエストの最大課金倍率を制限します。ヘッダーで指定された倍率はこの値を超えることができません。空欄で制限なし。",
 		"reasoningEnvelopeEnabled": "暗号化推論ガード",
 		"reasoningEnvelopeHelp": "暗号化推論に上流モデルのメタデータを付与し、不一致の暗号化ブロックを転送前に破棄します。",
-		"requestCaptureEnabled": "リクエストキャプチャダンプ",
-		"requestCaptureHelp": "この API キーの生のリクエスト/レスポンス診断ダンプを保存します。システム全体のキャプチャスイッチも有効である必要があります。",
-		"captureBadge": "dump"
+		"requestCaptureMode": "リクエストキャプチャダンプ",
+		"requestCaptureModeOff": "オフ",
+		"requestCaptureModeAll": "すべてキャプチャ",
+		"requestCaptureModeAbnormal": "異常のみ",
+		"requestCaptureModeAllHelp": "この API キーのすべてのリクエストについて生のリクエスト/レスポンス診断ダンプを保存します。",
+		"requestCaptureModeAbnormalHelp": "上流エラー、usage 欠落、または usage 合計 0 の場合のみダンプを保存します。",
+		"requestCaptureHelp": "ダンプを書き込むには、システム全体のキャプチャスイッチも有効である必要があります。",
+		"captureBadgeAll": "dump",
+		"captureBadgeAbnormal": "異常"
 	},
 	"settings": {
 		"title": "設定",

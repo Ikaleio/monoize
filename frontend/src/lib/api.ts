@@ -43,6 +43,8 @@ export interface ModelRedirectRule {
   replace: string;
 }
 
+export type RequestCaptureMode = "off" | "capture-all" | "capture-only-abnormal";
+
 export interface ApiKey {
   id: string;
   name: string;
@@ -63,7 +65,7 @@ export interface ApiKey {
   transforms: TransformRuleConfig[];
   model_redirects: ModelRedirectRule[];
   reasoning_envelope_enabled: boolean;
-  request_capture_enabled: boolean;
+  request_capture_mode: RequestCaptureMode;
 }
 
 export type ApiKeyCreated = ApiKey;
@@ -80,7 +82,7 @@ export interface CreateApiKeyInput {
   transforms?: TransformRuleConfig[];
   model_redirects?: ModelRedirectRule[];
   reasoning_envelope_enabled?: boolean;
-  request_capture_enabled?: boolean;
+  request_capture_mode?: RequestCaptureMode;
 }
 
 export interface UpdateApiKeyInput {
@@ -96,7 +98,7 @@ export interface UpdateApiKeyInput {
   expires_at?: string;
   model_redirects?: ModelRedirectRule[];
   reasoning_envelope_enabled?: boolean;
-  request_capture_enabled?: boolean;
+  request_capture_mode?: RequestCaptureMode;
 }
 
 export interface SystemSettings {

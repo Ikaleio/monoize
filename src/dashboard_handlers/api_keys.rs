@@ -3,8 +3,8 @@ use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
-    CreateApiKeyInput, ModelRedirectRule, UpdateApiKeyInput, canonicalize_groups,
-    format_nano_to_usd, parse_nano_usd,
+    CreateApiKeyInput, ModelRedirectRule, RequestCaptureMode, UpdateApiKeyInput,
+    canonicalize_groups, format_nano_to_usd, parse_nano_usd,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -41,7 +41,7 @@ pub struct CreateApiKeyRequest {
     #[serde(default = "default_true")]
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
-    pub request_capture_enabled: bool,
+    pub request_capture_mode: RequestCaptureMode,
 }
 
 fn default_true() -> bool {
@@ -73,7 +73,7 @@ pub struct ApiKeyResponse {
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
     pub reasoning_envelope_enabled: bool,
-    pub request_capture_enabled: bool,
+    pub request_capture_mode: RequestCaptureMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -95,7 +95,7 @@ pub struct ApiKeyCreatedResponse {
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
     pub reasoning_envelope_enabled: bool,
-    pub request_capture_enabled: bool,
+    pub request_capture_mode: RequestCaptureMode,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,7 +111,7 @@ pub struct UpdateApiKeyRequest {
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_envelope_enabled: Option<bool>,
-    pub request_capture_enabled: Option<bool>,
+    pub request_capture_mode: Option<RequestCaptureMode>,
     pub expires_at: Option<String>,
 }
 
@@ -157,7 +157,7 @@ pub async fn list_my_api_keys(
                 transforms: k.transforms,
                 model_redirects: k.model_redirects,
                 reasoning_envelope_enabled: k.reasoning_envelope_enabled,
-                request_capture_enabled: k.request_capture_enabled,
+                request_capture_mode: k.request_capture_mode,
             }
         })
         .collect();
@@ -210,7 +210,7 @@ pub async fn create_api_key(
         transforms: body.transforms,
         model_redirects: body.model_redirects,
         reasoning_envelope_enabled: body.reasoning_envelope_enabled,
-        request_capture_enabled: body.request_capture_enabled,
+        request_capture_mode: body.request_capture_mode,
     };
 
     let is_admin = user.role.can_manage_system();
@@ -245,7 +245,7 @@ pub async fn create_api_key(
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
-            request_capture_enabled: api_key.request_capture_enabled,
+            request_capture_mode: api_key.request_capture_mode,
         }),
     ))
 }
@@ -328,7 +328,7 @@ pub async fn get_api_key(
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
-            request_capture_enabled: api_key.request_capture_enabled,
+            request_capture_mode: api_key.request_capture_mode,
         }
     }))
 }
@@ -372,7 +372,7 @@ pub async fn update_api_key(
         transforms: body.transforms,
         model_redirects: body.model_redirects,
         reasoning_envelope_enabled: body.reasoning_envelope_enabled,
-        request_capture_enabled: body.request_capture_enabled,
+        request_capture_mode: body.request_capture_mode,
         expires_at: body.expires_at,
     };
 
@@ -408,7 +408,7 @@ pub async fn update_api_key(
         transforms: updated_key.transforms,
         model_redirects: updated_key.model_redirects,
         reasoning_envelope_enabled: updated_key.reasoning_envelope_enabled,
-        request_capture_enabled: updated_key.request_capture_enabled,
+        request_capture_mode: updated_key.request_capture_mode,
     }))
 }
 

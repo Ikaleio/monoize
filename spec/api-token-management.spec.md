@@ -31,7 +31,7 @@ An API key row has:
 - `allowed_groups: string[]`
 - `max_multiplier: number?`
 - `transforms: TransformRuleConfig[]`
-- `request_capture_enabled: boolean`
+- `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"`
 
 ### 1.2 Group-scoped routing fields
 
@@ -84,7 +84,7 @@ All endpoints in this spec require an authenticated dashboard session.
   - `allowed_groups: string[]` (default empty, meaning inherit from owning user)
   - `max_multiplier: number?` (default null)
   - `transforms: TransformRuleConfig[]` (default empty)
-  - `request_capture_enabled: boolean` (default false)
+  - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"` (default `"off"`)
 - **Response:** The created key object including the full key string.
 
 TM-CREATE-1. The generated full key MUST start with the literal prefix `sk-`.
@@ -111,7 +111,7 @@ TM-CREATE-4. After successful key creation, there is no required cache invalidat
   - `allowed_groups`
   - `max_multiplier`
   - `transforms`
-  - `request_capture_enabled`
+  - `request_capture_mode`
   - `expires_at` (RFC3339 string or null)
 - **Errors:** `404 not_found` if the key does not exist or is not owned by the user.
 

@@ -7,7 +7,7 @@ use crate::monoize_routing::{
 };
 use crate::settings::normalize_pricing_model_key;
 use crate::urp;
-use crate::users::{ModelRedirectRule, UserRole};
+use crate::users::{ModelRedirectRule, RequestCaptureMode, UserRole};
 use axum::http::StatusCode;
 use std::collections::{BTreeSet, HashMap};
 
@@ -37,7 +37,7 @@ fn build_test_auth_with_role(
         sub_account_enabled: false,
         sub_account_balance_nano: "0".to_string(),
         reasoning_envelope_enabled: true,
-        request_capture_enabled: false,
+        request_capture_mode: RequestCaptureMode::Off,
     }
 }
 

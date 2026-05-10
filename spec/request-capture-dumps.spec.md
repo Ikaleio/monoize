@@ -18,19 +18,29 @@ RCD-C4. The default value of `monoize_request_capture_retention_days` MUST be `1
 
 RCD-C5. If a settings update supplies `monoize_request_capture_retention_days < 1`, the server MUST persist `1`.
 
-RCD-C6. API key rows MUST include `request_capture_enabled: boolean`.
+RCD-C6. API key rows MUST include `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"`.
 
-RCD-C7. The default value of `request_capture_enabled` for newly created API keys MUST be `false`.
+RCD-C7. The default value of `request_capture_mode` for newly created API keys MUST be `"off"`.
 
-RCD-C8. If an existing API key row has no stored `request_capture_enabled` value, runtime MUST treat it as `false`.
+RCD-C8. If an existing API key row has no stored `request_capture_mode` value, runtime MUST treat it as `"off"`.
 
 RCD-C9. A forwarding request is capture-eligible iff all conditions are true:
 
 1. the request is authenticated by a dashboard-managed API key;
 2. `monoize_request_capture_enabled == true` at request-processing time;
-3. the authenticated API key has `request_capture_enabled == true`.
+3. the authenticated API key has `request_capture_mode != "off"`.
 
-RCD-C10. If `monoize_request_capture_enabled == false`, no dump file MUST be written even when the authenticated API key has `request_capture_enabled == true`.
+RCD-C10. If `monoize_request_capture_enabled == false`, no dump file MUST be written even when the authenticated API key has `request_capture_mode != "off"`.
+
+RCD-C11. If `request_capture_mode == "capture-all"`, Monoize MUST persist a dump file for every capture-eligible forwarding request that records at least one upstream attempt.
+
+RCD-C12. If `request_capture_mode == "capture-only-abnormal"`, Monoize MUST persist a dump file only when at least one of the following conditions is true for the request:
+
+1. an upstream call failed and produced an upstream error for any recorded attempt;
+2. the final request result contains no upstream `usage` object;
+3. the final request result contains an upstream `usage` object whose `input_tokens + output_tokens == 0`.
+
+RCD-C13. For RCD-C12, synthetic usage created only for estimated billing MUST NOT cause condition 2 to become false. The abnormal-only decision MUST be based on upstream-provided usage data before estimated billing fallback.
 
 ## 2. Directory and filename
 

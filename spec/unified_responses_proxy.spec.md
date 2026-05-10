@@ -479,9 +479,13 @@ PR4c.1. When decoding downstream Responses `input[]`, Monoize MUST decode an ite
 - `summary[]` maps to `Reasoning.summary`;
 - `text`, when present, maps to `Reasoning.content`.
 
+If the downstream `input[]` reasoning item omits `id`, Monoize MUST leave `Reasoning.id` absent. Monoize MUST NOT synthesize an id while decoding request-side replay items.
+
 PR4c.2. When encoding an upstream `POST /v1/responses` request, Monoize MUST include `reasoning.encrypted_content` in the top-level `include` array. If the downstream request already supplied an `include` array, Monoize MUST append `reasoning.encrypted_content` only when that exact string is absent.
 
 PR4c.2a. When encoding an upstream `POST /v1/responses` request whose replayed `input[]` history also contains one or more tool-calling nodes, Monoize MUST drop every replayed `Reasoning` node that lacks a non-empty encrypted payload. This drop occurs after request-phase transforms and before HTTP request emission. The purpose is to prevent downstream-visible plaintext-only reasoning summaries, including summaries produced by Monoize response transforms, from being replayed upstream as authoritative Responses reasoning items during stateless tool-loop continuation.
+
+PR4c.2b. When encoding a replayed URP v2 `Reasoning` node with non-empty `encrypted` into an upstream `POST /v1/responses` request `input[]` item, Monoize MUST emit that item only if the node has a stable upstream Responses reasoning item id. A stable id is present iff either `Reasoning.id` is non-empty or `Reasoning.extra_body.id` is a non-empty string. If no stable id is present, Monoize MUST drop the replayed reasoning node. Monoize MUST NOT synthesize a new `rs_...` id for encrypted reasoning replay because the encrypted payload is bound to the original upstream item id.
 
 PR4c.3. When an authenticated API key has `reasoning_envelope_enabled = true`, Monoize MUST wrap every downstream-visible encrypted reasoning payload produced by `/v1/responses`, `/v1/chat/completions`, or `/v1/messages` in a Monoize reasoning envelope before the payload is emitted to the downstream client.
 
@@ -497,6 +501,10 @@ PR4c.4. The Monoize reasoning envelope string format MUST be:
   - `payload`: the original encrypted reasoning payload as a JSON value.
 
 PR4c.5. Monoize MUST apply PR4c.3 to all downstream surfaces that can carry encrypted reasoning, including non-stream terminal responses, streaming reasoning deltas, streaming `output_item.added`, streaming `output_item.done`, streaming `response.completed`, Chat Completions `reasoning_details[]`, and Anthropic Messages `thinking.signature` or `redacted_thinking.data`.
+
+PR4c.5a. When applying PR4c.3 to a streaming reasoning delta, if the canonical URP stream event carries `reasoning_item_id` or `item_id` in event extra state, Monoize MUST store that value as the mz2 envelope `item_id`. Monoize MUST NOT emit an mz2 envelope with `item_id = null` when the stream event contains a non-empty reasoning item id.
+
+PR4c.5b. When decoding a downstream Responses `response.output_item.added` event whose `item.type = "reasoning"` and whose item contains both non-empty `id` and `encrypted_content`, Monoize MUST preserve that `id` in the canonical stream event that carries item-level `encrypted_content`. When applying PR4c.3 to that event, Monoize MUST store the same id as the mz2 envelope `item_id`. The downstream `response.output_item.added.item.id` and the decoded mz2 envelope `item_id` MUST be equal.
 
 PR4c.6. Before sending an upstream request, Monoize MUST inspect replayed URP `Reasoning.encrypted` values. If the value is an `mz2.` envelope and `reasoning_envelope_enabled = true`, Monoize MUST unwrap and forward the original `payload` only when both `provider_type` and `model` equal the selected upstream provider type and upstream model for the current attempt. If either value differs, Monoize MUST drop that replayed reasoning node from the upstream request.
 

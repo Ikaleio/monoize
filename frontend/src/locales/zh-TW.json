@@ -216,9 +216,15 @@
 		"maxMultiplierHelp": "限制使用此金鑰的請求之最大計費倍率。透過 header 指定的倍率不得超過此值。留空表示不限制。",
 		"reasoningEnvelopeEnabled": "加密推理保護",
 		"reasoningEnvelopeHelp": "為加密推理附加上游模型中繼資料，並在轉發前丟棄不相符的加密推理區塊。",
-		"requestCaptureEnabled": "請求抓包匯出",
-		"requestCaptureHelp": "為此 API 金鑰保存原始請求/回應診斷 dump。仍需同時啟用系統總開關。",
-		"captureBadge": "抓包"
+		"requestCaptureMode": "請求抓包匯出",
+		"requestCaptureModeOff": "關閉",
+		"requestCaptureModeAll": "全部抓包",
+		"requestCaptureModeAbnormal": "僅抓異常",
+		"requestCaptureModeAllHelp": "為此 API 金鑰的每次請求保存原始請求/回應診斷 dump。",
+		"requestCaptureModeAbnormalHelp": "僅在上游報錯、缺少 usage、或 usage 總量為 0 時保存 dump。",
+		"requestCaptureHelp": "寫入 dump 前仍需同時啟用系統總開關。",
+		"captureBadgeAll": "抓包",
+		"captureBadgeAbnormal": "異常抓包"
 	},
 	"settings": {
 		"title": "系統設定",

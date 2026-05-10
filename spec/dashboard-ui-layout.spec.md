@@ -238,13 +238,21 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 
 AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_content_delta` for response-phase rules.
 
-AK4. API key create and edit dialogs MUST include a `request_capture_enabled` boolean switch.
+AK4. API key create and edit dialogs MUST include a `request_capture_mode` tri-state control.
 
-AK5. The `request_capture_enabled` switch MUST default to off when creating an API key.
+AK5. The `request_capture_mode` control MUST default to `"off"` when creating an API key.
 
-AK6. The API key list MUST display a visible indicator for keys whose `request_capture_enabled` value is true.
+AK6. The API key list MUST display a visible indicator for keys whose `request_capture_mode != "off"`.
 
-AK7. The `request_capture_enabled` switch label or help text MUST state that the system-wide capture switch must also be enabled before dumps are written.
+AK7. The `request_capture_mode` control label or help text MUST state that the system-wide capture switch must also be enabled before dumps are written.
+
+AK8. The `request_capture_mode` control MUST expose exactly these three options:
+
+- `"off"`
+- `"capture-all"`
+- `"capture-only-abnormal"`
+
+AK9. The `"capture-only-abnormal"` option help text MUST explain that abnormal means upstream error, missing usage information, or usage total equal to zero.
 
 ## 5. Dashboard Home Page
 

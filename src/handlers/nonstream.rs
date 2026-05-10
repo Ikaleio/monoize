@@ -219,7 +219,7 @@ pub(super) async fn execute_nonstream_typed(
                         Ok(resp) => resp,
                         Err(err) => {
                             if let Some(session) = capture.session.as_ref() {
-                                session.persist().await;
+                                session.persist_with_result(None, false).await;
                             }
                             return Err(err);
                         }
@@ -233,7 +233,7 @@ pub(super) async fn execute_nonstream_typed(
                     .await
                     {
                         if let Some(session) = capture.session.as_ref() {
-                            session.persist().await;
+                            session.persist_with_result(None, false).await;
                         }
                         return Err(err);
                     }
@@ -246,7 +246,7 @@ pub(super) async fn execute_nonstream_typed(
                     .await
                     {
                         if let Some(session) = capture.session.as_ref() {
-                            session.persist().await;
+                            session.persist_with_result(None, false).await;
                         }
                         return Err(err);
                     }
@@ -259,7 +259,7 @@ pub(super) async fn execute_nonstream_typed(
                     .await
                     {
                         if let Some(session) = capture.session.as_ref() {
-                            session.persist().await;
+                            session.persist_with_result(None, false).await;
                         }
                         return Err(err);
                     }
@@ -282,7 +282,7 @@ pub(super) async fn execute_nonstream_typed(
                             Ok(charge) => charge,
                             Err(err) => {
                                 if let Some(session) = capture.session.as_ref() {
-                                    session.persist().await;
+                                    session.persist_with_result(None, false).await;
                                 }
                                 return Err(err);
                             }
@@ -306,7 +306,9 @@ pub(super) async fn execute_nonstream_typed(
                         tried_providers,
                     );
                     if let Some(session) = capture.session.as_ref() {
-                        session.persist().await;
+                        session
+                            .persist_with_result(resp.usage.as_ref(), false)
+                            .await;
                     }
                     return Ok((resp, logical_model.clone()));
                 }
@@ -353,7 +355,7 @@ pub(super) async fn execute_nonstream_typed(
                             tried_providers,
                         );
                         if let Some(session) = capture.session.as_ref() {
-                            session.persist().await;
+                            session.persist_with_result(None, true).await;
                         }
                         return Err(app_err);
                     }
@@ -391,7 +393,7 @@ pub(super) async fn execute_nonstream_typed(
                         tried_providers,
                     );
                     if let Some(session) = capture.session.as_ref() {
-                        session.persist().await;
+                        session.persist_with_result(None, true).await;
                     }
                     return Err(app_err);
                 }
@@ -428,7 +430,7 @@ pub(super) async fn execute_nonstream_typed(
         );
     }
     if let Some(session) = capture.session.as_ref() {
-        session.persist().await;
+        session.persist_with_result(None, true).await;
     }
     Err(final_err)
 }

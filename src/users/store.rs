@@ -1,8 +1,9 @@
 use super::utils::parse_nano_usd;
 use super::{
     ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput, ModelRedirectRule,
-    RESERVED_INTERNAL_USER_PREFIX, Session, UpdateApiKeyInput, User, UserBalance, UserRole,
-    UserStore, canonicalize_groups, parse_groups_json, validate_model_redirects,
+    RESERVED_INTERNAL_USER_PREFIX, RequestCaptureMode, Session, UpdateApiKeyInput, User,
+    UserBalance, UserRole, UserStore, canonicalize_groups, parse_groups_json,
+    validate_model_redirects,
 };
 use crate::transforms::TransformRuleConfig;
 use argon2::{
@@ -560,7 +561,7 @@ impl UserStore {
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
-                request_capture_enabled: false,
+                request_capture_mode: RequestCaptureMode::Off,
             },
             false,
         )
@@ -601,8 +602,8 @@ impl UserStore {
 
         self.db.write().await
             .execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)"#,
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
                 vec![
                     id.clone().into(),
                     user_id.into(),
@@ -623,7 +624,12 @@ impl UserStore {
                     serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?.into(),
                     model_redirects_json.into(),
                     SeaValue::Int(Some(if input.reasoning_envelope_enabled { 1 } else { 0 })),
-                    SeaValue::Int(Some(if input.request_capture_enabled { 1 } else { 0 })),
+                    SeaValue::Int(Some(if input.request_capture_mode.should_start_capture() {
+                        1
+                    } else {
+                        0
+                    })),
+                    input.request_capture_mode.as_str().into(),
                 ],
             ))
             .await
@@ -650,7 +656,7 @@ impl UserStore {
             transforms: input.transforms,
             model_redirects: input.model_redirects,
             reasoning_envelope_enabled: input.reasoning_envelope_enabled,
-            request_capture_enabled: input.request_capture_enabled,
+            request_capture_mode: input.request_capture_mode,
         };
 
         Ok((api_key, key))
@@ -659,7 +665,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled FROM api_keys WHERE key_prefix = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode FROM api_keys WHERE key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -675,7 +681,7 @@ impl UserStore {
     pub async fn list_user_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
                 vec![user_id.into()],
             ))
             .await
@@ -879,7 +885,20 @@ impl UserStore {
             serde_json::from_str(&model_redirects_str).unwrap_or_default();
         let reasoning_envelope_enabled: i32 =
             row.try_get("", "reasoning_envelope_enabled").unwrap_or(1);
-        let request_capture_enabled: i32 = row.try_get("", "request_capture_enabled").unwrap_or(0);
+        let request_capture_mode = row
+            .try_get::<String>("", "request_capture_mode")
+            .map(|raw| RequestCaptureMode::from_db_value(&raw))
+            .unwrap_or_else(|_| {
+                if row
+                    .try_get::<i32>("", "request_capture_enabled")
+                    .unwrap_or(0)
+                    == 1
+                {
+                    RequestCaptureMode::CaptureAll
+                } else {
+                    RequestCaptureMode::Off
+                }
+            });
 
         Ok(ApiKey {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -910,7 +929,7 @@ impl UserStore {
             transforms,
             model_redirects,
             reasoning_envelope_enabled: reasoning_envelope_enabled == 1,
-            request_capture_enabled: request_capture_enabled == 1,
+            request_capture_mode,
         })
     }
 
@@ -1069,13 +1088,18 @@ impl UserStore {
             })));
             idx += 1;
         }
-        if let Some(request_capture_enabled) = input.request_capture_enabled {
+        if let Some(request_capture_mode) = input.request_capture_mode {
             set_clauses.push(format!("request_capture_enabled = ${idx}"));
-            values.push(SeaValue::Int(Some(if request_capture_enabled {
-                1
-            } else {
-                0
-            })));
+            values.push(SeaValue::Int(Some(
+                if request_capture_mode.should_start_capture() {
+                    1
+                } else {
+                    0
+                },
+            )));
+            idx += 1;
+            set_clauses.push(format!("request_capture_mode = ${idx}"));
+            values.push(request_capture_mode.as_str().into());
             idx += 1;
         }
         if let Some(expires_at) = &input.expires_at {
@@ -1120,7 +1144,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled FROM api_keys WHERE id = $1",
+                "SELECT id, user_id, name, key_prefix, key, key_hash, created_at, expires_at, last_used_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, allowed_groups, token_group, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode FROM api_keys WHERE id = $1",
                 vec![id.into()],
             ))
             .await

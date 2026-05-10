@@ -21,6 +21,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260403_000013_drop_orphan_channel_override_columns::Migration),
             Box::new(m20260404_000014_api_key_reasoning_envelope_switch::Migration),
             Box::new(m20260501_000015_api_key_request_capture_switch::Migration),
+            Box::new(m20260509_000016_api_key_request_capture_mode::Migration),
         ]
     }
 }
@@ -40,3 +41,4 @@ mod m20260402_000012_provider_strip_cross_protocol_nested_extra;
 mod m20260403_000013_drop_orphan_channel_override_columns;
 mod m20260404_000014_api_key_reasoning_envelope_switch;
 mod m20260501_000015_api_key_request_capture_switch;
+mod m20260509_000016_api_key_request_capture_mode;

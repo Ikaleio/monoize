@@ -125,7 +125,7 @@ mod tests {
                     transforms: Vec::new(),
                     model_redirects: Vec::new(),
                     reasoning_envelope_enabled: true,
-                    request_capture_enabled: false,
+                    request_capture_mode: crate::users::RequestCaptureMode::Off,
                 },
                 false,
             )

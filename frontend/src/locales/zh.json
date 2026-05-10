@@ -219,9 +219,15 @@
 		"maxMultiplierHelp": "限制使用此密钥的请求的最大计费倍率。通过 header 指定的倍率不能超过此值。留空表示不限制。",
 		"reasoningEnvelopeEnabled": "加密推理保护",
 		"reasoningEnvelopeHelp": "为加密推理附加上游模型元数据，并在转发前丢弃不匹配的加密推理块。",
-		"requestCaptureEnabled": "请求抓包导出",
-		"requestCaptureHelp": "为此 API Key 持久化原始请求/响应诊断 dump。还需要同时开启系统总开关。",
-		"captureBadge": "抓包"
+		"requestCaptureMode": "请求抓包导出",
+		"requestCaptureModeOff": "关闭",
+		"requestCaptureModeAll": "全部抓包",
+		"requestCaptureModeAbnormal": "仅抓异常",
+		"requestCaptureModeAllHelp": "为此 API Key 的每次请求持久化原始请求/响应诊断 dump。",
+		"requestCaptureModeAbnormalHelp": "仅在上游报错、缺少 usage、或 usage 总量为 0 时持久化 dump。",
+		"requestCaptureHelp": "写入 dump 前仍需要同时开启系统总开关。",
+		"captureBadgeAll": "抓包",
+		"captureBadgeAbnormal": "异常抓包"
 	},
 	"settings": {
 		"title": "系统设置",
