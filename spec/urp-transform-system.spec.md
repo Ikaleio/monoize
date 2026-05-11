@@ -322,7 +322,9 @@ CUMI-7. On successful replacement:
 2. `data:` URL sources MUST remain `Url` with updated `url`; and
 3. provider-specific typed fields such as image detail hints MUST remain unchanged.
 
-CUMI-8. The cache key, persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary `Image` nodes rather than to nested message parts.
+CUMI-8. If the decoded image after resizing has an alpha channel, the transform MUST emit `image/png` using PNG best compression followed by lossless PNG optimization. If the decoded image after resizing has no alpha channel, the transform MUST emit `image/jpeg` using `jpeg_quality`.
+
+CUMI-9. The cache key, persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary `Image` nodes rather than to nested message parts.
 
 RIU-1. `resolve_image_urls` is request-phase only.
 
@@ -449,6 +451,37 @@ AOIM-10. On pass-through streams, the transform MUST preserve pass-through timin
 AOIM-11. If a request is already on the buffered synthetic path because of another matching response transform, the final transformed `UrpResponseV2` MUST produce downstream text deltas that include the appended Markdown.
 
 AOIM-12. `assistant_output_images_to_markdown` alone MUST NOT force an otherwise pass-through stream onto the buffered synthetic path.
+
+CAOI-1. `compress_assistant_output_images` is response-phase only.
+
+CAOI-2. Config MAY contain:
+- `max_edge_px` (integer, default `1568`)
+- `jpeg_quality` (integer, default `80`)
+- `skip_if_smaller` (boolean, default `true`)
+
+CAOI-3. On non-stream responses, the transform MUST inspect only ordinary `Image` nodes with `role = assistant` in `response.output`.
+
+CAOI-4. On stream responses, the transform MUST inspect:
+1. `NodeDelta` image sources only when a preceding `NodeStart` for the same `node_index` has `header.type = image` and `header.role = assistant`;
+2. `NodeDone.node` only when it is an ordinary `Image` node with `role = assistant`; and
+3. ordinary `Image` nodes with `role = assistant` in `ResponseDone.output`.
+
+CAOI-5. Eligible image sources are:
+1. `Image.source = Base64`; or
+2. `Image.source = Url` whose `url` is a `data:<image-media-type>;base64,<payload>` URL.
+
+CAOI-6. Non-`data:` URL sources MUST remain unchanged.
+
+CAOI-7. If the media type is not decodable by the image codec stack, the node or delta MUST remain unchanged.
+
+CAOI-8. On successful replacement:
+1. `Base64` sources MUST remain `Base64` with updated `media_type` and `data`;
+2. `data:` URL sources MUST remain `Url` with updated `url`; and
+3. provider-specific typed fields such as image detail hints MUST remain unchanged.
+
+CAOI-9. If the decoded image after resizing has an alpha channel, the transform MUST emit `image/png` using PNG best compression followed by lossless PNG optimization. If the decoded image after resizing has no alpha channel, the transform MUST emit `image/jpeg` using `jpeg_quality`.
+
+CAOI-10. The cache key, persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary assistant `Image` nodes and eligible assistant image deltas.
 
 ### 4.9 `split_sse_frames`
 

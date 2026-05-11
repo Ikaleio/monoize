@@ -173,6 +173,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(auto_cache_system::AutoCacheSystemTransform),
         Box::new(auto_cache_tool_use::AutoCacheToolUseTransform),
         Box::new(auto_cache_user_id::AutoCacheUserIdTransform),
+        Box::new(compress_user_message_images::CompressAssistantOutputImagesTransform),
         Box::new(compress_user_message_images::CompressUserMessageImagesTransform),
         Box::new(developer_to_system_role::DeveloperToSystemRoleTransform),
         Box::new(enable_openai_image_generation_tool::EnableOpenAiImageGenerationToolTransform),

@@ -38,6 +38,7 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
     "reasoning_summary_to_raw_cot",
     "assistant_markdown_images_to_output",
     "assistant_output_images_to_markdown",
+    "compress_assistant_output_images",
 ];
 
 pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
@@ -1745,6 +1746,17 @@ mod tests {
                 models: None,
                 phase: Phase::Response,
                 config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "compress_assistant_output_images".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({
+                    "max_edge_px": 1024,
+                    "jpeg_quality": 80,
+                    "skip_if_smaller": true
+                }),
             },
         ];
 

@@ -91,6 +91,12 @@ async fn create_api_key_allows_new_response_transforms() {
                         "enabled": true,
                         "phase": "response",
                         "config": { "template": "![preview]({{src}})" }
+                    },
+                    {
+                        "transform": "compress_assistant_output_images",
+                        "enabled": true,
+                        "phase": "response",
+                        "config": { "max_edge_px": 1024, "jpeg_quality": 80 }
                     }
                 ]
             })
@@ -103,7 +109,7 @@ async fn create_api_key_allows_new_response_transforms() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     let transforms = v["transforms"].as_array().expect("transforms array");
-    assert_eq!(transforms.len(), 3);
+    assert_eq!(transforms.len(), 4);
 }
 
 #[tokio::test]

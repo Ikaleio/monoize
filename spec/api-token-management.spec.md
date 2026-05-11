@@ -144,6 +144,7 @@ TM-TF-4. Allowed API-key response-phase transforms are exactly:
 - `reasoning_summary_to_raw_cot`
 - `assistant_markdown_images_to_output`
 - `assistant_output_images_to_markdown`
+- `compress_assistant_output_images`
 
 TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routing, upstream model selection, upstream pricing tier, request execution mode, output token ceiling, or arbitrary provider passthrough fields. This forbidden set includes at minimum:
 

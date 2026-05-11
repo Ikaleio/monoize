@@ -3,7 +3,7 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::{ImageSource, Node, OrdinaryRole};
+use crate::urp::{ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::any::Any;
+use std::collections::HashMap;
 
 const TRANSFORM_VERSION: &str = "compress_user_message_images:v2";
 
@@ -47,6 +48,19 @@ impl TransformConfig for Config {
 }
 
 pub struct CompressUserMessageImagesTransform;
+
+#[derive(Default)]
+struct AssistantStreamState {
+    assistant_image_nodes: HashMap<u32, bool>,
+}
+
+impl TransformState for AssistantStreamState {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+pub struct CompressAssistantOutputImagesTransform;
 
 #[async_trait]
 impl Transform for CompressUserMessageImagesTransform {
@@ -123,45 +137,109 @@ impl Transform for CompressUserMessageImagesTransform {
             return Ok(());
         };
 
-        for node in &mut req.input {
-            let Node::Image {
-                role: OrdinaryRole::User,
-                source,
-                ..
-            } = node
-            else {
-                continue;
-            };
-            match source {
-                ImageSource::Base64 { media_type, data } => {
-                    let Some(next_source) = compress_base64_image(
-                        context,
-                        cfg.clone(),
-                        media_type.clone(),
-                        data.clone(),
-                    )
-                    .await?
-                    else {
-                        continue;
-                    };
-                    *source = next_source;
-                }
-                ImageSource::Url { url, detail } => {
-                    let Some((media_type, data)) = split_image_data_url(url.as_str()) else {
-                        continue;
-                    };
-                    let Some(next_source) =
-                        compress_base64_image(context, cfg.clone(), media_type, data).await?
-                    else {
-                        continue;
-                    };
-                    *source = preserve_url_detail(next_source, detail.clone());
-                }
+        compress_image_nodes(&mut req.input, OrdinaryRole::User, context, &cfg).await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Transform for CompressAssistantOutputImagesTransform {
+    fn type_id(&self) -> &'static str {
+        "compress_assistant_output_images"
+    }
+
+    fn supported_phases(&self) -> &'static [Phase] {
+        &[Phase::Response]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
+    fn config_schema(&self) -> Value {
+        image_compression_config_schema("assistant-output")
+    }
+
+    fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
+        parse_image_compression_config(raw)
+    }
+
+    fn init_state(&self) -> Box<dyn TransformState> {
+        Box::new(AssistantStreamState::default())
+    }
+
+    async fn apply(
+        &self,
+        data: UrpData<'_>,
+        _phase: Phase,
+        context: &TransformRuntimeContext,
+        config: &dyn TransformConfig,
+        state: &mut dyn TransformState,
+    ) -> Result<(), TransformError> {
+        let cfg = config
+            .as_any()
+            .downcast_ref::<Config>()
+            .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?
+            .clone();
+
+        match data {
+            UrpData::Response(resp) => {
+                compress_image_nodes(&mut resp.output, OrdinaryRole::Assistant, context, &cfg)
+                    .await?;
             }
+            UrpData::Stream(event) => {
+                let Some(stream_state) = state.as_any_mut().downcast_mut::<AssistantStreamState>()
+                else {
+                    return Err(TransformError::Apply("invalid stream state".to_string()));
+                };
+                compress_stream_event(event, stream_state, context, &cfg).await?;
+            }
+            UrpData::Request(_) => {}
         }
 
         Ok(())
     }
+}
+
+fn image_compression_config_schema(subject: &str) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "max_edge_px": {
+                "type": "integer",
+                "minimum": 1,
+                "description": format!("Maximum width or height of compressed {subject} images. Defaults to 1568.")
+            },
+            "jpeg_quality": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "JPEG quality used when the output image has no alpha channel. Defaults to 80."
+            },
+            "skip_if_smaller": {
+                "type": "boolean",
+                "description": "Keep the original image when compression does not reduce payload size. Defaults to true."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn parse_image_compression_config(raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
+    let cfg: Config =
+        serde_json::from_value(raw).map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+    if cfg.max_edge_px == 0 {
+        return Err(TransformError::InvalidConfig(
+            "max_edge_px must be >= 1".to_string(),
+        ));
+    }
+    if !(1..=100).contains(&cfg.jpeg_quality) {
+        return Err(TransformError::InvalidConfig(
+            "jpeg_quality must be between 1 and 100".to_string(),
+        ));
+    }
+    Ok(Box::new(cfg))
 }
 
 fn split_image_data_url(url: &str) -> Option<(String, String)> {
@@ -175,6 +253,116 @@ fn split_image_data_url(url: &str) -> Option<(String, String)> {
         return None;
     }
     Some((media_type.to_string(), data.to_string()))
+}
+
+async fn compress_image_nodes(
+    nodes: &mut [Node],
+    role: OrdinaryRole,
+    context: &TransformRuntimeContext,
+    cfg: &Config,
+) -> Result<(), TransformError> {
+    for node in nodes {
+        compress_image_node(node, role, context, cfg).await?;
+    }
+    Ok(())
+}
+
+async fn compress_image_node(
+    node: &mut Node,
+    role: OrdinaryRole,
+    context: &TransformRuntimeContext,
+    cfg: &Config,
+) -> Result<(), TransformError> {
+    let Node::Image {
+        role: node_role,
+        source,
+        ..
+    } = node
+    else {
+        return Ok(());
+    };
+    if *node_role != role {
+        return Ok(());
+    }
+    if let Some(next_source) = compress_image_source(context, cfg, source).await? {
+        *source = next_source;
+    }
+    Ok(())
+}
+
+async fn compress_image_source(
+    context: &TransformRuntimeContext,
+    cfg: &Config,
+    source: &ImageSource,
+) -> Result<Option<ImageSource>, TransformError> {
+    match source {
+        ImageSource::Base64 { media_type, data } => {
+            compress_base64_image(context, cfg.clone(), media_type.clone(), data.clone()).await
+        }
+        ImageSource::Url { url, detail } => {
+            let Some((media_type, data)) = split_image_data_url(url.as_str()) else {
+                return Ok(None);
+            };
+            let Some(next_source) =
+                compress_base64_image(context, cfg.clone(), media_type, data).await?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(preserve_url_detail(next_source, detail.clone())))
+        }
+    }
+}
+
+async fn compress_stream_event(
+    event: &mut UrpStreamEvent,
+    stream_state: &mut AssistantStreamState,
+    context: &TransformRuntimeContext,
+    cfg: &Config,
+) -> Result<(), TransformError> {
+    match event {
+        UrpStreamEvent::NodeStart {
+            node_index, header, ..
+        } => {
+            let is_assistant_image = matches!(
+                header,
+                NodeHeader::Image {
+                    role: OrdinaryRole::Assistant,
+                    ..
+                }
+            );
+            stream_state
+                .assistant_image_nodes
+                .insert(*node_index, is_assistant_image);
+        }
+        UrpStreamEvent::NodeDelta {
+            node_index, delta, ..
+        } => {
+            if stream_state
+                .assistant_image_nodes
+                .get(&*node_index)
+                .copied()
+                .unwrap_or(false)
+            {
+                if let NodeDelta::Image { source } = delta {
+                    if let Some(next_source) = compress_image_source(context, cfg, source).await? {
+                        *source = next_source;
+                    }
+                }
+            }
+        }
+        UrpStreamEvent::NodeDone {
+            node_index, node, ..
+        } => {
+            compress_image_node(node, OrdinaryRole::Assistant, context, cfg).await?;
+            stream_state.assistant_image_nodes.remove(&*node_index);
+        }
+        UrpStreamEvent::ResponseDone { output, .. } => {
+            compress_image_nodes(output, OrdinaryRole::Assistant, context, cfg).await?;
+            stream_state.assistant_image_nodes.clear();
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn preserve_url_detail(source: ImageSource, detail: Option<String>) -> ImageSource {
@@ -363,13 +551,17 @@ inventory::submit!(TransformEntry {
     factory: || Box::new(CompressUserMessageImagesTransform),
 });
 
+inventory::submit!(TransformEntry {
+    factory: || Box::new(CompressAssistantOutputImagesTransform),
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::image_transform_cache::ImageTransformCache;
     use crate::transforms::{TransformRuntimeContext, build_states_for_rules, registry};
-    use crate::urp::UrpRequest;
     use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
+    use crate::urp::{NodeHeader, UrpRequest, UrpResponse, UrpStreamEvent};
     use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
     use image::{ImageBuffer, ImageEncoder, Rgb};
     use serde_json::json;
@@ -549,6 +741,156 @@ mod tests {
             .decode(input_png.as_bytes())
             .expect("decode original image");
         assert!(compressed.len() < original.len());
+    }
+
+    #[tokio::test]
+    async fn compresses_assistant_output_base64_images() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cache = ImageTransformCache::new(
+            temp_dir.path().join("cache"),
+            std::time::Duration::from_secs(3600),
+        )
+        .await
+        .expect("cache");
+        let context = TransformRuntimeContext {
+            image_transform_cache: std::sync::Arc::new(cache),
+            http_client: reqwest::Client::new(),
+        };
+        let input_png = build_png_data_url_source();
+        let mut resp = UrpResponse {
+            id: "resp-test".to_string(),
+            model: "gpt-test".to_string(),
+            created_at: None,
+            output: vec![Node::Image {
+                id: None,
+                role: OrdinaryRole::Assistant,
+                source: ImageSource::Base64 {
+                    media_type: "image/png".to_string(),
+                    data: input_png.clone(),
+                },
+                extra_body: HashMap::new(),
+            }],
+            finish_reason: None,
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+        let rules = vec![crate::transforms::TransformRuleConfig {
+            transform: "compress_assistant_output_images".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Response,
+            config: json!({"max_edge_px": 256, "jpeg_quality": 65}),
+        }];
+        let registry = registry();
+        let mut states = build_states_for_rules(&rules, &registry).expect("states");
+
+        crate::transforms::apply_transforms(
+            UrpData::Response(&mut resp),
+            &rules,
+            &mut states,
+            "gpt-test",
+            Phase::Response,
+            &context,
+            &registry,
+        )
+        .await
+        .expect("apply transforms");
+
+        let Node::Image { source, .. } = &resp.output[0] else {
+            panic!("expected image node");
+        };
+        let ImageSource::Base64 { media_type, data } = source else {
+            panic!("expected base64 image source");
+        };
+        assert_eq!(media_type, "image/jpeg");
+        let compressed = STANDARD
+            .decode(data.as_bytes())
+            .expect("decode transformed image");
+        let original = STANDARD
+            .decode(input_png.as_bytes())
+            .expect("decode original image");
+        assert!(compressed.len() < original.len());
+    }
+
+    #[tokio::test]
+    async fn compresses_assistant_image_stream_delta_after_assistant_image_start() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cache = ImageTransformCache::new(
+            temp_dir.path().join("cache"),
+            std::time::Duration::from_secs(3600),
+        )
+        .await
+        .expect("cache");
+        let context = TransformRuntimeContext {
+            image_transform_cache: std::sync::Arc::new(cache),
+            http_client: reqwest::Client::new(),
+        };
+        let rules = vec![crate::transforms::TransformRuleConfig {
+            transform: "compress_assistant_output_images".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Response,
+            config: json!({"max_edge_px": 256, "jpeg_quality": 65}),
+        }];
+        let registry = registry();
+        let mut states = build_states_for_rules(&rules, &registry).expect("states");
+        let start = UrpStreamEvent::NodeStart {
+            node_index: 7,
+            header: NodeHeader::Image {
+                id: None,
+                role: OrdinaryRole::Assistant,
+            },
+            extra_body: HashMap::new(),
+        };
+
+        crate::transforms::apply_stream_transforms(
+            start,
+            &rules,
+            &mut states,
+            "gpt-test",
+            Phase::Response,
+            &context,
+            &registry,
+        )
+        .await
+        .expect("apply start transform");
+
+        let input_png = build_png_data_url_source();
+        let delta = UrpStreamEvent::NodeDelta {
+            node_index: 7,
+            delta: NodeDelta::Image {
+                source: ImageSource::Base64 {
+                    media_type: "image/png".to_string(),
+                    data: input_png,
+                },
+            },
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+
+        let mut transformed = crate::transforms::apply_stream_transforms(
+            delta,
+            &rules,
+            &mut states,
+            "gpt-test",
+            Phase::Response,
+            &context,
+            &registry,
+        )
+        .await
+        .expect("apply delta transform");
+
+        let UrpStreamEvent::NodeDelta {
+            delta: NodeDelta::Image { source },
+            ..
+        } = transformed.pop().expect("transformed delta")
+        else {
+            panic!("expected image delta");
+        };
+        let ImageSource::Base64 { media_type, .. } = source else {
+            panic!("expected base64 image source");
+        };
+        assert_eq!(media_type, "image/jpeg");
     }
 
     fn build_png_data_url_source() -> String {
