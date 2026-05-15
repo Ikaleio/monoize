@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react'
 import { Anthropic, Google, OpenAI } from '@lobehub/icons'
 import { Box } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge, StatusDot } from '@/components/ui/status'
 import type {
 	ApiTypeOverride,
 	ModelMetadataRecord,
@@ -300,27 +300,27 @@ export function hasBillablePricingModelId(
 	)
 }
 
-export function statusBadge(status?: string) {
+export function statusBadge(status?: string, t?: (key: string) => string) {
 	if (status === 'healthy') {
 		return (
-			<Badge className='bg-emerald-600/15 text-emerald-700 hover:bg-emerald-600/15 dark:bg-emerald-500/15 dark:text-emerald-400 border-0'>
-				<span className='mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 inline-block animate-pulse' />
-				Healthy
-			</Badge>
+			<StatusBadge variant='success'>
+				<StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />
+				{t ? t('providers.statusHealthy') : 'Healthy'}
+			</StatusBadge>
 		)
 	}
 	if (status === 'probing') {
 		return (
-			<Badge className='bg-amber-500/15 text-amber-700 hover:bg-amber-500/15 dark:bg-amber-500/15 dark:text-amber-400 border-0'>
-				<span className='mr-1.5 h-1.5 w-1.5 rounded-full bg-amber-500 inline-block animate-pulse' />
-				Probing
-			</Badge>
+			<StatusBadge variant='warning'>
+				<StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />
+				{t ? t('providers.statusProbing') : 'Probing'}
+			</StatusBadge>
 		)
 	}
 	return (
-		<Badge className='bg-red-500/15 text-red-700 hover:bg-red-500/15 dark:bg-red-500/15 dark:text-red-400 border-0'>
-			<span className='mr-1.5 h-1.5 w-1.5 rounded-full bg-red-500 inline-block animate-pulse' />
-			Unhealthy
-		</Badge>
+		<StatusBadge variant='destructive'>
+			<StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />
+			{t ? t('providers.statusUnhealthy') : 'Unhealthy'}
+		</StatusBadge>
 	)
 }

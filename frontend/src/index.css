@@ -24,6 +24,18 @@
 		--accent-foreground: 0 0% 100%;
 		--destructive: 0 84.2% 60.2%;
 		--destructive-foreground: 0 0% 98%;
+		--success: 142 76% 28%;
+		--success-foreground: 142 72% 20%;
+		--success-soft: 142 76% 94%;
+		--success-border: 142 52% 72%;
+		--warning: 32 95% 36%;
+		--warning-foreground: 32 95% 22%;
+		--warning-soft: 48 100% 94%;
+		--warning-border: 40 90% 72%;
+		--info: 199 89% 32%;
+		--info-foreground: 199 89% 25%;
+		--info-soft: 199 95% 94%;
+		--info-border: 199 84% 74%;
 		--border: 240 5.9% 90%;
 		--input: 240 5.9% 90%;
 		--ring: 207 47% 43%;
@@ -37,10 +49,24 @@
 		--sidebar-border: 240 5.9% 90%;
 		--sidebar-ring: 207 47% 43%;
 		--chart-1: 207 47% 43%;
-		--chart-2: 207 47% 53%;
-		--chart-3: 207 47% 63%;
-		--chart-4: 207 47% 33%;
-		--chart-5: 207 47% 23%;
+		--chart-2: 38 92% 50%;
+		--chart-3: 142 71% 35%;
+		--chart-4: 262 83% 58%;
+		--chart-5: 0 84% 60%;
+		--chart-6: 199 89% 48%;
+		--chart-7: 330 81% 60%;
+		--chart-8: 24 95% 53%;
+		--chart-9: 168 76% 36%;
+		--chart-10: 250 69% 65%;
+		--chart-11: 48 96% 53%;
+		--chart-12: 217 91% 60%;
+		--chart-13: 351 83% 61%;
+		--chart-14: 120 60% 42%;
+		--chart-15: 16 85% 55%;
+		--chart-16: 240 65% 65%;
+		--font-display:
+			'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+			'Inter', 'Segoe UI', sans-serif;
 		--font-sans-cjk:
 			'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
 			'Segoe UI', sans-serif;
@@ -67,6 +93,18 @@
 		--accent-foreground: 0 0% 100%;
 		--destructive: 0 62.8% 30.6%;
 		--destructive-foreground: 0 0% 98%;
+		--success: 142 69% 58%;
+		--success-foreground: 142 69% 78%;
+		--success-soft: 142 50% 12%;
+		--success-border: 142 45% 28%;
+		--warning: 45 93% 68%;
+		--warning-foreground: 45 93% 78%;
+		--warning-soft: 45 60% 12%;
+		--warning-border: 45 70% 30%;
+		--info: 199 89% 68%;
+		--info-foreground: 199 89% 78%;
+		--info-soft: 199 55% 12%;
+		--info-border: 199 60% 30%;
 		--border: 240 3.7% 15.9%;
 		--input: 240 3.7% 15.9%;
 		--ring: 207 47% 50%;
@@ -78,6 +116,22 @@
 		--sidebar-accent-foreground: 240 4.8% 95.9%;
 		--sidebar-border: 240 3.7% 15.9%;
 		--sidebar-ring: 207 47% 50%;
+		--chart-1: 207 47% 60%;
+		--chart-2: 45 93% 58%;
+		--chart-3: 142 69% 45%;
+		--chart-4: 263 90% 70%;
+		--chart-5: 0 72% 65%;
+		--chart-6: 199 89% 58%;
+		--chart-7: 330 85% 70%;
+		--chart-8: 24 95% 63%;
+		--chart-9: 168 76% 46%;
+		--chart-10: 250 80% 75%;
+		--chart-11: 48 96% 63%;
+		--chart-12: 217 91% 70%;
+		--chart-13: 351 83% 71%;
+		--chart-14: 120 60% 52%;
+		--chart-15: 16 85% 65%;
+		--chart-16: 240 75% 75%;
 	}
 
 	* {
@@ -103,16 +157,6 @@
 	kbd,
 	samp {
 		font-family: var(--font-code);
-	}
-}
-
-@layer components {
-	.sidebar-item {
-		@apply flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-foreground hover:bg-accent/50;
-	}
-
-	.sidebar-item.active {
-		@apply bg-primary/10 text-primary font-medium;
 	}
 }
 

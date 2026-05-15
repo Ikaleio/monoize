@@ -5,15 +5,22 @@ import {
   Plus,
   Pencil,
   Trash2,
-  Search,
   Database,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -38,6 +45,10 @@ import {
 } from "@/lib/swr";
 import type { ModelMetadataRecord, UpsertModelMetadataInput } from "@/lib/api";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { TablePageSkeleton } from "@/components/ui/page-skeleton";
+import { DataTableShell, TableToolbarSearch } from "@/components/ui/data-table-shell";
 import { toast } from "sonner";
 import { TableVirtuoso } from "react-virtuoso";
 
@@ -210,6 +221,7 @@ export function ModelMetadataPage() {
   const [editRecord, setEditRecord] = useState<ModelMetadataRecord | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<EditFormData>(emptyForm);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const filtered = records.filter((r) =>
     r.model_id.toLowerCase().includes(search.toLowerCase())
@@ -263,15 +275,21 @@ export function ModelMetadataPage() {
   };
 
   const handleDelete = async (modelId: string) => {
-    if (!confirm(t("modelMetadata.deleteConfirm"))) return;
+    setDeleteTargetId(modelId);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTargetId) return;
     try {
-      await deleteModelMetadataOptimistic(modelId, records, (error) =>
+      await deleteModelMetadataOptimistic(deleteTargetId, records, (error) =>
         toast.error(t("modelMetadata.deleteFailed"), { description: error.message })
       );
       toast.success(t("modelMetadata.deleteSuccess"));
       setEditRecord(null);
     } catch {
       return
+    } finally {
+      setDeleteTargetId(null);
     }
   };
 
@@ -287,18 +305,17 @@ export function ModelMetadataPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
+      <PageWrapper className="space-y-6">
+        <TablePageSkeleton showToolbar />
+      </PageWrapper>
     );
   }
 
   const editDialog = (isCreate: boolean, open: boolean, onOpenChange: (v: boolean) => void) => (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-lg">
+        <div className="flex min-h-0 flex-col p-6">
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             {isCreate ? t("modelMetadata.createModel") : t("modelMetadata.editModel")}
           </DialogTitle>
@@ -308,7 +325,7 @@ export function ModelMetadataPage() {
               : `${form.modelId}`}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2 max-h-[60vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-2 pr-1">
           {isCreate && (
             <div className="space-y-2">
               <Label>{t("modelMetadata.modelId")}</Label>
@@ -458,7 +475,7 @@ export function ModelMetadataPage() {
             </div>
           </div>
         </div>
-        <DialogFooter className="flex justify-between">
+        <DialogFooter className="shrink-0 pt-4 sm:justify-between">
           {!isCreate && editRecord && (
             <Button
               variant="destructive"
@@ -481,6 +498,7 @@ export function ModelMetadataPage() {
             </Button>
           </div>
         </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -491,13 +509,9 @@ export function ModelMetadataPage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
-        className="flex flex-wrap items-center justify-between gap-4"
       >
-        <div className="min-w-0">
-          <h1 className="text-3xl font-bold tracking-tight">{t("modelMetadata.title")}</h1>
-          <p className="text-muted-foreground">{t("modelMetadata.description")}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <PageHeader title={t("modelMetadata.title")} description={t("modelMetadata.description")} actions={(
+          <>
           <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
             <Button variant="outline" onClick={handleSync} disabled={syncing}>
               <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
@@ -510,47 +524,56 @@ export function ModelMetadataPage() {
               {t("modelMetadata.addModel")}
             </Button>
           </motion.div>
-        </div>
+          </>
+        )} />
       </motion.div>
 
       {editDialog(false, !!editRecord, (open) => !open && setEditRecord(null))}
       {editDialog(true, createOpen, setCreateOpen)}
+
+      <AlertDialog open={!!deleteTargetId} onOpenChange={(open) => { if (!open) setDeleteTargetId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("modelMetadata.deleteModel")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("modelMetadata.deleteConfirm")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={confirmDelete}>
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, ...transitions.normal }}
       >
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
+        <DataTableShell
+          toolbar={(
+            <>
+              <div className="flex items-center gap-2 text-base font-semibold">
                 <Database className="h-5 w-5" />
                 {t("modelMetadata.title")}
-              </CardTitle>
-              <div className="relative w-64">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t("modelMetadata.searchPlaceholder")}
-                  className="pl-9"
-                />
               </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <Database className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                <p className="text-lg font-medium text-muted-foreground">
-                  {t("modelMetadata.noModels")}
-                </p>
-                <p className="text-sm text-muted-foreground/70 mt-1">
-                  {t("modelMetadata.noModelsDesc")}
-                </p>
-              </div>
-            ) : (
+              <TableToolbarSearch
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("modelMetadata.searchPlaceholder")}
+              />
+            </>
+          )}
+          isEmpty={filtered.length === 0}
+          emptyState={(
+            <EmptyState
+              icon={<Database className="h-12 w-12" />}
+              title={t("modelMetadata.noModels")}
+              description={t("modelMetadata.noModelsDesc")}
+            />
+          )}
+        >
               <TableVirtuoso
                 style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
                 data={filtered}
@@ -676,9 +699,7 @@ export function ModelMetadataPage() {
                   </>
                 )}
               />
-            )}
-          </CardContent>
-        </Card>
+        </DataTableShell>
       </motion.div>
     </PageWrapper>
   );

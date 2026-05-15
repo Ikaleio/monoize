@@ -158,7 +158,7 @@ export function LoginPage() {
                   maxLength={22}
                   pattern="[a-zA-Z0-9_]+"
                   title={t("auth.usernameRequirements")}
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
               </motion.div>
               <motion.div variants={itemVariants} className="space-y-2">
@@ -171,7 +171,7 @@ export function LoginPage() {
                   placeholder={t("auth.enterPassword")}
                   required
                   minLength={8}
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
               </motion.div>
               <AnimatePresence mode="wait">

@@ -23,6 +23,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
 import type { RequestLog, RequestLogsFilter, RequestLogsResponse } from '@/lib/api'
 import { PageWrapper, motion, transitions } from '@/components/ui/motion'
+import { PageHeader } from '@/components/ui/page-header'
 import { AnimatePresence } from 'framer-motion'
 import { DateRangePicker } from './request-logs/date-range-picker'
 import { RequestLogsTable } from './request-logs/request-logs-table'
@@ -422,16 +423,7 @@ export function RequestLogsPage() {
 				animate={{ opacity: 1, y: 0 }}
 				transition={transitions.normal}
 			>
-				<div className='flex items-center justify-between'>
-					<div>
-						<h1 className='text-3xl font-bold tracking-tight'>
-							{t('requestLogs.title')}
-						</h1>
-						<p className='text-muted-foreground text-sm'>
-							{t('requestLogs.description')}
-						</p>
-					</div>
-				</div>
+				<PageHeader title={t('requestLogs.title')} description={t('requestLogs.description')} />
 			</motion.div>
 
 			<motion.div
@@ -440,8 +432,8 @@ export function RequestLogsPage() {
 				transition={{ delay: 0.05, ...transitions.normal }}
 				className='rounded-lg border bg-card px-3 py-1.5 space-y-1.5'
 			>
-				<div className='flex items-center gap-2'>
-					<div className='relative flex-1 min-w-[200px] max-w-sm'>
+				<div className='flex flex-wrap items-center gap-2'>
+					<div className='relative w-full sm:w-80'>
 						<Search className='absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground' />
 						<Input
 							className='pl-10 h-9'
@@ -563,7 +555,7 @@ export function RequestLogsPage() {
 												<span
 													className={cn(
 														'inline-block h-2 w-2 rounded-full transition-colors duration-300',
-														sseConnected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
+														sseConnected ? 'bg-success' : 'bg-warning animate-pulse'
 													)}
 												/>
 											</TooltipTrigger>

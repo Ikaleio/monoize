@@ -16,6 +16,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger
 } from '@/components/ui/tooltip'
+import { StatusBadge } from '@/components/ui/status'
 import { api } from '@/lib/api'
 import { SWR_KEYS } from '@/lib/swr'
 import { mutate } from 'swr'
@@ -173,24 +174,24 @@ export function ChannelTestDialog({
 
 										<span className='flex items-center gap-2 shrink-0'>
 											{status === 'passed' && (
-												<Badge className='bg-emerald-600/15 text-emerald-700 hover:bg-emerald-600/15 dark:bg-emerald-500/15 dark:text-emerald-400 border-0 gap-1'>
+												<StatusBadge variant='success' className='gap-1'>
 													<Check className='h-3 w-3' />
 													{t('providers.testLatency', {
 														ms: state?.latency_ms ?? 0
 													})}
-												</Badge>
+												</StatusBadge>
 											)}
 											{status === 'failed' && (
 												<TooltipProvider delayDuration={0}>
 													<Tooltip>
 														<TooltipTrigger asChild>
-															<Badge className='bg-red-500/15 text-red-700 hover:bg-red-500/15 dark:bg-red-500/15 dark:text-red-400 border-0 gap-1'>
+															<StatusBadge variant='destructive' className='gap-1'>
 																<X className='h-3 w-3' />
 																{state?.latency_ms != null ?
 																	t('providers.testLatency', { ms: state.latency_ms })
-																:	t('providers.testFailed')
+																: 	t('providers.testFailed')
 																}
-															</Badge>
+															</StatusBadge>
 														</TooltipTrigger>
 														{state?.error && (
 															<TooltipContent side='left' className='max-w-xs'>

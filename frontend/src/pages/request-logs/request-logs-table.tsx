@@ -1,6 +1,7 @@
 import type { ComponentProps } from 'react'
 import { TableVirtuoso } from 'react-virtuoso'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
 import type { RequestLog } from '@/lib/api'
 import { LogRowCells } from './log-row-cells'
 
@@ -31,7 +32,7 @@ const tableComponents = {
 	TableRow: (props: ComponentProps<'tr'>) => (
 		<tr
 			{...props}
-			className='border-b transition-colors hover:bg-muted/30 align-middle'
+			className='border-b transition-colors hover:bg-muted/50 align-middle'
 		/>
 	)
 }
@@ -101,9 +102,7 @@ export function RequestLogsTable({
 
 	if (logs.length === 0) {
 		return (
-			<div className='h-full flex items-center justify-center text-muted-foreground text-sm px-4'>
-				{t('requestLogs.noLogs')}
-			</div>
+			<EmptyState title={t('requestLogs.noLogs')} className='h-full px-4 py-0' />
 		)
 	}
 

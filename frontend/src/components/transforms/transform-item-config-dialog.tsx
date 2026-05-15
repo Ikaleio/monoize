@@ -167,15 +167,16 @@ function TransformItemConfigDialogInner({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-2xl">
+        <div className="flex min-h-0 flex-col p-6">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="font-mono">{draftRule.transform}</DialogTitle>
           <DialogDescription>
             {t("transforms.configureRule", { phase: draftRule.phase })}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5 py-2">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto py-2 pr-1">
           <div className="space-y-2">
             <Label>{t("transforms.modelsFilter")}</Label>
             <ModelsGlobInput
@@ -187,7 +188,7 @@ function TransformItemConfigDialogInner({
           <div className="space-y-2">
             <Label>{t("transforms.config")}</Label>
             {isUnknownTransform && (
-              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+              <div className="rounded-md border border-warning-border bg-warning-soft p-3 text-xs text-warning-foreground">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4" />
                   <span>{t("transforms.unknownRuleReadOnly")}</span>
@@ -224,12 +225,13 @@ function TransformItemConfigDialogInner({
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
           <Button onClick={validateAndSave}>{t("common.save")}</Button>
         </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

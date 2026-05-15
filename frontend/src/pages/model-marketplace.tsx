@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, Store } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Store } from "lucide-react";
 import { ModelBadge } from "@/components/ModelBadge";
 import { useMarketplaceModels } from "@/lib/swr";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { TablePageSkeleton } from "@/components/ui/page-skeleton";
+import { DataTableShell, TableToolbarSearch } from "@/components/ui/data-table-shell";
 import { TableVirtuoso } from "react-virtuoso";
 
 function nanoToPerMillion(nano?: string | null): string {
@@ -37,11 +38,9 @@ export function ModelMarketplacePage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
+      <PageWrapper className="space-y-6">
+        <TablePageSkeleton showToolbar />
+      </PageWrapper>
     );
   }
 
@@ -51,12 +50,8 @@ export function ModelMarketplacePage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
-        className="flex flex-wrap items-center justify-between gap-4"
       >
-        <div className="min-w-0">
-          <h1 className="text-3xl font-bold tracking-tight">{t("modelMarketplace.title")}</h1>
-          <p className="text-muted-foreground">{t("modelMarketplace.description")}</p>
-        </div>
+        <PageHeader title={t("modelMarketplace.title")} description={t("modelMarketplace.description")} />
       </motion.div>
 
       <motion.div
@@ -64,32 +59,29 @@ export function ModelMarketplacePage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, ...transitions.normal }}
       >
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
+        <DataTableShell
+          toolbar={(
+            <>
+              <div className="flex items-center gap-2 text-base font-semibold">
                 <Store className="h-5 w-5" />
                 {t("modelMarketplace.title")}
-              </CardTitle>
-              <div className="relative w-64">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t("modelMarketplace.searchPlaceholder")}
-                  className="pl-9"
-                />
               </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <Store className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                <p className="text-lg font-medium text-muted-foreground">{t("modelMarketplace.noModels")}</p>
-                <p className="text-sm text-muted-foreground/70 mt-1">{t("modelMarketplace.noModelsDesc")}</p>
-              </div>
-            ) : (
+              <TableToolbarSearch
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("modelMarketplace.searchPlaceholder")}
+              />
+            </>
+          )}
+          isEmpty={filtered.length === 0}
+          emptyState={(
+            <EmptyState
+              icon={<Store className="h-12 w-12" />}
+              title={t("modelMarketplace.noModels")}
+              description={t("modelMarketplace.noModelsDesc")}
+            />
+          )}
+        >
               <TableVirtuoso
                 style={{ height: "calc(100dvh - 280px)", minHeight: 400 }}
                 data={filtered}
@@ -147,9 +139,7 @@ export function ModelMarketplacePage() {
                   );
                 }}
               />
-            )}
-          </CardContent>
-        </Card>
+        </DataTableShell>
       </motion.div>
     </PageWrapper>
   );

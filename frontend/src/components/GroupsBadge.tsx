@@ -1,4 +1,5 @@
 import { Layers } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import {
 	Tooltip,
@@ -19,6 +20,7 @@ export function GroupsBadge({
 	variant = 'outline',
 	className
 }: GroupsBadgeProps) {
+	const { t } = useTranslation()
 	if (groups.length === 0) return null
 
 	if (groups.length === 1) {
@@ -39,7 +41,7 @@ export function GroupsBadge({
 							className={cn('w-fit gap-1 whitespace-nowrap font-mono text-xs', className)}
 						>
 							<Layers className='h-3 w-3' />
-							{groups.length} groups
+							{t('groupsBadge.groupsCount', { count: groups.length })}
 						</Badge>
 					</span>
 				</TooltipTrigger>

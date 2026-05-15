@@ -61,6 +61,9 @@
 		"admin": "管理員",
 		"user": "使用者"
 	},
+	"groupsBadge": {
+		"groupsCount": "{{count}} 個群組"
+	},
 	"dashboard": {
 		"title": "儀表板",
 		"greeting": "👋 午安，{{username}}",
@@ -131,6 +134,7 @@
 		"allUsers": "所有使用者",
 		"usersTotal": "共 {{count}} 位使用者",
 		"usersTotal_plural": "共 {{count}} 位使用者",
+		"noUsers": "尚無使用者。建立一位使用者開始使用。",
 		"user": "使用者",
 		"role": "角色",
 		"allowedGroups": "允許的群組",
@@ -396,6 +400,9 @@
 		"stripCrossProtocolNestedExtraDescription": "控制此供應商在跨協定族請求時是否剝離下游協定專用的巢狀透傳狀態。繼承代表使用全域設定。",
 		"same": "相同",
 		"failureCount": "失敗次數",
+		"statusHealthy": "健康",
+		"statusProbing": "探測中",
+		"statusUnhealthy": "不健康",
 		"providerEnabled": "供應商已啟用",
 		"moveUp": "上移",
 		"moveDown": "下移",

@@ -9,12 +9,14 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
 import { type DashboardAnalyticsBucket } from "@/lib/api";
 import { useDashboardAnalytics, useProviders, usePublicSettings, useRequestLogs, useStats } from "@/lib/swr";
 import { cn } from "@/lib/utils";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { CardsPageSkeleton } from "@/components/ui/page-skeleton";
 import { toast } from "sonner";
 
 type AnalysisTabId = "spendDistribution" | "callDistribution" | "callRank";
@@ -67,29 +69,10 @@ function nanoUsdToUsd(nanoUsd: number | string | undefined): number {
   return parsed / 1e9;
 }
 
-/**
- * Deterministic color palette for model→color mapping.
- * Uses hsl-based hues to maximise visual distinction; saturation/lightness
- * are tuned for light backgrounds while remaining readable in dark mode.
- */
-const MODEL_COLORS = [
-  "hsl(45, 93%, 65%)",
-  "hsl(330, 70%, 72%)",
-  "hsl(24, 85%, 60%)",
-  "hsl(160, 55%, 55%)",
-  "hsl(270, 60%, 68%)",
-  "hsl(200, 70%, 58%)",
-  "hsl(0, 70%, 62%)",
-  "hsl(95, 50%, 55%)",
-  "hsl(290, 50%, 60%)",
-  "hsl(180, 50%, 50%)",
-  "hsl(50, 80%, 55%)",
-  "hsl(210, 55%, 65%)",
-  "hsl(350, 65%, 58%)",
-  "hsl(130, 45%, 50%)",
-  "hsl(15, 75%, 55%)",
-  "hsl(240, 50%, 65%)",
-] as const;
+const CHART_COLORS = Array.from(
+  { length: 16 },
+  (_, index) => `hsl(var(--chart-${index + 1}))`
+);
 
 /** Stable hash → palette index so the same model always gets the same color. */
 function modelToColor(modelId: string): string {
@@ -97,7 +80,7 @@ function modelToColor(modelId: string): string {
   for (let i = 0; i < modelId.length; i++) {
     hash = ((hash << 5) - hash + modelId.charCodeAt(i)) | 0;
   }
-  return MODEL_COLORS[((hash % MODEL_COLORS.length) + MODEL_COLORS.length) % MODEL_COLORS.length];
+  return CHART_COLORS[((hash % CHART_COLORS.length) + CHART_COLORS.length) % CHART_COLORS.length];
 }
 
 function OverviewCard({
@@ -188,21 +171,7 @@ function PaginatedChartLegend({
 
 function DashboardSkeleton() {
   return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <Skeleton className="h-8 w-56" />
-        <Skeleton className="h-4 w-72" />
-      </div>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, index) => (
-          <Skeleton key={index} className="h-[170px] rounded-xl" />
-        ))}
-      </div>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Skeleton className="h-[360px] rounded-xl lg:col-span-2" />
-        <Skeleton className="h-[360px] rounded-xl" />
-      </div>
-    </div>
+    <CardsPageSkeleton />
   );
 }
 
@@ -434,12 +403,10 @@ export function DashboardPage() {
         transition={transitions.normal}
         className="shrink-0"
       >
-        <div className="space-y-1">
-          <h1 className="text-3xl font-bold tracking-tight">
-            {tt("dashboard.greeting", "👋 Good afternoon, {{username}}", { username: user?.username ?? "User" })}
-          </h1>
-          <p className="text-sm text-muted-foreground">{tt("dashboard.subtitle", "Realtime overview of account status, usage and routing data")}</p>
-        </div>
+        <PageHeader
+          title={tt("dashboard.greeting", "👋 Good afternoon, {{username}}", { username: user?.username ?? "User" })}
+          description={tt("dashboard.subtitle", "Realtime overview of account status, usage and routing data")}
+        />
       </motion.header>
 
       <section className="shrink-0 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -551,14 +518,11 @@ export function DashboardPage() {
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 rounded-lg border bg-muted/20 p-6 sm:p-8">
-                  <div className="flex h-full min-h-[170px] flex-col items-center justify-center text-center">
-                    <p className="text-base font-medium">
-                      {tt("dashboard.noAnalysisData", "No request log data available")}
-                    </p>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      {tt("dashboard.noAnalysisDataDescription", "Statistics will appear automatically after requests are made.")}
-                    </p>
-                  </div>
+                  <EmptyState
+                    title={tt("dashboard.noAnalysisData", "No request log data available")}
+                    description={tt("dashboard.noAnalysisDataDescription", "Statistics will appear automatically after requests are made.")}
+                    className="h-full min-h-[170px] py-0"
+                  />
                 </div>
               )}
             </CardContent>
@@ -577,12 +541,11 @@ export function DashboardPage() {
             </CardHeader>
             <CardContent className="flex flex-1 min-h-0 flex-col pt-4">
               {!publicSettings?.api_base_url ? (
-                <div className="flex flex-1 flex-col items-center justify-center text-center">
-                  <p className="mt-4 text-xl font-semibold">{tt("dashboard.noApiInfo", "No API Information")}</p>
-                  <p className="mt-2 max-w-xs text-sm leading-6 text-muted-foreground">
-                    {tt("dashboard.noApiInfoDescription", "Please configure the API base URL in system settings.")}
-                  </p>
-                </div>
+                <EmptyState
+                  title={tt("dashboard.noApiInfo", "No API Information")}
+                  description={tt("dashboard.noApiInfoDescription", "Please configure the API base URL in system settings.")}
+                  className="flex-1 py-0"
+                />
               ) : (
                 <div className="flex-1 min-h-0 space-y-2 overflow-auto">
                   <motion.button

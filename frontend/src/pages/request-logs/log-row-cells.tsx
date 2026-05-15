@@ -247,9 +247,9 @@ export function LogRowCells({
 		readNanoString(billingOutput, 'reasoning_charge_nano')
 	)
 	const statusIndicatorClass =
-		log.status === 'success' ? 'bg-emerald-500'
-		: log.status === 'pending' ? 'bg-sky-500'
-		: log.status === 'error' ? 'bg-red-500'
+		log.status === 'success' ? 'bg-success'
+		: log.status === 'pending' ? 'bg-info'
+		: log.status === 'error' ? 'bg-destructive'
 		: 'bg-zinc-400'
 	const baseCharge = readNanoString(billingSnapshot, 'base_charge_nano')
 	const hasBreakdownContent = !!(
@@ -496,7 +496,7 @@ export function LogRowCells({
 					{ttfb && (
 						<Badge
 							variant='secondary'
-							className='text-[10px] h-5 px-1 font-mono rounded-full border-0 bg-sky-500/15 text-sky-700 dark:text-sky-400'
+							className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
 						>
 							{ttfb}
 						</Badge>
@@ -504,14 +504,14 @@ export function LogRowCells({
 					{log.is_stream ? (
 						<Badge
 							variant='secondary'
-							className='text-[10px] h-5 px-1 font-mono rounded-full border-0 bg-indigo-500/15 text-indigo-700 dark:text-indigo-400'
+							className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
 						>
 							{t('requestLogs.streamBadge')}
 						</Badge>
 					) : (
 						<Badge
 							variant='secondary'
-							className='text-[10px] h-5 px-1 font-mono rounded-full border-0 bg-amber-500/15 text-amber-700 dark:text-amber-400'
+							className='text-[10px] h-5 px-1 font-mono rounded-full border-warning-border bg-warning-soft text-warning-foreground'
 						>
 							{t('requestLogs.nonStreamBadge')}
 						</Badge>
@@ -665,12 +665,12 @@ export function LogRowCells({
 									</div>
 								)}
 								{isEstimatedBilling && (
-									<div className='text-amber-500 text-xs flex items-center gap-1'>
+									<div className='text-warning text-xs flex items-center gap-1'>
 										⚡ {t('requestLogs.estimatedBilling')}
 									</div>
 								)}
 								{isAdminUnpricedExemption && (
-									<div className='text-amber-500 text-xs flex items-center gap-1'>
+									<div className='text-warning text-xs flex items-center gap-1'>
 										ℹ {t('requestLogs.adminUnpricedExemption')}
 									</div>
 								)}

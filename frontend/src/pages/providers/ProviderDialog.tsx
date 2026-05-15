@@ -239,6 +239,12 @@ export function ProviderDialog({
 				!editProviderDetailError &&
 				(isLoadingEditProviderDetail || hydratedKey === null))
 		: 	hydratedKey !== '__create__')
+	const isProviderChildDialogOpen =
+		modelPickerOpen ||
+		modelDraft !== null ||
+		channelDraft !== null ||
+		baseUrlPrompt !== null ||
+		unsavedChangesOpen
 
 	useEffect(() => {
 		if (open && !isHydratingForm) {
@@ -706,8 +712,16 @@ export function ProviderDialog({
 					onOpenChange(value)
 				}}
 			>
-				<DialogContent className='max-h-[85vh] overflow-y-auto w-[min(96vw,1200px)] max-w-[1200px]'>
-					<DialogHeader>
+				<DialogContent
+					className='max-h-[calc(100dvh-2rem)] overflow-hidden p-0 w-[min(96vw,1200px)] max-w-[1200px] sm:max-h-[calc(100dvh-3rem)]'
+					onInteractOutside={event => {
+						if (isProviderChildDialogOpen) {
+							event.preventDefault()
+						}
+					}}
+				>
+					<div className='flex min-h-0 flex-col p-6'>
+					<DialogHeader className='shrink-0'>
 						<DialogTitle>
 							{isEdit ? t('providers.editProvider') : t('providers.createProvider')}
 						</DialogTitle>
@@ -716,6 +730,7 @@ export function ProviderDialog({
 						</DialogDescription>
 					</DialogHeader>
 
+					<div className='min-h-0 flex-1 overflow-y-auto py-2 pr-1'>
 					{isHydratingForm ?
 						<div className='space-y-4 py-2'>
 							<Skeleton className='h-10 w-full' />
@@ -809,8 +824,9 @@ export function ProviderDialog({
 							/>
 						</div>
 					}
+					</div>
 
-					<DialogFooter>
+					<DialogFooter className='shrink-0 pt-4'>
 						<Button type='button' variant='outline' onClick={tryClose}>
 							{t('common.cancel')}
 						</Button>
@@ -823,6 +839,7 @@ export function ProviderDialog({
 							{loading ? t('common.saving') : t('common.save')}
 						</Button>
 					</DialogFooter>
+					</div>
 				</DialogContent>
 			</Dialog>
 

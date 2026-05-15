@@ -61,6 +61,9 @@
 		"admin": "管理者",
 		"user": "ユーザー"
 	},
+	"groupsBadge": {
+		"groupsCount": "{{count}} グループ"
+	},
 	"dashboard": {
 		"title": "ダッシュボード",
 		"greeting": "👋 こんにちは、{{username}}さん",
@@ -131,6 +134,7 @@
 		"allUsers": "すべてのユーザー",
 		"usersTotal": "{{count}} ユーザー",
 		"usersTotal_plural": "{{count}} ユーザー",
+		"noUsers": "ユーザーがいません。ユーザーを作成して始めましょう。",
 		"user": "ユーザー",
 		"role": "ロール",
 		"allowedGroups": "許可されたグループ",
@@ -396,6 +400,9 @@
 		"stripCrossProtocolNestedExtraDescription": "このプロバイダーがプロトコルファミリーをまたぐリクエストで下流専用のネストされた透過状態を除去するかを制御します。継承時はグローバル設定を使います。",
 		"same": "同一",
 		"failureCount": "失敗回数",
+		"statusHealthy": "正常",
+		"statusProbing": "プローブ中",
+		"statusUnhealthy": "異常",
 		"providerEnabled": "プロバイダー有効",
 		"moveUp": "上に移動",
 		"moveDown": "下に移動",

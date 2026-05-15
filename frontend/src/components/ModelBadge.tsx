@@ -141,7 +141,7 @@ export function ModelBadge({
 			className={cn(
 				'font-mono text-xs border transition-all gap-1.5 py-1 px-2 h-7',
 				highlightUnpriced ?
-					'bg-amber-500/20 text-amber-900 border-amber-500/40 hover:bg-amber-500/25 dark:bg-amber-500/20 dark:text-amber-200 dark:border-amber-400/40'
+					'border-warning-border bg-warning-soft text-warning-foreground hover:bg-warning-soft/80'
 				:	'bg-sidebar-accent/40 hover:bg-sidebar-accent text-foreground border-transparent hover:border-sidebar-border',
 				className
 			)}

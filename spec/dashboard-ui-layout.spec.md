@@ -191,6 +191,16 @@ PL23a. Provider channel edit dialog MUST operate on a draft copy of the selected
 - Editing an existing channel row MUST NOT mutate the underlying list row until user confirms via dialog save action.
 - Closing/canceling the existing-channel dialog without saving MUST leave the underlying row unchanged.
 
+PL24. While the provider editor dialog is open, interaction with a child dialog that belongs to the provider editor MUST NOT be treated as an outside click of the provider editor dialog. This rule applies to at least:
+
+- the unsaved-changes confirmation dialog;
+- the trailing `/v1` confirmation dialog;
+- the model picker dialog;
+- the model edit dialog;
+- the channel edit dialog.
+
+Clicking an action button inside any such child dialog MUST execute only that child dialog action and MUST NOT open another unsaved-changes confirmation dialog through the parent provider editor outside-click handler.
+
 ## 3. Playground Page
 
 ST1. `/dashboard/admin-settings` MUST include a "Health Monitoring" section for Monoize active probe settings.

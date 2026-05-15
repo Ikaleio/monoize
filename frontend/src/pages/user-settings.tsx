@@ -16,6 +16,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { PageWrapper, StaggerList, StaggerItem, motion, transitions } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
 import { setLanguage, getCurrentLanguage } from "@/i18n";
 import { updateMeOptimistic } from "@/lib/swr";
 import { getGravatarUrl } from "@/lib/utils";
@@ -80,8 +81,7 @@ export function UserSettingsPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
       >
-        <h1 className="text-3xl font-bold tracking-tight">{t("userSettings.title")}</h1>
-        <p className="text-muted-foreground">{t("userSettings.description")}</p>
+        <PageHeader title={t("userSettings.title")} description={t("userSettings.description")} />
       </motion.div>
 
       <StaggerList className="grid gap-6">

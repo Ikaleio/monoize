@@ -35,6 +35,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -80,17 +81,17 @@ function uid(): string {
 
 function RoleIcon({ role }: { role: MessageRole }) {
   if (role === "system")
-    return <Settings2 className="h-4 w-4 text-amber-500" />;
+    return <Settings2 className="h-4 w-4 text-warning" />;
   if (role === "assistant") return <Bot className="h-4 w-4 text-primary" />;
-  return <User className="h-4 w-4 text-emerald-500" />;
+  return <User className="h-4 w-4 text-success" />;
 }
 
 function roleBadgeClass(role: MessageRole): string {
   if (role === "system")
-    return "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-0";
+    return "border-warning-border bg-warning-soft text-warning-foreground";
   if (role === "assistant")
     return "bg-primary/15 text-primary border-0";
-  return "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400 border-0";
+  return "border-success-border bg-success-soft text-success-foreground";
 }
 
 // ── SSE streaming helper ───────────────────────────────────────────
@@ -460,10 +461,7 @@ export function PlaygroundPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
       >
-        <h1 className="text-3xl font-bold tracking-tight">
-          {t("playground.title")}
-        </h1>
-        <p className="text-muted-foreground">{t("playground.description")}</p>
+        <PageHeader title={t("playground.title")} description={t("playground.description")} />
       </motion.div>
 
       {/* Controls */}

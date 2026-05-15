@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail, X, PlusCircle } from "lucide-react";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +18,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { TableVirtuoso } from "react-virtuoso";
 import {
   DropdownMenu,
@@ -38,6 +47,10 @@ import type { User } from "@/lib/api";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { getGravatarUrl } from "@/lib/utils";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
+import { TablePageSkeleton } from "@/components/ui/page-skeleton";
+import { DataTableShell } from "@/components/ui/data-table-shell";
+import { EmptyState } from "@/components/ui/empty-state";
 
 const NANO_PER_USD = 1_000_000_000n;
 
@@ -272,6 +285,7 @@ export function UsersPage() {
   const [balanceMode, setBalanceMode] = useState<"set" | "add">("set");
   const [balanceAddAmount, setBalanceAddAmount] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const handleCreate = async () => {
     if (!formData.username.trim() || !formData.password) return;
@@ -386,15 +400,21 @@ export function UsersPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm(t("users.confirmDelete"))) return;
+    setDeleteTargetId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTargetId) return;
     try {
       await deleteUserOptimistic(
-        id,
+        deleteTargetId,
         users,
         (error) => console.error(t("users.failedDelete"), error)
       );
     } catch (error) {
       logOptimisticFlowRejection("delete user", error);
+    } finally {
+      setDeleteTargetId(null);
     }
   };
 
@@ -436,10 +456,9 @@ export function UsersPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-64" />
-      </div>
+      <PageWrapper className="space-y-6">
+        <TablePageSkeleton />
+      </PageWrapper>
     );
   }
 
@@ -449,13 +468,9 @@ export function UsersPage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
-        className="flex items-center justify-between"
       >
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">{t("users.title")}</h1>
-          <p className="text-muted-foreground">{t("users.description")}</p>
-        </div>
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <PageHeader title={t("users.title")} description={t("users.description")} actions={(
+          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
             <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
               <Button>
@@ -537,8 +552,27 @@ export function UsersPage() {
               </DialogFooter>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        )} />
       </motion.div>
+
+      <AlertDialog open={!!deleteTargetId} onOpenChange={(open) => { if (!open) setDeleteTargetId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("users.confirmDelete")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("users.confirmDelete")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={!!editUser} onOpenChange={(open) => !open && setEditUser(null)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
@@ -696,14 +730,24 @@ export function UsersPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, ...transitions.normal }}
       >
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("users.allUsers")}</CardTitle>
-            <CardDescription>
-              {t("users.usersTotal", { count: users.length })}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <DataTableShell
+          toolbar={(
+            <div>
+              <h2 className="text-base font-semibold">{t("users.allUsers")}</h2>
+              <p className="text-sm text-muted-foreground">
+                {t("users.usersTotal", { count: users.length })}
+              </p>
+            </div>
+          )}
+          isEmpty={users.length === 0}
+          emptyState={(
+            <EmptyState
+              icon={<UserIcon className="h-12 w-12" />}
+              title={t("users.allUsers")}
+              description={t("users.noUsers")}
+            />
+          )}
+        >
             <TableVirtuoso
               style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "auto" }}
               data={users}
@@ -824,8 +868,7 @@ export function UsersPage() {
                 );
               }}
             />
-          </CardContent>
-        </Card>
+        </DataTableShell>
       </motion.div>
     </PageWrapper>
   );

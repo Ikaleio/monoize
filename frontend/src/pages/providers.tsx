@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import useSWR from 'swr'
 import { Plus, Server } from 'lucide-react'
-import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
 	AlertDialog,
@@ -14,7 +13,6 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle
 } from '@/components/ui/alert-dialog'
-import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import type { Provider } from '@/lib/api'
@@ -27,6 +25,9 @@ import {
 	reorderProviders
 } from '@/lib/swr'
 import { PageWrapper, motion, transitions } from '@/components/ui/motion'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { CardsPageSkeleton } from '@/components/ui/page-skeleton'
 import { ProviderCard } from './providers/ProviderCard'
 import { ProviderDialog } from './providers/ProviderDialog'
 import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
@@ -108,17 +109,9 @@ export function ProvidersPage() {
 
 	if (isLoading) {
 		return (
-			<div className='space-y-6'>
-				<div>
-					<Skeleton className='h-9 w-48' />
-					<Skeleton className='mt-2 h-4 w-80' />
-				</div>
-				<div className='space-y-4'>
-					{[...Array(3)].map((_, index) => (
-						<Skeleton key={index} className='h-48 w-full' />
-					))}
-				</div>
-			</div>
+			<PageWrapper className='space-y-6'>
+				<CardsPageSkeleton />
+			</PageWrapper>
 		)
 	}
 
@@ -128,20 +121,15 @@ export function ProvidersPage() {
 				initial={{ opacity: 0, y: -10 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={transitions.normal}
-				className='flex items-center justify-between'
 			>
-				<div>
-					<h1 className='text-3xl font-bold tracking-tight'>
-						{t('providers.title')}
-					</h1>
-					<p className='text-muted-foreground'>{t('providers.description')}</p>
-				</div>
-				<motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-					<Button onClick={() => setCreateOpen(true)}>
-						<Plus className='h-4 w-4 mr-2' />
-						{t('providers.addProvider')}
-					</Button>
-				</motion.div>
+				<PageHeader title={t('providers.title')} description={t('providers.description')} actions={(
+					<motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+						<Button onClick={() => setCreateOpen(true)}>
+							<Plus className='h-4 w-4 mr-2' />
+							{t('providers.addProvider')}
+						</Button>
+					</motion.div>
+				)} />
 			</motion.div>
 
 			<div className='space-y-4'>
@@ -151,33 +139,13 @@ export function ProvidersPage() {
 						animate={{ opacity: 1, scale: 1 }}
 						transition={transitions.normal}
 					>
-						<Card>
-							<CardContent className='py-16 flex flex-col items-center justify-center text-center'>
-								<motion.div
-									initial={{ scale: 0 }}
-									animate={{ scale: 1 }}
-									transition={{
-										type: 'spring',
-										stiffness: 300,
-										damping: 20,
-										delay: 0.1
-									}}
-									className='flex h-16 w-16 items-center justify-center rounded-full bg-muted mb-4'
-								>
-									<Server className='h-8 w-8 text-muted-foreground' />
-								</motion.div>
-								<h3 className='text-lg font-medium mb-1'>
-									{t('providers.noProviders')}
-								</h3>
-								<p className='text-sm text-muted-foreground mb-4'>
-									{t('providers.emptyStateDesc')}
-								</p>
-								<Button variant='outline' onClick={() => setCreateOpen(true)}>
-									<Plus className='h-4 w-4 mr-2' />
-									{t('providers.addProvider')}
-								</Button>
-							</CardContent>
-						</Card>
+						<EmptyState
+							variant='card'
+							icon={<Server className='h-12 w-12' />}
+							title={t('providers.noProviders')}
+							description={t('providers.emptyStateDesc')}
+							action={<Button variant='outline' onClick={() => setCreateOpen(true)}><Plus className='h-4 w-4 mr-2' />{t('providers.addProvider')}</Button>}
+						/>
 					</motion.div>
 				)}
 

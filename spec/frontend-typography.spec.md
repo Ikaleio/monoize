@@ -18,3 +18,7 @@ FT3. `body` MUST use the CJK sans-serif global font stack.
 FT4. Code-oriented elements (`code`, `pre`, `kbd`, `samp`) MUST keep a monospaced stack for readability.
 
 FT5. If the injected web font fails to load, the stack MUST fall back to system sans-serif fonts without breaking rendering.
+
+FT6. The frontend theme MUST expose a display font stack through `--font-display` and Tailwind `font-display`.
+
+FT7. Dashboard page titles rendered by the shared page header MUST use the display font stack.

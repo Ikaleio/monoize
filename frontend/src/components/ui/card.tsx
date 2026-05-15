@@ -9,13 +9,28 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-xl border bg-card text-card-foreground shadow-md transition-shadow hover:shadow-lg",
+      "rounded-xl border bg-card text-card-foreground shadow-sm",
       className
     )}
     {...props}
   />
 ))
 Card.displayName = "Card"
+
+const InteractiveCard = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <Card
+    ref={ref}
+    className={cn(
+      "transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+      className
+    )}
+    {...props}
+  />
+))
+InteractiveCard.displayName = "InteractiveCard"
 
 const CardHeader = React.forwardRef<
   HTMLDivElement,
@@ -76,4 +91,4 @@ const CardFooter = React.forwardRef<
 ))
 CardFooter.displayName = "CardFooter"
 
-export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent }
+export { Card, InteractiveCard, CardHeader, CardFooter, CardTitle, CardDescription, CardContent }

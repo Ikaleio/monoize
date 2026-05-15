@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings, updateSettingsOptimistic, useTransformRegistry } from "@/lib/swr";
 import type { SystemSettings } from "@/lib/api";
 import { PageWrapper, motion, transitions, StaggerList, StaggerItem } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
+import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
 import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
 import { toast } from "sonner";
@@ -75,7 +76,7 @@ function SuffixMapEditor({
           <Input
             defaultValue={row.suffix}
             placeholder={t("settings.suffix")}
-            className="flex-1 transition-all focus:scale-[1.01]"
+            className="flex-1 transition-all"
             onBlur={(e) => {
               const updated = rows.map((r, i) =>
                 i === idx ? { ...r, suffix: e.target.value } : r
@@ -182,10 +183,9 @@ export function SettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-64" />
-      </div>
+      <PageWrapper className="space-y-6">
+        <TablePageSkeleton />
+      </PageWrapper>
     );
   }
 
@@ -203,13 +203,8 @@ export function SettingsPage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
-        className="flex items-center justify-between"
       >
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">{t("settings.title")}</h1>
-          <p className="text-muted-foreground">{t("settings.description")}</p>
-        </div>
-        <motion.div
+        <PageHeader title={t("settings.title")} description={t("settings.description")} actions={(<motion.div
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
         >
@@ -217,7 +212,7 @@ export function SettingsPage() {
             <Save className="mr-2 h-4 w-4" />
             {saving ? t("common.saving") : saved ? t("common.saved") : t("common.saveChanges")}
           </Button>
-        </motion.div>
+        </motion.div>)} />
       </motion.div>
 
       <StaggerList className="grid gap-6">
@@ -234,7 +229,7 @@ export function SettingsPage() {
                   id="site_name"
                   value={currentSettings.site_name}
                   onChange={(e) => handleChange({ site_name: e.target.value })}
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
               </div>
               <div className="space-y-2">
@@ -243,7 +238,7 @@ export function SettingsPage() {
                   id="site_description"
                   value={currentSettings.site_description}
                   onChange={(e) => handleChange({ site_description: e.target.value })}
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
               </div>
               <div className="space-y-2">
@@ -253,7 +248,7 @@ export function SettingsPage() {
                   value={currentSettings.api_base_url}
                   onChange={(e) => handleChange({ api_base_url: e.target.value })}
                   placeholder={t("settings.apiBaseUrlPlaceholder")}
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.apiBaseUrlDescription")}
@@ -297,7 +292,7 @@ export function SettingsPage() {
                   onChange={(e) =>
                     handleChange({ default_user_role: e.target.value })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.defaultUserRoleDescription")}
@@ -326,7 +321,7 @@ export function SettingsPage() {
                       session_ttl_days: parseInt(e.target.value) || 7,
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.sessionDurationDescription")}
@@ -345,7 +340,7 @@ export function SettingsPage() {
                       api_key_max_per_user: parseInt(e.target.value) || 10,
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.maxApiKeysDescription")}
@@ -487,7 +482,7 @@ export function SettingsPage() {
                       monoize_request_capture_retention_days: Math.max(1, parseInt(e.target.value) || 1),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.requestCaptureRetentionDaysDescription")}
@@ -506,7 +501,7 @@ export function SettingsPage() {
                       monoize_active_probe_interval_seconds: Math.max(1, parseInt(e.target.value) || 30),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.activeProbeIntervalSecondsDescription")}
@@ -524,7 +519,7 @@ export function SettingsPage() {
                       monoize_active_probe_success_threshold: Math.max(1, parseInt(e.target.value) || 1),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.activeProbeSuccessThresholdDescription")}
@@ -539,7 +534,7 @@ export function SettingsPage() {
                     handleChange({ monoize_active_probe_model: e.target.value || null })
                   }
                   placeholder={t("settings.activeProbeModelPlaceholder")}
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.activeProbeModelDescription")}
@@ -558,7 +553,7 @@ export function SettingsPage() {
                       monoize_passive_failure_threshold: Math.max(1, parseInt(e.target.value) || 3),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveFailureThresholdDescription")}
@@ -576,7 +571,7 @@ export function SettingsPage() {
                       monoize_passive_cooldown_seconds: Math.max(1, parseInt(e.target.value) || 60),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveCooldownSecondsDescription")}
@@ -594,7 +589,7 @@ export function SettingsPage() {
                       monoize_passive_window_seconds: Math.max(1, parseInt(e.target.value) || 30),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveWindowSecondsDescription")}
@@ -612,7 +607,7 @@ export function SettingsPage() {
                       monoize_passive_min_samples: Math.max(1, parseInt(e.target.value) || 20),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveMinSamplesDescription")}
@@ -635,7 +630,7 @@ export function SettingsPage() {
                       ),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveFailureRateThresholdDescription")}
@@ -653,7 +648,7 @@ export function SettingsPage() {
                       monoize_passive_rate_limit_cooldown_seconds: Math.max(1, parseInt(e.target.value) || 15),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.passiveRateLimitCooldownSecondsDescription")}
@@ -671,7 +666,7 @@ export function SettingsPage() {
                       monoize_request_timeout_ms: Math.max(1, parseInt(e.target.value) || 30000),
                     })
                   }
-                  className="transition-all focus:scale-[1.01]"
+                  className="transition-all"
                 />
                 <p className="text-sm text-muted-foreground">
                   {t("settings.requestTimeoutMsDescription")}
@@ -720,7 +715,7 @@ export function SettingsPage() {
                       handleChange({ monoize_extra_fields_whitelist: next });
                     }}
                     placeholder={t("settings.extraFieldsWhitelistPlaceholder")}
-                    className="font-mono text-sm transition-all focus:scale-[1.01]"
+                    className="font-mono text-sm transition-all"
                   />
                 </div>
               ))}

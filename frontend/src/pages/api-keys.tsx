@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, ArrowRightLeft, X } from "lucide-react";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +49,10 @@ import {
 import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { api as apiClient } from "@/lib/api";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { PageHeader } from "@/components/ui/page-header";
+import { TablePageSkeleton } from "@/components/ui/page-skeleton";
+import { DataTableShell } from "@/components/ui/data-table-shell";
+import { EmptyState } from "@/components/ui/empty-state";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
 import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
 import { toast } from "sonner";
@@ -565,10 +569,9 @@ export function ApiKeysPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-64" />
-      </div>
+      <PageWrapper className="space-y-6">
+        <TablePageSkeleton />
+      </PageWrapper>
     );
   }
 
@@ -578,15 +581,9 @@ export function ApiKeysPage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
-        className="flex items-center justify-between"
       >
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">{t("apiKeys.title")}</h1>
-          <p className="text-muted-foreground">
-            {t("apiKeys.description")}
-          </p>
-        </div>
-        <div className="flex gap-2">
+        <PageHeader title={t("apiKeys.title")} description={t("apiKeys.description")} actions={(
+          <>
           {selectedKeys.length > 0 && (
             <Button variant="destructive" onClick={handleBatchDelete}>
               <Trash2 className="mr-2 h-4 w-4" />
@@ -602,14 +599,15 @@ export function ApiKeysPage() {
                 </Button>
               </motion.div>
             </DialogTrigger>
-            <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
-              <DialogHeader>
+            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-4xl">
+              <div className="flex min-h-0 flex-col p-6">
+              <DialogHeader className="shrink-0">
                 <DialogTitle>{t("apiKeys.createApiKey")}</DialogTitle>
                 <DialogDescription>
                   {t("apiKeys.createDescription")}
                 </DialogDescription>
               </DialogHeader>
-              <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto px-1 -mx-1">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-4 -mx-1">
                 <div className="space-y-2">
                   <Label htmlFor="name">{t("common.name")}</Label>
                   <Input
@@ -732,7 +730,7 @@ export function ApiKeysPage() {
                   onChange={setNewKeyModelRedirects}
                 />
               </div>
-              <DialogFooter>
+              <DialogFooter className="shrink-0 pt-4">
                 <Button variant="outline" onClick={() => { setCreateOpen(false); resetCreateForm(); }}>
                   {t("common.cancel")}
                 </Button>
@@ -740,9 +738,11 @@ export function ApiKeysPage() {
                   {creating ? t("common.creating") : t("common.create")}
                 </Button>
               </DialogFooter>
+              </div>
             </DialogContent>
           </Dialog>
-        </div>
+          </>
+        )} />
       </motion.div>
 
       {createdKey && (
@@ -751,9 +751,9 @@ export function ApiKeysPage() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ type: "spring", stiffness: 300, damping: 25 }}
         >
-          <Card className="border-green-500/50 bg-green-500/5">
+          <Card className="border-success-border bg-success-soft">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-green-600">
+              <CardTitle className="flex items-center gap-2 text-success-foreground">
                 <motion.div
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
@@ -801,19 +801,24 @@ export function ApiKeysPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, ...transitions.normal }}
       >
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("apiKeys.yourApiKeys")}</CardTitle>
-            <CardDescription>
-              {t("apiKeys.keysCreated", { count: keys.length })}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {keys.length === 0 ? (
-              <div className="py-8 text-center text-muted-foreground">
-                {t("apiKeys.noKeys")}
-              </div>
-            ) : (
+        <DataTableShell
+          toolbar={(
+            <div>
+              <h2 className="text-base font-semibold">{t("apiKeys.yourApiKeys")}</h2>
+              <p className="text-sm text-muted-foreground">
+                {t("apiKeys.keysCreated", { count: keys.length })}
+              </p>
+            </div>
+          )}
+          isEmpty={keys.length === 0}
+          emptyState={(
+            <EmptyState
+              icon={<Key className="h-12 w-12" />}
+              title={t("apiKeys.yourApiKeys")}
+              description={t("apiKeys.noKeys")}
+            />
+          )}
+        >
               <TableVirtuoso
                 style={{ height: "calc(100dvh - 280px)", minHeight: 400, overflowX: "auto" }}
                 data={keys}
@@ -1017,21 +1022,20 @@ export function ApiKeysPage() {
                   </>
                 )}
               />
-            )}
-          </CardContent>
-        </Card>
+        </DataTableShell>
       </motion.div>
 
       {/* Edit Dialog */}
       <Dialog open={!!editKey} onOpenChange={(open) => { if (!open) { setEditKey(null); resetCreateForm(); } }}>
-        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-4xl">
+          <div className="flex min-h-0 flex-col p-6">
+          <DialogHeader className="shrink-0">
             <DialogTitle>{t("apiKeys.editApiKey")}</DialogTitle>
             <DialogDescription>
               {t("apiKeys.editDescription")}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
             <div className="space-y-2">
               <Label htmlFor="editName">{t("common.name")}</Label>
               <Input
@@ -1138,7 +1142,7 @@ export function ApiKeysPage() {
               onChange={setNewKeyModelRedirects}
             />
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0 pt-4">
             <Button variant="outline" onClick={() => { setEditKey(null); resetCreateForm(); }}>
               {t("common.cancel")}
             </Button>
@@ -1146,6 +1150,7 @@ export function ApiKeysPage() {
               {updating ? t("common.saving") : t("common.save")}
             </Button>
           </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 

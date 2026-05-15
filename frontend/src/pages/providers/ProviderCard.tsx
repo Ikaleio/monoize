@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { motion, transitions } from '@/components/ui/motion'
 import { Separator } from '@/components/ui/separator'
+import { StatusBadge } from '@/components/ui/status'
 import { Switch } from '@/components/ui/switch'
 import {
 	Tooltip,
@@ -171,23 +172,16 @@ export function ProviderCard({
 								<Badge variant='outline' className='font-mono text-xs'>
 									{provider.provider_type}
 								</Badge>
-								<Badge
-									variant={provider.enabled ? 'default' : 'secondary'}
-									className={
-										provider.enabled ?
-											'bg-emerald-600/15 text-emerald-700 hover:bg-emerald-600/15 dark:bg-emerald-500/15 dark:text-emerald-400 border-0'
-										:	'border-0'
-									}
-								>
+								<StatusBadge variant={provider.enabled ? 'success' : 'info'}>
 									{provider.enabled ?
 										t('common.enabled')
-									:	t('common.disabled')}
-								</Badge>
+									: 	t('common.disabled')}
+								</StatusBadge>
 								{unpricedCount > 0 && (
-									<Badge className='bg-amber-500/15 text-amber-700 hover:bg-amber-500/15 dark:bg-amber-500/15 dark:text-amber-400 border-0'>
+									<StatusBadge variant='warning'>
 										<AlertTriangle className='h-3 w-3 mr-1' />
 										{t('providers.unpricedModels', { count: unpricedCount })}
-									</Badge>
+									</StatusBadge>
 								)}
 								{provider.groups.length > 0 && <GroupsBadge groups={provider.groups} />}
 								<span className='hidden lg:inline text-xs text-muted-foreground whitespace-nowrap'>
@@ -391,19 +385,11 @@ export function ProviderCard({
 														<span className='text-xs text-muted-foreground'>
 															W:{channel.weight}
 														</span>
-														<Badge
-															variant={channel.enabled ? 'default' : 'secondary'}
-															className={cn(
-																'text-xs',
-																channel.enabled ?
-																	'bg-emerald-600/15 text-emerald-700 hover:bg-emerald-600/15 dark:bg-emerald-500/15 dark:text-emerald-400 border-0'
-																:	'border-0'
-															)}
-														>
+														<StatusBadge variant={channel.enabled ? 'success' : 'info'}>
 															{channel.enabled ?
 																t('common.enabled')
-															:	t('common.disabled')}
-														</Badge>
+															: 	t('common.disabled')}
+														</StatusBadge>
 													</span>
 												</div>
 											)}

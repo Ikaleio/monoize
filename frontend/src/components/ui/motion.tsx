@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { motion, type Variants, type Transition } from "framer-motion";
+import { motion, useReducedMotion, type Variants, type Transition } from "framer-motion";
 import { forwardRef, type ReactNode, type ComponentProps } from "react";
 
 // Easing functions - non-linear for smooth feel
@@ -65,6 +65,24 @@ export const staggerItemVariants: Variants = {
   animate: { opacity: 1, y: 0 },
 };
 
+const reducedPageVariants: Variants = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+};
+
+const reducedStaggerContainerVariants: Variants = {
+  initial: {},
+  animate: {},
+};
+
+const reducedStaggerItemVariants: Variants = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+};
+
+const reducedTransition: Transition = { duration: 0 };
+
 // Page wrapper component
 interface PageWrapperProps {
   children: ReactNode;
@@ -72,19 +90,23 @@ interface PageWrapperProps {
 }
 
 export const PageWrapper = forwardRef<HTMLDivElement, PageWrapperProps>(
-  ({ children, className = "" }, ref) => (
-    <motion.div
-      ref={ref}
-      initial="initial"
-      animate="animate"
-      exit="exit"
-      variants={pageVariants}
-      transition={transitions.normal}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "" }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        variants={shouldReduceMotion ? reducedPageVariants : pageVariants}
+        transition={shouldReduceMotion ? reducedTransition : transitions.normal}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 PageWrapper.displayName = "PageWrapper";
 
@@ -96,17 +118,21 @@ interface FadeInProps {
 }
 
 export const FadeIn = forwardRef<HTMLDivElement, FadeInProps>(
-  ({ children, className = "", delay = 0 }, ref) => (
-    <motion.div
-      ref={ref}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ ...transitions.normal, delay }}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "", delay = 0 }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={shouldReduceMotion ? reducedTransition : { ...transitions.normal, delay }}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 FadeIn.displayName = "FadeIn";
 
@@ -118,17 +144,21 @@ interface SlideUpProps {
 }
 
 export const SlideUp = forwardRef<HTMLDivElement, SlideUpProps>(
-  ({ children, className = "", delay = 0 }, ref) => (
-    <motion.div
-      ref={ref}
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ ...transitions.normal, delay }}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "", delay = 0 }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 16 }}
+        animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+        transition={shouldReduceMotion ? reducedTransition : { ...transitions.normal, delay }}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 SlideUp.displayName = "SlideUp";
 
@@ -140,17 +170,21 @@ interface ScaleInProps {
 }
 
 export const ScaleIn = forwardRef<HTMLDivElement, ScaleInProps>(
-  ({ children, className = "", delay = 0 }, ref) => (
-    <motion.div
-      ref={ref}
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ ...transitions.springBounce, delay }}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "", delay = 0 }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9 }}
+        animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+        transition={shouldReduceMotion ? reducedTransition : { ...transitions.springBounce, delay }}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 ScaleIn.displayName = "ScaleIn";
 
@@ -161,17 +195,21 @@ interface StaggerListProps {
 }
 
 export const StaggerList = forwardRef<HTMLDivElement, StaggerListProps>(
-  ({ children, className = "" }, ref) => (
-    <motion.div
-      ref={ref}
-      initial="initial"
-      animate="animate"
-      variants={staggerContainerVariants}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "" }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        initial="initial"
+        animate="animate"
+        variants={shouldReduceMotion ? reducedStaggerContainerVariants : staggerContainerVariants}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 StaggerList.displayName = "StaggerList";
 
@@ -182,16 +220,20 @@ interface StaggerItemProps {
 }
 
 export const StaggerItem = forwardRef<HTMLDivElement, StaggerItemProps>(
-  ({ children, className = "" }, ref) => (
-    <motion.div
-      ref={ref}
-      variants={staggerItemVariants}
-      transition={transitions.normal}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "" }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        variants={shouldReduceMotion ? reducedStaggerItemVariants : staggerItemVariants}
+        transition={shouldReduceMotion ? reducedTransition : transitions.normal}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 StaggerItem.displayName = "StaggerItem";
 
@@ -203,18 +245,22 @@ interface AnimatedCardProps extends ComponentProps<typeof motion.div> {
 }
 
 export const AnimatedCard = forwardRef<HTMLDivElement, AnimatedCardProps>(
-  ({ children, className = "", hoverScale = 1.02, ...props }, ref) => (
-    <motion.div
-      ref={ref}
-      whileHover={{ scale: hoverScale, y: -2 }}
-      whileTap={{ scale: 0.98 }}
-      transition={transitions.spring}
-      className={className}
-      {...props}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "", hoverScale = 1.02, ...props }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        whileHover={shouldReduceMotion ? undefined : { scale: hoverScale, y: -2 }}
+        whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
+        transition={shouldReduceMotion ? reducedTransition : transitions.spring}
+        className={className}
+        {...props}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 AnimatedCard.displayName = "AnimatedCard";
 
@@ -225,17 +271,21 @@ interface AnimatedButtonProps {
 }
 
 export const AnimatedButton = forwardRef<HTMLDivElement, AnimatedButtonProps>(
-  ({ children, className = "" }, ref) => (
-    <motion.div
-      ref={ref}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
-      transition={transitions.spring}
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  ({ children, className = "" }, ref) => {
+    const shouldReduceMotion = useReducedMotion();
+
+    return (
+      <motion.div
+        ref={ref}
+        whileHover={shouldReduceMotion ? undefined : { scale: 1.02 }}
+        whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
+        transition={shouldReduceMotion ? reducedTransition : transitions.spring}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    );
+  }
 );
 AnimatedButton.displayName = "AnimatedButton";
 
