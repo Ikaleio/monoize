@@ -136,7 +136,7 @@ const DialogContent = React.forwardRef<
                   }}
                   style={touchScrollStyle}
                   className={cn(
-                    "relative z-50 flex w-full max-w-lg flex-col overflow-y-auto overscroll-contain border bg-background p-6 shadow-lg sm:rounded-lg [&_*]:ring-offset-background",
+                    "relative z-50 flex w-full max-w-lg flex-col overflow-y-auto overscroll-contain border bg-background p-6 shadow-sm sm:rounded-lg [&_*]:ring-offset-background",
                     className
                   )}
                 >

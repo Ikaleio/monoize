@@ -49,7 +49,7 @@ import { getGravatarUrl } from "@/lib/utils";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
-import { DataTableShell } from "@/components/ui/data-table-shell";
+import { DataTableShell, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 
 const NANO_PER_USD = 1_000_000_000n;
@@ -774,34 +774,34 @@ export function UsersPage() {
               }}
               fixedHeaderContent={() => (
                 <tr className="border-b bg-background">
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground min-w-[14rem]">
+                  <VirtualTableHeaderCell className="min-w-[14rem]">
                     {t("users.user")}
-                  </th>
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[8.5rem] whitespace-nowrap">
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell className="w-[8.5rem] whitespace-nowrap">
                     {t("users.role")}
-                  </th>
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell>
                     {t("common.created")}
-                  </th>
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell>
                     {t("users.lastLogin")}
-                  </th>
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell>
                     Balance
-                  </th>
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell>
                     {t("common.status")}
-                  </th>
-                  <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[100px]">
+                  </VirtualTableHeaderCell>
+                  <VirtualTableHeaderCell className="w-[100px]">
                     {t("common.actions")}
-                  </th>
+                  </VirtualTableHeaderCell>
                 </tr>
               )}
               itemContent={(_index, user) => {
                 const RoleIcon = roleIcons[user.role];
                 return (
                   <>
-                    <td className="p-4 align-middle whitespace-nowrap">
+                    <VirtualTableCell className="whitespace-nowrap">
                       <div className="flex min-w-max items-center gap-2">
                         <Avatar className="h-8 w-8 shrink-0">
                           {user.email && <AvatarImage src={getGravatarUrl(user.email, 64) ?? undefined} alt={user.username} />}
@@ -814,8 +814,8 @@ export function UsersPage() {
                           )}
                         </div>
                       </div>
-                    </td>
-                    <td className="p-4 align-middle">
+                    </VirtualTableCell>
+                    <VirtualTableCell>
                       <div className="max-h-8 overflow-x-auto overflow-y-hidden">
                         <Badge
                           variant={roleVariants[user.role]}
@@ -825,15 +825,15 @@ export function UsersPage() {
                           {t(`roles.${user.role}`)}
                         </Badge>
                       </div>
-                    </td>
-                    <td className="p-4 align-middle">{formatDate(user.created_at)}</td>
-                    <td className="p-4 align-middle">
+                    </VirtualTableCell>
+                    <VirtualTableCell>{formatDate(user.created_at)}</VirtualTableCell>
+                    <VirtualTableCell>
                       {user.last_login_at ? formatDate(user.last_login_at) : t("common.never")}
-                    </td>
-                    <td className="p-4 align-middle">
+                    </VirtualTableCell>
+                    <VirtualTableCell>
                       {user.balance_unlimited ? "Unlimited" : `$${user.balance_usd}`}
-                    </td>
-                    <td className="p-4 align-middle">
+                    </VirtualTableCell>
+                    <VirtualTableCell>
                       <div className="flex items-center gap-2">
                         <Switch
                           checked={user.enabled}
@@ -844,8 +844,8 @@ export function UsersPage() {
                           {user.enabled ? t("common.enabled") : t("common.disabled")}
                         </span>
                       </div>
-                    </td>
-                    <td className="p-4 align-middle">
+                    </VirtualTableCell>
+                    <VirtualTableCell>
                       <div className="flex items-center gap-1">
                         {canEdit(user) && (
                           <Button variant="ghost" size="icon" onClick={() => openEdit(user)}>
@@ -863,7 +863,7 @@ export function UsersPage() {
                           </Button>
                         )}
                       </div>
-                    </td>
+                    </VirtualTableCell>
                   </>
                 );
               }}

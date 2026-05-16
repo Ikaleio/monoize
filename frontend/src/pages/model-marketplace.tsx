@@ -7,7 +7,7 @@ import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
-import { DataTableShell, TableToolbarSearch } from "@/components/ui/data-table-shell";
+import { DataTableShell, TableToolbarSearch, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { TableVirtuoso } from "react-virtuoso";
 
 function nanoToPerMillion(nano?: string | null): string {
@@ -93,21 +93,21 @@ export function ModelMarketplacePage() {
                 }}
                 fixedHeaderContent={() => (
                   <tr className="border-b bg-background">
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground min-w-[200px]">
+                    <VirtualTableHeaderCell className="min-w-[200px]">
                       {t("modelMarketplace.modelId")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMarketplace.inputCost")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMarketplace.outputCost")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMarketplace.context")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMarketplace.maxOutput")}
-                    </th>
+                    </VirtualTableHeaderCell>
                   </tr>
                 )}
                 itemContent={(_index, record) => {
@@ -116,25 +116,25 @@ export function ModelMarketplacePage() {
 
                   return (
                     <>
-                      <td className="p-4 align-middle">
+                      <VirtualTableCell>
                         <ModelBadge
                           model={record.model_id}
                           provider={record.models_dev_provider}
                           showDetails={false}
                         />
-                      </td>
-                      <td className="p-4 align-middle font-mono text-xs">
+                      </VirtualTableCell>
+                      <VirtualTableCell className="font-mono text-xs">
                         {inputCost === "-" ? "-" : `${inputCost} / 1M`}
-                      </td>
-                      <td className="p-4 align-middle font-mono text-xs">
+                      </VirtualTableCell>
+                      <VirtualTableCell className="font-mono text-xs">
                         {outputCost === "-" ? "-" : `${outputCost} / 1M`}
-                      </td>
-                      <td className="p-4 align-middle font-mono text-xs">
+                      </VirtualTableCell>
+                      <VirtualTableCell className="font-mono text-xs">
                         {formatTokens(record.max_tokens)}
-                      </td>
-                      <td className="p-4 align-middle font-mono text-xs">
+                      </VirtualTableCell>
+                      <VirtualTableCell className="font-mono text-xs">
                         {formatTokens(record.max_output_tokens)}
-                      </td>
+                      </VirtualTableCell>
                     </>
                   );
                 }}

@@ -34,7 +34,7 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { getGravatarUrl } from "@/lib/utils";
+import { cn, getGravatarUrl } from "@/lib/utils";
 
 const navTransition = {
   type: "spring",
@@ -68,25 +68,26 @@ function NavLink({
     <Link
       to={to}
       onClick={onClick}
-      className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200 ${
+      className={cn(
+        "relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-200",
         isActive
-          ? "text-primary-foreground"
-          : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-      }`}
+          ? "text-foreground"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+      )}
     >
       {isActive && (
         disableLayoutAnimation ? (
-          <div className="absolute inset-0 rounded-lg bg-primary" />
+          <div className="absolute inset-0 rounded-md bg-accent" />
         ) : (
           <motion.div
             layoutId={layoutId}
-            className="absolute inset-0 rounded-lg bg-primary"
+            className="absolute inset-0 rounded-md bg-accent"
             transition={navTransition}
           />
         )
       )}
       <span className="relative z-10 flex items-center gap-3">
-        <Icon className="h-4 w-4" />
+        <Icon className={cn("h-4 w-4", isActive && "text-primary")} />
         {label}
       </span>
     </Link>
@@ -127,7 +128,7 @@ function Sidebar({ onNavigate, layoutId = "nav-active", disableLayoutAnimation =
           whileHover={{ scale: 1.05, rotate: 5 }}
           whileTap={{ scale: 0.95 }}
           transition={{ type: "spring", stiffness: 400, damping: 17 }}
-          className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-primary-foreground"
+          className="flex h-8 w-8 items-center justify-center rounded-md border bg-background text-foreground"
         >
           <Layers3 className="h-4 w-4" />
         </motion.div>
@@ -307,13 +308,13 @@ export function DashboardLayout() {
           <Button
             variant="outline"
             size="icon"
-            className="fixed left-4 top-4 z-50 shadow-md lg:hidden"
+            className="fixed left-4 top-4 z-50 lg:hidden"
           >
             <Menu className="h-5 w-5" />
             <span className="sr-only">Toggle menu</span>
           </Button>
         </SheetTrigger>
-        <SheetContent side="left" className="w-64 p-0">
+        <SheetContent side="left" className="w-64 border-r bg-card p-0 shadow-none">
           <Sidebar onNavigate={() => setOpen(false)} disableLayoutAnimation />
         </SheetContent>
       </Sheet>
@@ -322,7 +323,7 @@ export function DashboardLayout() {
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className="m-4 mr-0 hidden h-[calc(100dvh-2rem)] w-64 shrink-0 rounded-xl border bg-card shadow-md lg:block"
+        className="m-4 mr-0 hidden h-[calc(100dvh-2rem)] w-64 shrink-0 rounded-xl border bg-card shadow-sm lg:block"
       >
         <Sidebar />
       </motion.aside>

@@ -40,4 +40,24 @@ const TableToolbarSearch = React.forwardRef<HTMLInputElement, TableToolbarSearch
 );
 TableToolbarSearch.displayName = "TableToolbarSearch";
 
-export { DataTableShell, TableToolbarSearch };
+const VirtualTableHeaderCell = React.forwardRef<
+  HTMLTableCellElement,
+  React.ThHTMLAttributes<HTMLTableCellElement>
+>(({ className, ...props }, ref) => (
+  <th
+    ref={ref}
+    className={cn("h-9 px-3 text-left align-middle text-xs font-medium text-muted-foreground", className)}
+    {...props}
+  />
+));
+VirtualTableHeaderCell.displayName = "VirtualTableHeaderCell";
+
+const VirtualTableCell = React.forwardRef<
+  HTMLTableCellElement,
+  React.TdHTMLAttributes<HTMLTableCellElement>
+>(({ className, ...props }, ref) => (
+  <td ref={ref} className={cn("px-3 py-2 align-middle", className)} {...props} />
+));
+VirtualTableCell.displayName = "VirtualTableCell";
+
+export { DataTableShell, TableToolbarSearch, VirtualTableHeaderCell, VirtualTableCell };

@@ -197,7 +197,7 @@ export function DateRangePicker({ from, to, onChange, t }: DateRangePickerProps)
 								size='sm'
 								className={cn(
 									'shrink-0 text-xs h-7 px-2',
-									isAllTime && 'bg-primary text-primary-foreground'
+									isAllTime && 'bg-accent text-accent-foreground'
 								)}
 								onClick={handleClear}
 							>
@@ -210,7 +210,7 @@ export function DateRangePicker({ from, to, onChange, t }: DateRangePickerProps)
 									size='sm'
 									className={cn(
 										'shrink-0 text-xs h-7 px-2',
-										activePreset === p.key && 'bg-primary text-primary-foreground'
+										activePreset === p.key && 'bg-accent text-accent-foreground'
 									)}
 									onClick={() => handlePreset(p.key)}
 								>

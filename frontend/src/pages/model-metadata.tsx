@@ -48,7 +48,7 @@ import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
-import { DataTableShell, TableToolbarSearch } from "@/components/ui/data-table-shell";
+import { DataTableShell, TableToolbarSearch, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { toast } from "sonner";
 import { TableVirtuoso } from "react-virtuoso";
 
@@ -599,33 +599,32 @@ export function ModelMetadataPage() {
                 }}
                 fixedHeaderContent={() => (
                   <tr className="border-b bg-background">
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground min-w-[200px]">
+                    <VirtualTableHeaderCell className="min-w-[200px]">
                       {t("modelMetadata.modelId")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMetadata.inputCost")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMetadata.outputCost")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMetadata.context")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMetadata.source")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell>
                       {t("modelMetadata.updated")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground w-[80px]">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="w-[80px]">
                       {t("common.actions")}
-                    </th>
+                    </VirtualTableHeaderCell>
                   </tr>
                 )}
                 itemContent={(_index, record) => (
                   <>
-                    <td
-                      className="p-4 align-middle"
+                    <VirtualTableCell
                       onClick={() => openEdit(record)}
                     >
                       <ModelBadge
@@ -633,27 +632,26 @@ export function ModelMetadataPage() {
                         provider={record.models_dev_provider}
                         showDetails={false}
                       />
-                    </td>
-                    <td
-                      className="p-4 align-middle font-mono text-xs"
+                    </VirtualTableCell>
+                    <VirtualTableCell
+                      className="font-mono text-xs"
                       onClick={() => openEdit(record)}
                     >
                       {nanoToPerMillion(record.input_cost_per_token_nano)}
-                    </td>
-                    <td
-                      className="p-4 align-middle font-mono text-xs"
+                    </VirtualTableCell>
+                    <VirtualTableCell
+                      className="font-mono text-xs"
                       onClick={() => openEdit(record)}
                     >
                       {nanoToPerMillion(record.output_cost_per_token_nano)}
-                    </td>
-                    <td
-                      className="p-4 align-middle font-mono text-xs"
+                    </VirtualTableCell>
+                    <VirtualTableCell
+                      className="font-mono text-xs"
                       onClick={() => openEdit(record)}
                     >
                       {formatTokens(record.max_tokens)}
-                    </td>
-                    <td
-                      className="p-4 align-middle"
+                    </VirtualTableCell>
+                    <VirtualTableCell
                       onClick={() => openEdit(record)}
                     >
                       <Badge
@@ -664,14 +662,14 @@ export function ModelMetadataPage() {
                           ? t("modelMetadata.manual")
                           : t("modelMetadata.modelsDev")}
                       </Badge>
-                    </td>
-                    <td
-                      className="p-4 align-middle text-xs text-muted-foreground"
+                    </VirtualTableCell>
+                    <VirtualTableCell
+                      className="text-xs text-muted-foreground"
                       onClick={() => openEdit(record)}
                     >
                       {formatRelativeTime(record.updated_at)}
-                    </td>
-                    <td className="p-4 align-middle">
+                    </VirtualTableCell>
+                    <VirtualTableCell>
                       <div className="flex items-center gap-1">
                         <Button
                           variant="ghost"
@@ -695,7 +693,7 @@ export function ModelMetadataPage() {
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
-                    </td>
+                    </VirtualTableCell>
                   </>
                 )}
               />

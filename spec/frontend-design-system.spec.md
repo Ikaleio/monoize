@@ -38,13 +38,17 @@ DS4. Semantic status tokens MUST provide at least these forms:
 - soft background color;
 - border color.
 
-DS4b. Text rendered on semantic soft backgrounds MUST have a contrast ratio of at least 4.5:1 in both light and dark themes. This rule applies to `text-success` on `bg-success-soft`, `text-warning-foreground` on `bg-warning-soft`, and `text-info` on `bg-info-soft`.
+DS4b. Text rendered on semantic soft backgrounds MUST have a contrast ratio of at least 4.5:1 in both light and dark themes. This rule applies to `text-success-foreground` on `bg-success-soft`, `text-warning-foreground` on `bg-warning-soft`, and `text-info-foreground` on `bg-info-soft`.
 
 DS4c. Dark-theme semantic foreground tokens MUST be lighter than their matching soft background tokens when the soft token is a dark surface. A dark foreground on a dark semantic soft surface is invalid.
 
 DS4a. Chart series colors MUST be exposed as CSS variables `--chart-1` through `--chart-16` and Tailwind colors `chart.1` through `chart.16`.
 
 DS5. Business UI MUST NOT introduce raw Tailwind status palettes for repeated semantic states when a status token exists. This rule applies to success, warning, info, and destructive states.
+
+DS5a. Dashboard status soft backgrounds and borders SHOULD use lower saturation than their matching foreground tokens when contrast remains at least 4.5:1.
+
+DS5b. The dashboard body background MAY use the product grid texture. Implementations MUST NOT remove the grid texture unless the product specification is updated.
 
 ## 2. Cards
 
@@ -53,6 +57,8 @@ DS6. Base `Card` MUST be a static surface by default.
 DS7. Base `Card` MUST NOT apply hover shadow or hover transform by default.
 
 DS8. Interactive card affordance MUST be opt-in by using a dedicated interactive wrapper or explicit classes at the call site.
+
+DS8a. Dashboard card layout and floating-shell layout are product decisions. Vercel/shadcn alignment work MUST NOT remove floating card layout or body grid unless a separate specification change requires it.
 
 ## 3. Page Headers
 
@@ -108,6 +114,10 @@ DS21. Standard table cells MUST use deterministic horizontal and vertical paddin
 
 DS22. Search inputs in table toolbars MUST use responsive width: full width below `sm`, bounded width at `sm` and above.
 
+DS22a. Shared virtual table header cells SHOULD use `h-9 px-3 text-xs font-medium text-muted-foreground`.
+
+DS22b. Shared virtual table body cells SHOULD use `px-3 py-2 align-middle` unless the table is explicitly high-density.
+
 ## 7. Dialogs and Confirmation
 
 DS23. Destructive confirmation UI MUST use shadcn `AlertDialog` primitives.
@@ -142,6 +152,8 @@ DS33. When reduced motion is enabled, shared motion helpers MUST NOT animate x-o
 
 DS34. When reduced motion is enabled, shared motion helpers MAY animate opacity or render without animation.
 
+DS34a. Existing dashboard motion effects are part of the product interaction model. Vercel/shadcn visual alignment work MUST preserve existing motion timing, transforms, and layout animations unless a separate motion specification change requires modification.
+
 ## 10. Internationalized Copy
 
 DS35. User-visible copy in reusable components MUST be provided through the frontend i18n system.
@@ -153,3 +165,23 @@ DS36. Reusable components MUST NOT hard-code English labels when equivalent tran
 DS37. Tailwind MUST expose a `font-display` family backed by `--font-display`.
 
 DS38. Standard page titles rendered through `PageHeader` MUST use `font-display`.
+
+DS39. Base dashboard card titles SHOULD render as `text-base font-semibold leading-none tracking-tight`.
+
+DS40. Badge text SHOULD use `font-medium` by default.
+
+## 12. Sidebar and Navigation
+
+DS41. Sidebar active navigation items SHOULD use a low-emphasis surface (`accent` or `muted`) rather than a solid primary background.
+
+DS42. Sidebar active navigation icons MAY use primary color as a low-area active indicator.
+
+DS43. Sidebar brand marks SHOULD use a neutral bordered surface rather than a solid primary chip.
+
+DS44. Sidebar mobile sheet content SHOULD match the desktop sidebar surface and border treatment.
+
+DS45. Sidebar motion and floating-card layout MUST be preserved unless a separate product specification changes them.
+
+## 13. Selected Filters
+
+DS46. Selected filter presets SHOULD use `accent` surface and `accent-foreground` text instead of solid primary background.

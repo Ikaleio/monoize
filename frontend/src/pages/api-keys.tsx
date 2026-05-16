@@ -51,7 +51,7 @@ import { api as apiClient } from "@/lib/api";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
-import { DataTableShell } from "@/components/ui/data-table-shell";
+import { DataTableShell, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
 import { findFirstInvalidTransformRule } from "@/components/transforms/transform-schema";
@@ -845,44 +845,44 @@ export function ApiKeysPage() {
                 }}
                 fixedHeaderContent={() => (
                   <tr className="border-b bg-background">
-                    <th className="h-10 w-[50px] px-4 align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    <VirtualTableHeaderCell className="w-[50px] whitespace-nowrap">
                       <Checkbox
                         checked={selectedKeys.length === keys.length && keys.length > 0}
                         onCheckedChange={toggleSelectAll}
                       />
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="whitespace-nowrap">
                       {t("common.name")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="whitespace-nowrap">
                       {t("apiKeys.keyPrefix")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="whitespace-nowrap">
                       {t("apiKeys.balance")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="whitespace-nowrap">
                       {t("apiKeys.restrictions")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="whitespace-nowrap">
                       {t("apiKeys.expires")}
-                    </th>
-                    <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="whitespace-nowrap">
                       {t("common.status")}
-                    </th>
-                    <th className="h-10 w-[100px] px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap">
+                    </VirtualTableHeaderCell>
+                    <VirtualTableHeaderCell className="w-[100px] whitespace-nowrap">
                       {t("common.actions")}
-                    </th>
+                    </VirtualTableHeaderCell>
                   </tr>
                 )}
                 itemContent={(_index, key) => (
                   <>
-                    <td className="p-4 align-middle">
+                    <VirtualTableCell>
                       <Checkbox
                         checked={selectedKeys.includes(key.id)}
                         onCheckedChange={() => toggleSelectKey(key.id)}
                       />
-                    </td>
-                    <td className="p-4 align-middle font-medium whitespace-nowrap">
+                    </VirtualTableCell>
+                    <VirtualTableCell className="font-medium whitespace-nowrap">
                       <div className="min-w-max">
                         {key.name}
                       </div>
@@ -891,8 +891,8 @@ export function ApiKeysPage() {
                           <GroupsBadge groups={key.allowed_groups} variant="secondary" />
                         </div>
                       )}
-                    </td>
-                    <td className="p-4 align-middle whitespace-nowrap">
+                    </VirtualTableCell>
+                    <VirtualTableCell className="whitespace-nowrap">
                       <div className="flex min-w-max items-center gap-1">
                         <code className="rounded bg-muted px-2 py-0.5 text-sm whitespace-nowrap">
                           {key.key ? `${key.key.slice(0, 12)}...` : `${key.key_prefix}...`}
@@ -912,15 +912,15 @@ export function ApiKeysPage() {
                           </Button>
                         )}
                       </div>
-                    </td>
-                    <td className="p-4 align-middle whitespace-nowrap">
+                    </VirtualTableCell>
+                    <VirtualTableCell className="whitespace-nowrap">
                       {key.sub_account_enabled ? (
                         <span className="font-mono text-sm">${key.sub_account_balance_usd}</span>
                       ) : (
                         <Badge variant="secondary" className="whitespace-nowrap">{t("apiKeys.inheritsUser")}</Badge>
                       )}
-                    </td>
-                    <td className="p-4 align-middle whitespace-nowrap">
+                    </VirtualTableCell>
+                    <VirtualTableCell className="whitespace-nowrap">
                       <TooltipProvider>
                         <div className="flex min-w-max gap-1">
                           {key.model_limits_enabled && key.model_limits.length > 0 && (
@@ -978,17 +978,17 @@ export function ApiKeysPage() {
                           )}
                         </div>
                       </TooltipProvider>
-                    </td>
-                    <td className="p-4 align-middle whitespace-nowrap">
+                    </VirtualTableCell>
+                    <VirtualTableCell className="whitespace-nowrap">
                       {key.expires_at ? formatDate(key.expires_at) : t("common.never")}
-                    </td>
-                    <td className="p-4 align-middle whitespace-nowrap">
+                    </VirtualTableCell>
+                    <VirtualTableCell className="whitespace-nowrap">
                       <Switch
                         checked={key.enabled}
                         onCheckedChange={() => handleToggleEnabled(key)}
                       />
-                    </td>
-                    <td className="p-4 align-middle">
+                    </VirtualTableCell>
+                    <VirtualTableCell>
                       <div className="flex gap-1">
                         {key.sub_account_enabled && (
                           <Button
@@ -1018,7 +1018,7 @@ export function ApiKeysPage() {
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
-                    </td>
+                    </VirtualTableCell>
                   </>
                 )}
               />
