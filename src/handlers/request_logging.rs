@@ -1,6 +1,18 @@
 use super::*;
 use chrono::{Duration as ChronoDuration, Utc};
 
+#[must_use]
+pub(super) struct PendingRequestLogGuard {
+    request_id: String,
+    pending_request_logs: std::sync::Arc<dashmap::DashMap<String, InsertRequestLog>>,
+}
+
+impl Drop for PendingRequestLogGuard {
+    fn drop(&mut self) {
+        self.pending_request_logs.remove(&self.request_id);
+    }
+}
+
 fn request_created_at(started_at: std::time::Instant) -> chrono::DateTime<Utc> {
     let elapsed = ChronoDuration::from_std(started_at.elapsed()).unwrap_or(ChronoDuration::MAX);
     Utc::now() - elapsed
@@ -58,6 +70,9 @@ fn broadcast_pending_snapshot(
         created_at,
     };
 
+    state
+        .pending_request_logs
+        .insert(request_id.to_string(), pending_log.clone());
     let _ = state.log_broadcast.send(vec![pending_log]);
 }
 
@@ -69,12 +84,12 @@ pub(super) async fn insert_pending_request_log(
     request_id: Option<&str>,
     request_ip: Option<&str>,
     started_at: std::time::Instant,
-) {
+) -> Option<PendingRequestLogGuard> {
     let Some(_user_id) = auth.user_id.as_deref() else {
-        return;
+        return None;
     };
     let Some(request_id) = request_id.map(str::trim).filter(|v| !v.is_empty()) else {
-        return;
+        return None;
     };
 
     broadcast_pending_snapshot(
@@ -90,6 +105,10 @@ pub(super) async fn insert_pending_request_log(
         None,
         request_created_at(started_at),
     );
+    Some(PendingRequestLogGuard {
+        request_id: request_id.to_string(),
+        pending_request_logs: state.pending_request_logs.clone(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

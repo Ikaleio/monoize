@@ -81,7 +81,7 @@ IM1. `model` → `UrpRequest.model` (used for routing).
 
 IM2. `prompt` → `UrpRequest.input` as one `Node::Text` with `role: User` and the prompt string.
 
-IM3. The downstream Image API contract is non-streaming. Monoize MAY use either `stream: Some(false)` or `stream: Some(true)` on the internal upstream URP request, provided the final downstream response remains a single non-streaming Image API JSON response.
+IM3. The downstream Image API contract is non-streaming. Monoize MAY use either `stream: Some(false)` or `stream: Some(true)` on the internal upstream URP request, provided the final downstream response remains a single non-streaming Image API JSON response. If a request-phase transform sets `stream = true`, Monoize MUST collect the upstream stream internally and MUST NOT return downstream SSE for Image API endpoints.
 
 IM4. All remaining fields from the request body → `UrpRequest.extra_body`. The fields `prompt`, `model`, and `n` MUST be excluded from `extra_body`.
 
@@ -103,7 +103,7 @@ IM9. `prompt` MUST be mapped to one `Node::Text` with `role: User`, before the i
 
 IM10. Node order in `UrpRequest.input` MUST be: `[prompt_text, image, extra_image*, mask?]`.
 
-IM11. The downstream Image API contract is non-streaming. Monoize MAY use either `stream: Some(false)` or `stream: Some(true)` internally for edit sub-requests, provided the final downstream response remains a single non-streaming Image API JSON response.
+IM11. The downstream Image API contract is non-streaming. Monoize MAY use either `stream: Some(false)` or `stream: Some(true)` internally for edit sub-requests, provided the final downstream response remains a single non-streaming Image API JSON response. If a request-phase transform sets `stream = true`, Monoize MUST collect the upstream stream internally and MUST NOT return downstream SSE for Image API endpoints.
 
 IM12. All remaining text fields → `UrpRequest.extra_body`. The fields `prompt`, `model`, `n`, `image`, and `mask` MUST be excluded from `extra_body`.
 

@@ -19,6 +19,9 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
     let mut body = Map::new();
     body.insert("model".to_string(), Value::String(model.to_string()));
     body.insert("prompt".to_string(), Value::String(prompt));
+    if req.stream == Some(true) {
+        body.insert("stream".to_string(), Value::Bool(true));
+    }
 
     for (k, v) in &req.extra_body {
         if k != "model" && k != "prompt" && k != "stream" {
@@ -105,7 +108,7 @@ mod tests {
         assert_eq!(encoded["prompt"], json!("draw a cat\nin watercolor"));
         assert_eq!(encoded["size"], json!("1024x1024"));
         assert_eq!(encoded["n"], json!(2));
-        assert!(encoded.get("stream").is_none());
+        assert_eq!(encoded["stream"], json!(true));
     }
 
     #[test]
@@ -136,5 +139,33 @@ mod tests {
         assert_eq!(encoded["model"], json!("gpt-image-2"));
         assert_eq!(encoded["prompt"], json!("draw a blue square"));
         assert_eq!(encoded["size"], json!("1280x720"));
+    }
+
+    #[test]
+    fn omits_stream_field_when_stream_is_false() {
+        let req = UrpRequest {
+            model: "logical-model".to_string(),
+            input: vec![Node::Text {
+                id: None,
+                role: OrdinaryRole::User,
+                content: "draw a blue square".to_string(),
+                phase: None,
+                extra_body: empty_map(),
+            }],
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::from([("stream".to_string(), json!(true))]),
+        };
+
+        let encoded = encode_request(&req, "gpt-image-2");
+        assert!(encoded.get("stream").is_none());
     }
 }

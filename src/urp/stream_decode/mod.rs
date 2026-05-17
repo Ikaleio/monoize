@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod gemini;
 pub mod openai_chat;
+pub mod openai_image;
 pub mod openai_responses;
 pub mod replicate;
 
@@ -59,11 +60,16 @@ pub(crate) async fn stream_upstream_to_urp_events(
             gemini::stream_gemini_to_urp_events(urp, upstream_resp, tx, started_at, runtime_metrics)
                 .await
         }
-        ProviderType::OpenaiImage => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "provider_type_not_supported",
-            "openai_image does not support streaming",
-        )),
+        ProviderType::OpenaiImage => {
+            openai_image::stream_image_to_urp_events(
+                urp,
+                upstream_resp,
+                tx,
+                started_at,
+                runtime_metrics,
+            )
+            .await
+        }
         ProviderType::Replicate => {
             replicate::stream_replicate_to_urp_events(
                 urp,

@@ -51,6 +51,7 @@ pub struct AppState {
     pub transform_registry: Arc<TransformRegistry>,
     pub auth_rate_limiter: RateLimiter,
     pub log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
+    pub pending_request_logs: Arc<DashMap<String, InsertRequestLog>>,
     pub sse_connections: Arc<DashMap<String, AtomicUsize>>,
     pub image_transform_cache: Arc<ImageTransformCache>,
     pub request_capture: RequestCaptureStore,
@@ -134,15 +135,20 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
 
     let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(64);
 
-    let user_store = UserStore::new(db.clone(), log_broadcast.clone())
-        .await
-        .map_err(|err| {
-            AppError::new(
-                axum::http::StatusCode::BAD_REQUEST,
-                "user_store_init_failed",
-                err,
-            )
-        })?;
+    let pending_request_logs = Arc::new(DashMap::new());
+    let user_store = UserStore::new_with_pending_request_logs(
+        db.clone(),
+        log_broadcast.clone(),
+        pending_request_logs.clone(),
+    )
+    .await
+    .map_err(|err| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "user_store_init_failed",
+            err,
+        )
+    })?;
     let name_caches = NameCaches::init(db.read()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
@@ -456,6 +462,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         transform_registry,
         auth_rate_limiter: RateLimiter::new(10, std::time::Duration::from_secs(60)),
         log_broadcast,
+        pending_request_logs,
         sse_connections: Arc::new(DashMap::new()),
         image_transform_cache,
         request_capture,

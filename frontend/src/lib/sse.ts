@@ -6,6 +6,7 @@ import type { RequestLog } from "./api";
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
+const STALE_STREAM_TIMEOUT_MS = 45_000;
 
 export type RequestLogStreamEvent =
   | { type: "log_batch"; logs: RequestLog[] }
@@ -23,7 +24,9 @@ export function useRequestLogSSE(enabled: boolean) {
     let cancelled = false;
     let reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let staleTimer: ReturnType<typeof setTimeout> | null = null;
     let controller: AbortController | null = null;
+    let reconnectImmediately = false;
 
     const clearReconnectTimer = () => {
       if (!reconnectTimer) {
@@ -32,6 +35,67 @@ export function useRequestLogSSE(enabled: boolean) {
 
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
+    };
+
+    const clearStaleTimer = () => {
+      if (!staleTimer) {
+        return;
+      }
+
+      clearTimeout(staleTimer);
+      staleTimer = null;
+    };
+
+    const scheduleReconnect = (delayOverrideMs?: number) => {
+      if (cancelled) {
+        return;
+      }
+
+      setConnected(false);
+      const delay = delayOverrideMs ?? reconnectDelayMs;
+      if (delayOverrideMs === undefined) {
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+      }
+      clearReconnectTimer();
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        void connect();
+      }, delay);
+    };
+
+    const armStaleTimer = () => {
+      clearStaleTimer();
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+
+      staleTimer = setTimeout(() => {
+        if (cancelled) {
+          return;
+        }
+
+        reconnectImmediately = true;
+        next(null, { type: "resync" });
+        controller?.abort();
+        if (!controller) {
+          scheduleReconnect(0);
+        }
+      }, STALE_STREAM_TIMEOUT_MS);
+    };
+
+    const restartNow = () => {
+      if (cancelled) {
+        return;
+      }
+
+      next(null, { type: "resync" });
+      reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+      reconnectImmediately = true;
+      setConnected(false);
+      controller?.abort();
+      if (!controller) {
+        scheduleReconnect(0);
+      }
     };
 
     const parseEventBlock = (block: string) => {
@@ -82,21 +146,6 @@ export function useRequestLogSSE(enabled: boolean) {
       }
     };
 
-    const scheduleReconnect = () => {
-      if (cancelled) {
-        return;
-      }
-
-      setConnected(false);
-      const delay = reconnectDelayMs;
-      reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
-      clearReconnectTimer();
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        void connect();
-      }, delay);
-    };
-
     const connect = async () => {
       if (cancelled) {
         return;
@@ -112,6 +161,7 @@ export function useRequestLogSSE(enabled: boolean) {
       const decoder = new TextDecoder();
 
       try {
+        clearStaleTimer();
         const response = await fetch("/api/dashboard/request-logs/stream", {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -125,6 +175,7 @@ export function useRequestLogSSE(enabled: boolean) {
 
         setConnected(true);
         reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+        armStaleTimer();
 
         const reader = response.body.getReader();
         let buffer = "";
@@ -135,6 +186,7 @@ export function useRequestLogSSE(enabled: boolean) {
             break;
           }
 
+          armStaleTimer();
           buffer += decoder.decode(value, { stream: true }).replaceAll("\r", "");
 
           let eventBoundary = buffer.indexOf("\n\n");
@@ -165,11 +217,28 @@ export function useRequestLogSSE(enabled: boolean) {
 
         next(streamError instanceof Error ? streamError : new Error("SSE stream failed"));
       } finally {
+        controller = null;
+        clearStaleTimer();
         if (!cancelled) {
-          scheduleReconnect();
+          const delayOverrideMs = reconnectImmediately ? 0 : undefined;
+          reconnectImmediately = false;
+          scheduleReconnect(delayOverrideMs);
         }
       }
     };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        clearStaleTimer();
+        return;
+      }
+
+      restartNow();
+    };
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+    }
 
     void connect();
 
@@ -177,6 +246,10 @@ export function useRequestLogSSE(enabled: boolean) {
       cancelled = true;
       setConnected(false);
       clearReconnectTimer();
+      clearStaleTimer();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+      }
       controller?.abort();
     };
   };

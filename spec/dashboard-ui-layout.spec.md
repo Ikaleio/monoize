@@ -293,9 +293,9 @@ DH3. The left analysis panel in row C MUST contain:
 
 DH3a. Dashboard home analysis queries MUST cover the complete latest 24-hour window:
 
-- frontend MUST send `time_from` and `time_to` to `GET /api/dashboard/request-logs`, where `time_to` is current client time and `time_from = time_to - 24h`;
-- frontend MUST page through backend results until `loaded_row_count >= total` for that time window before considering analysis input complete;
-- chart buckets MUST be generated from that same `[time_from, time_to)` window, so historical buckets in the 24-hour range are preserved even when recent traffic is dense.
+- frontend MUST send `buckets=8` and `range_hours=24` to `GET /api/dashboard/analytics`;
+- backend MUST compute `time_to = NOW()` and `time_from = time_to - 24h` for that analytics response;
+- chart buckets MUST be generated from that same `[time_from, time_to)` window.
 
 DH4. The right panel in row C MUST be an API information panel:
 

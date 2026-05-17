@@ -526,9 +526,11 @@ PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Respons
 
 PR5c. When parsing upstream Responses SSE, Monoize MAY receive official image-generation tool events outside the `response.*` namespace.
 
-- For `image_generation.completed`, if the payload carries non-empty `b64_json`, Monoize MUST decode that payload as one assistant `Image` node with `Image.source = Base64`.
+- For `image_generation.completed`, if the payload carries non-empty `b64_json` or non-empty `result`, Monoize MUST decode that payload as one assistant `Image` node with `Image.source = Base64`.
+- Monoize MUST treat `response.image_generation.completed` as an alias of `image_generation.completed`.
 - The decoded media type MUST be derived from `output_format` using the same mapping as PR2b, defaulting to `image/png`.
 - For `image_generation.partial_image`, Monoize MAY ignore the event for canonical URP node emission. Ignoring that event MUST NOT be treated as a stream error.
+- Monoize MUST treat `response.image_generation.partial_image` as an alias of `image_generation.partial_image`.
 
 PR5a. Responses stream node reconstruction:
 

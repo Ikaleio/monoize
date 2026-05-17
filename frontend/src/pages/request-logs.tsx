@@ -199,16 +199,19 @@ export function RequestLogsPage() {
 				const handledRequestIds = new Set<string>()
 
 				for (const log of logs) {
-					if (!matchesActiveFilters(log)) continue
 					if (incomingIds.has(log.id)) continue
 					incomingIds.add(log.id)
+					const matchesFilters = matchesActiveFilters(log)
 
 					if (log.request_id) {
 						if (handledRequestIds.has(log.request_id)) {
 							const duplicateIndex = next.findIndex(
 								item => item.request_id === log.request_id
 							)
-							if (duplicateIndex >= 0) next[duplicateIndex] = log
+							if (duplicateIndex >= 0) {
+								if (matchesFilters) next[duplicateIndex] = log
+								else next.splice(duplicateIndex, 1)
+							}
 							continue
 						}
 						handledRequestIds.add(log.request_id)
@@ -217,11 +220,12 @@ export function RequestLogsPage() {
 						)
 						if (existingIndex >= 0) {
 							next.splice(existingIndex, 1)
-							next.unshift(log)
+							if (matchesFilters) next.unshift(log)
 							continue
 						}
 					}
 
+					if (!matchesFilters) continue
 					if (existingIds.has(log.id)) continue
 					next.unshift(log)
 				}

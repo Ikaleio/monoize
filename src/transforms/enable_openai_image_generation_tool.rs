@@ -16,6 +16,8 @@ struct Config {
     #[serde(default)]
     action: Option<String>,
     #[serde(default)]
+    force_stream: bool,
+    #[serde(default)]
     extra: HashMap<String, Value>,
 }
 
@@ -58,6 +60,10 @@ impl Transform for EnableOpenAiImageGenerationToolTransform {
                     "type": "string",
                     "minLength": 1
                 },
+                "force_stream": {
+                    "type": "boolean",
+                    "default": false
+                },
                 "extra": {
                     "type": "object",
                     "default": {}
@@ -93,6 +99,9 @@ impl Transform for EnableOpenAiImageGenerationToolTransform {
         let UrpData::Request(req) = data else {
             return Ok(());
         };
+        if cfg.force_stream {
+            req.stream = Some(true);
+        }
 
         let tools = req.tools.get_or_insert_with(Vec::new);
         if tools
@@ -301,6 +310,51 @@ mod tests {
             tools[0].extra_body.get("output_format"),
             Some(&json!("png"))
         );
+    }
+
+    #[tokio::test]
+    async fn force_stream_sets_request_stream_true_without_duplicating_existing_tool() {
+        let transform = EnableOpenAiImageGenerationToolTransform;
+        let config = transform
+            .parse_config(json!({ "force_stream": true }))
+            .expect("config");
+        let mut state = transform.init_state();
+        let mut req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            input: Vec::new(),
+            stream: Some(false),
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(vec![ToolDefinition {
+                tool_type: "image_generation".to_string(),
+                name: None,
+                description: None,
+                function: None,
+                custom: None,
+                extra_body: HashMap::new(),
+            }]),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::new(),
+        };
+
+        transform
+            .apply(
+                UrpData::Request(&mut req),
+                Phase::Request,
+                &context().await,
+                config.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        assert_eq!(req.stream, Some(true));
+        assert_eq!(req.tools.expect("tools").len(), 1);
     }
 
     #[tokio::test]

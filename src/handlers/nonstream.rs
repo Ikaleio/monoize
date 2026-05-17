@@ -1,4 +1,5 @@
 use super::*;
+use crate::urp::stream_decode::stream_upstream_to_urp_events;
 use std::collections::HashSet;
 
 pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
@@ -79,7 +80,7 @@ pub(super) async fn execute_nonstream_typed(
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
     ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
-    insert_pending_request_log(
+    let _pending_request_log_guard = insert_pending_request_log(
         state,
         auth,
         &req.model,
@@ -168,18 +169,50 @@ pub(super) async fn execute_nonstream_typed(
                 &upstream_body,
                 &req_attempt,
             );
-            let call = upstream::call_upstream_with_timeout_and_headers(
-                client_http(state),
-                &provider,
-                &attempt.api_key,
-                &path,
-                &upstream_body,
-                attempt.request_timeout_ms,
-                provider_extra_headers(attempt.provider_type),
-            )
-            .await;
-            match call {
-                Ok(value) => {
+            let call_value = if req_attempt.stream == Some(true)
+                && supports_nonstream_upstream_stream_collection(attempt.provider_type)
+            {
+                let call = upstream::call_upstream_raw_with_timeout_and_headers(
+                    client_http(state),
+                    &provider,
+                    &attempt.api_key,
+                    &path,
+                    &upstream_body,
+                    attempt.request_timeout_ms.saturating_mul(10).max(600_000),
+                    provider_extra_headers(attempt.provider_type),
+                )
+                .await;
+                match call {
+                    Ok(upstream_resp) => match collect_streamed_upstream_response(
+                        &req_attempt,
+                        max_multiplier,
+                        attempt.provider_type,
+                        upstream_resp,
+                        started_at,
+                        &logical_model,
+                    )
+                    .await
+                    {
+                        Ok(resp) => Ok((None, Some(resp))),
+                        Err(err) => return Err(err),
+                    },
+                    Err(err) => Err(err),
+                }
+            } else {
+                upstream::call_upstream_with_timeout_and_headers(
+                    client_http(state),
+                    &provider,
+                    &attempt.api_key,
+                    &path,
+                    &upstream_body,
+                    attempt.request_timeout_ms,
+                    provider_extra_headers(attempt.provider_type),
+                )
+                .await
+                .map(|value| (Some(value), None))
+            };
+            match call_value {
+                Ok((value, collected_resp)) => {
                     if let Some(session) = capture.session.as_ref() {
                         session
                             .push_attempt(crate::request_capture::build_attempt_dump(
@@ -193,7 +226,7 @@ pub(super) async fn execute_nonstream_typed(
                                 capture.raw_input.clone(),
                                 &req_attempt,
                                 upstream_body.clone(),
-                                Some(value.clone()),
+                                value.clone(),
                                 None,
                                 None,
                             ))
@@ -211,18 +244,21 @@ pub(super) async fn execute_nonstream_typed(
                     )
                     .await;
                     mark_channel_success(state, &attempt).await;
-                    let mut resp = match decode_response_from_provider(
-                        attempt.provider_type,
-                        &value,
-                        &req_attempt.model,
-                    ) {
-                        Ok(resp) => resp,
-                        Err(err) => {
-                            if let Some(session) = capture.session.as_ref() {
-                                session.persist_with_result(None, false).await;
+                    let mut resp = match collected_resp {
+                        Some(resp) => resp,
+                        None => match decode_response_from_provider(
+                            attempt.provider_type,
+                            &value.expect("non-stream upstream value"),
+                            &req_attempt.model,
+                        ) {
+                            Ok(resp) => resp,
+                            Err(err) => {
+                                if let Some(session) = capture.session.as_ref() {
+                                    session.persist_with_result(None, false).await;
+                                }
+                                return Err(err);
                             }
-                            return Err(err);
-                        }
+                        },
                     };
                     if let Err(err) = apply_transform_rules_response(
                         state,
@@ -433,6 +469,127 @@ pub(super) async fn execute_nonstream_typed(
         session.persist_with_result(None, true).await;
     }
     Err(final_err)
+}
+
+fn supports_nonstream_upstream_stream_collection(provider_type: ProviderType) -> bool {
+    matches!(
+        provider_type,
+        ProviderType::Responses | ProviderType::OpenaiImage
+    )
+}
+
+async fn collect_streamed_upstream_response(
+    req_attempt: &urp::UrpRequest,
+    max_multiplier: Option<f64>,
+    provider_type: ProviderType,
+    upstream_resp: reqwest::Response,
+    started_at: std::time::Instant,
+    logical_model: &str,
+) -> AppResult<urp::UrpResponse> {
+    let legacy = typed_request_to_legacy(req_attempt, max_multiplier)?;
+    let pending_request_envelope_extra =
+        req_attempt
+            .input
+            .clone()
+            .into_iter()
+            .find_map(|node| match node {
+                crate::urp::Node::NextDownstreamEnvelopeExtra { extra_body }
+                    if !extra_body.is_empty() =>
+                {
+                    Some(extra_body)
+                }
+                _ => None,
+            });
+    let (decoded_tx, mut decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+    let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
+    let decode_handle = {
+        let runtime_metrics = runtime_metrics.clone();
+        tokio::spawn(async move {
+            stream_upstream_to_urp_events(
+                &legacy,
+                pending_request_envelope_extra,
+                provider_type,
+                upstream_resp,
+                decoded_tx,
+                Some(started_at),
+                Some(runtime_metrics),
+            )
+            .await
+        })
+    };
+
+    let mut fallback_output = Vec::new();
+    let mut final_response: Option<urp::UrpResponse> = None;
+    let mut stream_error: Option<AppError> = None;
+    while let Some(event) = decoded_rx.recv().await {
+        match event {
+            crate::urp::UrpStreamEvent::NodeDone { node, .. } => {
+                if !fallback_output.contains(&node) {
+                    fallback_output.push(node);
+                }
+            }
+            crate::urp::UrpStreamEvent::ResponseDone {
+                finish_reason,
+                usage,
+                mut output,
+                extra_body,
+            } => {
+                if output.is_empty() && !fallback_output.is_empty() {
+                    output = fallback_output.clone();
+                } else {
+                    for node in &fallback_output {
+                        if !output.contains(node) {
+                            output.push(node.clone());
+                        }
+                    }
+                }
+                final_response = Some(urp::UrpResponse {
+                    id: extra_body
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("resp_stream_collected")
+                        .to_string(),
+                    model: extra_body
+                        .get("model")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(logical_model)
+                        .to_string(),
+                    created_at: extra_body
+                        .get("created_at")
+                        .and_then(|value| value.as_i64()),
+                    output,
+                    finish_reason,
+                    usage,
+                    extra_body,
+                });
+            }
+            crate::urp::UrpStreamEvent::Error { code, message, .. } => {
+                stream_error = Some(AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    code.unwrap_or_else(|| "upstream_stream_error".to_string()),
+                    message,
+                ));
+            }
+            _ => {}
+        }
+    }
+    decode_handle.await.map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "task_panic",
+            e.to_string(),
+        )
+    })??;
+    if let Some(err) = stream_error {
+        return Err(err);
+    }
+    final_response.ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_stream_error",
+            "stream completed without terminal response",
+        )
+    })
 }
 
 pub(super) async fn forward_nonstream_typed(

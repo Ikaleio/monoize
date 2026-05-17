@@ -395,7 +395,7 @@ pub async fn create_embeddings(
     let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
     let attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
     ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
-    insert_pending_request_log(
+    let _pending_request_log_guard = insert_pending_request_log(
         &state,
         &auth,
         &logical_model,

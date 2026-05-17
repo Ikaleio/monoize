@@ -62,6 +62,8 @@ RL1a-1. The server MUST broadcast an in-memory request-log snapshot with `status
 
 RL1a-2. When provider/channel metadata for an in-flight request becomes known, the server SHOULD broadcast an updated in-memory `pending` snapshot for the same `request_id`. When the terminal `success` or `error` row is later broadcast, clients MUST treat it as replacing any earlier `pending` snapshot with the same `request_id`.
 
+RL1a-3. The server MUST maintain an in-memory map of current SSE-only `pending` snapshots keyed by `request_id`. Creating or updating a `pending` snapshot MUST upsert that key before broadcasting the snapshot. Enqueuing a terminal `success` or `error` row with the same `request_id` MUST remove that key from the map before broadcasting the terminal row. The map is process-local and starts empty after process startup.
+
 RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal status:
 
 - `"success"` when the downstream client received a normal API response payload (including truncated/cutoff completion cases such as `finish_reason = "length"`, and including cases where the downstream client disconnected mid-stream after partial delivery),
@@ -431,11 +433,13 @@ FL47. SSE event visibility MUST obey the same permission rules as the REST endpo
 FL48. The SSE connection lifecycle MUST follow these phases:
 
 1. **Connect**: The client MUST open the SSE stream using a `fetch()`-based reader (NOT the native `EventSource` API, because `EventSource` cannot send custom `Authorization` headers).
-   The frontend integration layer for this stream MUST be implemented through SWR subscription state, so stream lifecycle and event delivery are owned by the SWR data layer rather than a page-local ad hoc subscription mechanism.
-   The client MUST begin attempting this SSE connection as soon as the logs page mounts; it MUST NOT gate connection startup on completion of the initial REST page fetch.
-2. **Receive**: On each `log_batch` event, the client MUST merge the received `RequestLog` objects into the existing table data array (newest first). If an incoming row has the same `request_id` as an existing row, the incoming row MUST replace the existing row instead of creating a duplicate. This replacement rule is required for the `pending -> success/error` SSE-only lifecycle defined in RL1a-1 and RL1a-2.
+    The frontend integration layer for this stream MUST be implemented through SWR subscription state, so stream lifecycle and event delivery are owned by the SWR data layer rather than a page-local ad hoc subscription mechanism.
+    The client MUST begin attempting this SSE connection as soon as the logs page mounts; it MUST NOT gate connection startup on completion of the initial REST page fetch.
+    After authentication succeeds, the server MUST emit an initial SSE frame without waiting for a future request-log broadcast. If the current pending-snapshot map defined in RL1a-3 contains one or more entries visible to the authenticated user, the initial frame MUST be a `log_batch` event containing those entries ordered by `created_at DESC`. Otherwise, the initial frame MUST be an SSE comment frame. This initial frame exists so the client can mark the stream connected promptly and so in-flight `pending` requests that began before stream establishment become visible.
+2. **Receive**: On each `log_batch` event, the client MUST merge the received `RequestLog` objects into the existing table data array (newest first). If an incoming row has the same `request_id` as an existing row, the incoming row MUST be processed before active UI filters are applied. If the incoming row matches active UI filters, it MUST replace the existing row instead of creating a duplicate. If the incoming row does not match active UI filters, the existing row with that `request_id` MUST be removed from the visible table. This replacement/removal rule is required for the `pending -> success/error` SSE-only lifecycle defined in RL1a-1 and RL1a-2, including the case where the active filter is `status = pending` and a terminal row arrives.
 3. **Disconnect**: On network error, HTTP error, or stream close, the client MUST fall back to SWR polling (see FL50).
 4. **Reconnect**: The client MUST automatically attempt reconnection using exponential backoff: initial delay 1s, doubling on each consecutive failure (1s, 2s, 4s, 8s, 16s), capped at 30s maximum delay. On successful reconnection, the backoff counter MUST reset to 1s.
+5. **Visibility recovery**: When `document.visibilityState` transitions to `visible`, the client MUST treat the current stream as suspect, close it if open, immediately perform a full REST refetch, and immediately open a new SSE stream attempt. This transition MUST NOT wait for the normal exponential-backoff timer.
 
 ### 6.5 SSE as primary real-time mechanism
 
@@ -460,6 +464,8 @@ FL53. The SSE endpoint `GET /api/dashboard/request-logs/stream` MUST NOT accept 
 ### 6.10 Keep-alive
 
 FL54. The server MUST emit SSE comment lines (lines beginning with `:`) at regular intervals of approximately 15 seconds when no data events have been sent. This prevents intermediate proxies and load balancers from closing idle connections due to inactivity timeouts.
+
+FL54a. The client MUST treat the stream as stale if no SSE bytes (data events or comment frames) are observed for at least 45 seconds while the document is visible. A stale stream MUST be closed and reconnected using the reconnect rules in FL48.
 
 ### 6.11 Concurrent connection policy
 

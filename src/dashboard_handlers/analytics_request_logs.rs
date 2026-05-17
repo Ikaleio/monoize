@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Sse};
 use chrono::NaiveTime;
 use chrono::Utc;
 use dashmap::DashMap;
-use futures_util::stream;
+use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -295,7 +295,28 @@ pub async fn stream_request_logs(
     let name_caches = state.name_caches.clone();
     let api_key_cache = state.user_store.api_key_cache.clone();
     let receiver = state.log_broadcast.subscribe();
-    let stream = stream::unfold(
+
+    let mut initial_pending: Vec<_> = state
+        .pending_request_logs
+        .iter()
+        .filter(|entry| is_admin || entry.value().user_id == user_id)
+        .map(|entry| entry.value().clone())
+        .collect();
+    initial_pending.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    let initial_event = if initial_pending.is_empty() {
+        Event::default().comment("ready")
+    } else {
+        let enriched_batch: Vec<_> = initial_pending
+            .iter()
+            .map(|log| name_caches.enrich_log(log, &api_key_cache))
+            .collect();
+        match serde_json::to_string(&enriched_batch) {
+            Ok(payload) => Event::default().event("log_batch").data(payload),
+            Err(_) => Event::default().event("resync").data("{}"),
+        }
+    };
+
+    let live_stream = stream::unfold(
         (
             receiver,
             name_caches,
@@ -358,6 +379,8 @@ pub async fn stream_request_logs(
             }
         },
     );
+    let stream =
+        stream::once(async move { Ok::<Event, Infallible>(initial_event) }).chain(live_stream);
 
     Ok(Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))

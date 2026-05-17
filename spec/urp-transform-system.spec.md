@@ -269,13 +269,28 @@ SOTU-5. `strip_orphaned_tool_use` MUST preserve all non-`ToolCall` ordinary node
 
 SOTU-6. `strip_orphaned_tool_use` MUST preserve control nodes unchanged.
 
+### 4.5a `force_stream`
+
+FS-1. `force_stream` is request-phase only.
+
+FS-2. Config MUST contain `enabled` as a boolean.
+
+FS-3. If `enabled = true`, the transform MUST set `request.stream = true` during request-phase application.
+
+FS-4. If `enabled = false`, the transform MUST set `request.stream = false` during request-phase application.
+
+FS-5. When `force_stream` is configured in a provider transform chain for a provider whose effective upstream type is `openai_image`, and the downstream request is non-streaming, Monoize MUST still request the upstream image endpoint in streaming mode, collect the upstream stream into one `UrpResponseV2`, apply response transforms, and return a normal non-streaming downstream response. This follows `openai-image-upstream.spec.md` §6.
+
+FS-6. `force_stream` MUST NOT modify `request.input`, `request.tools`, `request.tool_choice`, or any response-phase payload surface.
+
 ### 4.6 Image transforms on request ordinary nodes
 
 EOIGT-1. `enable_openai_image_generation_tool` is request-phase only.
 
 EOIGT-2. Config MAY contain:
 - `output_format` as one of `png`, `webp`, or `jpeg`; default `png`;
-- `action` as a string; optional; and
+- `action` as a string; optional;
+- `force_stream` as a boolean; default `false`; and
 - `extra` as an object whose entries are copied verbatim into the inserted tool descriptor's `extra_body`.
 
 EOIGT-3. The transform MUST inspect only top-level `request.tools`.
@@ -298,7 +313,11 @@ EOIGT-6b. If `extra` contains keys `output_format` or `action`, the transform MU
 
 EOIGT-7. The transform MUST preserve all pre-existing tool descriptors in source order and MUST append the inserted `image_generation` tool after them.
 
-EOIGT-8. The transform MUST NOT modify `request.input`, `request.tool_choice`, or any response-phase payload surface.
+EOIGT-8. If `force_stream = true`, the transform MUST set `request.stream = true` during request-phase application. This rule applies even when `request.tools` already contains an `image_generation` descriptor.
+
+EOIGT-9. If `force_stream = false`, the transform MUST NOT modify `request.stream`.
+
+EOIGT-10. The transform MUST NOT modify `request.input`, `request.tool_choice`, or any response-phase payload surface.
 
 CUMI-1. `compress_user_message_images` is request-phase only.
 

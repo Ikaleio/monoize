@@ -49,7 +49,7 @@ DH-6. Provider-derived metrics shown on dashboard home MUST use `GET /api/dashbo
 
 DH-7. The page MUST NOT throw runtime exceptions when optional config fields are missing from `GET /api/dashboard/settings`.
 
-DH-8. Row C analysis charts MUST be driven by the server-side analytics endpoint `GET /api/dashboard/analytics`.
+DH-8. Row C analysis charts MUST be driven by the server-side analytics endpoint `GET /api/dashboard/analytics` using `buckets=8` and `range_hours=24`.
 
 ### Analytics Endpoint Contract
 

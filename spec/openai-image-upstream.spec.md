@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Subsystem:** OpenAI Image upstream provider type.
-- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`) and forwards them as non-streaming `POST /v1/images/generations` requests to the upstream provider configured with `provider_type = "openai_image"`.
+- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`) and forwards them as `POST /v1/images/generations` requests to the upstream provider configured with `provider_type = "openai_image"`. The upstream transport MAY be non-streaming JSON or SSE streaming.
 - **Dependency:** This spec extends `unified_responses_proxy.spec.md` §7 (Adapters) and `monoize-upstream-routing.spec.md` §2.3 (Provider).
 
 ## 1. Terminology
@@ -32,7 +32,7 @@ OIU-E2. The upstream request body MUST include:
 
 OIU-E3. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be merged into the upstream request body as top-level fields. Adapter-generated keys (`model`, `prompt`) take precedence over `extra_body` keys.
 
-OIU-E4. `UrpRequest.stream` MUST be ignored. The upstream request is always non-streaming. Monoize MUST NOT include a `stream` field in the upstream image request body.
+OIU-E4. If `UrpRequest.stream == Some(true)`, Monoize MUST include top-level JSON field `stream: true` in the upstream image request body. If `UrpRequest.stream != Some(true)`, Monoize MUST NOT include a `stream` field in the upstream image request body.
 
 OIU-E5. URP fields `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `response_format`, and `user` MUST be ignored and MUST NOT appear in the upstream image request body.
 
@@ -88,14 +88,17 @@ OIU-R4. This automatic conversion MUST occur after response-phase transforms hav
 
 ## 6. Streaming Behavior
 
-OIU-S1. The `openai_image` upstream type does not support streaming. When the downstream request has `stream = true`, Monoize MUST use buffered synthetic streaming:
-1. Send the upstream request as non-streaming.
-2. Decode the response to URP.
-3. Apply response transforms.
-4. Apply the image-to-markdown conversion for non-Responses downstream (per §5.2).
-5. Emit the response as synthetic downstream SSE.
+OIU-S1. The `openai_image` upstream type supports upstream SSE streaming when `UrpRequest.stream == Some(true)`.
 
-OIU-S2. Monoize MUST always force `requires_buffered_response_stream = true` when the provider type is `openai_image`, regardless of configured transforms.
+OIU-S2. When decoding upstream image SSE, Monoize MUST accept event `image_generation.partial_image`. The decoder MAY ignore the event for canonical URP node emission. Ignoring that event MUST NOT be treated as a stream error.
+
+OIU-S3. When decoding upstream image SSE, Monoize MUST accept event `image_generation.completed`. If the payload contains non-empty `b64_json` or `result`, the decoder MUST emit one assistant `Image` node with `Image.source = Base64`. The media type MUST be derived from `output_format`, defaulting to `image/png`.
+
+OIU-S4. When upstream image SSE reaches a terminal successful event, Monoize MUST emit one canonical `ResponseDone` whose `output` contains all completed image nodes collected from the stream.
+
+OIU-S5. When the downstream request is streaming, Monoize MAY pass upstream image SSE through the canonical URP streaming pipeline and encode downstream SSE from canonical URP events.
+
+OIU-S6. When the downstream request is non-streaming but the selected attempt has `UrpRequest.stream == Some(true)` after request-phase transforms, Monoize MUST call the upstream image endpoint with streaming enabled, collect canonical URP stream events into one `UrpResponse`, apply response transforms, and return a normal non-streaming downstream response.
 
 ## 7. Routing Integration
 
@@ -115,6 +118,6 @@ OIU-UI2. The provider type MUST use the OpenAI icon in the UI.
 
 OIU-C1. `openai_image` is a concrete upstream type, not virtual. Providers with this type MUST have `base_url` and `auth`.
 
-OIU-C2. `openai_image` MUST NOT appear in the `stream_upstream_to_urp_events` streaming decoder dispatch. If somehow reached, it MUST return an error.
+OIU-C2. `openai_image` MUST appear in the `stream_upstream_to_urp_events` streaming decoder dispatch and MUST NOT return `provider_type_not_supported` for streaming image generation attempts.
 
 OIU-C3. `n` field handling: if `n` is present in `extra_body`, it is forwarded to the upstream as-is. Monoize does NOT perform fan-out for this upstream type (unlike the Image API proxy endpoints which do their own fan-out). The upstream provider handles `n` natively.

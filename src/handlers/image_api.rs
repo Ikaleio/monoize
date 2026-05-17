@@ -492,7 +492,7 @@ async fn execute_stream_collected_image_typed(
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(state, &routing_stub, auth).await?;
     ensure_balance_before_forward_for_attempts(state, auth, &attempts).await?;
-    insert_pending_request_log(
+    let _pending_request_log_guard = insert_pending_request_log(
         state,
         auth,
         &req.model,

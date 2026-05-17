@@ -52,11 +52,12 @@ export function LogRowCells({
 	)
 
 	useEffect(() => {
+		const tooltipIds = rowTooltipIdsRef.current
 		return () => {
-			for (const tooltipId of rowTooltipIdsRef.current) {
+			for (const tooltipId of tooltipIds) {
 				onTooltipOpenChange(tooltipId, false)
 			}
-			rowTooltipIdsRef.current.clear()
+			tooltipIds.clear()
 		}
 	}, [onTooltipOpenChange])
 

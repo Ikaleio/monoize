@@ -15,6 +15,7 @@ use sea_orm::Value as SeaValue;
 use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryResult, TransactionTrait};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
     "inject_system_prompt",
@@ -152,11 +153,24 @@ impl UserStore {
         db: crate::db::DbPool,
         log_broadcast: tokio::sync::broadcast::Sender<Vec<super::InsertRequestLog>>,
     ) -> Result<Self, String> {
+        Self::new_with_pending_request_logs(db, log_broadcast, Arc::new(dashmap::DashMap::new()))
+            .await
+    }
+
+    pub async fn new_with_pending_request_logs(
+        db: crate::db::DbPool,
+        log_broadcast: tokio::sync::broadcast::Sender<Vec<super::InsertRequestLog>>,
+        pending_request_logs: Arc<dashmap::DashMap<String, super::InsertRequestLog>>,
+    ) -> Result<Self, String> {
         use std::time::Duration;
         Ok(Self {
             db,
             last_used_batcher: crate::db_cache::LastUsedBatcher::new(),
-            request_log_batcher: crate::db_cache::RequestLogBatcher::new(128, log_broadcast),
+            request_log_batcher: crate::db_cache::RequestLogBatcher::new(
+                128,
+                log_broadcast,
+                pending_request_logs,
+            ),
             api_key_cache: crate::db_cache::ApiKeyCache::new(Duration::from_secs(60)),
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
         })

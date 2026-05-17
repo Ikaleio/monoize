@@ -187,7 +187,8 @@ export function DashboardPage() {
     revalidateOnMount: isAdmin,
   });
   const { data: requestLogsResponse, isLoading: logsLoading } = useRequestLogs(400, 0);
-  const { data: analytics, isLoading: analyticsLoading } = useDashboardAnalytics(8, 720);
+  const { data: summaryAnalytics, isLoading: summaryAnalyticsLoading } = useDashboardAnalytics(8, 720);
+  const { data: analysisAnalytics, isLoading: analysisAnalyticsLoading } = useDashboardAnalytics(8, 24);
   const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
 
   const rawLogs = requestLogsResponse?.data ?? [];
@@ -218,7 +219,8 @@ export function DashboardPage() {
 
   const loading = statsLoading
     || logsLoading
-    || analyticsLoading
+    || summaryAnalyticsLoading
+    || analysisAnalyticsLoading
     || publicSettingsLoading
     || (isAdmin && providersLoading);
 
@@ -255,12 +257,12 @@ export function DashboardPage() {
           {
             key: "totalRequests",
             label: tt("dashboard.cards.totalRequests", "30d Requests"),
-            value: formatNumber(analytics?.total_calls ?? totalRequests),
+            value: formatNumber(summaryAnalytics?.total_calls ?? totalRequests),
           },
           {
             key: "todayRequests",
             label: tt("dashboard.cards.todayRequests", "Today's Requests"),
-            value: formatNumber(analytics?.today_calls ?? 0),
+            value: formatNumber(summaryAnalytics?.today_calls ?? 0),
           },
         ],
       },
@@ -271,12 +273,12 @@ export function DashboardPage() {
           {
             key: "totalSpend",
             label: tt("dashboard.cards.totalSpend", "30d Spend"),
-            value: formatMoney(nanoUsdToUsd(analytics?.total_cost_nano_usd)),
+            value: formatMoney(nanoUsdToUsd(summaryAnalytics?.total_cost_nano_usd)),
           },
           {
             key: "todaySpend",
             label: tt("dashboard.cards.todaySpend", "Today's Spend"),
-            value: formatMoney(nanoUsdToUsd(analytics?.today_cost_nano_usd)),
+            value: formatMoney(nanoUsdToUsd(summaryAnalytics?.today_cost_nano_usd)),
           },
         ],
       },
@@ -298,7 +300,7 @@ export function DashboardPage() {
       },
     ],
     [
-      analytics,
+      summaryAnalytics,
       perfStats,
       totalRequests,
       stats?.my_api_keys_count,
@@ -319,7 +321,7 @@ export function DashboardPage() {
           : tt("dashboard.value", "Value"),
     };
 
-    if (!analytics?.buckets?.length) return base;
+    if (!analysisAnalytics?.buckets?.length) return base;
 
     const getBucketMap = (bucket: DashboardAnalyticsBucket): Record<string, number> => {
       if (activeTab === "spendDistribution") return bucket.cost_by_model;
@@ -328,7 +330,7 @@ export function DashboardPage() {
     };
 
     const modelTotals = new Map<string, number>();
-    for (const bucket of analytics.buckets) {
+    for (const bucket of analysisAnalytics.buckets) {
       const map = getBucketMap(bucket);
       for (const [key, val] of Object.entries(map)) {
         modelTotals.set(key, (modelTotals.get(key) ?? 0) + val);
@@ -340,7 +342,7 @@ export function DashboardPage() {
       .sort((a, b) => b[1] - a[1])
       .map(([k]) => k);
 
-    const rows: StackedBucketRow[] = analytics.buckets.map((bucket) => {
+    const rows: StackedBucketRow[] = analysisAnalytics.buckets.map((bucket) => {
       const row: StackedBucketRow = { label: bucket.label };
       const map = getBucketMap(bucket);
       for (const model of models) {
@@ -353,7 +355,7 @@ export function DashboardPage() {
     const total = [...modelTotals.values()].reduce((s, v) => s + v, 0);
     const displayTotal = base.valueType === "money" ? total / 1e9 : total;
     return { ...base, rows, models, total: displayTotal };
-  }, [activeTab, analytics, tt]);
+  }, [activeTab, analysisAnalytics, tt]);
 
   const analysisTotalDisplay =
     analysisData.valueType === "money"

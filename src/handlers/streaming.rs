@@ -29,7 +29,7 @@ pub(super) async fn forward_stream_typed(
     let routing_stub = build_routing_stub(&req, max_multiplier);
     let attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
     ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
-    insert_pending_request_log(
+    let pending_request_log_guard = insert_pending_request_log(
         &state,
         &auth,
         &req.model,
@@ -62,8 +62,7 @@ pub(super) async fn forward_stream_typed(
             &auth.transforms,
             &logical_model,
             downstream,
-        ) || attempt.provider_type == ProviderType::OpenaiImage
-            || attempt.provider_type == ProviderType::Replicate;
+        ) || attempt.provider_type == ProviderType::Replicate;
         let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
 
         for channel_attempt in 0..max_channel_attempts {
@@ -496,7 +495,9 @@ pub(super) async fn forward_stream_typed(
                                 req_attempt.model.clone(),
                             )
                         });
+                    let pending_request_log_guard_for_stream = pending_request_log_guard;
                     tokio::spawn(async move {
+                        let _pending_request_log_guard = pending_request_log_guard_for_stream;
                         let tx_err = tx.clone();
                         let stream_future = async {
                             let (decoded_tx, decoded_rx) =

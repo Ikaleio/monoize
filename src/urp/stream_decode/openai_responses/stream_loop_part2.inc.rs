@@ -193,8 +193,10 @@ fn map_responses_event_to_urp_events_with_state(
                 ),
             }]
         }
-        "image_generation.completed" => map_image_generation_completed(data_val, index_state),
-        "image_generation.partial_image" => Vec::new(),
+        "image_generation.completed" | "response.image_generation.completed" => {
+            map_image_generation_completed(data_val, index_state)
+        }
+        "image_generation.partial_image" | "response.image_generation.partial_image" => Vec::new(),
         "response.content_part.done" => map_content_part_done(data_val, index_state),
         "response.output_item.done" => map_output_item_done(data_val, index_state),
         "response.completed" => map_response_completed(data_val, index_state),
@@ -332,4 +334,3 @@ fn output_role_to_ordinary(role: Role) -> OrdinaryRole {
 fn first_node_from_item_value(item: &Value) -> Option<Node> {
     nodes_from_item_value(item).into_iter().next()
 }
-

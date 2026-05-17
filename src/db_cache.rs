@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::db::DbPool;
-use crate::users::{InsertRequestLog, UserBalance};
+use crate::users::{InsertRequestLog, REQUEST_LOG_STATUS_PENDING, UserBalance};
 
 // ---------------------------------------------------------------------------
 // LastUsedBatcher: buffers api_key last_used timestamps, flushes periodically
@@ -81,21 +81,29 @@ pub struct RequestLogBatcher {
     buffer: Arc<Mutex<Vec<InsertRequestLog>>>,
     capacity_hint: usize,
     broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
+    pending_snapshots: Arc<DashMap<String, InsertRequestLog>>,
 }
 
 impl RequestLogBatcher {
     pub fn new(
         capacity_hint: usize,
         broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
+        pending_snapshots: Arc<DashMap<String, InsertRequestLog>>,
     ) -> Self {
         Self {
             buffer: Arc::new(Mutex::new(Vec::with_capacity(capacity_hint))),
             capacity_hint,
             broadcast,
+            pending_snapshots,
         }
     }
 
     pub async fn push(&self, log: InsertRequestLog) {
+        if log.status != REQUEST_LOG_STATUS_PENDING
+            && let Some(request_id) = log.request_id.as_deref()
+        {
+            self.pending_snapshots.remove(request_id);
+        }
         let _ = self.broadcast.send(vec![log.clone()]);
         let mut buf = self.buffer.lock().await;
         buf.push(log);

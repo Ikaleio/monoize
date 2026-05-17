@@ -71,3 +71,97 @@ impl Transform for ForceStreamTransform {
 inventory::submit!(TransformEntry {
     factory: || Box::new(ForceStreamTransform),
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image_transform_cache::ImageTransformCache;
+    use crate::transforms::TransformRuntimeContext;
+    use crate::urp::{Node, OrdinaryRole, UrpRequest};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    async fn context() -> TransformRuntimeContext {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cache = ImageTransformCache::new(
+            temp_dir.path().join("cache"),
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .expect("cache");
+        TransformRuntimeContext {
+            image_transform_cache: std::sync::Arc::new(cache),
+            http_client: reqwest::Client::new(),
+        }
+    }
+
+    fn request(stream: Option<bool>) -> UrpRequest {
+        UrpRequest {
+            model: "gpt-image-1".to_string(),
+            input: vec![Node::Text {
+                id: None,
+                role: OrdinaryRole::User,
+                content: "draw a cat".to_string(),
+                phase: None,
+                extra_body: HashMap::new(),
+            }],
+            stream,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn enabled_sets_request_stream_true_for_image_upstream_collection() {
+        let transform = ForceStreamTransform;
+        let config = transform
+            .parse_config(json!({ "enabled": true }))
+            .expect("config");
+        let mut state = transform.init_state();
+        let mut req = request(Some(false));
+
+        transform
+            .apply(
+                UrpData::Request(&mut req),
+                Phase::Request,
+                &context().await,
+                config.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        assert_eq!(req.stream, Some(true));
+    }
+
+    #[tokio::test]
+    async fn disabled_sets_request_stream_false() {
+        let transform = ForceStreamTransform;
+        let config = transform
+            .parse_config(json!({ "enabled": false }))
+            .expect("config");
+        let mut state = transform.init_state();
+        let mut req = request(Some(true));
+
+        transform
+            .apply(
+                UrpData::Request(&mut req),
+                Phase::Request,
+                &context().await,
+                config.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        assert_eq!(req.stream, Some(false));
+    }
+}
