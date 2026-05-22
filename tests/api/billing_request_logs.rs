@@ -461,6 +461,102 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
 }
 
 #[tokio::test]
+async fn responses_streaming_response_failed_is_logged_as_error_and_not_billed() {
+    let ctx = setup().await;
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user before")
+        .expect("user exists");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":"stream",
+                "stream": true,
+                "stream_mode": "error_then_failed"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(
+        text.contains("event: response.failed"),
+        "downstream should preserve response.failed: {text}"
+    );
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    let mut matched = None;
+    for _ in 0..20 {
+        ctx.state.user_store.flush_all_batchers().await;
+        let (logs, _, _) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(
+                &user.id,
+                100,
+                0,
+                Some("gpt-5-mini"),
+                Some("error"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("list request logs");
+        matched = logs.into_iter().find(|log| {
+            log.model == "gpt-5-mini"
+                && log.is_stream
+                && log.error.code.as_deref() == Some("context_length_exceeded")
+        });
+        if matched.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let log = matched.expect("response.failed request log should be inserted");
+    assert_eq!(log.status, "error");
+    assert_eq!(log.billing.charge_nano_usd, None);
+    assert_eq!(log.tokens.input, None);
+    assert_eq!(log.tokens.output, None);
+    assert_eq!(log.error.http_status, Some(400));
+    assert_eq!(
+        log.error.message.as_deref(),
+        Some("mock context length exceeded")
+    );
+
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user after")
+        .expect("user exists");
+    assert_eq!(user_before.balance_nano_usd, user_after.balance_nano_usd);
+}
+
+#[tokio::test]
 async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
     let ctx = setup().await;
     let user = ctx

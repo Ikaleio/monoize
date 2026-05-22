@@ -82,6 +82,15 @@ pub(super) async fn forward_stream_typed(
             }
             inject_monoize_context(&auth, &mut req_attempt);
             req_attempt.model = attempt.upstream_model.clone();
+            // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
+            // observes the request input. See `nonstream.rs` for rationale and
+            // spec references (urp-transform-system PIPE-1 step 6, PIPE-1d).
+            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
+                &mut req_attempt.input,
+                reasoning_envelope_provider_type(attempt.provider_type),
+                &req_attempt.model,
+                auth.reasoning_envelope_enabled,
+            );
             apply_transform_rules_request(
                 &state,
                 &mut req_attempt,
@@ -104,12 +113,6 @@ pub(super) async fn forward_stream_typed(
             )
             .await?;
             strip_monoize_context(&mut req_attempt);
-            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
-                &mut req_attempt.input,
-                reasoning_envelope_provider_type(attempt.provider_type),
-                &req_attempt.model,
-                auth.reasoning_envelope_enabled,
-            );
 
             if requires_buffered_stream {
                 let mut nonstream_req = req_attempt.clone();
@@ -185,6 +188,17 @@ pub(super) async fn forward_stream_typed(
                                 return Err(err);
                             }
                         };
+                        // Wrap newly produced encrypted reasoning payloads in
+                        // mz2 envelopes BEFORE response-phase transforms run.
+                        // See `nonstream.rs` and PIPE-1d in
+                        // spec/urp-transform-system.spec.md for rationale.
+                        if auth.reasoning_envelope_enabled {
+                            urp::wrap_reasoning_envelopes_in_response(
+                                &mut resp,
+                                reasoning_envelope_provider_type(attempt.provider_type),
+                                &nonstream_req.model,
+                            );
+                        }
                         if let Err(err) = apply_transform_rules_response(
                             &state,
                             &mut resp,
@@ -228,13 +242,6 @@ pub(super) async fn forward_stream_typed(
                             && !matches!(downstream, DownstreamProtocol::Responses)
                         {
                             convert_assistant_images_to_markdown(&mut resp);
-                        }
-                        if auth.reasoning_envelope_enabled {
-                            urp::wrap_reasoning_envelopes_in_response(
-                                &mut resp,
-                                reasoning_envelope_provider_type(attempt.provider_type),
-                                &nonstream_req.model,
-                            );
                         }
                         let charge = match maybe_charge_response(
                             &state,
@@ -624,6 +631,59 @@ pub(super) async fn forward_stream_typed(
                                 guard.terminal.clone(),
                             )
                         };
+
+                        if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {
+                            spawn_request_log_stream_terminal_error(
+                                &state_for_log,
+                                &auth_for_log,
+                                &attempt_for_log,
+                                &model_for_log,
+                                started_at,
+                                request_id_for_log,
+                                request_ip_for_log,
+                                ttfb_ms,
+                                terminal_error,
+                                reasoning_effort_for_log,
+                                tried_providers_for_log,
+                            );
+                            if let Some(session) = capture_session.as_ref() {
+                                let frames = if let Some(frames) = capture_frames_for_task.as_ref()
+                                {
+                                    frames.lock().await.clone()
+                                } else {
+                                    Vec::new()
+                                };
+                                let error_json =
+                                    terminal_diagnostics.terminal_error.as_ref().map(|err| {
+                                        json!({
+                                            "message": err.message,
+                                            "code": err.code,
+                                            "status": err.http_status,
+                                        })
+                                    });
+                                session
+                                    .push_attempt(crate::request_capture::build_attempt_dump(
+                                        capture_attempt_number,
+                                        &capture_provider_id,
+                                        Some(&capture_channel_id),
+                                        capture_provider_type,
+                                        &capture_logical_model,
+                                        &capture_upstream_model,
+                                        &capture_path,
+                                        capture_raw_input,
+                                        &capture_req_attempt,
+                                        capture_upstream_body,
+                                        None,
+                                        Some(frames),
+                                        error_json,
+                                    ))
+                                    .await;
+                                session
+                                    .persist_with_result(actual_upstream_usage.as_ref(), true)
+                                    .await;
+                            }
+                            return;
+                        }
 
                         let mut charge = match usage.as_ref() {
                             Some(usage_row) => match maybe_charge_usage(

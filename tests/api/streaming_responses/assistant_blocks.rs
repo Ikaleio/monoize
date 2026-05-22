@@ -122,7 +122,7 @@ async fn responses_streaming_upstream_error_is_terminal() {
 }
 
 #[tokio::test]
-async fn responses_streaming_prestream_upstream_error_uses_top_level_error_event() {
+async fn responses_streaming_prestream_upstream_error_returns_http_error() {
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -134,7 +134,7 @@ async fn responses_streaming_prestream_upstream_error_uses_top_level_error_event
                 "model":"gpt-5-mini",
                 "input":"stream",
                 "stream": true,
-                "force_upstream_error_status": 429,
+                "force_upstream_error_status": 422,
                 "force_upstream_error_code": "forced_daily_limit",
                 "force_upstream_error_message": "daily usage limit exceeded"
             })
@@ -143,31 +143,30 @@ async fn responses_streaming_prestream_upstream_error_uses_top_level_error_event
         .unwrap();
 
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
-    let frames = parse_responses_sse_json(&text);
-
-    assert_eq!(frames.len(), 1, "expected one error frame: {text}");
-    assert_eq!(frames[0].0, "error");
-    let payload = &frames[0].1;
-    assert_eq!(payload["type"].as_str(), Some("error"));
-    assert_eq!(payload["code"].as_str(), Some("forced_daily_limit"));
     assert!(
-        payload["message"]
+        !text.contains("event: error"),
+        "pre-stream error must not be converted to SSE: {text}"
+    );
+    assert!(
+        !text.contains("[DONE]"),
+        "pre-stream error must not append an SSE sentinel: {text}"
+    );
+    let payload: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(payload["error"]["code"].as_str(), Some("upstream_error"));
+    assert_eq!(
+        payload["error"]["upstream_code"].as_str(),
+        Some("forced_daily_limit")
+    );
+    assert_eq!(payload["error"]["upstream_status"].as_u64(), Some(422));
+    assert!(
+        payload["error"]["message"]
             .as_str()
             .unwrap_or("")
             .contains("daily usage limit exceeded"),
         "error message should expose upstream detail: {text}"
-    );
-    assert!(
-        payload.get("error").is_none(),
-        "Responses error SSE payload must not nest the error object: {text}"
-    );
-    assert_eq!(
-        count_done_sentinels(&text),
-        1,
-        "responses pre-stream error must emit exactly one [DONE]: {text}"
     );
 }
 

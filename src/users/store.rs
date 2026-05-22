@@ -31,6 +31,7 @@ const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
 
 const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
     "strip_reasoning",
+    "strip_encrypted_reasoning",
     "reasoning_to_think_xml",
     "think_xml_to_reasoning",
     "split_sse_frames",
@@ -1728,6 +1729,13 @@ mod tests {
         let transforms = vec![
             TransformRuleConfig {
                 transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: Phase::Response,
+                config: json!({}),
+            },
+            TransformRuleConfig {
+                transform: "strip_encrypted_reasoning".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,

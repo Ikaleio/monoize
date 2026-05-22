@@ -180,11 +180,7 @@ pub async fn create_response(
                     .keep_alive(api_stream_keep_alive())
                     .into_response());
             }
-            Err(err) => {
-                return Ok(Sse::new(error_to_sse_stream(&err, downstream))
-                    .keep_alive(api_stream_keep_alive())
-                    .into_response());
-            }
+            Err(err) => return Err(err),
         }
     }
 
@@ -248,11 +244,7 @@ pub async fn create_chat_completions(
                     .keep_alive(api_stream_keep_alive())
                     .into_response());
             }
-            Err(err) => {
-                return Ok(Sse::new(error_to_sse_stream(&err, downstream))
-                    .keep_alive(api_stream_keep_alive())
-                    .into_response());
-            }
+            Err(err) => return Err(err),
         }
     }
     let value = forward_nonstream_typed(
@@ -315,11 +307,7 @@ pub async fn create_messages(
                     .keep_alive(api_stream_keep_alive())
                     .into_response());
             }
-            Err(err) => {
-                return Ok(Sse::new(error_to_sse_stream(&err, downstream))
-                    .keep_alive(api_stream_keep_alive())
-                    .into_response());
-            }
+            Err(err) => return Err(err),
         }
     }
     let value = forward_nonstream_typed(
@@ -794,10 +782,20 @@ impl DownstreamProtocol {
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub(crate) struct StreamTerminalDiagnostics {
-    saw_done_sentinel: bool,
-    terminal_event: Option<String>,
-    terminal_finish_reason: Option<String>,
-    synthetic_terminal_emitted: bool,
+    pub(crate) saw_done_sentinel: bool,
+    pub(crate) terminal_event: Option<String>,
+    pub(crate) terminal_finish_reason: Option<String>,
+    pub(crate) synthetic_terminal_emitted: bool,
+    pub(crate) terminal_error: Option<StreamTerminalError>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct StreamTerminalError {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) http_status: u16,
+    pub(crate) error_type: Option<String>,
+    pub(crate) param: Option<String>,
 }
 
 #[derive(Default)]

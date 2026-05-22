@@ -1,4 +1,4 @@
-use super::StreamRuntimeMetrics;
+use super::{StreamRuntimeMetrics, StreamTerminalError};
 use crate::urp;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -90,6 +90,19 @@ pub(crate) async fn record_stream_terminal_event(
     {
         guard.terminal.terminal_finish_reason = Some(reason.to_string());
     }
+}
+
+pub(crate) async fn record_stream_terminal_error(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    event: &str,
+    error: StreamTerminalError,
+) {
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    let mut guard = runtime_metrics.lock().await;
+    guard.terminal.terminal_event = Some(event.to_string());
+    guard.terminal.terminal_error = Some(error);
 }
 
 pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {

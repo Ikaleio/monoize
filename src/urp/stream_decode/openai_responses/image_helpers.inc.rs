@@ -45,3 +45,33 @@ fn image_node_from_image_generation_payload(payload: &Value) -> Option<Node> {
     })
 }
 
+fn image_generation_call_event_extra_body(payload: Value) -> HashMap<String, Value> {
+    let provider_event_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut extra_body = split_known_fields(payload, &["type", "sequence_number"]);
+    if let Some(provider_event_type) = provider_event_type {
+        extra_body.insert(
+            "provider_event_type".to_string(),
+            Value::String(provider_event_type),
+        );
+    }
+    extra_body
+}
+
+fn map_image_generation_call_event(
+    data_val: Value,
+    output_index: u64,
+    index_state: &mut ResponsesStreamIndexState,
+) -> Vec<UrpStreamEvent> {
+    let node_index = index_state.synthetic_node_index_for_output(output_index);
+    vec![UrpStreamEvent::NodeDelta {
+        node_index,
+        delta: NodeDelta::ProviderItem {
+            data: Value::Null,
+        },
+        usage: None,
+        extra_body: image_generation_call_event_extra_body(data_val),
+    }]
+}

@@ -1,3 +1,58 @@
+#[tokio::test]
+async fn responses_streaming_preserves_image_generation_partial_image_events() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"draw"}]}],
+                "tools":[{ "type":"image_generation", "partial_images": 3 }],
+                "stream": true,
+                "stream_mode": "image_generation_partial"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let partial = frames
+        .iter()
+        .find(|(event, _)| event == "response.image_generation_call.partial_image")
+        .expect("partial image event");
+    assert_eq!(partial.1["item_id"].as_str(), Some("ig_mock"));
+    assert_eq!(partial.1["output_index"].as_u64(), Some(0));
+    assert_eq!(partial.1["partial_image_index"].as_u64(), Some(0));
+    assert_eq!(partial.1["partial_image_b64"].as_str(), Some("QUJD"));
+    assert_eq!(
+        partial.1["type"].as_str(),
+        Some("response.image_generation_call.partial_image")
+    );
+    assert!(partial.1.get("provider_event_type").is_none());
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.image_generation_call.in_progress")
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.image_generation_call.generating")
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|(event, _)| event == "response.image_generation_call.completed")
+    );
+}
 
 #[tokio::test]
 async fn responses_streaming_shared_message_output_adds_item_once_before_each_text_part_lifecycle()

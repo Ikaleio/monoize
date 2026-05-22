@@ -2,9 +2,10 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::routing::now_ts;
 use crate::handlers::usage::{
     latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_responses_object,
-    record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
+    record_stream_done_sentinel, record_stream_terminal_error, record_stream_terminal_event,
+    record_stream_usage_if_present,
 };
-use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,

@@ -447,6 +447,12 @@ PR2a. Responses order preservation:
 
 PR3. For streaming, Monoize MUST parse upstream Responses SSE into canonical URP v2 stream events and then encode protocol-correct downstream SSE under §8 when the downstream endpoint is `POST /v1/responses`.
 
+PR3a. When an upstream Responses SSE event has `type = "response.image_generation_call.partial_image"`, Monoize MUST preserve it as a downstream Responses SSE event with the same event name when the downstream request is streaming and the downstream protocol is Responses. The downstream event payload MUST preserve `item_id`, `output_index`, `partial_image_b64`, and `partial_image_index` when those fields are present in the upstream payload. It MUST preserve any other upstream payload fields except `type` and `sequence_number` as event-local fields. Monoize MAY assign a new downstream `sequence_number`.
+
+PR3b. When an upstream Responses SSE event has `type = "response.image_generation_call.in_progress"` or `type = "response.image_generation_call.generating"`, Monoize MUST preserve it as a downstream Responses SSE event with the same event name when the downstream request is streaming and the downstream protocol is Responses. The downstream event payload MUST preserve `item_id` and `output_index` when those fields are present. It MUST preserve any other upstream payload fields except `type` and `sequence_number` as event-local fields. Monoize MAY assign a new downstream `sequence_number`.
+
+PR3c. When an upstream Responses SSE event has `type = "response.image_generation_call.completed"`, Monoize MUST preserve it as a downstream Responses SSE event with the same event name when the downstream request is streaming and the downstream protocol is Responses. The downstream event payload MUST preserve `item_id` and `output_index` when those fields are present. It MUST preserve any other upstream payload fields except `type` and `sequence_number` as event-local fields. Monoize MAY assign a new downstream `sequence_number`.
+
 PR4. When constructing upstream `POST /v1/responses` requests, Monoize MUST emit `tools[]` in Responses-style function-tool shape even if the downstream request used another tool schema.
 
 PR4a. Responses `phase` mapping:
@@ -487,7 +493,7 @@ PR4c.2a. When encoding an upstream `POST /v1/responses` request whose replayed `
 
 PR4c.2b. When encoding a replayed URP v2 `Reasoning` node with non-empty `encrypted` into an upstream `POST /v1/responses` request `input[]` item, Monoize MUST emit that item only if the node has a stable upstream Responses reasoning item id. A stable id is present iff either `Reasoning.id` is non-empty or `Reasoning.extra_body.id` is a non-empty string. If no stable id is present, Monoize MUST drop the replayed reasoning node. Monoize MUST NOT synthesize a new `rs_...` id for encrypted reasoning replay because the encrypted payload is bound to the original upstream item id.
 
-PR4c.3. When an authenticated API key has `reasoning_envelope_enabled = true`, Monoize MUST wrap every downstream-visible encrypted reasoning payload produced by `/v1/responses`, `/v1/chat/completions`, or `/v1/messages` in a Monoize reasoning envelope before the payload is emitted to the downstream client.
+PR4c.3. When an authenticated API key has `reasoning_envelope_enabled = true`, Monoize MUST wrap every downstream-visible encrypted reasoning payload produced by `/v1/responses`, `/v1/chat/completions`, or `/v1/messages` in a Monoize reasoning envelope before the payload is emitted to the downstream client. The wrap step MUST occur before any response-phase transform (provider, global, or API-key) observes the corresponding `Reasoning` node, reasoning `NodeDelta`, reasoning `NodeStart`, reasoning `NodeDone`, or `ResponseDone.output` reasoning entry. After PR4c.3 wrapping, the only encrypted reasoning value visible to response-phase transforms is the `mz2.` envelope string.
 
 PR4c.4. The Monoize reasoning envelope string format MUST be:
 
@@ -1128,6 +1134,10 @@ DMO7. If the authenticated API key has `model_limits_enabled = true` and `model_
 ## 8. Streaming requirements, Responses downstream
 
 When the downstream endpoint is `POST /v1/responses` with `stream=true`, Monoize MUST respond using SSE and MUST emit the externally visible Responses lifecycle from canonical URP v2 stream events and terminal `ResponseDone.output`.
+
+STR0. If a downstream request has `stream=true` but Monoize fails before it has returned a downstream SSE response, Monoize MUST return a non-SSE HTTP error response. The HTTP status code and JSON error envelope MUST be the same shape used for an equivalent non-streaming request. In particular, when an upstream returns a non-2xx status before a downstream stream is established, Monoize MUST preserve the upstream error fields in the HTTP error envelope according to the same routing and exhaustion rules used by non-streaming requests, and MUST NOT convert that condition into `HTTP 200` with an SSE `event: error` frame.
+
+STR0a. If Monoize has already returned a downstream SSE response and a later upstream or adapter error occurs, Monoize MUST report that error using the downstream protocol's terminal stream error shape. STR0 does not apply after downstream SSE headers have been committed.
 
 At minimum the downstream Responses stream MUST support:
 

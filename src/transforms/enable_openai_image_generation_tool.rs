@@ -2,12 +2,14 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::ToolDefinition;
+use crate::urp::{ToolChoice, ToolDefinition};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
 use std::collections::HashMap;
+
+const FORCE_STREAM_PARTIAL_IMAGES: u64 = 3;
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -17,6 +19,8 @@ struct Config {
     action: Option<String>,
     #[serde(default)]
     force_stream: bool,
+    #[serde(default)]
+    force_tool_choice: bool,
     #[serde(default)]
     extra: HashMap<String, Value>,
 }
@@ -64,6 +68,10 @@ impl Transform for EnableOpenAiImageGenerationToolTransform {
                     "type": "boolean",
                     "default": false
                 },
+                "force_tool_choice": {
+                    "type": "boolean",
+                    "default": false
+                },
                 "extra": {
                     "type": "object",
                     "default": {}
@@ -102,9 +110,29 @@ impl Transform for EnableOpenAiImageGenerationToolTransform {
         if cfg.force_stream {
             req.stream = Some(true);
         }
+        if cfg.force_tool_choice {
+            req.tool_choice = Some(ToolChoice::Specific(json!({
+                "type": "image_generation"
+            })));
+        }
 
         let tools = req.tools.get_or_insert_with(Vec::new);
-        if tools
+        if cfg.force_stream {
+            let mut found_existing = false;
+            for tool in tools
+                .iter_mut()
+                .filter(|tool| tool.tool_type == "image_generation")
+            {
+                tool.extra_body.insert(
+                    "partial_images".to_string(),
+                    Value::from(FORCE_STREAM_PARTIAL_IMAGES),
+                );
+                found_existing = true;
+            }
+            if found_existing {
+                return Ok(());
+            }
+        } else if tools
             .iter()
             .any(|tool| tool.tool_type == "image_generation")
         {
@@ -124,6 +152,12 @@ impl Transform for EnableOpenAiImageGenerationToolTransform {
         );
         if let Some(action) = cfg.action.filter(|value| !value.is_empty()) {
             extra_body.insert("action".to_string(), Value::String(action));
+        }
+        if cfg.force_stream {
+            extra_body.insert(
+                "partial_images".to_string(),
+                Value::from(FORCE_STREAM_PARTIAL_IMAGES),
+            );
         }
         tools.push(ToolDefinition {
             tool_type: "image_generation".to_string(),
@@ -316,7 +350,10 @@ mod tests {
     async fn force_stream_sets_request_stream_true_without_duplicating_existing_tool() {
         let transform = EnableOpenAiImageGenerationToolTransform;
         let config = transform
-            .parse_config(json!({ "force_stream": true }))
+            .parse_config(json!({
+                "force_stream": true,
+                "extra": { "partial_images": 0 }
+            }))
             .expect("config");
         let mut state = transform.init_state();
         let mut req = UrpRequest {
@@ -333,7 +370,7 @@ mod tests {
                 description: None,
                 function: None,
                 custom: None,
-                extra_body: HashMap::new(),
+                extra_body: HashMap::from([("partial_images".to_string(), json!(0))]),
             }]),
             tool_choice: None,
             parallel_tool_calls: None,
@@ -354,7 +391,99 @@ mod tests {
             .expect("apply");
 
         assert_eq!(req.stream, Some(true));
-        assert_eq!(req.tools.expect("tools").len(), 1);
+        let tools = req.tools.expect("tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].extra_body.get("partial_images"), Some(&json!(3)));
+    }
+
+    #[tokio::test]
+    async fn force_tool_choice_selects_image_generation_tool() {
+        let transform = EnableOpenAiImageGenerationToolTransform;
+        let config = transform
+            .parse_config(json!({
+                "force_tool_choice": true
+            }))
+            .expect("config");
+        let mut state = transform.init_state();
+        let mut req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            input: Vec::new(),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(Vec::new()),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::new(),
+        };
+
+        transform
+            .apply(
+                UrpData::Request(&mut req),
+                Phase::Request,
+                &context().await,
+                config.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        assert!(matches!(
+            req.tool_choice,
+            Some(ToolChoice::Specific(value))
+                if value == json!({ "type": "image_generation" })
+        ));
+        let tools = req.tools.expect("tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].tool_type, "image_generation");
+    }
+
+    #[tokio::test]
+    async fn force_stream_adds_partial_images_to_inserted_tool() {
+        let transform = EnableOpenAiImageGenerationToolTransform;
+        let config = transform
+            .parse_config(json!({
+                "force_stream": true,
+                "extra": { "partial_images": 0 }
+            }))
+            .expect("config");
+        let mut state = transform.init_state();
+        let mut req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            input: Vec::new(),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: Some(Vec::new()),
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::new(),
+        };
+
+        transform
+            .apply(
+                UrpData::Request(&mut req),
+                Phase::Request,
+                &context().await,
+                config.as_ref(),
+                state.as_mut(),
+            )
+            .await
+            .expect("apply");
+
+        let tools = req.tools.expect("tools");
+        assert_eq!(req.stream, Some(true));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].tool_type, "image_generation");
+        assert_eq!(tools[0].extra_body.get("partial_images"), Some(&json!(3)));
     }
 
     #[tokio::test]

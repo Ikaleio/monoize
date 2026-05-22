@@ -130,6 +130,7 @@ TM-TF-3. Allowed API-key request-phase transforms are exactly:
 - `merge_consecutive_roles`
 - `append_empty_user_message`
 - `compress_user_message_images`
+- `enable_openai_image_generation_tool`
 - `auto_cache_system`
 - `auto_cache_tool_use`
 - `auto_cache_user_id`
@@ -137,10 +138,12 @@ TM-TF-3. Allowed API-key request-phase transforms are exactly:
 TM-TF-4. Allowed API-key response-phase transforms are exactly:
 
 - `strip_reasoning`
+- `strip_encrypted_reasoning`
 - `reasoning_to_think_xml`
 - `think_xml_to_reasoning`
 - `split_sse_frames`
 - `plaintext_reasoning_to_summary`
+- `reasoning_content_delta`
 - `reasoning_summary_to_raw_cot`
 - `assistant_markdown_images_to_output`
 - `assistant_output_images_to_markdown`

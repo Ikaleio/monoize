@@ -198,6 +198,14 @@ pub(super) fn spawn_request_log(
                 stream_terminal_finish_reason = stream_terminal_diagnostics
                     .as_ref()
                     .and_then(|diagnostics| diagnostics.terminal_finish_reason.as_deref()),
+                stream_terminal_error_code = stream_terminal_diagnostics
+                    .as_ref()
+                    .and_then(|diagnostics| diagnostics.terminal_error.as_ref())
+                    .map(|err| err.code.as_str()),
+                stream_terminal_error_http_status = stream_terminal_diagnostics
+                    .as_ref()
+                    .and_then(|diagnostics| diagnostics.terminal_error.as_ref())
+                    .map(|err| err.http_status),
                 stream_synthetic_terminal_emitted = stream_terminal_diagnostics
                     .as_ref()
                     .map(|diagnostics| diagnostics.synthetic_terminal_emitted),
@@ -331,6 +339,78 @@ pub(super) fn spawn_request_log_error(
             error_http_status,
             duration_ms: Some(duration_ms),
             ttfb_ms: None,
+            request_ip,
+            reasoning_effort,
+            tried_providers_json,
+            request_kind: None,
+            created_at,
+        };
+        if let Err(e) = user_store.finalize_request_log(log).await {
+            tracing::warn!("failed to finalize request log: {e}");
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_request_log_stream_terminal_error(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    attempt: &MonoizeAttempt,
+    model: &str,
+    started_at: std::time::Instant,
+    request_id: Option<String>,
+    request_ip: Option<String>,
+    ttfb_ms: Option<u64>,
+    terminal_error: StreamTerminalError,
+    reasoning_effort: Option<String>,
+    tried_providers: Vec<TriedProvider>,
+) {
+    let Some(user_id) = auth.user_id.clone() else {
+        return;
+    };
+    let api_key_id = auth.api_key_id.clone();
+    let model = model.to_string();
+    let provider_id = attempt.provider_id.clone();
+    let upstream_model = attempt.upstream_model.clone();
+    let model_multiplier = attempt.model_multiplier;
+    let channel_id = attempt.channel_id.clone();
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    let created_at = request_created_at(started_at);
+    let user_store = state.user_store.clone();
+    let tried_providers_json = if tried_providers.is_empty() {
+        None
+    } else {
+        serde_json::to_value(&tried_providers).ok()
+    };
+
+    tokio::spawn(async move {
+        let log = InsertRequestLog {
+            request_id,
+            user_id,
+            api_key_id,
+            model,
+            provider_id: Some(provider_id),
+            upstream_model: Some(upstream_model),
+            channel_id: Some(channel_id),
+            is_stream: true,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
+            reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
+            provider_multiplier: Some(model_multiplier),
+            charge_nano_usd: None,
+            status: REQUEST_LOG_STATUS_ERROR.to_string(),
+            usage_breakdown_json: None,
+            billing_breakdown_json: None,
+            error_code: Some(terminal_error.code),
+            error_message: Some(terminal_error.message),
+            error_http_status: Some(terminal_error.http_status),
+            duration_ms: Some(duration_ms),
+            ttfb_ms,
             request_ip,
             reasoning_effort,
             tried_providers_json,

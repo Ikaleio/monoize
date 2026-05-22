@@ -330,7 +330,18 @@ pub(super) async fn transform_urp_stream(
         http_client: state.http.clone(),
     };
 
-    while let Some(event) = rx.recv().await {
+    while let Some(mut event) = rx.recv().await {
+        // Wrap newly produced encrypted reasoning payloads in mz2 envelopes
+        // BEFORE any response-phase stream transform observes the event. Per
+        // spec/urp-transform-system.spec.md PIPE-1 step 12 and PIPE-1d, and
+        // spec/unified_responses_proxy.spec.md PR4c.3, response-phase
+        // transforms must only ever see encrypted reasoning in `mz2.` envelope
+        // form. This is what allows e.g. `strip_encrypted_reasoning` to detect
+        // and remove envelope payloads on a single canonical surface.
+        if let Some((provider_type, upstream_model)) = reasoning_envelope {
+            urp::wrap_reasoning_envelope_in_stream_event(&mut event, provider_type, upstream_model);
+        }
+
         let provider_events = transforms::apply_stream_transforms(
             event,
             provider_rules,
@@ -387,14 +398,7 @@ pub(super) async fn transform_urp_stream(
                     )
                 })?;
 
-                for mut auth_event in auth_events {
-                    if let Some((provider_type, upstream_model)) = reasoning_envelope {
-                        urp::wrap_reasoning_envelope_in_stream_event(
-                            &mut auth_event,
-                            provider_type,
-                            upstream_model,
-                        );
-                    }
+                for auth_event in auth_events {
                     tx.send(auth_event).await.map_err(|_| {
                         AppError::new(
                             StatusCode::BAD_GATEWAY,

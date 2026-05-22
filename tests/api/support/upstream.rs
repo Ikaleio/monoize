@@ -126,6 +126,64 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 return Sse::new(stream).into_response();
             }
 
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("image_generation_partial")
+                && tool_outputs.is_empty()
+                && image_generation_tool
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(Event::default()
+                        .event("response.image_generation_call.in_progress")
+                        .data(json!({
+                            "type": "response.image_generation_call.in_progress",
+                            "output_index": 0,
+                            "item_id": "ig_mock"
+                        }).to_string())),
+                    Ok::<_, Infallible>(Event::default()
+                        .event("response.image_generation_call.partial_image")
+                        .data(json!({
+                            "type": "response.image_generation_call.partial_image",
+                            "output_index": 0,
+                            "item_id": "ig_mock",
+                            "partial_image_index": 0,
+                            "partial_image_b64": "QUJD",
+                            "output_format": "png"
+                        }).to_string())),
+                    Ok::<_, Infallible>(Event::default()
+                        .event("response.image_generation_call.generating")
+                        .data(json!({
+                            "type": "response.image_generation_call.generating",
+                            "output_index": 0,
+                            "item_id": "ig_mock"
+                        }).to_string())),
+                    Ok::<_, Infallible>(Event::default()
+                        .event("response.image_generation_call.completed")
+                        .data(json!({
+                            "type": "response.image_generation_call.completed",
+                            "output_index": 0,
+                            "item_id": "ig_mock"
+                        }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("response.completed").data(json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_mock",
+                            "object": "response",
+                            "created_at": 0,
+                            "model": model,
+                            "status": "completed",
+                            "output": [{
+                                "type": "image_generation_call",
+                                "id": "ig_mock",
+                                "result": image_b64,
+                                "output_format": "png"
+                            }]
+                        }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
             if tools_present && tool_outputs.is_empty() {
                 if body.get("stream_mode").and_then(|v| v.as_str()) == Some("reasoning_text_tool") {
                     let stream = futures_util::stream::iter(vec![
@@ -2619,4 +2677,3 @@ fn parse_responses_sse_json(text: &str) -> Vec<(String, Value)> {
         })
         .collect()
 }
-

@@ -107,6 +107,8 @@ RL6c. *(Removed — no incremental pending updates exist. Usage is written once 
 
 RL6d. For pass-through streaming requests that finalize successfully without a usage snapshot, Monoize MUST emit an observability warning containing the request identifier plus the in-memory terminal-stream diagnostics collected during adaptation. The warning payload MUST include whether a literal upstream `[DONE]` sentinel was observed, the last terminal event classification seen by the adapter, the terminal finish reason when the upstream protocol exposes one, and whether Monoize synthesized its own terminal chunk before closing the downstream stream.
 
+RL6e. For pass-through streaming requests, an upstream in-stream terminal error event is an API error response even when the upstream HTTP status is `200`. This includes OpenAI Responses SSE events named `error` and `response.failed`. Monoize MUST forward the protocol-correct downstream terminal error event, MUST finalize the request log with `status = "error"`, MUST leave `charge_nano_usd` and `billing_breakdown_json` null, and MUST populate `error_code`, `error_message`, and `error_http_status`. For OpenAI Responses `response.failed`, `error_code` MUST equal `response.error.code` when present, `error_message` MUST equal `response.error.message` when present, and `error_http_status` MUST be `400` unless the upstream stream exposes a more specific non-2xx status.
+
 RL7. The `duration_ms` field MUST measure wall-clock time from the start of request processing (after auth) to the point where the upstream response is received.
 
 RL8. The `request_id` field MUST be populated from the `x-request-id` header set by the tower-http middleware.

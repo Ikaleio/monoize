@@ -121,6 +121,19 @@ pub(super) async fn execute_nonstream_typed(
             }
             inject_monoize_context(auth, &mut req_attempt);
             req_attempt.model = attempt.upstream_model.clone();
+            // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
+            // observes the request input. Per spec/urp-transform-system.spec.md
+            // PIPE-1 step 6 and PIPE-1d, transforms must not see encrypted
+            // reasoning replays still in `mz2.` envelope form, and they must not
+            // be allowed to mutate the reasoning payload before envelope-bound
+            // provider/model checks (PR4c.6) decide whether to keep or drop the
+            // replayed reasoning node for this attempt.
+            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
+                &mut req_attempt.input,
+                reasoning_envelope_provider_type(attempt.provider_type),
+                &req_attempt.model,
+                auth.reasoning_envelope_enabled,
+            );
             apply_transform_rules_request(
                 state,
                 &mut req_attempt,
@@ -144,12 +157,6 @@ pub(super) async fn execute_nonstream_typed(
             )
             .await?;
             strip_monoize_context(&mut req_attempt);
-            urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
-                &mut req_attempt.input,
-                reasoning_envelope_provider_type(attempt.provider_type),
-                &req_attempt.model,
-                auth.reasoning_envelope_enabled,
-            );
 
             let upstream_body =
                 encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
@@ -260,6 +267,20 @@ pub(super) async fn execute_nonstream_typed(
                             }
                         },
                     };
+                    // Wrap newly produced encrypted reasoning payloads in mz2
+                    // envelopes BEFORE any response-phase transform observes
+                    // the response. Per spec/urp-transform-system.spec.md
+                    // PIPE-1 step 12 and PIPE-1d, transforms must only see
+                    // encrypted reasoning in `mz2.` envelope form so that
+                    // bulk-mutation transforms (e.g. strip_encrypted_reasoning)
+                    // can reason about that single canonical surface.
+                    if auth.reasoning_envelope_enabled {
+                        urp::wrap_reasoning_envelopes_in_response(
+                            &mut resp,
+                            reasoning_envelope_provider_type(attempt.provider_type),
+                            &req_attempt.model,
+                        );
+                    }
                     if let Err(err) = apply_transform_rules_response(
                         state,
                         &mut resp,
@@ -303,13 +324,6 @@ pub(super) async fn execute_nonstream_typed(
                         && !matches!(downstream, DownstreamProtocol::Responses)
                     {
                         convert_assistant_images_to_markdown(&mut resp);
-                    }
-                    if auth.reasoning_envelope_enabled {
-                        urp::wrap_reasoning_envelopes_in_response(
-                            &mut resp,
-                            reasoning_envelope_provider_type(attempt.provider_type),
-                            &req_attempt.model,
-                        );
                     }
                     let charge =
                         match maybe_charge_response(state, auth, &attempt, &logical_model, &resp)

@@ -196,7 +196,23 @@ fn map_responses_event_to_urp_events_with_state(
         "image_generation.completed" | "response.image_generation.completed" => {
             map_image_generation_completed(data_val, index_state)
         }
-        "image_generation.partial_image" | "response.image_generation.partial_image" => Vec::new(),
+        "image_generation.partial_image" | "response.image_generation.partial_image" => {
+            let output_index = data_val
+                .get("output_index")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            map_image_generation_call_event(data_val, output_index, index_state)
+        }
+        "response.image_generation_call.in_progress"
+        | "response.image_generation_call.generating"
+        | "response.image_generation_call.partial_image"
+        | "response.image_generation_call.completed" => {
+            let output_index = data_val
+                .get("output_index")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            map_image_generation_call_event(data_val, output_index, index_state)
+        }
         "response.content_part.done" => map_content_part_done(data_val, index_state),
         "response.output_item.done" => map_output_item_done(data_val, index_state),
         "response.completed" => map_response_completed(data_val, index_state),
@@ -285,7 +301,12 @@ fn reasoning_source_from_value(value: &Value) -> Option<String> {
 fn responses_stream_error_parts(
     event_name: &str,
     data_val: Value,
-) -> (Option<String>, String, HashMap<String, Value>) {
+) -> (
+    Option<String>,
+    String,
+    HashMap<String, Value>,
+    StreamTerminalError,
+) {
     let error_value = if event_name == "response.failed" {
         data_val
             .get("response")
@@ -309,12 +330,37 @@ fn responses_stream_error_parts(
         .or_else(|| data_val.get("message").and_then(|v| v.as_str()))
         .unwrap_or_else(|| data_val.as_str().unwrap_or("upstream error"))
         .to_string();
+    let error_type = error_value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .or_else(|| data_val.get("type").and_then(|v| v.as_str()))
+        .filter(|value| *value != event_name)
+        .map(|value| value.to_string());
+    let param = error_value
+        .get("param")
+        .and_then(|v| v.as_str())
+        .or_else(|| data_val.get("param").and_then(|v| v.as_str()))
+        .map(|value| value.to_string());
+    let http_status = error_value
+        .get("status")
+        .and_then(|v| v.as_u64())
+        .or_else(|| data_val.get("status").and_then(|v| v.as_u64()))
+        .filter(|status| (400..=599).contains(status))
+        .and_then(|status| u16::try_from(status).ok())
+        .unwrap_or(StatusCode::BAD_REQUEST.as_u16());
+    let terminal_error = StreamTerminalError {
+        code: code.clone().unwrap_or_else(|| "upstream_stream_error".to_string()),
+        message: message.clone(),
+        http_status,
+        error_type: error_type.clone(),
+        param: param.clone(),
+    };
     let mut extra_body = split_known_fields(error_value, &["code", "message"]);
     extra_body.extend(split_known_fields(
         data_val,
         &["code", "message", "error", "response"],
     ));
-    (code, message, extra_body)
+    (code, message, extra_body, terminal_error)
 }
 
 fn output_state_for<'a>(

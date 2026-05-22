@@ -30,6 +30,7 @@ pub mod remove_field;
 pub mod resolve_image_urls;
 pub mod set_field;
 pub mod split_sse_frames;
+pub mod strip_encrypted_reasoning;
 pub mod strip_input_reasoning;
 pub mod strip_orphaned_tool_use;
 pub mod strip_reasoning;
@@ -165,6 +166,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(split_sse_frames::SplitSseFramesTransform),
         Box::new(strip_input_reasoning::StripInputReasoningTransform),
         Box::new(strip_reasoning::StripReasoningTransform),
+        Box::new(strip_encrypted_reasoning::StripEncryptedReasoningTransform),
         Box::new(strip_orphaned_tool_use::StripOrphanedToolUseTransform),
         Box::new(system_to_developer_role::SystemToDeveloperRoleTransform),
         Box::new(think_xml_to_reasoning::ThinkXmlToReasoningTransform),

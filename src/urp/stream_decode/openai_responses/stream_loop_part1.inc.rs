@@ -74,7 +74,8 @@ pub(crate) async fn stream_responses_to_urp_events(
         .await;
 
         if ev.event == "error" || ev.event == "response.failed" {
-            let (code, message, extra_body) = responses_stream_error_parts(&ev.event, data_val);
+            let (code, message, extra_body, terminal_error) =
+                responses_stream_error_parts(&ev.event, data_val);
             let _ = tx
                 .send(UrpStreamEvent::Error {
                     code,
@@ -82,7 +83,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                     extra_body,
                 })
                 .await;
-            record_stream_terminal_event(&runtime_metrics, &ev.event, None).await;
+            record_stream_terminal_error(&runtime_metrics, &ev.event, terminal_error).await;
             return Ok(());
         }
 
@@ -587,4 +588,3 @@ pub(crate) async fn stream_responses_to_urp_events(
     record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
     Ok(())
 }
-

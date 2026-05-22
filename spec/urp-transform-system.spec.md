@@ -164,6 +164,7 @@ TF-7. Built-ins that MUST exist are:
 - `assistant_markdown_images_to_output`
 - `assistant_output_images_to_markdown`
 - `strip_orphaned_tool_use`
+- `strip_encrypted_reasoning`
 
 TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include `type_id`, `supported_phases`, `supported_scopes`, and `config_schema`.
 
@@ -291,33 +292,45 @@ EOIGT-2. Config MAY contain:
 - `output_format` as one of `png`, `webp`, or `jpeg`; default `png`;
 - `action` as a string; optional;
 - `force_stream` as a boolean; default `false`; and
+- `force_tool_choice` as a boolean; default `false`; and
 - `extra` as an object whose entries are copied verbatim into the inserted tool descriptor's `extra_body`.
 
 EOIGT-3. The transform MUST inspect only top-level `request.tools`.
 
 EOIGT-4. If `request.tools` is absent, the transform MUST create it as a one-element array containing one tool descriptor with `type = "image_generation"`.
 
-EOIGT-5. If `request.tools` already contains at least one tool descriptor whose `type` is `image_generation`, the transform MUST leave `request.tools` unchanged.
+EOIGT-5. If `request.tools` already contains at least one tool descriptor whose `type` is `image_generation` and `force_stream = false`, the transform MUST leave `request.tools` unchanged.
+
+EOIGT-5a. If `request.tools` already contains at least one tool descriptor whose `type` is `image_generation` and `force_stream = true`, the transform MUST NOT append another `image_generation` descriptor.
 
 EOIGT-6. When the transform inserts a tool descriptor, it MUST set:
 1. `type = "image_generation"`;
 2. `extra_body.size = request.extra_body.size` when `request.extra_body` contains `size`;
 3. `extra_body.quality = request.extra_body.quality` when `request.extra_body` contains `quality`;
 4. all `extra` object entries into `extra_body` afterward, preserving their JSON values verbatim;
-5. `extra_body.output_format = <configured output_format>`; and
-6. `extra_body.action = <configured action>` only when `action` is configured.
+5. `extra_body.output_format = <configured output_format>`;
+6. `extra_body.action = <configured action>` only when `action` is configured; and
+7. `extra_body.partial_images = 3` when `force_stream = true`.
 
-EOIGT-6a. If `extra` contains keys `size` or `quality`, the transform MUST preserve the `extra` values in the inserted tool descriptor and MUST NOT overwrite them with same-named values from `request.extra_body`.
+EOIGT-6a. If `force_stream = true`, the transform MUST set `request.stream = true` and MUST set `extra_body.partial_images = 3` on every `image_generation` tool descriptor in `request.tools`, including any descriptor inserted by the transform.
 
-EOIGT-6b. If `extra` contains keys `output_format` or `action`, the transform MUST still apply EOIGT-6.5 and EOIGT-6.6 afterward so that the explicit typed config fields take precedence over colliding `extra` entries.
+EOIGT-6b. `partial_images` set by EOIGT-6a MUST override any preserved or configured `partial_images` value on the same tool descriptor.
 
-EOIGT-7. The transform MUST preserve all pre-existing tool descriptors in source order and MUST append the inserted `image_generation` tool after them.
+EOIGT-6c. If `extra` contains keys `size` or `quality`, the transform MUST preserve the `extra` values in the inserted tool descriptor and MUST NOT overwrite them with same-named values from `request.extra_body`.
+
+EOIGT-6d. If `extra` contains keys `output_format`, `action`, or `partial_images`, the transform MUST still apply EOIGT-6.5, EOIGT-6.6, and EOIGT-6.7 afterward so that the explicit transform-owned fields take precedence over colliding `extra` entries.
+
+EOIGT-7. The transform MUST preserve the source order of all pre-existing tool descriptors and MUST append the inserted `image_generation` tool after them. The only allowed mutation to a pre-existing `image_generation` descriptor is the `partial_images` assignment required by EOIGT-6a.
 
 EOIGT-8. If `force_stream = true`, the transform MUST set `request.stream = true` during request-phase application. This rule applies even when `request.tools` already contains an `image_generation` descriptor.
 
 EOIGT-9. If `force_stream = false`, the transform MUST NOT modify `request.stream`.
 
-EOIGT-10. The transform MUST NOT modify `request.input`, `request.tool_choice`, or any response-phase payload surface.
+EOIGT-10. If `force_tool_choice = true`, the transform MUST set `request.tool_choice` to a specific Responses native tool choice object equivalent to `{ "type": "image_generation" }` during request-phase application.
+
+EOIGT-11. If `force_tool_choice = false`, the transform MUST NOT modify `request.tool_choice`.
+
+EOIGT-12. The transform MUST NOT modify `request.input` or any response-phase payload surface.
 
 CUMI-1. `compress_user_message_images` is request-phase only.
 
@@ -416,6 +429,30 @@ RCD-7. If a reasoning node or delta carries only encrypted reasoning and no plai
 RCD-8. The transform MUST be independent of `reasoning_summary_to_raw_cot`. Both transforms MAY be enabled simultaneously.
 
 RCD-9. When a downstream Chat Completions encoder sees non-empty `inject_reasoning_content`, it MUST emit the additional OpenRouter-compatible or DeepSeek-compatible downstream reasoning-content field without removing normal reasoning fields.
+
+SER-1. `strip_encrypted_reasoning` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
+
+SER-2. Config MUST be an empty object.
+
+SER-3. On non-stream responses, the transform MUST clear `Reasoning.encrypted` and MUST remove `encrypted_content` from `Reasoning.extra_body` for every ordinary `Reasoning` node in `response.output`.
+
+SER-4. On non-stream responses, the transform MUST remove `encrypted_content` from any `next_downstream_envelope_extra` control node whose `extra_body` either contains `encrypted_content` or carries `type = "reasoning"`.
+
+SER-5. On streams, the transform MUST apply the following per canonical event:
+1. on a `NodeStart` whose `header.type = reasoning`, remove `encrypted_content` from the event's `extra_body`;
+2. on a `NodeStart` whose `header.type = next_downstream_envelope_extra` and whose `extra_body` carries reasoning-item state under SER-4, remove `encrypted_content` from the event's `extra_body`;
+3. on a `NodeDelta` whose `delta.type = reasoning`, clear `delta.encrypted`;
+4. on a `NodeDone` whose `node.type = reasoning`, apply SER-3 to `node`;
+5. on a `NodeDone` whose `node.type = next_downstream_envelope_extra` and whose `extra_body` carries reasoning-item state under SER-4, apply SER-4 to `node`;
+6. on a `ResponseDone`, apply SER-3 and SER-4 to every node in `output`.
+
+SER-6. The transform MUST preserve plaintext reasoning surfaces. Specifically, `Reasoning.content`, `Reasoning.summary`, `Reasoning.source`, and node-local `extra_body` keys other than `encrypted_content` MUST remain unchanged. On reasoning `NodeDelta`, fields `content`, `summary`, and `source` MUST remain unchanged.
+
+SER-7. The transform MUST be a no-op on `UrpData::Request`. Request-side stripping of replayed encrypted reasoning is governed by `spec/unified_responses_proxy.spec.md` PR4c.6 through PR4c.8 and is not the responsibility of this transform.
+
+SER-8. The transform MUST behave identically whether the encrypted payload it observes is an `mz2.` envelope string or a raw upstream encrypted reasoning value. PIPE-1d guarantees that when `reasoning_envelope_enabled = true`, only the envelope form is observable; this transform MUST NOT depend on that guarantee for correctness.
+
+SER-9. The motivating use case for SER-1 through SER-8 is downstream SSE clients that cannot tolerate single SSE `data:` lines exceeding their per-line buffer. Removing `encrypted_content` shrinks the per-line payload of `response.completed` and `response.output_item.added` events without changing other observable response semantics.
 
 ### 4.8 Response image transforms on flat ordinary nodes and stream state
 
@@ -555,15 +592,19 @@ PIPE-1. Non-stream and stream requests MUST execute in this order:
 3. route to provider and channel using waterfall plus fail-forward;
 4. set `request.model` to the selected upstream model name;
 5. if required, perform cross-family nested passthrough stripping under XSTRIP-3 through XSTRIP-8;
-6. apply provider request-phase transforms;
-7. apply global request-phase transforms configured in system settings;
-8. apply API-key request-phase transforms;
-9. encode URP v2 to the upstream wire payload using the selected upstream model name;
-10. decode the upstream response or stream into URP v2;
-11. apply provider response-phase transforms;
-12. apply global response-phase transforms configured in system settings;
-13. apply API-key response-phase transforms; and
-14. encode URP v2 to the downstream wire response using the original requested logical model name.
+6. unwrap any `mz2.` reasoning envelopes in `request.input` against the selected upstream provider type and upstream model under §7.2 of `spec/unified_responses_proxy.spec.md` (PR4c.6, PR4c.7, PR4c.8);
+7. apply provider request-phase transforms;
+8. apply global request-phase transforms configured in system settings;
+9. apply API-key request-phase transforms;
+10. encode URP v2 to the upstream wire payload using the selected upstream model name;
+11. decode the upstream response or stream into URP v2;
+12. wrap newly produced opaque encrypted reasoning payloads in `mz2.` envelopes under PR4c.3 through PR4c.5b of `spec/unified_responses_proxy.spec.md` when the API key has `reasoning_envelope_enabled = true`;
+13. apply provider response-phase transforms;
+14. apply global response-phase transforms configured in system settings;
+15. apply API-key response-phase transforms; and
+16. encode URP v2 to the downstream wire response using the original requested logical model name.
+
+PIPE-1d. Step 6 of PIPE-1 MUST run before any request-phase transform observes `request.input`. Step 12 of PIPE-1 MUST run before any response-phase transform observes `response.output` or canonical URP v2 stream events. The runtime MUST NOT expose unwrapped raw encrypted reasoning payloads to request-phase transforms, and MUST NOT expose un-enveloped encrypted reasoning payloads to response-phase transforms.
 
 PIPE-1a. For streaming requests that satisfy STR-9, the runtime MAY call the upstream non-stream endpoint for that attempt, decode to `UrpResponseV2`, apply response transforms, and emit synthesized downstream stream events. The postcondition is that transformed content remains visible on the stream path even when upstream native streaming is bypassed.
 

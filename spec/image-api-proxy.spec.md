@@ -85,7 +85,9 @@ IM3. The downstream Image API contract is non-streaming. Monoize MAY use either 
 
 IM4. All remaining fields from the request body → `UrpRequest.extra_body`. The fields `prompt`, `model`, and `n` MUST be excluded from `extra_body`.
 
-IM5. `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `response_format`, and `user` on the URP request MUST be left as `None`/absent. Monoize MUST NOT inject any `tools` or `tool_choice` values. Users who need specific tool injection (e.g. `image_generation` tool for OpenAI Responses upstream) MUST configure request-phase transforms on the provider or API key.
+IM5. `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `response_format`, and `user` on the URP request MUST be left as `None`/absent. Monoize MUST NOT inject any `tools` or `tool_choice` values at Image API request mapping time. Users who need specific tool injection (e.g. `image_generation` tool for OpenAI Responses upstream) MUST configure request-phase transforms on the provider or API key.
+
+IM5b. If the selected upstream provider is `provider_type = "responses"`, the Images API compatibility path SHOULD use a request-phase transform that inserts a Responses `image_generation` tool and forces a specific `tool_choice` for that tool. Without a forced tool choice, a text-capable Responses model MAY return only assistant text, which produces no Image API data item under §5.1.
 
 IM5a. If a routed upstream provider only surfaces generated image outputs on the streaming Responses event channel and omits them from the terminal non-streaming response body, Monoize MAY internally execute the sub-request as a streaming upstream request, collect the emitted URP stream events into a final `UrpResponse`, and continue response extraction from that collected `UrpResponse`.
 

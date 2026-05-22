@@ -35,6 +35,48 @@ mod image_generation_alias_tests {
             &mut state,
         );
 
-        assert!(events.is_empty());
+        assert!(matches!(events.as_slice(), [
+            UrpStreamEvent::NodeDelta {
+                delta: NodeDelta::ProviderItem { data },
+                extra_body,
+                ..
+            }
+        ] if data.is_null()
+            && extra_body.get("partial_image_index") == Some(&json!(0))
+            && extra_body.get("b64_json") == Some(&json!("AAAA"))));
+    }
+
+    #[test]
+    fn response_image_generation_call_partial_maps_to_provider_delta() {
+        let mut state = ResponsesStreamIndexState::default();
+        let events = map_responses_event_to_urp_events_with_state(
+            "response.image_generation_call.partial_image",
+            json!({
+                "type": "response.image_generation_call.partial_image",
+                "item_id": "ig_1",
+                "output_index": 2,
+                "partial_image_index": 1,
+                "partial_image_b64": "BBBB",
+                "sequence_number": 99
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+
+        assert!(matches!(events.as_slice(), [
+            UrpStreamEvent::NodeDelta {
+                node_index,
+                delta: NodeDelta::ProviderItem { data },
+                extra_body,
+                ..
+            }
+        ] if *node_index == 0
+            && data.is_null()
+            && extra_body.get("item_id") == Some(&json!("ig_1"))
+            && extra_body.get("output_index") == Some(&json!(2))
+            && extra_body.get("partial_image_index") == Some(&json!(1))
+            && extra_body.get("partial_image_b64") == Some(&json!("BBBB"))
+            && extra_body.get("provider_event_type") == Some(&json!("response.image_generation_call.partial_image"))
+            && !extra_body.contains_key("sequence_number")));
     }
 }

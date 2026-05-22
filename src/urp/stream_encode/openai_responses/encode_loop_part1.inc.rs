@@ -262,6 +262,18 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 extra_body,
                 ..
             } => {
+                if let urp::NodeDelta::ProviderItem { data } = &delta
+                    && let Some(downstream_event) = image_generation_call_downstream_event(&extra_body)
+                {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        &downstream_event,
+                        image_generation_call_event_payload(data, &extra_body),
+                    )
+                    .await?;
+                    continue;
+                }
                 if !node_states.contains_key(&node_index)
                     && let Some((output_item, synthesized_state)) =
                         synthesize_node_state_from_delta(node_index, &delta, &extra_body)
@@ -443,10 +455,10 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .await?;
                         function_args_delta_indices.insert(node_state.output_index);
                     }
+                    urp::NodeDelta::ProviderItem { .. } => {}
                     urp::NodeDelta::Image { .. }
                     | urp::NodeDelta::Audio { .. }
-                    | urp::NodeDelta::File { .. }
-                    | urp::NodeDelta::ProviderItem { .. } => {}
+                    | urp::NodeDelta::File { .. } => {}
                 }
             }
             UrpStreamEvent::NodeDone {
@@ -1238,6 +1250,43 @@ fn synthesize_node_state_from_delta(
             reasoning_started_at: Some(Instant::now()),
         },
     ))
+}
+
+fn image_generation_call_downstream_event(extra_body: &HashMap<String, Value>) -> Option<String> {
+    let event_type = extra_body
+        .get("provider_event_type")
+        .or_else(|| extra_body.get("type"))
+        .and_then(Value::as_str)?;
+    match event_type {
+        "image_generation.partial_image" | "response.image_generation.partial_image" => {
+            Some("response.image_generation_call.partial_image".to_string())
+        }
+        _ if event_type.starts_with("response.image_generation_call.") => {
+            Some(event_type.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn image_generation_call_event_payload(
+    data: &Value,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
+    let mut payload = match data {
+        Value::Object(map) => map.clone(),
+        Value::Null => Map::new(),
+        other => {
+            let mut map = Map::new();
+            map.insert("data".to_string(), other.clone());
+            map
+        }
+    };
+    for (key, value) in extra_body {
+        if key != "type" && key != "provider_event_type" && key != "sequence_number" {
+            payload.entry(key.clone()).or_insert(value.clone());
+        }
+    }
+    Value::Object(payload)
 }
 
 fn ordinary_role_to_str(role: urp::OrdinaryRole) -> &'static str {

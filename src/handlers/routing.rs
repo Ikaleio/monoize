@@ -647,33 +647,6 @@ pub(super) fn responses_stream_error_json(seq: u64, err: &AppError) -> Value {
     })
 }
 
-pub(super) fn error_to_sse_stream(
-    err: &AppError,
-    downstream: DownstreamProtocol,
-) -> impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>> + Send + 'static {
-    let error_json = openai_error_json(err);
-    let mut events: Vec<Event> = Vec::new();
-    match downstream {
-        DownstreamProtocol::Responses => {
-            let payload = responses_stream_error_json(1, err);
-            events.push(Event::default().event("error").data(payload.to_string()));
-        }
-        DownstreamProtocol::ChatCompletions => {
-            events.push(Event::default().data(error_json.to_string()));
-        }
-        DownstreamProtocol::AnthropicMessages => {
-            events.push(
-                Event::default().event("error").data(
-                    json!({"type": "error", "error": {"type": err.code, "message": err.message}})
-                        .to_string(),
-                ),
-            );
-        }
-    }
-    events.push(Event::default().data("[DONE]"));
-    futures_util::stream::iter(events.into_iter().map(Ok))
-}
-
 fn merge_extra_fields_whitelist(
     global: &std::collections::HashMap<String, Vec<String>>,
     provider_override: &Option<Vec<String>>,
