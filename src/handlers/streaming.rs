@@ -122,16 +122,6 @@ pub(super) async fn forward_stream_typed(
                 let provider = build_channel_provider_config(&attempt);
                 let path =
                     upstream_path_for_model(attempt.provider_type, &req_attempt.model, false);
-                log_outgoing_request_shape(
-                    request_id.as_deref(),
-                    &logical_model,
-                    &nonstream_req.model,
-                    attempt.provider_type,
-                    false,
-                    &path,
-                    &upstream_body,
-                    &nonstream_req,
-                );
                 let call = upstream::call_upstream_with_timeout_and_headers(
                     client_http(&state),
                     &provider,
@@ -408,16 +398,6 @@ pub(super) async fn forward_stream_typed(
                 encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
-            log_outgoing_request_shape(
-                request_id.as_deref(),
-                &logical_model,
-                &req_attempt.model,
-                attempt.provider_type,
-                true,
-                &path,
-                &upstream_body,
-                &req_attempt,
-            );
             let call = upstream::call_upstream_raw_with_timeout_and_headers(
                 client_http(&state),
                 &provider,
@@ -491,6 +471,12 @@ pub(super) async fn forward_stream_typed(
                     let tried_providers_for_log = tried_providers.clone();
                     let enable_estimated_billing =
                         state.monoize_runtime.read().await.enable_estimated_billing;
+                    let stream_idle_timeout_ms = state
+                        .monoize_runtime
+                        .read()
+                        .await
+                        .stream_idle_timeout_ms
+                        .max(1);
                     let state_for_transform = state.clone();
                     let provider_rules_for_transform = attempt.provider_transforms.clone();
                     let global_rules_for_transform = global_transforms.clone();
@@ -523,6 +509,7 @@ pub(super) async fn forward_stream_typed(
                                         decoded_tx,
                                         Some(started_at),
                                         Some(metrics),
+                                        stream_idle_timeout_ms,
                                     )
                                     .await
                                 })

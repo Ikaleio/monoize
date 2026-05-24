@@ -23,6 +23,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
     tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
 ) -> AppResult<()> {
     match provider_type {
         ProviderType::Responses => {
@@ -33,6 +34,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
                 tx,
                 started_at,
                 runtime_metrics,
+                idle_timeout_ms,
             )
             .await
         }
@@ -43,6 +45,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
                 tx,
                 started_at,
                 runtime_metrics,
+                idle_timeout_ms,
             )
             .await
         }
@@ -53,12 +56,20 @@ pub(crate) async fn stream_upstream_to_urp_events(
                 tx,
                 started_at,
                 runtime_metrics,
+                idle_timeout_ms,
             )
             .await
         }
         ProviderType::Gemini => {
-            gemini::stream_gemini_to_urp_events(urp, upstream_resp, tx, started_at, runtime_metrics)
-                .await
+            gemini::stream_gemini_to_urp_events(
+                urp,
+                upstream_resp,
+                tx,
+                started_at,
+                runtime_metrics,
+                idle_timeout_ms,
+            )
+            .await
         }
         ProviderType::OpenaiImage => {
             openai_image::stream_image_to_urp_events(
@@ -67,6 +78,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
                 tx,
                 started_at,
                 runtime_metrics,
+                idle_timeout_ms,
             )
             .await
         }
@@ -77,6 +89,7 @@ pub(crate) async fn stream_upstream_to_urp_events(
                 tx,
                 started_at,
                 runtime_metrics,
+                idle_timeout_ms,
             )
             .await
         }

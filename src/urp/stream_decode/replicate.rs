@@ -17,6 +17,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
     tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut started_response = false;
@@ -25,7 +26,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
     let mut had_error = false;
     let mut finish_reason: Option<FinishReason> = None;
 
-    let idle_timeout = std::time::Duration::from_secs(120);
+    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
 
     while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
@@ -34,7 +35,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
             AppError::new(
                 StatusCode::GATEWAY_TIMEOUT,
                 "upstream_idle_timeout",
-                "upstream stream idle for 120s without data",
+                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
             )
         })?
     {

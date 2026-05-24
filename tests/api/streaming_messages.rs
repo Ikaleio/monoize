@@ -748,6 +748,48 @@ async fn messages_stream_passthrough_from_messages_upstream() {
 }
 
 #[tokio::test]
+async fn messages_stream_passthrough_preserves_messages_upstream_error() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream error" }] }],
+            "stream": true,
+            "stream_mode": "messages_error"
+        }),
+    )
+    .await;
+    let events: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+
+    let error = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("error"))
+        .expect("messages upstream error should be forwarded as a Messages error event");
+    assert_eq!(
+        error["error"]["type"].as_str(),
+        Some("invalid_request_error"),
+        "error type must be preserved: {text}"
+    );
+    assert_eq!(
+        error["error"]["message"].as_str(),
+        Some("mock messages streaming error"),
+        "error message must be preserved: {text}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["type"].as_str() != Some("message_delta")
+                && event["type"].as_str() != Some("message_stop")),
+        "error stream must not synthesize a successful terminal message: {text}"
+    );
+}
+
+#[tokio::test]
 async fn messages_streaming_consumes_next_envelope_extra_exactly_once() {
     let ctx = setup().await;
     let events = collect_messages_stream_events(

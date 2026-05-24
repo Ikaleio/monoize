@@ -5,6 +5,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let created = now_ts();
@@ -39,7 +40,7 @@ pub(crate) async fn stream_responses_to_urp_events(
         })
         .await;
 
-    let idle_timeout = std::time::Duration::from_secs(120);
+    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
         .await
@@ -47,7 +48,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             AppError::new(
                 StatusCode::GATEWAY_TIMEOUT,
                 "upstream_idle_timeout",
-                "upstream stream idle for 120s without data",
+                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
             )
         })?
     {
@@ -108,14 +109,6 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if ev.event == "response.reasoning.delta" {
-            tracing::info!(
-                target: "monoize::urp::reasoning_trace",
-                event = %ev.event,
-                output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
-                item_id = data_val.get("item_id").and_then(|v| v.as_str()).unwrap_or(""),
-                has_text = data_val.get("delta").and_then(|v| v.as_str()).is_some_and(|v| !v.is_empty()),
-                "responses reasoning delta observed"
-            );
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -136,14 +129,6 @@ pub(crate) async fn stream_responses_to_urp_events(
             }
         }
         if ev.event == "response.reasoning_summary_text.delta" {
-            tracing::info!(
-                target: "monoize::urp::reasoning_trace",
-                event = %ev.event,
-                output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
-                item_id = data_val.get("item_id").and_then(|v| v.as_str()).unwrap_or(""),
-                has_text = data_val.get("delta").and_then(|v| v.as_str()).is_some_and(|v| !v.is_empty()),
-                "responses reasoning summary delta observed"
-            );
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
@@ -162,20 +147,6 @@ pub(crate) async fn stream_responses_to_urp_events(
         }
         if ev.event == "response.output_item.added" {
             let item = data_val.get("item").unwrap_or(&data_val);
-            if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
-                tracing::info!(
-                    target: "monoize::urp::reasoning_trace",
-                    event = %ev.event,
-                    output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
-                    item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or(""),
-                    encrypted_len = item
-                        .get("encrypted_content")
-                        .and_then(|v| v.as_str())
-                        .map(|v| v.len())
-                        .unwrap_or(0),
-                    "responses reasoning output item added"
-                );
-            }
             if let (Some(idx), Some(id)) = (
                 data_val.get("output_index").and_then(|v| v.as_u64()),
                 item.get("id").and_then(|v| v.as_str()),
@@ -293,21 +264,6 @@ pub(crate) async fn stream_responses_to_urp_events(
         }
         if ev.event == "response.output_item.done" {
             let item = data_val.get("item").unwrap_or(&data_val);
-            if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
-                tracing::info!(
-                    target: "monoize::urp::reasoning_trace",
-                    event = %ev.event,
-                    output_index = data_val.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0),
-                    item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or(""),
-                    encrypted_len = item
-                        .get("encrypted_content")
-                        .and_then(|v| v.as_str())
-                        .map(|v| v.len())
-                        .unwrap_or(0),
-                    text_len = item.get("text").and_then(|v| v.as_str()).map(|v| v.len()).unwrap_or(0),
-                    "responses reasoning output item done"
-                );
-            }
             if let (Some(idx), Some(id)) = (
                 data_val.get("output_index").and_then(|v| v.as_u64()),
                 item.get("id").and_then(|v| v.as_str()),

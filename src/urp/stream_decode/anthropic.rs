@@ -1,9 +1,10 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_messages_object,
-    record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
+    record_stream_done_sentinel, record_stream_terminal_error, record_stream_terminal_event,
+    record_stream_usage_if_present,
 };
-use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -50,13 +51,14 @@ pub(crate) async fn stream_messages_to_urp_events(
     tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut response_model = urp.model.clone();
     let mut response_extra = HashMap::new();
     let mut state = AnthropicMessagesStreamState::default();
 
-    let idle_timeout = std::time::Duration::from_secs(120);
+    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
         .await
@@ -64,7 +66,7 @@ pub(crate) async fn stream_messages_to_urp_events(
             AppError::new(
                 StatusCode::GATEWAY_TIMEOUT,
                 "upstream_idle_timeout",
-                "upstream stream idle for 120s without data",
+                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
             )
         })?
     {
@@ -92,6 +94,19 @@ pub(crate) async fn stream_messages_to_urp_events(
         .await;
 
         match data_val.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "error" => {
+                let (code, message, extra_body, terminal_error) =
+                    messages_stream_error_parts(&data_val);
+                let _ = tx
+                    .send(UrpStreamEvent::Error {
+                        code,
+                        message,
+                        extra_body,
+                    })
+                    .await;
+                record_stream_terminal_error(&runtime_metrics, "error", terminal_error).await;
+                return Ok(());
+            }
             "message_start" => {
                 let message = data_val.get("message").cloned().unwrap_or(Value::Null);
                 if let Some(id) = message.get("id").and_then(|v| v.as_str()) {
@@ -542,6 +557,59 @@ fn object_without_keys(value: &Value, ignored: &[&str]) -> HashMap<String, Value
         .filter(|(key, _)| !ignored.contains(&key.as_str()))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
+}
+
+fn messages_stream_error_parts(
+    data_val: &Value,
+) -> (
+    Option<String>,
+    String,
+    HashMap<String, Value>,
+    StreamTerminalError,
+) {
+    let error_value = data_val
+        .get("error")
+        .cloned()
+        .unwrap_or_else(|| data_val.clone());
+    let code = error_value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .or_else(|| error_value.get("code").and_then(|v| v.as_str()))
+        .or_else(|| data_val.get("code").and_then(|v| v.as_str()))
+        .map(str::to_string);
+    let message = error_value
+        .get("message")
+        .and_then(|v| v.as_str())
+        .or_else(|| data_val.get("message").and_then(|v| v.as_str()))
+        .unwrap_or_else(|| data_val.as_str().unwrap_or("upstream error"))
+        .to_string();
+    let param = error_value
+        .get("param")
+        .and_then(|v| v.as_str())
+        .or_else(|| data_val.get("param").and_then(|v| v.as_str()))
+        .map(str::to_string);
+    let http_status = error_value
+        .get("status")
+        .and_then(|v| v.as_u64())
+        .or_else(|| data_val.get("status").and_then(|v| v.as_u64()))
+        .filter(|status| (400..=599).contains(status))
+        .and_then(|status| u16::try_from(status).ok())
+        .unwrap_or(StatusCode::BAD_REQUEST.as_u16());
+    let mut extra_body = object_without_keys(&error_value, &["type", "code", "message", "param"]);
+    extra_body.extend(object_without_keys(
+        data_val,
+        &["type", "error", "code", "message", "param"],
+    ));
+    let terminal_error = StreamTerminalError {
+        code: code
+            .clone()
+            .unwrap_or_else(|| "upstream_stream_error".to_string()),
+        message: message.clone(),
+        http_status,
+        error_type: code.clone(),
+        param: param.clone(),
+    };
+    (code, message, extra_body, terminal_error)
 }
 
 fn map_finish_reason(reason: &str) -> Option<FinishReason> {

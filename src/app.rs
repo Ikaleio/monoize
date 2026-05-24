@@ -228,6 +228,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     monoize_runtime.active_probe_model = settings_snapshot.monoize_active_probe_model.clone();
     monoize_runtime.global_transforms = settings_snapshot.global_transforms.clone();
     monoize_runtime.request_timeout_ms = settings_snapshot.monoize_request_timeout_ms.max(1);
+    monoize_runtime.stream_idle_timeout_ms =
+        settings_snapshot.monoize_stream_idle_timeout_ms.max(1);
     monoize_runtime.enable_estimated_billing = settings_snapshot.monoize_enable_estimated_billing;
     monoize_runtime.extra_fields_whitelist =
         settings_snapshot.monoize_extra_fields_whitelist.clone();

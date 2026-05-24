@@ -178,6 +178,8 @@ DS42. Sidebar active navigation icons MAY use primary color as a low-area active
 
 DS43. Sidebar brand marks SHOULD use a neutral bordered surface rather than a solid primary chip.
 
+DS43a. In-app Monoize brand marks MUST render without an opaque dark or brand-colored plate inside the SVG. The M body MUST inherit `currentColor`. The red, orange, cyan, and celeste beam shapes MAY use fixed brand colors. Browser favicon assets MAY keep an opaque dark plate.
+
 DS44. Sidebar mobile sheet content SHOULD match the desktop sidebar surface and border treatment.
 
 DS45. Sidebar motion and floating-card layout MUST be preserved unless a separate product specification changes them.

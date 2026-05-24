@@ -59,13 +59,6 @@ pub async fn create_image_generation(
         extra_body: HashMap::new(),
     }];
 
-    tracing::info!(
-        model = %model,
-        n = n,
-        endpoint = "generations",
-        "image api request"
-    );
-
     let results = fan_out_subrequests(
         &state,
         &auth,
@@ -205,8 +198,6 @@ pub async fn create_image_edit(
     let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
 
-    let has_mask = mask_data.is_some();
-
     let mut inputs = Vec::new();
     inputs.push(urp::Node::Text {
         id: None,
@@ -246,14 +237,6 @@ pub async fn create_image_edit(
             extra_body: HashMap::new(),
         });
     }
-
-    tracing::info!(
-        model = %model,
-        n = n,
-        endpoint = "edits",
-        has_mask = has_mask,
-        "image api request"
-    );
 
     let results = fan_out_subrequests(
         &state,
@@ -560,16 +543,6 @@ async fn execute_stream_collected_image_typed(
             )?;
             let provider = build_channel_provider_config(&attempt);
             let path = upstream_path_for_model(attempt.provider_type, &req_attempt.model, true);
-            log_outgoing_request_shape(
-                request_id.as_deref(),
-                &logical_model,
-                &req_attempt.model,
-                attempt.provider_type,
-                true,
-                &path,
-                &upstream_body,
-                &req_attempt,
-            );
             let call = upstream::call_upstream_raw_with_timeout_and_headers(
                 client_http(state),
                 &provider,
@@ -611,6 +584,12 @@ async fn execute_stream_collected_image_typed(
                     let (transformed_tx, mut transformed_rx) =
                         mpsc::channel::<crate::urp::UrpStreamEvent>(64);
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
+                    let stream_idle_timeout_ms = state
+                        .monoize_runtime
+                        .read()
+                        .await
+                        .stream_idle_timeout_ms
+                        .max(1);
 
                     let decode_handle = {
                         let runtime_metrics = runtime_metrics.clone();
@@ -624,6 +603,7 @@ async fn execute_stream_collected_image_typed(
                                 decoded_tx,
                                 Some(started_at),
                                 Some(runtime_metrics),
+                                stream_idle_timeout_ms,
                             )
                             .await
                         })

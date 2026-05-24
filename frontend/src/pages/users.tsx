@@ -51,6 +51,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { DataTableShell, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { EmptyState } from "@/components/ui/empty-state";
+import { toast } from "sonner";
 
 const NANO_PER_USD = 1_000_000_000n;
 
@@ -99,10 +100,6 @@ const roleVariants = {
 };
 
 type Translator = (key: string) => string;
-
-function logOptimisticFlowRejection(flow: string, error: unknown) {
-  console.debug(`[UsersPage] ${flow} rejected after optimistic helper handling`, error);
-}
 
 function groupKey(value: string): string {
   return value.trim().toLowerCase();
@@ -297,8 +294,7 @@ export function UsersPage() {
         formData.password,
         formData.role,
         allowedGroups,
-        users,
-        (error) => console.error(t("users.failedCreate"), error)
+        users
       );
       setCreateOpen(false);
       setFormData({
@@ -311,7 +307,7 @@ export function UsersPage() {
         allowedGroups: [],
       });
     } catch (error) {
-      logOptimisticFlowRejection("create user", error);
+      toast.error(error instanceof Error ? error.message : t("users.failedCreate"));
     } finally {
       setSaving(false);
     }
@@ -364,8 +360,7 @@ export function UsersPage() {
       await updateUserOptimistic(
         editUser.id,
         updates,
-        users,
-        (error) => console.error(t("users.failedUpdate"), error)
+        users
       );
       setEditUser(null);
       setBalanceMode("set");
@@ -380,7 +375,7 @@ export function UsersPage() {
         allowedGroups: [],
       });
     } catch (error) {
-      logOptimisticFlowRejection("update user", error);
+      toast.error(error instanceof Error ? error.message : t("users.failedUpdate"));
     } finally {
       setSaving(false);
     }
@@ -391,11 +386,10 @@ export function UsersPage() {
       await updateUserOptimistic(
         user.id,
         { enabled: !user.enabled },
-        users,
-        (error) => console.error(t("users.failedUpdate"), error)
+        users
       );
     } catch (error) {
-      logOptimisticFlowRejection("toggle user enabled", error);
+      toast.error(error instanceof Error ? error.message : t("users.failedUpdate"));
     }
   };
 
@@ -408,11 +402,10 @@ export function UsersPage() {
     try {
       await deleteUserOptimistic(
         deleteTargetId,
-        users,
-        (error) => console.error(t("users.failedDelete"), error)
+        users
       );
     } catch (error) {
-      logOptimisticFlowRejection("delete user", error);
+      toast.error(error instanceof Error ? error.message : t("users.failedDelete"));
     } finally {
       setDeleteTargetId(null);
     }

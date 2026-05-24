@@ -32,6 +32,7 @@ pub(crate) async fn stream_chat_to_urp_events(
     tx: mpsc::Sender<UrpStreamEvent>,
     started_at: Option<std::time::Instant>,
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let mut output_text = String::new();
@@ -51,7 +52,7 @@ pub(crate) async fn stream_chat_to_urp_events(
     let mut tool_node_index_by_call_id: HashMap<String, u32> = HashMap::new();
     let mut finish_reason = None;
 
-    let idle_timeout = std::time::Duration::from_secs(120);
+    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
     while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
         .await
@@ -59,7 +60,7 @@ pub(crate) async fn stream_chat_to_urp_events(
             AppError::new(
                 StatusCode::GATEWAY_TIMEOUT,
                 "upstream_idle_timeout",
-                "upstream stream idle for 120s without data",
+                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
             )
         })?
     {

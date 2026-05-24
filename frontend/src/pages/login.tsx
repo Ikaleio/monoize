@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Layers3, Languages, Sun, Moon } from "lucide-react";
+import { Languages, Sun, Moon } from "lucide-react";
+import { MonoizeLogo } from "@/components/MonoizeLogo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -126,9 +127,9 @@ export function LoginPage() {
               whileHover={{ scale: 1.05, rotate: 5 }}
               whileTap={{ scale: 0.95 }}
               transition={{ type: "spring", stiffness: 400, damping: 17 }}
-              className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground"
+              className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border bg-background p-2 text-foreground"
             >
-              <Layers3 className="h-6 w-6" />
+              <MonoizeLogo className="h-full w-full" />
             </motion.div>
             <motion.div variants={itemVariants}>
               <CardTitle className="text-2xl">{siteName}</CardTitle>

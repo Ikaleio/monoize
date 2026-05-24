@@ -29,6 +29,7 @@ pub struct SystemSettings {
     pub monoize_passive_failure_rate_threshold: f64,
     pub monoize_passive_rate_limit_cooldown_seconds: u64,
     pub monoize_request_timeout_ms: u64,
+    pub monoize_stream_idle_timeout_ms: u64,
     pub monoize_enable_estimated_billing: bool,
     #[serde(default)]
     pub monoize_extra_fields_whitelist: HashMap<String, Vec<String>>,
@@ -113,6 +114,7 @@ impl Default for SystemSettings {
             monoize_passive_failure_rate_threshold: 0.6,
             monoize_passive_rate_limit_cooldown_seconds: 15,
             monoize_request_timeout_ms: 30000,
+            monoize_stream_idle_timeout_ms: 120000,
             monoize_enable_estimated_billing: true,
             monoize_extra_fields_whitelist: HashMap::new(),
             monoize_strip_cross_protocol_nested_extra: true,
@@ -226,6 +228,11 @@ impl SettingsStore {
         self.set_if_not_exists(
             "monoize_request_timeout_ms",
             &defaults.monoize_request_timeout_ms.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_stream_idle_timeout_ms",
+            &defaults.monoize_stream_idle_timeout_ms.to_string(),
         )
         .await?;
         self.set_if_not_exists(
@@ -408,6 +415,9 @@ impl SettingsStore {
                 "monoize_request_timeout_ms" => {
                     settings.monoize_request_timeout_ms = row.value.parse().unwrap_or(30000);
                 }
+                "monoize_stream_idle_timeout_ms" => {
+                    settings.monoize_stream_idle_timeout_ms = row.value.parse().unwrap_or(120000);
+                }
                 "monoize_enable_estimated_billing" => {
                     settings.monoize_enable_estimated_billing = row.value.parse().unwrap_or(true);
                 }
@@ -521,6 +531,11 @@ impl SettingsStore {
         self.set(
             "monoize_request_timeout_ms",
             &settings.monoize_request_timeout_ms.to_string(),
+        )
+        .await?;
+        self.set(
+            "monoize_stream_idle_timeout_ms",
+            &settings.monoize_stream_idle_timeout_ms.to_string(),
         )
         .await?;
         self.set(

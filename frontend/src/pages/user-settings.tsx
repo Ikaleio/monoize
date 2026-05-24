@@ -20,6 +20,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { setLanguage, getCurrentLanguage } from "@/i18n";
 import { updateMeOptimistic } from "@/lib/swr";
 import { getGravatarUrl } from "@/lib/utils";
+import { toast } from "sonner";
 
 export function UserSettingsPage() {
   const { t } = useTranslation();
@@ -51,16 +52,12 @@ export function UserSettingsPage() {
     setSavingEmail(true);
     try {
       const emailValue = email.trim() || null;
-      await updateMeOptimistic(
-        { email: emailValue },
-        user ?? undefined,
-        (error) => console.error("Failed to update email", error)
-      );
+      await updateMeOptimistic({ email: emailValue }, user ?? undefined);
       await refreshUser();
       setSavedEmail(true);
       setTimeout(() => setSavedEmail(false), 2000);
-    } catch {
-      // Error handled by optimistic update
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("common.error"));
     } finally {
       setSavingEmail(false);
     }

@@ -165,15 +165,13 @@ export function SettingsPage() {
     }
     setSaving(true);
     try {
-      await updateSettingsOptimistic(currentSettings, (error) => {
-        console.error(t("settings.failedSave"), error);
-      });
+      await updateSettingsOptimistic(currentSettings);
       setLocalSettings(null); // Clear local state to use SWR data
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       mutate();
-    } catch {
-      // Error already handled by optimistic update
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("settings.failedSave"));
     } finally {
       setSaving(false);
     }

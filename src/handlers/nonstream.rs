@@ -166,19 +166,15 @@ pub(super) async fn execute_nonstream_typed(
                 &req_attempt.model,
                 req_attempt.stream.unwrap_or(false),
             );
-            log_outgoing_request_shape(
-                request_id.as_deref(),
-                &logical_model,
-                &req_attempt.model,
-                attempt.provider_type,
-                req_attempt.stream.unwrap_or(false),
-                &path,
-                &upstream_body,
-                &req_attempt,
-            );
             let call_value = if req_attempt.stream == Some(true)
                 && supports_nonstream_upstream_stream_collection(attempt.provider_type)
             {
+                let stream_idle_timeout_ms = state
+                    .monoize_runtime
+                    .read()
+                    .await
+                    .stream_idle_timeout_ms
+                    .max(1);
                 let call = upstream::call_upstream_raw_with_timeout_and_headers(
                     client_http(state),
                     &provider,
@@ -197,6 +193,7 @@ pub(super) async fn execute_nonstream_typed(
                         upstream_resp,
                         started_at,
                         &logical_model,
+                        stream_idle_timeout_ms,
                     )
                     .await
                     {
@@ -499,6 +496,7 @@ async fn collect_streamed_upstream_response(
     upstream_resp: reqwest::Response,
     started_at: std::time::Instant,
     logical_model: &str,
+    stream_idle_timeout_ms: u64,
 ) -> AppResult<urp::UrpResponse> {
     let legacy = typed_request_to_legacy(req_attempt, max_multiplier)?;
     let pending_request_envelope_extra =
@@ -527,6 +525,7 @@ async fn collect_streamed_upstream_response(
                 decoded_tx,
                 Some(started_at),
                 Some(runtime_metrics),
+                stream_idle_timeout_ms,
             )
             .await
         })

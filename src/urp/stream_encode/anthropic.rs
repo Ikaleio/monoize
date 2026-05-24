@@ -92,19 +92,6 @@ impl PendingAnthropicBlock {
         saw_tool_use: &mut bool,
         sse_max_frame_length: Option<usize>,
     ) -> AppResult<()> {
-        if let AnthropicBlockPayload::Thinking {
-            signature, item_id, ..
-        } = &self.payload
-        {
-            tracing::info!(
-                target: "monoize::urp::reasoning_trace",
-                block_index = self.block_index,
-                item_id = item_id.as_deref().unwrap_or(""),
-                raw_signature_len = signature.as_ref().map(|s| s.len()).unwrap_or(0),
-                effective_signature_len = self.effective_signature().as_ref().map(|s| s.len()).unwrap_or(0),
-                "anthropic thinking block emit"
-            );
-        }
         let start = json!({
             "type": "content_block_start",
             "index": self.block_index,
@@ -934,7 +921,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 return Ok(());
             }
             UrpStreamEvent::Error { code, message, .. } => {
-                should_emit_terminal_message = true;
                 ensure_message_start(
                     &tx,
                     response_id.as_deref().unwrap_or("msg_mock"),
@@ -952,6 +938,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     }
                 });
                 send_named_messages_event(&tx, error).await?;
+                return Ok(());
             }
         }
     }

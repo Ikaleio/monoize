@@ -79,13 +79,6 @@ function dedupeAllowedGroups(values: string[]): string[] {
   return next;
 }
 
-function logHandledOptimisticError(action: string, error: unknown, details: Record<string, unknown>) {
-  console.debug(`[api-keys] ${action} failed after optimistic helper handling`, {
-    ...details,
-    error,
-  });
-}
-
 function requestCaptureBadgeVariant(mode: RequestCaptureMode): "secondary" | "outline" {
   return mode === "capture-only-abnormal" ? "secondary" : "outline";
 }
@@ -411,8 +404,7 @@ export function ApiKeysPage() {
       };
       const key = await createApiKeyOptimistic(
         input,
-        keys,
-        (error) => console.error(t("apiKeys.failedCreate"), error)
+        keys
       );
       setCreatedKey(key);
       resetCreateForm();
@@ -453,8 +445,7 @@ export function ApiKeysPage() {
       await updateApiKeyOptimistic(
         editKey.id,
         input,
-        keys,
-        (error) => console.error(t("apiKeys.failedUpdate"), error)
+        keys
       );
       setEditKey(null);
       resetCreateForm();
@@ -474,12 +465,11 @@ export function ApiKeysPage() {
     try {
       await deleteApiKeyOptimistic(
         deleteTargetId,
-        keys,
-        (error) => console.error(t("apiKeys.failedDelete"), error)
+        keys
       );
       setSelectedKeys(prev => prev.filter(k => k !== deleteTargetId));
     } catch (error) {
-      logHandledOptimisticError("delete api key", error, { id: deleteTargetId });
+      toast.error(error instanceof Error ? error.message : t("apiKeys.failedDelete"));
     } finally {
       setDeleteTargetId(null);
     }
@@ -494,15 +484,11 @@ export function ApiKeysPage() {
     try {
       await batchDeleteApiKeysOptimistic(
         selectedKeys,
-        keys,
-        (error) => console.error(t("apiKeys.failedBatchDelete"), error)
+        keys
       );
       setSelectedKeys([]);
     } catch (error) {
-      logHandledOptimisticError("batch delete api keys", error, {
-        count: selectedKeys.length,
-        ids: selectedKeys,
-      });
+      toast.error(error instanceof Error ? error.message : t("apiKeys.failedBatchDelete"));
     } finally {
       setBatchDeleteOpen(false);
     }
@@ -513,14 +499,10 @@ export function ApiKeysPage() {
       await updateApiKeyOptimistic(
         key.id,
         { enabled: !key.enabled },
-        keys,
-        (error) => console.error(t("apiKeys.failedUpdate"), error)
+        keys
       );
     } catch (error) {
-      logHandledOptimisticError("toggle api key enabled", error, {
-        id: key.id,
-        nextEnabled: !key.enabled,
-      });
+      toast.error(error instanceof Error ? error.message : t("apiKeys.failedUpdate"));
     }
   };
 

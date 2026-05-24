@@ -1951,6 +1951,25 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             .unwrap_or_else(serde_json::Map::new);
 
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_error") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(Event::default().data(
+                        json!({
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": "mock messages streaming error",
+                                "param": "messages",
+                                "status": 400
+                            }
+                        })
+                        .to_string(),
+                    )),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
             if tools_present && tool_results.is_empty() {
                 let mut events: Vec<Result<Event, Infallible>> = Vec::new();
                 events.push(Ok(Event::default().data(json!({

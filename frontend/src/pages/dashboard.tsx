@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { ChevronUp, ChevronDown } from "lucide-react";
+import { AlertTriangle, ChevronUp, ChevronDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ChartContainer,
@@ -182,7 +182,7 @@ export function DashboardPage() {
 
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
   const { data: stats, isLoading: statsLoading } = useStats();
-  const { isLoading: providersLoading } = useProviders({
+  const { error: providersError, isLoading: providersLoading } = useProviders({
     isPaused: () => !isAdmin,
     revalidateOnMount: isAdmin,
   });
@@ -410,6 +410,20 @@ export function DashboardPage() {
           description={tt("dashboard.subtitle", "Realtime overview of account status, usage and routing data")}
         />
       </motion.header>
+
+      {isAdmin && providersError ? (
+        <EmptyState
+          variant="card"
+          icon={<AlertTriangle className="h-8 w-8 text-destructive" />}
+          title={tt("dashboard.providersLoadFailed", "Failed to load providers")}
+          description={
+            <span className="font-mono text-xs break-all">
+              {providersError instanceof Error ? providersError.message : tt("common.error", "Error")}
+            </span>
+          }
+          className="shrink-0 py-4"
+        />
+      ) : null}
 
       <section className="shrink-0 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {overviewCards.map((card, index) => (

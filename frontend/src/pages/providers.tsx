@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import useSWR from 'swr'
-import { Plus, Server } from 'lucide-react'
+import { AlertTriangle, Plus, Server } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
 	AlertDialog,
@@ -34,7 +34,8 @@ import { DEFAULT_REASONING_SUFFIX_MAP } from './providers/shared'
 
 export function ProvidersPage() {
 	const { t } = useTranslation()
-	const { data: providers = [], isLoading } = useProviders()
+	const { data: providersData, error: providersError, isLoading, mutate: reloadProviders } = useProviders()
+	const providers = providersData ?? []
 	const { data: settings } = useSettings()
 	const { data: transformRegistry = [] } = useTransformRegistry()
 	const { data: modelMetadata = [] } = useSWR('model-metadata', () =>
@@ -111,6 +112,28 @@ export function ProvidersPage() {
 		return (
 			<PageWrapper className='space-y-6'>
 				<CardsPageSkeleton />
+			</PageWrapper>
+		)
+	}
+
+	if (providersError) {
+		const message = providersError instanceof Error ? providersError.message : t('common.error')
+		return (
+			<PageWrapper className='space-y-6'>
+				<motion.div
+					initial={{ opacity: 0, y: -10 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={transitions.normal}
+				>
+					<PageHeader title={t('providers.title')} description={t('providers.description')} />
+				</motion.div>
+				<EmptyState
+					variant='card'
+					icon={<AlertTriangle className='h-12 w-12 text-destructive' />}
+					title={t('providers.loadFailed', { defaultValue: 'Failed to load providers' })}
+					description={<span className='font-mono text-xs break-all'>{message}</span>}
+					action={<Button variant='outline' onClick={() => void reloadProviders()}>{t('common.retry', { defaultValue: 'Retry' })}</Button>}
+				/>
 			</PageWrapper>
 		)
 	}

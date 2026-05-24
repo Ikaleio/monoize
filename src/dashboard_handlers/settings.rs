@@ -32,6 +32,7 @@ pub struct UpdateSettingsRequest {
     pub monoize_passive_failure_rate_threshold: Option<f64>,
     pub monoize_passive_rate_limit_cooldown_seconds: Option<u64>,
     pub monoize_request_timeout_ms: Option<u64>,
+    pub monoize_stream_idle_timeout_ms: Option<u64>,
     pub monoize_enable_estimated_billing: Option<bool>,
     pub monoize_extra_fields_whitelist: Option<std::collections::HashMap<String, Vec<String>>>,
     pub monoize_strip_cross_protocol_nested_extra: Option<bool>,
@@ -138,6 +139,9 @@ pub async fn update_settings(
     if let Some(v) = body.monoize_request_timeout_ms {
         settings.monoize_request_timeout_ms = v.max(1);
     }
+    if let Some(v) = body.monoize_stream_idle_timeout_ms {
+        settings.monoize_stream_idle_timeout_ms = v.max(1);
+    }
     if let Some(v) = body.monoize_enable_estimated_billing {
         settings.monoize_enable_estimated_billing = v;
     }
@@ -167,6 +171,7 @@ pub async fn update_settings(
     {
         let mut rt = state.monoize_runtime.write().await;
         rt.request_timeout_ms = updated.monoize_request_timeout_ms.max(1);
+        rt.stream_idle_timeout_ms = updated.monoize_stream_idle_timeout_ms.max(1);
         rt.enable_estimated_billing = updated.monoize_enable_estimated_billing;
         rt.passive_failure_count_threshold = updated.monoize_passive_failure_threshold.max(1);
         rt.passive_cooldown_seconds = updated.monoize_passive_cooldown_seconds.max(1);

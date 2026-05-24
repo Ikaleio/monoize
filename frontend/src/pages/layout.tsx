@@ -8,7 +8,6 @@ import {
   Server,
   LogOut,
   Menu,
-  Layers3,
   Sun,
   Moon,
   Monitor,
@@ -35,6 +34,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { cn, getGravatarUrl } from "@/lib/utils";
+import { MonoizeLogo } from "@/components/MonoizeLogo";
 
 const navTransition = {
   type: "spring",
@@ -128,9 +128,9 @@ function Sidebar({ onNavigate, layoutId = "nav-active", disableLayoutAnimation =
           whileHover={{ scale: 1.05, rotate: 5 }}
           whileTap={{ scale: 0.95 }}
           transition={{ type: "spring", stiffness: 400, damping: 17 }}
-          className="flex h-8 w-8 items-center justify-center rounded-md border bg-background text-foreground"
+          className="flex h-8 w-8 items-center justify-center rounded-md border bg-background p-1 text-foreground"
         >
-          <Layers3 className="h-4 w-4" />
+          <MonoizeLogo className="h-full w-full" />
         </motion.div>
         <div className="leading-tight">
           <p className="text-sm font-semibold">Monoize</p>
