@@ -198,7 +198,7 @@ fn decode_item_from_value(item: &Value) -> Item {
                 .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
             role: Role::Assistant,
             parts: vec![decode_part_from_value(item)],
-            extra_body: HashMap::new(),
+            extra_body: item_extra_body_from_value(item),
         },
         other => Item::Message {
             id: item
@@ -325,4 +325,3 @@ fn decode_part_from_value(part: &Value) -> Part {
         },
     }
 }
-

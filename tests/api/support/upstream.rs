@@ -127,6 +127,108 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             }
 
             if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("image_generation_completed_snapshot_only")
+                && tool_outputs.is_empty()
+                && image_generation_tool
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": [{
+                                        "type": "image_generation_call",
+                                        "id": "ig_mock",
+                                        "result": image_b64,
+                                        "output_format": "webp"
+                                    }]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("image_generation_item_done_and_completed_snapshot")
+                && tool_outputs.is_empty()
+                && image_generation_tool
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.done").data(
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "image_generation_call",
+                                    "id": "ig_mock",
+                                    "result": image_b64,
+                                    "output_format": "webp"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.done").data(
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": 1,
+                                "item": {
+                                    "type": "message",
+                                    "id": "msg_empty",
+                                    "role": "assistant",
+                                    "content": [{ "type": "output_text", "text": "" }]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": [
+                                        {
+                                            "type": "image_generation_call",
+                                            "id": "ig_mock",
+                                            "result": image_b64,
+                                            "output_format": "webp"
+                                        },
+                                        {
+                                            "type": "message",
+                                            "id": "msg_empty",
+                                            "role": "assistant",
+                                            "content": [{ "type": "output_text", "text": "" }]
+                                        }
+                                    ]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str())
                 == Some("image_generation_partial")
                 && tool_outputs.is_empty()
                 && image_generation_tool

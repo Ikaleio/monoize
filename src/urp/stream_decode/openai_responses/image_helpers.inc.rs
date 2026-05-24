@@ -10,6 +10,7 @@ fn image_node_from_image_generation_payload(payload: &Value) -> Option<Node> {
     let data = payload
         .get("b64_json")
         .or_else(|| payload.get("result"))
+        .or_else(|| payload.get("partial_image_b64"))
         .and_then(|value| value.as_str())?
         .trim();
     if data.is_empty() {
@@ -38,6 +39,7 @@ fn image_node_from_image_generation_payload(payload: &Value) -> Option<Node> {
                 "id",
                 "b64_json",
                 "result",
+                "partial_image_b64",
                 "output_format",
                 "partial_image_index",
             ],
@@ -66,6 +68,24 @@ fn map_image_generation_call_event(
     index_state: &mut ResponsesStreamIndexState,
 ) -> Vec<UrpStreamEvent> {
     let node_index = index_state.synthetic_node_index_for_output(output_index);
+    if data_val.get("type").and_then(Value::as_str)
+        == Some("response.image_generation_call.partial_image")
+    {
+        if let Some(node) = image_node_from_image_generation_payload(&data_val) {
+            let extra_body = image_generation_call_event_extra_body(data_val);
+            return vec![UrpStreamEvent::NodeDelta {
+                node_index,
+                delta: NodeDelta::Image {
+                    source: match node {
+                        Node::Image { source, .. } => source,
+                        _ => unreachable!(),
+                    },
+                },
+                usage: None,
+                extra_body,
+            }];
+        }
+    }
     vec![UrpStreamEvent::NodeDelta {
         node_index,
         delta: NodeDelta::ProviderItem {

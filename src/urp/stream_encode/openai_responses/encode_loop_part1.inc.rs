@@ -262,6 +262,19 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 extra_body,
                 ..
             } => {
+                if let urp::NodeDelta::Image { source } = &delta
+                    && let Some(downstream_event) =
+                        image_generation_call_downstream_event(&extra_body)
+                {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        &downstream_event,
+                        image_generation_call_image_event_payload(source, &extra_body),
+                    )
+                    .await?;
+                    continue;
+                }
                 if let urp::NodeDelta::ProviderItem { data } = &delta
                     && let Some(downstream_event) = image_generation_call_downstream_event(&extra_body)
                 {
@@ -1284,6 +1297,24 @@ fn image_generation_call_event_payload(
     for (key, value) in extra_body {
         if key != "type" && key != "provider_event_type" && key != "sequence_number" {
             payload.entry(key.clone()).or_insert(value.clone());
+        }
+    }
+    Value::Object(payload)
+}
+
+fn image_generation_call_image_event_payload(
+    source: &urp::ImageSource,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
+    let mut payload = Map::new();
+    for (key, value) in extra_body {
+        if key != "type" && key != "provider_event_type" && key != "sequence_number" {
+            payload.insert(key.clone(), value.clone());
+        }
+    }
+    if !payload.contains_key("partial_image_b64") {
+        if let urp::ImageSource::Base64 { data, .. } = source {
+            payload.insert("partial_image_b64".to_string(), Value::String(data.clone()));
         }
     }
     Value::Object(payload)

@@ -292,6 +292,134 @@ async fn image_generations_collects_streamed_responses_image_output() {
 }
 
 #[tokio::test]
+async fn responses_nonstream_collects_completed_snapshot_image_generation_result() {
+    let ctx = setup().await;
+    let (upstream_addr, _, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+    let mut models = HashMap::new();
+    models.insert(
+        "gpt-image-test".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: Some("gpt-5-mini".to_string()),
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "fisx-style-image-test".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
+            models,
+            api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
+                pattern: "gpt-image-test".to_string(),
+                api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+            }],
+            groups: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("fisx-style-image-test-ch".to_string()),
+                name: "fisx-style-image-test-ch".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            transforms: vec![monoize::transforms::TransformRuleConfig {
+                transform: "enable_openai_image_generation_tool".to_string(),
+                enabled: true,
+                models: Some(vec!["gpt-image-test".to_string()]),
+                phase: monoize::transforms::Phase::Request,
+                config: json!({
+                    "output_format": "webp",
+                    "force_stream": true,
+                    "force_tool_choice": true
+                }),
+            }],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .expect("create fisx-style provider");
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-image-test",
+            "input": "draw a cat",
+            "stream_mode": "image_generation_completed_snapshot_only"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let output = v["output"].as_array().expect("output array");
+    let image = output
+        .iter()
+        .find_map(|item| item["content"].as_array())
+        .and_then(|content| {
+            content
+                .iter()
+                .find(|part| part["type"].as_str() == Some("output_image"))
+        })
+        .expect("output image from completed snapshot");
+    assert_eq!(image["source"]["media_type"].as_str(), Some("image/webp"));
+    assert!(
+        image["source"]["data"]
+            .as_str()
+            .is_some_and(|data| !data.is_empty()),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn responses_nonstream_dedupes_streamed_image_generation_item_against_completed_snapshot() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": "draw a cat",
+            "tools": [{ "type": "image_generation", "output_format": "webp" }],
+            "stream_mode": "image_generation_item_done_and_completed_snapshot"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let output = v["output"].as_array().expect("output array");
+    let image_count = output
+        .iter()
+        .flat_map(|item| item["content"].as_array().into_iter().flatten())
+        .filter(|part| part["type"].as_str() == Some("output_image"))
+        .count();
+    let text_count = output
+        .iter()
+        .flat_map(|item| item["content"].as_array().into_iter().flatten())
+        .filter(|part| part["type"].as_str() == Some("output_text"))
+        .count();
+
+    assert_eq!(image_count, 1, "{body}");
+    assert_eq!(text_count, 0, "{body}");
+}
+
+#[tokio::test]
 async fn image_edits_forwards_base64_images_as_data_urls_to_responses_upstream() {
     let ctx = setup().await;
     let boundary = "----monoize-edit-test";

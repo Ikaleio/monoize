@@ -884,6 +884,116 @@ impl Node {
     }
 }
 
+pub fn node_is_empty_text(node: &Node) -> bool {
+    matches!(node, Node::Text { content, .. } if content.is_empty())
+}
+
+pub fn nodes_semantically_match(left: &Node, right: &Node) -> bool {
+    match (left, right) {
+        (
+            Node::Text {
+                id: left_id,
+                role: left_role,
+                phase: left_phase,
+                content: left_content,
+                ..
+            },
+            Node::Text {
+                id: right_id,
+                role: right_role,
+                phase: right_phase,
+                content: right_content,
+                ..
+            },
+        ) => {
+            (left_id.is_some() && left_id == right_id)
+                || (left_role == right_role
+                    && left_phase == right_phase
+                    && left_content == right_content)
+        }
+        (
+            Node::Image {
+                id: left_id,
+                source: left_source,
+                ..
+            },
+            Node::Image {
+                id: right_id,
+                source: right_source,
+                ..
+            },
+        ) => (left_id.is_some() && left_id == right_id) || left_source == right_source,
+        (Node::Audio { id: left_id, .. }, Node::Audio { id: right_id, .. })
+        | (Node::File { id: left_id, .. }, Node::File { id: right_id, .. })
+        | (Node::Refusal { id: left_id, .. }, Node::Refusal { id: right_id, .. })
+        | (Node::ProviderItem { id: left_id, .. }, Node::ProviderItem { id: right_id, .. }) => {
+            left_id.is_some() && left_id == right_id
+        }
+        (
+            Node::Reasoning {
+                id: left_id,
+                content: left_content,
+                encrypted: left_encrypted,
+                summary: left_summary,
+                source: left_source,
+                extra_body: left_extra_body,
+            },
+            Node::Reasoning {
+                id: right_id,
+                content: right_content,
+                encrypted: right_encrypted,
+                summary: right_summary,
+                source: right_source,
+                extra_body: right_extra_body,
+            },
+        ) => {
+            (left_id.is_some() && left_id == right_id)
+                || (left_content == right_content
+                    && left_encrypted == right_encrypted
+                    && left_summary == right_summary
+                    && left_source == right_source
+                    && left_extra_body == right_extra_body)
+        }
+        (
+            Node::ToolCall {
+                id: left_id,
+                call_id: left_call_id,
+                ..
+            },
+            Node::ToolCall {
+                id: right_id,
+                call_id: right_call_id,
+                ..
+            },
+        )
+        | (
+            Node::ToolResult {
+                id: left_id,
+                call_id: left_call_id,
+                ..
+            },
+            Node::ToolResult {
+                id: right_id,
+                call_id: right_call_id,
+                ..
+            },
+        ) => left_call_id == right_call_id || (left_id.is_some() && left_id == right_id),
+        _ => left == right,
+    }
+}
+
+pub fn push_unique_node(output: &mut Vec<Node>, node: Node) {
+    if node_is_empty_text(&node) {
+        return;
+    }
+    if !output
+        .iter()
+        .any(|candidate| nodes_semantically_match(candidate, &node))
+    {
+        output.push(node);
+    }
+}
+
 pub fn strip_nested_extra_body(nodes: &mut Vec<Node>) {
     for node in nodes.iter_mut() {
         match node {

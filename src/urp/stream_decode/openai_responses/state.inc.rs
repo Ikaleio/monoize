@@ -212,12 +212,14 @@ fn map_output_item_done(
                     )
                 });
                 let node_index = index_state.synthetic_node_index_for_output(output_index);
-                events.push(UrpStreamEvent::NodeDone {
-                    node_index,
-                    node,
-                    usage: None,
-                    extra_body: part_extra_body_from_value(item),
-                });
+                if !node_is_empty_text(&node) {
+                    events.push(UrpStreamEvent::NodeDone {
+                        node_index,
+                        node,
+                        usage: None,
+                        extra_body: part_extra_body_from_value(item),
+                    });
+                }
             }
         }
     }
@@ -230,104 +232,24 @@ fn merge_response_completed_outputs(
     accumulated_outputs: &[Node],
 ) -> Vec<Node> {
     if accumulated_outputs.is_empty() {
-        return terminal_outputs;
+        let mut merged = Vec::new();
+        for terminal in terminal_outputs {
+            push_unique_node(&mut merged, terminal);
+        }
+        return merged;
     }
 
     let mut merged = accumulated_outputs.to_vec();
     for terminal in terminal_outputs {
         if let Some(index) = merged
             .iter()
-            .position(|candidate| response_completed_nodes_match(candidate, &terminal))
+            .position(|candidate| nodes_semantically_match(candidate, &terminal))
         {
             merged[index] = terminal;
-        } else {
+        } else if !node_is_empty_text(&terminal) {
             merged.push(terminal);
         }
     }
 
     merged
 }
-
-fn response_completed_nodes_match(left: &Node, right: &Node) -> bool {
-    match (left, right) {
-        (
-            Node::Text {
-                id: left_id,
-                role: left_role,
-                phase: left_phase,
-                content: left_content,
-                ..
-            },
-            Node::Text {
-                id: right_id,
-                role: right_role,
-                phase: right_phase,
-                content: right_content,
-                ..
-            },
-        ) => {
-            (left_id.is_some() && left_id == right_id)
-                || (left_role == right_role
-                    && left_phase == right_phase
-                    && left_content == right_content)
-        }
-        (Node::Image { id: left_id, .. }, Node::Image { id: right_id, .. })
-        | (Node::Audio { id: left_id, .. }, Node::Audio { id: right_id, .. })
-        | (Node::File { id: left_id, .. }, Node::File { id: right_id, .. })
-        | (Node::Refusal { id: left_id, .. }, Node::Refusal { id: right_id, .. })
-        | (Node::ProviderItem { id: left_id, .. }, Node::ProviderItem { id: right_id, .. }) => {
-            left_id.is_some() && left_id == right_id
-        }
-        (
-            Node::Reasoning {
-                id: left_id,
-                content: left_content,
-                encrypted: left_encrypted,
-                summary: left_summary,
-                source: left_source,
-                extra_body: left_extra_body,
-            },
-            Node::Reasoning {
-                id: right_id,
-                content: right_content,
-                encrypted: right_encrypted,
-                summary: right_summary,
-                source: right_source,
-                extra_body: right_extra_body,
-            },
-        ) => {
-            (left_id.is_some() && left_id == right_id)
-                || (left_content == right_content
-                    && left_encrypted == right_encrypted
-                    && left_summary == right_summary
-                    && left_source == right_source
-                    && left_extra_body == right_extra_body)
-        }
-        (
-            Node::ToolCall {
-                id: left_id,
-                call_id: left_call_id,
-                ..
-            },
-            Node::ToolCall {
-                id: right_id,
-                call_id: right_call_id,
-                ..
-            },
-        )
-        | (
-            Node::ToolResult {
-                id: left_id,
-                call_id: left_call_id,
-                ..
-            },
-            Node::ToolResult {
-                id: right_id,
-                call_id: right_call_id,
-                ..
-            },
-        ) => left_call_id == right_call_id || (left_id.is_some() && left_id == right_id),
-        _ => false,
-    }
-}
-

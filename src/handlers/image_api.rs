@@ -655,10 +655,8 @@ async fn execute_stream_collected_image_typed(
                     while let Some(event) = transformed_rx.recv().await {
                         match event {
                             crate::urp::UrpStreamEvent::NodeDone { node, .. } => {
-                                if matches!(node, urp::Node::Image { .. })
-                                    && !fallback_output.contains(&node)
-                                {
-                                    fallback_output.push(node);
+                                if matches!(node, urp::Node::Image { .. }) {
+                                    crate::urp::push_unique_node(&mut fallback_output, node);
                                 }
                             }
                             crate::urp::UrpStreamEvent::ResponseDone {
@@ -670,10 +668,8 @@ async fn execute_stream_collected_image_typed(
                                 if output.is_empty() && !fallback_output.is_empty() {
                                     output = fallback_output.clone();
                                 } else {
-                                    for node in &fallback_output {
-                                        if !output.contains(node) {
-                                            output.push(node.clone());
-                                        }
+                                    for node in fallback_output.iter().cloned() {
+                                        crate::urp::push_unique_node(&mut output, node);
                                     }
                                 }
                                 final_response = Some(urp::UrpResponse {

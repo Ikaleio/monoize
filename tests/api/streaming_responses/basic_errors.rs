@@ -91,6 +91,56 @@ async fn responses_streaming_image_generation_completed_emits_output_image() {
 }
 
 #[tokio::test]
+async fn responses_streaming_completed_snapshot_image_generation_emits_output_image() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":"generate image",
+                "tools":[{"type":"image_generation","output_format":"webp"}],
+                "stream": true,
+                "stream_mode": "image_generation_completed_snapshot_only"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(
+        frames.iter().any(|(event, payload)| {
+            event == "response.completed"
+                && payload["response"]["output"]
+                    .as_array()
+                    .is_some_and(|output| {
+                        output.iter().any(|item| {
+                            item["type"].as_str() == Some("message")
+                                && item["content"].as_array().is_some_and(|content| {
+                                    content.iter().any(|part| {
+                                        part["type"].as_str() == Some("output_image")
+                                            && part["source"]["media_type"].as_str()
+                                                == Some("image/webp")
+                                            && part["source"]["data"]
+                                                .as_str()
+                                                .is_some_and(|data| !data.is_empty())
+                                    })
+                                })
+                        })
+                    })
+        }),
+        "{text}"
+    );
+}
+
+#[tokio::test]
 async fn responses_streaming_reconstructs_phase_from_output_item_done() {
     let ctx = setup().await;
     let req = Request::builder()

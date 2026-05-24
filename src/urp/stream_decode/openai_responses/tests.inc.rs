@@ -66,17 +66,58 @@ mod image_generation_alias_tests {
         assert!(matches!(events.as_slice(), [
             UrpStreamEvent::NodeDelta {
                 node_index,
-                delta: NodeDelta::ProviderItem { data },
+                delta: NodeDelta::Image {
+                    source: crate::urp::ImageSource::Base64 { media_type, data },
+                },
                 extra_body,
                 ..
             }
         ] if *node_index == 0
-            && data.is_null()
+            && media_type == "image/png"
+            && data == "BBBB"
             && extra_body.get("item_id") == Some(&json!("ig_1"))
             && extra_body.get("output_index") == Some(&json!(2))
             && extra_body.get("partial_image_index") == Some(&json!(1))
-            && extra_body.get("partial_image_b64") == Some(&json!("BBBB"))
             && extra_body.get("provider_event_type") == Some(&json!("response.image_generation_call.partial_image"))
             && !extra_body.contains_key("sequence_number")));
+    }
+
+    #[test]
+    fn response_completed_snapshot_image_generation_call_maps_to_image_node() {
+        let mut state = ResponsesStreamIndexState::default();
+        let events = map_responses_event_to_urp_events_with_state(
+            "response.completed",
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "object": "response",
+                    "created_at": 0,
+                    "model": "gpt-5.4-mini",
+                    "status": "completed",
+                    "output": [{
+                        "type": "image_generation_call",
+                        "id": "ig_1",
+                        "result": "QUJD",
+                        "output_format": "webp"
+                    }]
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+
+        assert!(matches!(events.as_slice(), [
+            UrpStreamEvent::ResponseDone {
+                output,
+                ..
+            }
+        ] if matches!(output.as_slice(), [
+            Node::Image {
+                id: Some(id),
+                source: crate::urp::ImageSource::Base64 { media_type, data },
+                ..
+            }
+        ] if id == "ig_1" && media_type == "image/webp" && data == "QUJD")));
     }
 }

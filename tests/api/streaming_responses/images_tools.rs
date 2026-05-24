@@ -32,6 +32,7 @@ async fn responses_streaming_preserves_image_generation_partial_image_events() {
     assert_eq!(partial.1["output_index"].as_u64(), Some(0));
     assert_eq!(partial.1["partial_image_index"].as_u64(), Some(0));
     assert_eq!(partial.1["partial_image_b64"].as_str(), Some("QUJD"));
+    assert_eq!(partial.1["output_format"].as_str(), Some("png"));
     assert_eq!(
         partial.1["type"].as_str(),
         Some("response.image_generation_call.partial_image")

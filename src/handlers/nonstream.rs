@@ -538,9 +538,7 @@ async fn collect_streamed_upstream_response(
     while let Some(event) = decoded_rx.recv().await {
         match event {
             crate::urp::UrpStreamEvent::NodeDone { node, .. } => {
-                if !fallback_output.contains(&node) {
-                    fallback_output.push(node);
-                }
+                crate::urp::push_unique_node(&mut fallback_output, node);
             }
             crate::urp::UrpStreamEvent::ResponseDone {
                 finish_reason,
@@ -551,10 +549,8 @@ async fn collect_streamed_upstream_response(
                 if output.is_empty() && !fallback_output.is_empty() {
                     output = fallback_output.clone();
                 } else {
-                    for node in &fallback_output {
-                        if !output.contains(node) {
-                            output.push(node.clone());
-                        }
+                    for node in fallback_output.iter().cloned() {
+                        crate::urp::push_unique_node(&mut output, node);
                     }
                 }
                 final_response = Some(urp::UrpResponse {

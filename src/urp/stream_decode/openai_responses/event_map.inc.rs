@@ -8,12 +8,15 @@ fn nodes_from_item_value(item: &Value) -> Vec<Node> {
         } => {
             let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
             let mut nodes = Vec::new();
-            for (index, part) in parts.into_iter().enumerate() {
+            for part in parts {
+                if matches!(&part, Part::Text { content, .. } if content.is_empty()) {
+                    continue;
+                }
                 let mut node = part.into_node(ordinary_role);
-                if index == 0 && !extra_body.is_empty() {
+                if nodes.is_empty() && !extra_body.is_empty() {
                     node.extra_body_mut().extend(extra_body.clone());
                 }
-                if index == 0 {
+                if nodes.is_empty() {
                     node.set_id(id.clone());
                 }
                 nodes.push(node);
