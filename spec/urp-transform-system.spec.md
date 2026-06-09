@@ -545,7 +545,7 @@ SSF-1. Phase: response only.
 
 SSF-2. Config MAY contain `max_frame_length` as an integer. Default value is `131072`.
 
-SSF-3. If a streaming request matches at least one enabled `split_sse_frames` response rule, the runtime MUST execute the request through the buffered synthetic stream path.
+SSF-3. If a streaming request matches at least one enabled `split_sse_frames` response rule, the runtime MUST keep the selected native downstream stream encoder path. The transform MUST NOT require or force the buffered synthetic stream path solely to split SSE frames.
 
 SSF-4. The transform affects only downstream SSE emitted by Monoize.
 
@@ -553,7 +553,7 @@ SSF-5. Non-stream requests remain semantically unchanged.
 
 SSF-6. The transform MUST preserve downstream protocol correctness for Responses, Chat Completions, and Anthropic Messages SSE output.
 
-SSF-7. The transform MUST split oversized string-bearing delta payloads into multiple smaller downstream SSE events of the same downstream protocol event kind, in original order, such that downstream concatenation reconstructs the original logical content.
+SSF-7. The transform MUST split oversized string-bearing delta payloads into multiple smaller downstream SSE events of the same downstream protocol event kind, in original order, such that downstream concatenation reconstructs the original logical content. Split decisions MUST use the exact serialized downstream SSE `data:` line length after JSON string escaping and after adding the literal `data: ` prefix.
 
 SSF-8. Eligible split targets include text deltas, reasoning deltas, opaque reasoning signature or encrypted deltas, and tool-argument deltas.
 

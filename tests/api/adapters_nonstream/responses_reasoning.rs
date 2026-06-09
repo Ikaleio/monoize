@@ -476,6 +476,130 @@ async fn image_edits_forwards_base64_images_as_data_urls_to_responses_upstream()
 }
 
 #[tokio::test]
+async fn image_generations_to_openai_image_use_json_generations_endpoint() {
+    let ctx = setup().await;
+    let (upstream_addr, _, captured_bodies) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+    create_test_provider(
+        &ctx.state,
+        "openai-image-generation-test",
+        monoize::monoize_routing::MonoizeProviderType::OpenaiImage,
+        "gpt-image-route-test",
+        &base_url,
+        "upstream-key",
+    )
+    .await;
+    seed_test_model_pricing(&ctx.state, &["gpt-image-route-test"]).await;
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/images/generations",
+        json!({
+            "model": "gpt-image-route-test",
+            "prompt": "draw a cat",
+            "size": "1024x1024"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "image_generations")
+        .map(|(_, body)| body.clone())
+        .expect("image generations upstream body");
+    assert_eq!(upstream["model"].as_str(), Some("gpt-image-route-test"));
+    assert_eq!(upstream["prompt"].as_str(), Some("draw a cat"));
+    assert_eq!(upstream["size"].as_str(), Some("1024x1024"));
+    assert!(
+        captured_bodies
+            .lock()
+            .expect("captured bodies lock")
+            .iter()
+            .all(|(endpoint, _)| endpoint != "image_edits")
+    );
+}
+
+#[tokio::test]
+async fn image_edits_to_openai_image_use_multipart_edits_endpoint_with_image_bytes() {
+    let ctx = setup().await;
+    let (upstream_addr, _, captured_bodies) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+    create_test_provider(
+        &ctx.state,
+        "openai-image-edit-test",
+        monoize::monoize_routing::MonoizeProviderType::OpenaiImage,
+        "gpt-image-edit-route-test",
+        &base_url,
+        "upstream-key",
+    )
+    .await;
+    seed_test_model_pricing(&ctx.state, &["gpt-image-edit-route-test"]).await;
+
+    let boundary = "----monoize-openai-image-edit-test";
+    let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
+    let mask_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
+    let image = base64::engine::general_purpose::STANDARD
+        .decode(image_b64)
+        .unwrap();
+    let mask = base64::engine::general_purpose::STANDARD
+        .decode(mask_b64)
+        .unwrap();
+    let mut req_body = Vec::new();
+    req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-edit-route-test\r\n").as_bytes());
+    req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nedit this image\r\n").as_bytes());
+    req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"size\"\r\n\r\n1024x1024\r\n").as_bytes());
+    req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"one.png\"\r\nContent-Type: image/png\r\n\r\n").as_bytes());
+    req_body.extend_from_slice(&image);
+    req_body.extend_from_slice(b"\r\n");
+    req_body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"mask\"; filename=\"mask.png\"\r\nContent-Type: image/png\r\n\r\n").as_bytes());
+    req_body.extend_from_slice(&mask);
+    req_body.extend_from_slice(b"\r\n");
+    req_body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/images/edits")
+        .header(
+            CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(req_body))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let upstream = captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "image_edits")
+        .map(|(_, body)| body.clone())
+        .expect("image edits upstream body");
+    assert_eq!(upstream["model"].as_str(), Some("gpt-image-edit-route-test"));
+    assert_eq!(upstream["prompt"].as_str(), Some("edit this image"));
+    assert_eq!(upstream["size"].as_str(), Some("1024x1024"));
+    assert_eq!(upstream["images"][0]["content_type"].as_str(), Some("image/png"), "{upstream}");
+    assert_eq!(upstream["images"][0]["b64"].as_str(), Some(image_b64), "{upstream}");
+    assert_eq!(upstream["masks"][0]["content_type"].as_str(), Some("image/png"), "{upstream}");
+    assert_eq!(upstream["masks"][0]["b64"].as_str(), Some(mask_b64), "{upstream}");
+    assert!(
+        captured_bodies
+            .lock()
+            .expect("captured bodies lock")
+            .iter()
+            .all(|(endpoint, body)| endpoint != "image_generations"
+                || body["model"].as_str() != Some("gpt-image-edit-route-test"))
+    );
+}
+
+#[tokio::test]
 async fn responses_reject_item_reference_continuations_while_remaining_stateless() {
     let ctx = setup().await;
     let (status, body) = json_post(

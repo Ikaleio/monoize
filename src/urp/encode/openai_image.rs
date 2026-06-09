@@ -1,11 +1,12 @@
-use crate::urp::{Node, UrpRequest};
+use crate::urp::{ImageSource, Node, OrdinaryRole, UrpRequest};
+use base64::Engine as _;
 use serde_json::{Map, Value};
 
 pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
     let mut prompt_parts: Vec<String> = Vec::new();
     for item in &req.input {
         if let Node::Text {
-            role: crate::urp::OrdinaryRole::User,
+            role: OrdinaryRole::User,
             content,
             ..
         } = item
@@ -30,6 +31,92 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
     }
 
     Value::Object(body)
+}
+
+pub fn has_user_image_input(req: &UrpRequest) -> bool {
+    req.input.iter().any(|item| {
+        matches!(
+            item,
+            Node::Image {
+                role: OrdinaryRole::User,
+                ..
+            }
+        )
+    })
+}
+
+pub fn multipart_form(req: &UrpRequest, model: &str) -> Result<reqwest::multipart::Form, String> {
+    let prompt = user_prompt(req);
+    let mut form = reqwest::multipart::Form::new()
+        .text("model", model.to_string())
+        .text("prompt", prompt);
+
+    if req.stream == Some(true) {
+        form = form.text("stream", "true");
+    }
+
+    for (k, v) in &req.extra_body {
+        if k == "model" || k == "prompt" || k == "stream" {
+            continue;
+        }
+        form = form.text(k.clone(), extra_value_to_text(v));
+    }
+
+    for (idx, item) in req.input.iter().enumerate() {
+        let Node::Image {
+            id,
+            role: OrdinaryRole::User,
+            source,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        let (media_type, bytes) = match source {
+            ImageSource::Base64 { media_type, data } => {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|e| format!("invalid base64 image input: {e}"))?;
+                (media_type.clone(), bytes)
+            }
+            ImageSource::Url { url, .. } => ("text/plain".to_string(), url.as_bytes().to_vec()),
+        };
+        let field_name = if id.as_deref() == Some("__monoize_image_api_mask") {
+            "mask"
+        } else {
+            "image"
+        };
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(format!("image-{idx}"))
+            .mime_str(&media_type)
+            .map_err(|e| format!("invalid image media type: {e}"))?;
+        form = form.part(field_name.to_string(), part);
+    }
+
+    Ok(form)
+}
+
+fn user_prompt(req: &UrpRequest) -> String {
+    let mut prompt_parts: Vec<String> = Vec::new();
+    for item in &req.input {
+        if let Node::Text {
+            role: OrdinaryRole::User,
+            content,
+            ..
+        } = item
+            && !content.trim().is_empty()
+        {
+            prompt_parts.push(content.clone());
+        }
+    }
+    prompt_parts.join("\n")
+}
+
+fn extra_value_to_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]

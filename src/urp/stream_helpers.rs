@@ -118,12 +118,13 @@ pub(crate) fn split_wrapped_responses_json_string_field(
     if let Some(obj) = template.as_object_mut() {
         obj.insert(field.to_string(), Value::String(String::new()));
     }
-    let wrapped_template_len = responses_payload_length(seq, event_name, &template);
-    split_json_by_estimated_limit(
+    split_json_by_exact_limit(
         template,
         content,
         max_frame_length,
-        wrapped_template_len,
+        move |value, chunk_index| {
+            responses_data_line_length(seq + chunk_index as u64, event_name, value)
+        },
         move |value, part| {
             if let Some(obj) = value.as_object_mut() {
                 obj.insert(field.to_string(), Value::String(part.to_string()));
@@ -140,19 +141,22 @@ pub(crate) fn split_json_value_by_string_patch(
 ) -> Vec<Value> {
     let mut empty_template = template.clone();
     patch(&mut empty_template, "");
-    let template_len = empty_template.to_string().len();
-    split_json_by_estimated_limit(template, content, max_frame_length, template_len, patch)
+    split_json_by_exact_limit(
+        template,
+        content,
+        max_frame_length,
+        |value, _chunk_index| sse_data_line_length(&value.to_string()),
+        patch,
+    )
 }
 
-pub(crate) fn split_json_by_estimated_limit(
+pub(crate) fn split_json_by_exact_limit(
     template: Value,
     content: &str,
     max_frame_length: Option<usize>,
-    template_len: usize,
+    data_line_len: impl Fn(&Value, usize) -> usize,
     patch: impl Fn(&mut Value, &str),
 ) -> Vec<Value> {
-    const ESTIMATED_ESCAPE_RESERVE_BYTES: usize = 128;
-
     let Some(max_len) = max_frame_length else {
         let mut value = template;
         patch(&mut value, content);
@@ -161,26 +165,67 @@ pub(crate) fn split_json_by_estimated_limit(
 
     let mut empty_value = template.clone();
     patch(&mut empty_value, "");
-    if template_len > max_len {
+    if data_line_len(&empty_value, 0) > max_len {
         return vec![empty_value];
     }
     if content.is_empty() {
         return vec![empty_value];
     }
 
-    let chunk_size = max_len
-        .saturating_sub(template_len)
-        .saturating_sub(ESTIMATED_ESCAPE_RESERVE_BYTES)
-        .max(1);
+    let mut values = Vec::new();
+    let mut start = 0usize;
+    while start < content.len() {
+        let chunk_index = values.len();
+        let end = largest_fitting_prefix_end(
+            content,
+            start,
+            max_len,
+            &template,
+            &data_line_len,
+            &patch,
+            chunk_index,
+        );
+        let mut value = template.clone();
+        patch(&mut value, &content[start..end]);
+        values.push(value);
+        start = end;
+    }
+    values
+}
 
-    split_string_by_bytes(content, chunk_size)
-        .into_iter()
-        .map(|part| {
-            let mut value = template.clone();
-            patch(&mut value, &part);
-            value
-        })
-        .collect()
+fn largest_fitting_prefix_end(
+    content: &str,
+    start: usize,
+    max_len: usize,
+    template: &Value,
+    data_line_len: &impl Fn(&Value, usize) -> usize,
+    patch: &impl Fn(&mut Value, &str),
+    chunk_index: usize,
+) -> usize {
+    let char_ends: Vec<usize> = content[start..]
+        .char_indices()
+        .map(|(offset, ch)| start + offset + ch.len_utf8())
+        .collect();
+    let mut low = 0usize;
+    let mut high = char_ends.len();
+    let mut best = None;
+    while low < high {
+        let mid = (low + high) / 2;
+        let end = char_ends[mid];
+        let mut value = template.clone();
+        patch(&mut value, &content[start..end]);
+        if data_line_len(&value, chunk_index) <= max_len {
+            best = Some(end);
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    best.unwrap_or(char_ends[0])
+}
+
+pub(crate) fn sse_data_line_length(serialized_data: &str) -> usize {
+    "data: ".len() + serialized_data.len()
 }
 
 pub(crate) fn normalize_responses_payload(seq: u64, name: &str, data: Value) -> Value {
@@ -200,37 +245,8 @@ pub(crate) fn normalize_responses_payload(seq: u64, name: &str, data: Value) -> 
     }
 }
 
-pub(crate) fn responses_payload_length(seq: u64, name: &str, data: &Value) -> usize {
-    normalize_responses_payload(seq, name, data.clone())
-        .to_string()
-        .len()
-}
-
-pub(crate) fn split_string_by_bytes(content: &str, max_bytes: usize) -> Vec<String> {
-    if content.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut current_bytes = 0usize;
-    for ch in content.chars() {
-        let ch_len = ch.len_utf8();
-        if !current.is_empty() && current_bytes + ch_len > max_bytes {
-            parts.push(current);
-            current = String::new();
-            current_bytes = 0;
-        }
-        current.push(ch);
-        current_bytes += ch_len;
-    }
-    if !current.is_empty() {
-        parts.push(current);
-    }
-    if parts.is_empty() {
-        parts.push(String::new());
-    }
-    parts
+pub(crate) fn responses_data_line_length(seq: u64, name: &str, data: &Value) -> usize {
+    sse_data_line_length(&normalize_responses_payload(seq, name, data.clone()).to_string())
 }
 
 pub(crate) fn chat_delta_path_content(value: &mut Value, content: &str) {
@@ -696,6 +712,7 @@ pub(crate) fn responses_text_delta_payload(
 #[cfg(test)]
 mod tests {
     use super::{extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks};
+    use super::{responses_data_line_length, split_wrapped_responses_json_string_field};
     use crate::request_capture::with_sse_capture;
     use serde_json::{Value, json};
     use std::sync::Arc;
@@ -759,6 +776,41 @@ mod tests {
         assert_eq!(sig_parts.len(), 1);
         assert_eq!(sig_parts[0].text, "sig_1");
         assert_eq!(sig_parts[0].format.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn split_responses_delta_uses_escaped_data_line_length() {
+        let max_frame_length = 512usize;
+        let seq = 7u64;
+        let event_name = "response.output_text.delta";
+        let content = format!("{}🙂{}", "\n".repeat(700), "\\\"".repeat(50));
+        let template = json!({
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": ""
+        });
+
+        let chunks = split_wrapped_responses_json_string_field(
+            seq,
+            event_name,
+            template,
+            "delta",
+            &content,
+            Some(max_frame_length),
+        );
+
+        assert!(chunks.len() > 1);
+        let mut reconstructed = String::new();
+        for (index, chunk) in chunks.iter().enumerate() {
+            assert!(
+                responses_data_line_length(seq + index as u64, event_name, chunk)
+                    <= max_frame_length,
+                "chunk {index} exceeded max_frame_length"
+            );
+            reconstructed.push_str(chunk.get("delta").and_then(Value::as_str).unwrap());
+        }
+        assert_eq!(reconstructed, content);
     }
 
     #[tokio::test]

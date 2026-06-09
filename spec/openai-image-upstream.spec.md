@@ -3,13 +3,14 @@
 ## 0. Status
 
 - **Subsystem:** OpenAI Image upstream provider type.
-- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`) and forwards them as `POST /v1/images/generations` requests to the upstream provider configured with `provider_type = "openai_image"`. The upstream transport MAY be non-streaming JSON or SSE streaming.
+- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/images/generations`, `/v1/images/edits`) and forwards them to the upstream provider configured with `provider_type = "openai_image"`. Text-only requests are sent to `POST /v1/images/generations` as JSON. Requests that contain user image inputs are sent to `POST /v1/images/edits` as `multipart/form-data`.
 - **Dependency:** This spec extends `unified_responses_proxy.spec.md` §7 (Adapters) and `monoize-upstream-routing.spec.md` §2.3 (Provider).
 
 ## 1. Terminology
 
 - **OpenAI Image upstream:** A provider whose `provider_type` is `openai_image`.
-- **Upstream Image Request:** The `POST /v1/images/generations` request Monoize sends to the upstream provider.
+- **Upstream Image Generation Request:** The `POST /v1/images/generations` request Monoize sends to the upstream provider for text-only image generation.
+- **Upstream Image Edit Request:** The `POST /v1/images/edits` request Monoize sends to the upstream provider when the URP request contains at least one user-role `Node::Image`.
 - **Upstream Image Response:** The JSON response from the upstream provider containing `data[].b64_json` or `data[].url` image fields.
 
 ## 2. Provider Type Registration
@@ -22,9 +23,9 @@ OIU-3. `openai_image` MUST appear in the frontend provider type selector alongsi
 
 ## 3. Request Encoding
 
-### 3.1 URP to Upstream Image Request
+### 3.1 URP to Upstream Image Generation Request
 
-OIU-E1. When `provider_type` resolves to `openai_image`, Monoize MUST encode the URP request as a `POST /v1/images/generations` JSON body.
+OIU-E1. When `provider_type` resolves to `openai_image` and `UrpRequest.input` contains zero user-role `Node::Image` items, Monoize MUST encode the URP request as a `POST /v1/images/generations` JSON body.
 
 OIU-E2. The upstream request body MUST include:
 - `model`: from `UrpRequest.model` (after redirect).
@@ -36,7 +37,21 @@ OIU-E4. If `UrpRequest.stream == Some(true)`, Monoize MUST include top-level JSO
 
 OIU-E5. URP fields `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `response_format`, and `user` MUST be ignored and MUST NOT appear in the upstream image request body.
 
-### 3.2 Extra Body Whitelist
+### 3.2 URP to Upstream Image Edit Request
+
+OIU-E5a. When `provider_type` resolves to `openai_image` and `UrpRequest.input` contains one or more user-role `Node::Image` items, Monoize MUST send the upstream request as `multipart/form-data` to `POST /v1/images/edits`.
+
+OIU-E5b. The upstream edit multipart body MUST include text field `model` from `UrpRequest.model` after redirect.
+
+OIU-E5c. The upstream edit multipart body MUST include text field `prompt` equal to the concatenation of all user-role `Node::Text.content` values in `UrpRequest.input`, joined by newline, excluding empty text after trim.
+
+OIU-E5d. Each user-role `Node::Image` whose source is `ImageSource::Base64 { media_type, data }` MUST be decoded from base64 and included as a file field. The field name MUST be `image` unless the node has `id = "__monoize_image_api_mask"`; a node with that id MUST use field name `mask`. Monoize MUST NOT infer a mask from image position alone. The file part content type MUST equal `media_type`.
+
+OIU-E5e. All key-value pairs from `UrpRequest.extra_body` that pass whitelist filtering MUST be included in the upstream edit multipart body as text fields, except `model`, `prompt`, and `stream`. JSON string values MUST be written without quotes. JSON number, boolean, object, array, and null values MUST be written as their JSON serialization.
+
+OIU-E5f. If `UrpRequest.stream == Some(true)`, Monoize MUST include text field `stream` with value `true` in the upstream edit multipart body. If `UrpRequest.stream != Some(true)`, Monoize MUST NOT include a `stream` field in the upstream edit multipart body.
+
+### 3.3 Extra Body Whitelist
 
 OIU-E6. The default extra body whitelist for `openai_image` MUST be: `size`, `quality`, `style`, `response_format`, `n`, `background`, `output_format`, `output_compression`, `moderation`, `user`.
 
@@ -102,7 +117,9 @@ OIU-S6. When the downstream request is non-streaming but the selected attempt ha
 
 ## 7. Routing Integration
 
-OIU-RT1. The upstream path for `openai_image` MUST be `/v1/images/generations`.
+OIU-RT1. The upstream path for text-only `openai_image` requests MUST be `/v1/images/generations`.
+
+OIU-RT1a. The upstream path for `openai_image` requests containing one or more user-role `Node::Image` items MUST be `/v1/images/edits`.
 
 OIU-RT2. `openai_image` MUST NOT require any extra request headers beyond standard auth.
 

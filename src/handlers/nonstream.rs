@@ -161,11 +161,17 @@ pub(super) async fn execute_nonstream_typed(
             let upstream_body =
                 encode_request_for_provider(&mut req_attempt, &attempt, downstream)?;
             let provider = build_channel_provider_config(&attempt);
-            let path = upstream_path_for_model(
-                attempt.provider_type,
-                &req_attempt.model,
-                req_attempt.stream.unwrap_or(false),
-            );
+            let openai_image_edit = attempt.provider_type == ProviderType::OpenaiImage
+                && urp::encode::openai_image::has_user_image_input(&req_attempt);
+            let path = if openai_image_edit {
+                "/v1/images/edits".to_string()
+            } else {
+                upstream_path_for_model(
+                    attempt.provider_type,
+                    &req_attempt.model,
+                    req_attempt.stream.unwrap_or(false),
+                )
+            };
             let call_value = if req_attempt.stream == Some(true)
                 && supports_nonstream_upstream_stream_collection(attempt.provider_type)
             {
@@ -200,6 +206,44 @@ pub(super) async fn execute_nonstream_typed(
                         Ok(resp) => Ok((None, Some(resp))),
                         Err(err) => return Err(err),
                     },
+                    Err(err) => Err(err),
+                }
+            } else if openai_image_edit {
+                let form =
+                    urp::encode::openai_image::multipart_form(&req_attempt, &req_attempt.model)
+                        .map_err(|e| {
+                            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e)
+                        })?;
+                match upstream::call_upstream_multipart_with_timeout_and_headers(
+                    client_http(state),
+                    &provider,
+                    &attempt.api_key,
+                    &path,
+                    form,
+                    attempt.request_timeout_ms,
+                    provider_extra_headers(attempt.provider_type),
+                )
+                .await
+                {
+                    Ok(resp) => {
+                        let status = resp.status();
+                        match resp.text().await {
+                            Ok(text) => serde_json::from_str::<Value>(&text)
+                                .map(|value| (Some(value), None))
+                                .map_err(|err| {
+                                    upstream::UpstreamCallError::new(
+                                        upstream::UpstreamErrorKind::Http,
+                                        Some(status),
+                                        err.to_string(),
+                                    )
+                                }),
+                            Err(err) => Err(upstream::UpstreamCallError::new(
+                                upstream::UpstreamErrorKind::Network,
+                                Some(status),
+                                err.to_string(),
+                            )),
+                        }
+                    }
                     Err(err) => Err(err),
                 }
             } else {

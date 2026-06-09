@@ -2339,8 +2339,87 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         }
     }
 
+    async fn image_generations(
+        axum::extract::State((captured_headers, captured_bodies)): axum::extract::State<(
+            CapturedHeaders,
+            CapturedBodies,
+        )>,
+        headers: axum::http::HeaderMap,
+        Json(body): Json<Value>,
+    ) -> impl axum::response::IntoResponse {
+        if let Ok(mut lock) = captured_bodies.lock() {
+            lock.push(("image_generations".to_string(), body.clone()));
+        }
+        if let Some(v) = headers.get("content-type").and_then(|h| h.to_str().ok()) {
+            if let Ok(mut lock) = captured_headers.lock() {
+                lock.push(("image_generations-content-type".to_string(), v.to_string()));
+            }
+        }
+        Json(json!({
+            "created": 0,
+            "data": [{
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=",
+                "revised_prompt": body.get("prompt").and_then(|v| v.as_str()).unwrap_or("")
+            }]
+        }))
+    }
+
+    async fn image_edits(
+        axum::extract::State((captured_headers, captured_bodies)): axum::extract::State<(
+            CapturedHeaders,
+            CapturedBodies,
+        )>,
+        headers: axum::http::HeaderMap,
+        mut multipart: axum::extract::Multipart,
+    ) -> impl axum::response::IntoResponse {
+        let mut fields = serde_json::Map::new();
+        let mut image_parts = Vec::new();
+        let mut mask_parts = Vec::new();
+        while let Ok(Some(field)) = multipart.next_field().await {
+            let name = field.name().unwrap_or("").to_string();
+            if name == "image" || name == "mask" {
+                let content_type = field
+                    .content_type()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                let bytes = field.bytes().await.unwrap_or_default();
+                let part = json!({
+                    "content_type": content_type,
+                    "len": bytes.len(),
+                    "b64": base64::engine::general_purpose::STANDARD.encode(&bytes)
+                });
+                if name == "mask" {
+                    mask_parts.push(part);
+                } else {
+                    image_parts.push(part);
+                }
+            } else if let Ok(text) = field.text().await {
+                fields.insert(name, Value::String(text));
+            }
+        }
+        fields.insert("images".to_string(), Value::Array(image_parts));
+        fields.insert("masks".to_string(), Value::Array(mask_parts));
+        let captured = Value::Object(fields);
+        if let Ok(mut lock) = captured_bodies.lock() {
+            lock.push(("image_edits".to_string(), captured));
+        }
+        if let Some(v) = headers.get("content-type").and_then(|h| h.to_str().ok()) {
+            if let Ok(mut lock) = captured_headers.lock() {
+                lock.push(("image_edits-content-type".to_string(), v.to_string()));
+            }
+        }
+        Json(json!({
+            "created": 0,
+            "data": [{
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII="
+            }]
+        }))
+    }
+
     let router = Router::new()
         .route("/v1/responses", post(responses))
+        .route("/v1/images/generations", post(image_generations))
+        .route("/v1/images/edits", post(image_edits))
         .route("/v1/chat/completions", post(chat))
         .route("/v1/messages", post(messages))
         .route("/v1beta/models/{*rest}", post(gemini_dispatch))

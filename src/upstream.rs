@@ -197,6 +197,58 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
     Ok(resp)
 }
 
+pub async fn call_upstream_multipart_with_timeout_and_headers(
+    client: &reqwest::Client,
+    provider: &ProviderConfig,
+    auth_value: &str,
+    path: &str,
+    form: reqwest::multipart::Form,
+    timeout_ms: u64,
+    extra_headers: &[(&str, &str)],
+) -> Result<reqwest::Response, UpstreamCallError> {
+    let base = provider.base_url.as_ref().ok_or_else(|| {
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            None,
+            "missing base_url".to_string(),
+        )
+    })?;
+    let url = join_url(base, path);
+    let mut req = client
+        .post(url)
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .multipart(form);
+    let auth = provider.auth.as_ref().ok_or_else(|| {
+        UpstreamCallError::new(UpstreamErrorKind::Http, None, "missing auth".to_string())
+    })?;
+    req = apply_auth(req, auth, auth_value)
+        .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Http, None, err.message))?;
+    for (k, v) in extra_headers {
+        req = req.header(*k, *v);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Network, None, err.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        let info = extract_error_info(&text);
+        let message = info.message.clone().unwrap_or_else(|| {
+            if text.is_empty() {
+                "upstream returned an empty error body".to_string()
+            } else {
+                text
+            }
+        });
+        return Err(
+            UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
+                .with_error_info(info),
+        );
+    }
+    Ok(resp)
+}
+
 pub async fn call_responses(
     client: &reqwest::Client,
     provider: &ProviderConfig,

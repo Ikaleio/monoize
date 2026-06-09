@@ -228,7 +228,7 @@ pub async fn create_image_edit(
     }
     if let Some((mask_media_type, mask_b64)) = mask_data {
         inputs.push(urp::Node::Image {
-            id: None,
+            id: Some("__monoize_image_api_mask".to_string()),
             role: urp::OrdinaryRole::User,
             source: urp::ImageSource::Base64 {
                 media_type: mask_media_type,

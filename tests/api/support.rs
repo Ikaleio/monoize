@@ -7,6 +7,7 @@ use axum::response::IntoResponse;
 use axum::response::Sse;
 use axum::response::sse::Event;
 use axum::routing::post;
+use base64::Engine as _;
 use chrono::{Duration as ChronoDuration, Utc};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
