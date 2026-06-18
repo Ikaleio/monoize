@@ -156,6 +156,8 @@ TF-7. Built-ins that MUST exist are:
 - `auto_cache_user_id`
 - `auto_cache_system`
 - `auto_cache_tool_use`
+- `auto_cache_openai_prompt`
+- `strip_anthropic_billing_header`
 - `compress_user_message_images`
 - `resolve_image_urls`
 - `plaintext_reasoning_to_summary`
@@ -174,6 +176,27 @@ TF-9. Scope semantics are exact:
 3. `api_key` means the transform MAY be configured in API-key transform chains;
 4. a transform MAY support more than one scope; and
 5. dashboard editors MUST hide transforms that do not support the current editor scope.
+
+TF-10. The runtime context passed to a transform MUST include `upstream_provider_type`.
+
+TF-11. For request-phase transforms, `upstream_provider_type` MUST equal the selected provider type for the current attempt after model routing and API-type override resolution.
+
+TF-12. For response-phase non-stream and stream transforms, `upstream_provider_type` MUST equal the provider type that produced the decoded upstream response or stream.
+
+TF-13. When no upstream provider is selected for a transform invocation, `upstream_provider_type` MUST be absent.
+
+TF-14. Canonical transform IDs MUST match `^[a-z][a-z0-9]*(_[a-z0-9]+)*$`.
+
+TF-15. Runtime transform lookup MUST canonicalize transform IDs before resolving the registry entry.
+
+TF-16. On startup, the application MUST canonicalize transform IDs persisted in:
+1. `system_settings` row `key = "global_transforms"`;
+2. `monoize_providers.transforms`; and
+3. `api_keys.transforms`.
+
+TF-17. The canonicalization map MUST include:
+1. `remove_anthropic_billing_header`, `remove_anthropic_billing_headers`, `strip_anthropic_billing_headers`, and `strip_claude_code_billing_header` to `strip_anthropic_billing_header`; and
+2. `auto_cache_openai`, `auto_cache_openai_prompt_key`, and `openai_prompt_cache` to `auto_cache_openai_prompt`.
 
 ### 4.1 Transform-visible request and response surfaces
 
@@ -356,7 +379,20 @@ CUMI-7. On successful replacement:
 
 CUMI-8. If the decoded image after resizing has an alpha channel, the transform MUST emit `image/png` using PNG best compression followed by lossless PNG optimization. If the decoded image after resizing has no alpha channel, the transform MUST emit `image/jpeg` using `jpeg_quality`.
 
-CUMI-9. The cache key, persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary `Image` nodes rather than to nested message parts.
+CUMI-9. The cache key material MUST be the ordered byte sequence:
+1. UTF-8 bytes of `compress_user_message_images:v3`;
+2. one zero byte;
+3. UTF-8 bytes of the source media type;
+4. one zero byte;
+5. `max_edge_px` encoded as little-endian `u32`;
+6. `jpeg_quality` encoded as one byte;
+7. `skip_if_smaller` encoded as one byte, where `true = 1` and `false = 0`;
+8. one zero byte; and
+9. the decoded original image bytes.
+
+CUMI-10. The cache key MUST be xxHash3 128-bit over the cache key material, formatted as 32 lowercase hexadecimal characters.
+
+CUMI-11. The cache persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary `Image` nodes rather than to nested message parts.
 
 RIU-1. `resolve_image_urls` is request-phase only.
 
@@ -537,9 +573,29 @@ CAOI-8. On successful replacement:
 
 CAOI-9. If the decoded image after resizing has an alpha channel, the transform MUST emit `image/png` using PNG best compression followed by lossless PNG optimization. If the decoded image after resizing has no alpha channel, the transform MUST emit `image/jpeg` using `jpeg_quality`.
 
-CAOI-10. The cache key, persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary assistant `Image` nodes and eligible assistant image deltas.
+CAOI-10. The cache key material and cache key algorithm MUST be identical to CUMI-9 and CUMI-10.
 
-### 4.9 `split_sse_frames`
+CAOI-11. The cache persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary assistant `Image` nodes and eligible assistant image deltas.
+
+### 4.9 `strip_anthropic_billing_header`
+
+SABH-1. `strip_anthropic_billing_header` is request-phase only.
+
+SABH-2. Config MUST be an empty object.
+
+SABH-3. Supported scopes are `Provider`, `Global`, and `ApiKey`.
+
+SABH-4. The transform MUST inspect only `Text` nodes whose role is `System` or `Developer`.
+
+SABH-5. For each inspected text node, the transform MUST remove every line whose first non-whitespace characters are `x-anthropic-billing-header:`.
+
+SABH-6. If an inspected text node has empty content after SABH-5, the transform MUST remove that node from `req.input`.
+
+SABH-7. The transform MUST NOT modify user, assistant, tool-result, tool-call, image, audio, file, reasoning, refusal, provider-item, or control nodes.
+
+SABH-8. The transform is idempotent.
+
+### 4.10 `split_sse_frames`
 
 SSF-1. Phase: response only.
 
@@ -567,7 +623,7 @@ SSF-12. If `max_frame_length` is too small to encode even the minimal wrapper fo
 
 SSF-13. The transform MUST preserve event order and MUST NOT change usage, finish reason, `call_id`, node role, node phase, or other typed metadata except for the duplicated snapshot text fields allowed by SSF-10.
 
-### 4.10 `reasoning_effort_to_model_suffix`
+### 4.11 `reasoning_effort_to_model_suffix`
 
 REMS-1. Phase: request only.
 

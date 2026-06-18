@@ -92,6 +92,7 @@ mod tests {
         TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
             http_client: reqwest::Client::new(),
+            upstream_provider_type: None,
         }
     }
 

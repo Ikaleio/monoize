@@ -1,6 +1,6 @@
 use crate::db::DbPool;
 use crate::entity::system_settings;
-use crate::transforms::TransformRuleConfig;
+use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use chrono::{DateTime, Utc};
 use sea_orm::{EntityTrait, Set, sea_query::OnConflict};
 use serde::{Deserialize, Serialize};
@@ -134,6 +134,7 @@ impl SettingsStore {
     pub async fn new(db: DbPool) -> Result<Self, String> {
         let store = Self { db };
         store.ensure_defaults().await?;
+        store.migrate_transform_rule_ids().await?;
         Ok(store)
     }
 
@@ -364,7 +365,10 @@ impl SettingsStore {
                     settings.api_base_url = row.value;
                 }
                 "global_transforms" => {
-                    if let Ok(transforms) = serde_json::from_str(&row.value) {
+                    if let Ok(mut transforms) =
+                        serde_json::from_str::<Vec<TransformRuleConfig>>(&row.value)
+                    {
+                        canonicalize_transform_rules(&mut transforms);
                         settings.global_transforms = transforms;
                     }
                 }
@@ -446,6 +450,8 @@ impl SettingsStore {
     }
 
     pub async fn update_all(&self, settings: &SystemSettings) -> Result<(), String> {
+        let mut settings = settings.clone();
+        canonicalize_transform_rules(&mut settings.global_transforms);
         self.set(
             "registration_enabled",
             &settings.registration_enabled.to_string(),
@@ -570,6 +576,24 @@ impl SettingsStore {
         )
         .await?;
         Ok(())
+    }
+
+    async fn migrate_transform_rule_ids(&self) -> Result<(), String> {
+        let Some(raw) = self.get("global_transforms").await? else {
+            return Ok(());
+        };
+        let Ok(mut transforms) = serde_json::from_str::<Vec<TransformRuleConfig>>(&raw) else {
+            tracing::warn!("skip invalid global_transforms during transform id migration");
+            return Ok(());
+        };
+        if !canonicalize_transform_rules(&mut transforms) {
+            return Ok(());
+        }
+        self.set(
+            "global_transforms",
+            &serde_json::to_string(&transforms).map_err(|e| e.to_string())?,
+        )
+        .await
     }
 
     pub async fn is_registration_enabled(&self) -> Result<bool, String> {

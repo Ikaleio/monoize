@@ -86,14 +86,22 @@ pub async fn list_my_request_logs(
     .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     for log in &mut logs {
-        if let Some(ref id) = log.provider.id {
+        if log.provider.name.is_none()
+            && let Some(ref id) = log.provider.id
+        {
             log.provider.name = state.name_caches.get_provider_name(id);
         }
-        if let Some(ref id) = log.channel.id {
+        if log.channel.name.is_none()
+            && let Some(ref id) = log.channel.id
+        {
             log.channel.name = state.name_caches.get_channel_name(id);
         }
-        log.user.username = state.name_caches.get_username(&log.user.id);
-        if let Some(ref id) = log.api_key.id {
+        if log.user.username.is_none() {
+            log.user.username = state.name_caches.get_username(&log.user.id);
+        }
+        if log.api_key.name.is_none()
+            && let Some(ref id) = log.api_key.id
+        {
             log.api_key.name = state.name_caches.get_api_key_name(id);
         }
     }

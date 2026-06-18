@@ -286,6 +286,118 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 return Sse::new(stream).into_response();
             }
 
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("message_completed_snapshot_without_phase")
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.added").data(
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "message",
+                                    "id": "msg_stream",
+                                    "role": "assistant",
+                                    "phase": "final_answer",
+                                    "content": []
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.content_part.added").data(
+                            json!({
+                                "type": "response.content_part.added",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "msg_stream",
+                                "part": { "type": "output_text", "text": "", "annotations": [] }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_text.delta").data(
+                            json!({
+                                "type": "response.output_text.delta",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "msg_stream",
+                                "logprobs": Value::Null,
+                                "delta": "same text"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_text.done").data(
+                            json!({
+                                "type": "response.output_text.done",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "msg_stream",
+                                "logprobs": Value::Null,
+                                "text": "same text"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.content_part.done").data(
+                            json!({
+                                "type": "response.content_part.done",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "msg_stream",
+                                "part": { "type": "output_text", "text": "same text", "annotations": [] }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.done").data(
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "message",
+                                    "id": "msg_stream",
+                                    "role": "assistant",
+                                    "phase": "final_answer",
+                                    "content": [{ "type": "output_text", "text": "same text" }]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": [{
+                                        "type": "message",
+                                        "id": "msg_completed_snapshot",
+                                        "role": "assistant",
+                                        "content": [{ "type": "output_text", "text": "same text" }]
+                                    }]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
             if tools_present && tool_outputs.is_empty() {
                 if body.get("stream_mode").and_then(|v| v.as_str()) == Some("reasoning_text_tool") {
                     let stream = futures_util::stream::iter(vec![

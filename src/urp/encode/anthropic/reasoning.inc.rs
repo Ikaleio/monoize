@@ -103,10 +103,14 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 is_error,
                 extra_body,
             } => {
-                flush_pending_anthropic_message(&mut pending_message, &mut messages);
-                messages.push(encode_tool_result_message(
-                    call_id, content, *is_error, extra_body,
-                ));
+                append_tool_result_to_pending_anthropic_message(
+                    &mut pending_message,
+                    &mut messages,
+                    call_id,
+                    content,
+                    *is_error,
+                    extra_body,
+                );
             }
             Node::Text {
                 role: OrdinaryRole::System | OrdinaryRole::Developer,
@@ -217,4 +221,3 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     merge_extra(obj, &req.extra_body);
     body
 }
-

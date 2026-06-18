@@ -130,6 +130,35 @@ fn append_node_to_pending_anthropic_message(
     entry.content.push(block);
 }
 
+fn append_tool_result_to_pending_anthropic_message(
+    pending: &mut Option<AnthropicMessageEnvelope>,
+    out: &mut Vec<Value>,
+    call_id: &str,
+    content: &[ToolResultContent],
+    is_error: bool,
+    extra_body: &HashMap<String, Value>,
+) {
+    let should_flush = pending.as_ref().is_some_and(|existing| {
+        existing.role != OrdinaryRole::User
+            || existing
+                .content
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) != Some("tool_result"))
+    });
+    if should_flush {
+        flush_pending_anthropic_message(pending, out);
+    }
+
+    let entry = pending.get_or_insert_with(|| AnthropicMessageEnvelope {
+        role: OrdinaryRole::User,
+        content: Vec::new(),
+        extra_body: HashMap::new(),
+    });
+    entry
+        .content
+        .push(encode_tool_result_block(call_id, content, is_error, extra_body));
+}
+
 fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
     match node {
         Node::Text { role, .. }
@@ -190,4 +219,3 @@ fn encode_system_block(node: &Node) -> Option<Value> {
         _ => None,
     }
 }
-

@@ -1063,6 +1063,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .find(|(existing_index, _)| *existing_index == output_index)
                     {
                         merge_terminal_output_item(existing_item, item);
+                    } else if let Some((_, existing_item)) = rebuild_output_items
+                        .iter_mut()
+                        .find(|(_, existing_item)| {
+                            responses_output_items_semantically_match(existing_item, item)
+                        })
+                    {
+                        merge_terminal_output_item(existing_item, item);
                     } else {
                         rebuild_output_items.push((output_index, item.clone()));
                     }
@@ -2186,8 +2193,90 @@ fn sync_completed_output_items_with_terminal_output(
             .find(|(existing_index, _)| *existing_index == output_index)
         {
             merge_terminal_output_item(existing_item, item);
+        } else if let Some((_, existing_item)) = completed_output_items
+            .iter_mut()
+            .find(|(_, existing_item)| responses_output_items_semantically_match(existing_item, item))
+        {
+            merge_terminal_output_item(existing_item, item);
         }
     }
+}
+
+fn responses_output_items_semantically_match(left: &Value, right: &Value) -> bool {
+    let left_type = left.get("type").and_then(Value::as_str);
+    let right_type = right.get("type").and_then(Value::as_str);
+    if left_type.is_none() || left_type != right_type {
+        return false;
+    }
+
+    if non_empty_string_field_matches(left, right, "id") {
+        return true;
+    }
+
+    match left_type {
+        Some("message") => responses_message_items_semantically_match(left, right),
+        Some("function_call") => non_empty_string_field_matches(left, right, "call_id"),
+        Some("reasoning") => responses_reasoning_items_semantically_match(left, right),
+        _ => false,
+    }
+}
+
+fn non_empty_string_field_matches(left: &Value, right: &Value, field: &str) -> bool {
+    match (
+        left.get(field).and_then(Value::as_str),
+        right.get(field).and_then(Value::as_str),
+    ) {
+        (Some(left_value), Some(right_value)) => !left_value.is_empty() && left_value == right_value,
+        _ => false,
+    }
+}
+
+fn optional_string_fields_compatible(left: &Value, right: &Value, field: &str) -> bool {
+    let left_value = left.get(field).and_then(Value::as_str);
+    let right_value = right.get(field).and_then(Value::as_str);
+    left_value == right_value || left_value.is_none() || right_value.is_none()
+}
+
+fn responses_message_items_semantically_match(left: &Value, right: &Value) -> bool {
+    let left_role = left
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("assistant");
+    let right_role = right
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("assistant");
+    if left_role != right_role || !optional_string_fields_compatible(left, right, "phase") {
+        return false;
+    }
+
+    let left_text = responses_message_text_signature(left);
+    let right_text = responses_message_text_signature(right);
+    !left_text.is_empty() && left_text == right_text
+}
+
+fn responses_message_text_signature(item: &Value) -> Vec<String> {
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("text")
+                        .or_else(|| part.get("refusal"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn responses_reasoning_items_semantically_match(left: &Value, right: &Value) -> bool {
+    ["text", "encrypted_content", "source"]
+        .iter()
+        .all(|field| left.get(*field) == right.get(*field))
+        && left.get("summary") == right.get("summary")
 }
 
 fn merge_terminal_output_item(existing_item: &mut Value, terminal_item: &Value) {
@@ -2254,6 +2343,13 @@ async fn emit_missing_terminal_output_done_events(
 ) -> AppResult<()> {
     for (output_index, item) in terminal_output.iter().enumerate() {
         if completed_output_indices.contains(&output_index) {
+            continue;
+        }
+        if let Some((_, existing_item)) = completed_output_items
+            .iter_mut()
+            .find(|(_, existing_item)| responses_output_items_semantically_match(existing_item, item))
+        {
+            merge_terminal_output_item(existing_item, item);
             continue;
         }
         let done_item = sanitize_responses_output_item_for_frame_limit(

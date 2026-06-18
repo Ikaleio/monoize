@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub mod append_empty_user_message;
 pub mod assistant_markdown_images_to_output;
 pub mod assistant_output_images_to_markdown;
+pub mod auto_cache_openai_prompt;
 pub mod auto_cache_system;
 pub mod auto_cache_tool_use;
 pub mod auto_cache_user_id;
@@ -30,6 +31,7 @@ pub mod remove_field;
 pub mod resolve_image_urls;
 pub mod set_field;
 pub mod split_sse_frames;
+pub mod strip_anthropic_billing_header;
 pub mod strip_encrypted_reasoning;
 pub mod strip_input_reasoning;
 pub mod strip_orphaned_tool_use;
@@ -66,6 +68,32 @@ pub struct TransformRuleConfig {
 
 fn default_enabled() -> bool {
     true
+}
+
+pub fn canonical_transform_id(transform: &str) -> &str {
+    match transform {
+        "remove_anthropic_billing_header"
+        | "remove_anthropic_billing_headers"
+        | "strip_anthropic_billing_headers"
+        | "strip_claude_code_billing_header" => "strip_anthropic_billing_header",
+        "auto_cache_openai" | "auto_cache_openai_prompt_key" | "openai_prompt_cache" => {
+            "auto_cache_openai_prompt"
+        }
+        _ => transform,
+    }
+}
+
+pub fn canonicalize_transform_rule(rule: &mut TransformRuleConfig) -> bool {
+    let canonical = canonical_transform_id(&rule.transform);
+    if canonical == rule.transform {
+        return false;
+    }
+    rule.transform = canonical.to_string();
+    true
+}
+
+pub fn canonicalize_transform_rules(rules: &mut [TransformRuleConfig]) -> bool {
+    rules.iter_mut().any(canonicalize_transform_rule)
 }
 
 pub enum UrpData<'a> {
@@ -108,6 +136,7 @@ impl TransformState for NoState {
 pub struct TransformRuntimeContext {
     pub image_transform_cache: Arc<crate::image_transform_cache::ImageTransformCache>,
     pub http_client: reqwest::Client,
+    pub upstream_provider_type: Option<crate::config::ProviderType>,
 }
 
 #[async_trait]
@@ -164,6 +193,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(remove_field::RemoveFieldTransform),
         Box::new(set_field::SetFieldTransform),
         Box::new(split_sse_frames::SplitSseFramesTransform),
+        Box::new(strip_anthropic_billing_header::StripAnthropicBillingHeaderTransform),
         Box::new(strip_input_reasoning::StripInputReasoningTransform),
         Box::new(strip_reasoning::StripReasoningTransform),
         Box::new(strip_encrypted_reasoning::StripEncryptedReasoningTransform),
@@ -172,6 +202,7 @@ fn builtin_transforms() -> Vec<Box<dyn Transform>> {
         Box::new(think_xml_to_reasoning::ThinkXmlToReasoningTransform),
         Box::new(assistant_markdown_images_to_output::AssistantMarkdownImagesToOutputTransform),
         Box::new(assistant_output_images_to_markdown::AssistantOutputImagesToMarkdownTransform),
+        Box::new(auto_cache_openai_prompt::AutoCacheOpenAiPromptTransform),
         Box::new(auto_cache_system::AutoCacheSystemTransform),
         Box::new(auto_cache_tool_use::AutoCacheToolUseTransform),
         Box::new(auto_cache_user_id::AutoCacheUserIdTransform),
@@ -203,7 +234,7 @@ pub fn build_states_for_rules(
 ) -> Result<Vec<Box<dyn TransformState>>, TransformError> {
     let mut out = Vec::with_capacity(rules.len());
     for rule in rules {
-        if let Some(transform) = registry.get(rule.transform.as_str()) {
+        if let Some(transform) = registry.get(canonical_transform_id(rule.transform.as_str())) {
             out.push(transform.init_state());
         } else {
             return Err(TransformError::NotFound(rule.transform.clone()));
@@ -239,7 +270,7 @@ pub async fn apply_transforms(
             }
         }
         let transform = registry
-            .get(rule.transform.as_str())
+            .get(canonical_transform_id(rule.transform.as_str()))
             .ok_or_else(|| TransformError::NotFound(rule.transform.clone()))?;
         let config = transform.parse_config(rule.config.clone())?;
         transform
@@ -284,7 +315,7 @@ pub async fn apply_stream_transforms(
             }
         }
         let transform = registry
-            .get(rule.transform.as_str())
+            .get(canonical_transform_id(rule.transform.as_str()))
             .ok_or_else(|| TransformError::NotFound(rule.transform.clone()))?;
         let config = transform.parse_config(rule.config.clone())?;
         let mut next_events = Vec::new();
@@ -460,7 +491,7 @@ pub fn state_set_contains(state: &mut dyn TransformState, key: u32) -> bool {
 
 #[cfg(test)]
 mod registry_tests {
-    use super::registry;
+    use super::{TransformRuleConfig, canonicalize_transform_rule, registry};
 
     #[test]
     fn registry_contains_reasoning_content_delta_and_api_key_scope_metadata() {
@@ -489,5 +520,32 @@ mod registry_tests {
             serde_json::to_value(super::TransformScope::Global).expect("scope serializes"),
             serde_json::json!("global")
         );
+    }
+
+    #[test]
+    fn canonical_transform_ids_are_lower_snake_case() {
+        let registry = registry();
+        for transform_id in registry.keys() {
+            assert!(
+                transform_id
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'),
+                "transform id {transform_id} must be lowercase snake_case"
+            );
+        }
+    }
+
+    #[test]
+    fn canonicalizes_legacy_transform_aliases() {
+        let mut rule = TransformRuleConfig {
+            transform: "remove_anthropic_billing_header".to_string(),
+            enabled: true,
+            models: None,
+            phase: super::Phase::Request,
+            config: serde_json::json!({}),
+        };
+
+        assert!(canonicalize_transform_rule(&mut rule));
+        assert_eq!(rule.transform, "strip_anthropic_billing_header");
     }
 }

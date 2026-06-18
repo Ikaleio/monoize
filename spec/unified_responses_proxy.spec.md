@@ -727,6 +727,9 @@ PM4. Tool-calling:
 
 - When the upstream Messages output contains `tool_use` blocks, Monoize MUST convert each block into one URP assistant `ToolCall` node.
 - When a downstream Messages request contains `tool_result` blocks, Monoize MUST convert them into top-level URP `ToolResult` nodes.
+- When encoding a request to an upstream Messages provider, Monoize MUST NOT emit a `text` content block whose `text` value is the empty string unless that block carries at least one non-semantic extra field.
+- When encoding two or more consecutive URP `ToolResult` nodes to an upstream Messages provider, Monoize MUST encode them as consecutive `tool_result` blocks inside one user `messages[]` entry. Monoize MUST NOT split consecutive `ToolResult` nodes into multiple adjacent user `messages[]` entries.
+- When a user `messages[]` entry contains one or more encoded `tool_result` blocks, those blocks MUST appear before any non-`tool_result` content block in that same user entry.
 
 PM4.1. When parsing downstream Messages `tool_result.content`, Monoize MUST support:
 
@@ -1194,6 +1197,15 @@ STR3j. Downstream `/v1/responses` SSE MUST obey nested lifecycle ordering. For e
 - function-call `response.function_call_arguments.done` MUST precede the function-call item's `response.output_item.done`.
 
 STR3k. For downstream `/v1/responses` SSE translated from upstream Responses streams, Monoize MUST emit at most one `response.output_item.added` and `response.output_item.done` lifecycle per logical downstream output item. If a message or function-call item has already been streamed before `response.completed`, Monoize MUST NOT synthesize a second duplicate lifecycle for that same logical item when the terminal response snapshot arrives.
+
+STR3k.1. For the duplicate-suppression rule in STR3k, two message items MUST be treated as the same logical output item when all of the following conditions hold:
+
+- both items have `type = "message"`;
+- both items have the same role, using `"assistant"` when `role` is absent;
+- both items have the same non-empty ordered text content after reading each `content[]` part's `text` or `refusal` string;
+- the two item-level `phase` values are equal, or at least one item omits item-level `phase`.
+
+In that case, different message `id` values MUST NOT cause Monoize to emit a second output item lifecycle or a second `response.completed.response.output[]` entry.
 
 STR3l. Downstream `/v1/responses` SSE MUST preserve externally visible item identity continuity. In particular, deltas and terminal item payloads for the same logical output item MUST use the same `item_id`.
 

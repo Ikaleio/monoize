@@ -1,4 +1,43 @@
 
+async fn enable_auto_cache_openai_prompt(ctx: &TestContext) {
+    ctx.state.monoize_runtime.write().await.global_transforms =
+        vec![monoize::transforms::TransformRuleConfig {
+            transform: "auto_cache_openai_prompt".to_string(),
+            enabled: true,
+            models: None,
+            phase: monoize::transforms::Phase::Request,
+            config: json!({}),
+        }];
+}
+
+#[tokio::test]
+async fn responses_upstream_auto_cache_openai_prompt_adds_top_level_cache_fields() {
+    let ctx = setup().await;
+    enable_auto_cache_openai_prompt(&ctx).await;
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "instructions": "Keep answers short.",
+            "input": "cache me"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["prompt_cache_retention"], json!("24h"));
+    let key = upstream["prompt_cache_key"]
+        .as_str()
+        .expect("prompt_cache_key");
+    assert!(
+        key.starts_with("mzpc_") && key.len() == "mzpc_".len() + 32,
+        "unexpected prompt_cache_key: {key}"
+    );
+}
+
 #[tokio::test]
 async fn messages_nonstream_from_gemini_upstream_text() {
     let ctx = setup().await;

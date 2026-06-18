@@ -96,6 +96,7 @@ pub(super) async fn forward_stream_typed(
                 &mut req_attempt,
                 &attempt.provider_transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             apply_transform_rules_request(
@@ -103,6 +104,7 @@ pub(super) async fn forward_stream_typed(
                 &mut req_attempt,
                 &global_transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             apply_transform_rules_request(
@@ -110,6 +112,7 @@ pub(super) async fn forward_stream_typed(
                 &mut req_attempt,
                 &auth.transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             strip_monoize_context(&mut req_attempt);
@@ -194,6 +197,7 @@ pub(super) async fn forward_stream_typed(
                             &mut resp,
                             &attempt.provider_transforms,
                             &logical_model,
+                            Some(attempt.provider_type),
                         )
                         .await
                         {
@@ -207,6 +211,7 @@ pub(super) async fn forward_stream_typed(
                             &mut resp,
                             &global_transforms,
                             &logical_model,
+                            Some(attempt.provider_type),
                         )
                         .await
                         {
@@ -220,6 +225,7 @@ pub(super) async fn forward_stream_typed(
                             &mut resp,
                             &auth.transforms,
                             &logical_model,
+                            Some(attempt.provider_type),
                         )
                         .await
                         {
@@ -462,6 +468,7 @@ pub(super) async fn forward_stream_typed(
                     let capture_provider_id = attempt.provider_id.clone();
                     let capture_channel_id = attempt.channel_id.clone();
                     let capture_provider_type = attempt.provider_type;
+                    let transform_provider_type = attempt.provider_type;
                     let capture_upstream_model = req_attempt.model.clone();
                     let capture_logical_model = logical_model.clone();
                     let capture_attempt_number = attempt_number;
@@ -530,6 +537,7 @@ pub(super) async fn forward_stream_typed(
                                         &global_rules_for_transform,
                                         &auth_rules_for_transform,
                                         &model_for_transform,
+                                        Some(transform_provider_type),
                                         reasoning_envelope,
                                     )
                                     .await

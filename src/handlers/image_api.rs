@@ -516,6 +516,7 @@ async fn execute_stream_collected_image_typed(
                 &mut req_attempt,
                 &attempt.provider_transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
@@ -524,6 +525,7 @@ async fn execute_stream_collected_image_typed(
                 &mut req_attempt,
                 &global_transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             apply_transform_rules_request(
@@ -531,6 +533,7 @@ async fn execute_stream_collected_image_typed(
                 &mut req_attempt,
                 &auth.transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             strip_monoize_context(&mut req_attempt);
@@ -614,6 +617,7 @@ async fn execute_stream_collected_image_typed(
                     let auth_rules = auth.transforms.clone();
                     let state_for_transform = state.clone();
                     let model_for_transform = logical_model.clone();
+                    let transform_provider_type = attempt.provider_type;
                     let transform_handle = tokio::spawn(async move {
                         transform_urp_stream(
                             &state_for_transform,
@@ -623,6 +627,7 @@ async fn execute_stream_collected_image_typed(
                             &global_rules,
                             &auth_rules,
                             &model_for_transform,
+                            Some(transform_provider_type),
                             None,
                         )
                         .await

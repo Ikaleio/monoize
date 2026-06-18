@@ -5,7 +5,10 @@ use super::{
     UserBalance, UserRole, UserStore, canonicalize_groups, parse_groups_json,
     validate_model_redirects,
 };
-use crate::transforms::TransformRuleConfig;
+use crate::transforms::{
+    TransformRuleConfig, canonical_transform_id, canonicalize_transform_rule,
+    canonicalize_transform_rules,
+};
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
@@ -24,9 +27,11 @@ const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
     "append_empty_user_message",
     "compress_user_message_images",
     "enable_openai_image_generation_tool",
+    "strip_anthropic_billing_header",
     "auto_cache_system",
     "auto_cache_tool_use",
     "auto_cache_user_id",
+    "auto_cache_openai_prompt",
 ];
 
 const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
@@ -44,12 +49,13 @@ const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
 ];
 
 pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
+    let transform = canonical_transform_id(rule.transform.as_str());
     match rule.phase {
         crate::transforms::Phase::Request => {
-            ALLOWED_API_KEY_REQUEST_TRANSFORMS.contains(&rule.transform.as_str())
+            ALLOWED_API_KEY_REQUEST_TRANSFORMS.contains(&transform)
         }
         crate::transforms::Phase::Response => {
-            ALLOWED_API_KEY_RESPONSE_TRANSFORMS.contains(&rule.transform.as_str())
+            ALLOWED_API_KEY_RESPONSE_TRANSFORMS.contains(&transform)
         }
     }
 }
@@ -58,6 +64,13 @@ pub(crate) fn sanitize_api_key_transforms(
     transforms: Vec<TransformRuleConfig>,
     is_admin: bool,
 ) -> Vec<TransformRuleConfig> {
+    let transforms: Vec<TransformRuleConfig> = transforms
+        .into_iter()
+        .map(|mut rule| {
+            canonicalize_transform_rule(&mut rule);
+            rule
+        })
+        .collect();
     if is_admin {
         return transforms;
     }
@@ -75,7 +88,9 @@ pub(crate) fn validate_api_key_transforms(
         return Ok(());
     }
     for rule in transforms {
-        if !is_allowed_api_key_transform(rule) {
+        let mut canonical_rule = rule.clone();
+        canonicalize_transform_rule(&mut canonical_rule);
+        if !is_allowed_api_key_transform(&canonical_rule) {
             return Err(format!(
                 "transform '{}' is not allowed for API keys",
                 rule.transform
@@ -164,7 +179,7 @@ impl UserStore {
         pending_request_logs: Arc<dashmap::DashMap<String, super::InsertRequestLog>>,
     ) -> Result<Self, String> {
         use std::time::Duration;
-        Ok(Self {
+        let store = Self {
             db,
             last_used_batcher: crate::db_cache::LastUsedBatcher::new(),
             request_log_batcher: crate::db_cache::RequestLogBatcher::new(
@@ -174,7 +189,44 @@ impl UserStore {
             ),
             api_key_cache: crate::db_cache::ApiKeyCache::new(Duration::from_secs(60)),
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
-        })
+        };
+        store.migrate_transform_rule_ids().await?;
+        Ok(store)
+    }
+
+    async fn migrate_transform_rule_ids(&self) -> Result<(), String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(self.db.stmt("SELECT id, transforms FROM api_keys", vec![]))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+            let raw: String = row
+                .try_get("", "transforms")
+                .unwrap_or_else(|_| "[]".to_string());
+            let Ok(mut transforms) = serde_json::from_str::<Vec<TransformRuleConfig>>(&raw) else {
+                tracing::warn!(api_key_id = %id, "skip invalid api key transforms during transform id migration");
+                continue;
+            };
+            if !canonicalize_transform_rules(&mut transforms) {
+                continue;
+            }
+            let encoded = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
+            self.db
+                .write()
+                .await
+                .execute(self.db.stmt(
+                    "UPDATE api_keys SET transforms = $1 WHERE id = $2",
+                    vec![encoded.into(), id.clone().into()],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            self.api_key_cache.invalidate_by_key_id(&id);
+        }
+        Ok(())
     }
 
     pub fn spawn_background_tasks(&self) {
@@ -587,9 +639,10 @@ impl UserStore {
     pub async fn create_api_key_extended(
         &self,
         user_id: &str,
-        input: CreateApiKeyInput,
+        mut input: CreateApiKeyInput,
         is_admin: bool,
     ) -> Result<(ApiKey, String), String> {
+        canonicalize_transform_rules(&mut input.transforms);
         validate_api_key_transforms(&input.transforms, is_admin)?;
         validate_model_redirects(&input.model_redirects)?;
         let user_allowed_groups = self
@@ -1078,9 +1131,11 @@ impl UserStore {
             idx += 1;
         }
         if let Some(transforms) = &input.transforms {
+            let mut transforms = transforms.clone();
+            canonicalize_transform_rules(&mut transforms);
             set_clauses.push(format!("transforms = ${idx}"));
             values.push(
-                serde_json::to_string(transforms)
+                serde_json::to_string(&transforms)
                     .map_err(|e| e.to_string())?
                     .into(),
             );
@@ -1722,6 +1777,22 @@ mod tests {
         }];
 
         assert!(validate_api_key_transforms(&transforms, false).is_ok());
+    }
+
+    #[test]
+    fn sanitize_api_key_transforms_canonicalizes_allowed_aliases() {
+        let transforms = vec![TransformRuleConfig {
+            transform: "remove_anthropic_billing_header".to_string(),
+            enabled: true,
+            models: None,
+            phase: Phase::Request,
+            config: json!({}),
+        }];
+
+        let sanitized = sanitize_api_key_transforms(transforms, false);
+
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].transform, "strip_anthropic_billing_header");
     }
 
     #[test]

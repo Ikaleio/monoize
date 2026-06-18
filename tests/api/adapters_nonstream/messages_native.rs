@@ -50,6 +50,114 @@ async fn messages_tool_result_multipart_roundtrip_via_messages_upstream() {
 }
 
 #[tokio::test]
+async fn messages_parallel_tool_results_are_encoded_in_one_user_message_for_messages_upstream() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [
+              {
+                "role": "assistant",
+                "content": [
+                  { "type": "tool_use", "id": "call_1", "name": "tool_a", "input": {} },
+                  { "type": "tool_use", "id": "call_2", "name": "tool_b", "input": {} }
+                ]
+              },
+              {
+                "role": "user",
+                "content": [
+                  { "type": "tool_result", "tool_use_id": "call_1", "content": "R1" },
+                  { "type": "tool_result", "tool_use_id": "call_2", "content": "R2" }
+                ]
+              }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let text = v["content"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|b| b.get("type").and_then(|v| v.as_str()) == Some("text"))
+        })
+        .and_then(|b| b.get("text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(text.contains("tool_ok:R1|R2"));
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let messages = upstream["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 2, "unexpected messages shape: {upstream}");
+    assert_eq!(messages[0]["role"].as_str(), Some("assistant"));
+    assert_eq!(messages[1]["role"].as_str(), Some("user"));
+    let tool_results = messages[1]["content"].as_array().expect("content array");
+    assert_eq!(
+        tool_results
+            .iter()
+            .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("tool_result"))
+            .count(),
+        2,
+        "parallel tool results must share one user message: {upstream}"
+    );
+    assert_eq!(
+        tool_results[0]["tool_use_id"].as_str(),
+        Some("call_1"),
+        "tool_result order must follow input order: {upstream}"
+    );
+    assert_eq!(tool_results[1]["tool_use_id"].as_str(), Some("call_2"));
+}
+
+#[tokio::test]
+async fn messages_assistant_empty_text_before_tool_use_is_not_sent_to_messages_upstream() {
+    let ctx = setup().await;
+    let (status, _body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    { "type": "text", "text": "" },
+                    { "type": "tool_use", "id": "call_1", "name": "tool_a", "input": {} }
+                ]
+            }, {
+                "role": "user",
+                "content": [
+                    { "type": "tool_result", "tool_use_id": "call_1", "content": "R1" }
+                ]
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let messages = upstream["messages"].as_array().expect("messages array");
+    assert_eq!(
+        messages.len(),
+        2,
+        "assistant tool use and user tool result should both remain: {upstream}"
+    );
+    let content = messages[0]["content"]
+        .as_array()
+        .expect("content array");
+    assert_eq!(
+        content.len(),
+        1,
+        "empty assistant text block must not be forwarded: {upstream}"
+    );
+    assert_eq!(content[0]["type"].as_str(), Some("tool_use"));
+    assert_eq!(content[0]["id"].as_str(), Some("call_1"));
+}
+
+#[tokio::test]
 async fn messages_upstream_sends_anthropic_version_header() {
     let ctx = setup().await;
     let (status, _body) = json_post(

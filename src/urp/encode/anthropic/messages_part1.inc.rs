@@ -6,6 +6,9 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             extra_body,
             ..
         } => {
+            if content.is_empty() && phase.is_none() && extra_body.is_empty() {
+                return None;
+            }
             let mut block = json!({ "type": "text", "text": content });
             if let Some(obj) = block.as_object_mut() {
                 if let Some(phase) = phase {
@@ -108,6 +111,9 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             extra_body,
             ..
         } => {
+            if content.is_empty() && phase.is_none() && extra_body.is_empty() {
+                return None;
+            }
             let mut block = json!({ "type": "text", "text": content });
             if let Some(obj) = block.as_object_mut() {
                 if let Some(phase) = phase {
@@ -217,7 +223,7 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
     }
 }
 
-fn encode_tool_result_message(
+fn encode_tool_result_block(
     call_id: &str,
     content: &[ToolResultContent],
     is_error: bool,
@@ -243,9 +249,5 @@ fn encode_tool_result_message(
     if let Some(obj) = tool_result_block.as_object_mut() {
         merge_extra(obj, extra_body);
     }
-    json!({
-        "role": "user",
-        "content": [tool_result_block]
-    })
+    tool_result_block
 }
-

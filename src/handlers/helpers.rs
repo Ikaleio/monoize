@@ -106,10 +106,17 @@ pub(super) fn inject_monoize_context(auth: &crate::auth::AuthResult, req: &mut u
         req.extra_body
             .insert("__monoize_username".to_string(), json!(username.clone()));
     }
+    if let Some(api_key_id) = &auth.api_key_id {
+        req.extra_body.insert(
+            "__monoize_api_key_id".to_string(),
+            json!(api_key_id.clone()),
+        );
+    }
 }
 
 pub(super) fn strip_monoize_context(req: &mut urp::UrpRequest) {
     req.extra_body.remove("__monoize_username");
+    req.extra_body.remove("__monoize_api_key_id");
 }
 
 pub(super) async fn apply_transform_rules_request(
@@ -117,6 +124,7 @@ pub(super) async fn apply_transform_rules_request(
     req: &mut urp::UrpRequest,
     rules: &[TransformRuleConfig],
     match_model: &str,
+    upstream_provider_type: Option<ProviderType>,
 ) -> AppResult<()> {
     if rules.is_empty() {
         return Ok(());
@@ -132,6 +140,7 @@ pub(super) async fn apply_transform_rules_request(
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
         http_client: state.http.clone(),
+        upstream_provider_type,
     };
     transforms::apply_transforms(
         transforms::UrpData::Request(req),
@@ -157,6 +166,7 @@ pub(super) async fn apply_transform_rules_response(
     resp: &mut urp::UrpResponse,
     rules: &[TransformRuleConfig],
     model: &str,
+    upstream_provider_type: Option<ProviderType>,
 ) -> AppResult<()> {
     if rules.is_empty() {
         return Ok(());
@@ -172,6 +182,7 @@ pub(super) async fn apply_transform_rules_response(
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
         http_client: state.http.clone(),
+        upstream_provider_type,
     };
     transforms::apply_transforms(
         transforms::UrpData::Response(resp),
@@ -200,6 +211,7 @@ pub(super) async fn transform_urp_stream(
     global_rules: &[TransformRuleConfig],
     auth_rules: &[TransformRuleConfig],
     model: &str,
+    upstream_provider_type: Option<ProviderType>,
     reasoning_envelope: Option<(&str, &str)>,
 ) -> AppResult<()> {
     let mut provider_states =
@@ -233,6 +245,7 @@ pub(super) async fn transform_urp_stream(
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
         http_client: state.http.clone(),
+        upstream_provider_type,
     };
 
     while let Some(mut event) = rx.recv().await {
@@ -554,6 +567,8 @@ const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
     "min_p",
     "repetition_penalty",
     "prediction",
+    "prompt_cache_key",
+    "prompt_cache_retention",
     "route",
     "structured_outputs",
     "verbosity",

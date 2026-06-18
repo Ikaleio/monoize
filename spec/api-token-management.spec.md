@@ -131,9 +131,11 @@ TM-TF-3. Allowed API-key request-phase transforms are exactly:
 - `append_empty_user_message`
 - `compress_user_message_images`
 - `enable_openai_image_generation_tool`
+- `strip_anthropic_billing_header`
 - `auto_cache_system`
 - `auto_cache_tool_use`
 - `auto_cache_user_id`
+- `auto_cache_openai_prompt`
 
 TM-TF-4. Allowed API-key response-phase transforms are exactly:
 

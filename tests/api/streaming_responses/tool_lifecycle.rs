@@ -208,6 +208,74 @@ async fn responses_streaming_from_responses_upstream_does_not_duplicate_complete
 }
 
 #[tokio::test]
+async fn responses_streaming_completed_snapshot_without_phase_does_not_duplicate_streamed_message()
+{
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":"stream message",
+                "stream": true,
+                "stream_mode": "message_completed_snapshot_without_phase"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let output_item_added: Vec<&Value> = frames
+        .iter()
+        .filter(|(event, _)| event == "response.output_item.added")
+        .map(|(_, payload)| payload)
+        .collect();
+    let output_item_done: Vec<&Value> = frames
+        .iter()
+        .filter(|(event, _)| event == "response.output_item.done")
+        .map(|(_, payload)| payload)
+        .collect();
+
+    assert_eq!(
+        output_item_added.len(),
+        1,
+        "completed snapshot must not create a second added lifecycle: {text}"
+    );
+    assert_eq!(
+        output_item_done.len(),
+        1,
+        "completed snapshot must not create a second done lifecycle: {text}"
+    );
+    assert_eq!(output_item_added[0]["output_index"].as_u64(), Some(0));
+    assert_eq!(output_item_done[0]["output_index"].as_u64(), Some(0));
+    assert_eq!(output_item_done[0]["item"]["id"].as_str(), Some("msg_stream"));
+
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .expect("response.completed frame");
+    let output = completed["response"]["output"]
+        .as_array()
+        .expect("completed output array");
+    assert_eq!(
+        output.len(),
+        1,
+        "completed response output must not replay a duplicate message: {text}"
+    );
+    assert_eq!(output[0]["id"].as_str(), Some("msg_stream"));
+    assert_eq!(output[0]["phase"].as_str(), Some("final_answer"));
+    assert_eq!(output[0]["content"][0]["text"].as_str(), Some("same text"));
+}
+
+#[tokio::test]
 async fn responses_streaming_response_done_output_is_authoritative_terminal_state() {
     let ctx = setup().await;
     let req = Request::builder()

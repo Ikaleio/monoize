@@ -139,6 +139,7 @@ pub(super) async fn execute_nonstream_typed(
                 &mut req_attempt,
                 &attempt.provider_transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             let global_transforms = state.monoize_runtime.read().await.global_transforms.clone();
@@ -147,6 +148,7 @@ pub(super) async fn execute_nonstream_typed(
                 &mut req_attempt,
                 &global_transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             apply_transform_rules_request(
@@ -154,6 +156,7 @@ pub(super) async fn execute_nonstream_typed(
                 &mut req_attempt,
                 &auth.transforms,
                 &transform_match_model,
+                Some(attempt.provider_type),
             )
             .await?;
             strip_monoize_context(&mut req_attempt);
@@ -327,6 +330,7 @@ pub(super) async fn execute_nonstream_typed(
                         &mut resp,
                         &attempt.provider_transforms,
                         &req.model,
+                        Some(attempt.provider_type),
                     )
                     .await
                     {
@@ -340,6 +344,7 @@ pub(super) async fn execute_nonstream_typed(
                         &mut resp,
                         &global_transforms,
                         &req.model,
+                        Some(attempt.provider_type),
                     )
                     .await
                     {
@@ -353,6 +358,7 @@ pub(super) async fn execute_nonstream_typed(
                         &mut resp,
                         &auth.transforms,
                         &req.model,
+                        Some(attempt.provider_type),
                     )
                     .await
                     {

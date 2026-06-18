@@ -906,10 +906,10 @@ pub fn nodes_semantically_match(left: &Node, right: &Node) -> bool {
                 ..
             },
         ) => {
+            let phases_compatible =
+                left_phase == right_phase || left_phase.is_none() || right_phase.is_none();
             (left_id.is_some() && left_id == right_id)
-                || (left_role == right_role
-                    && left_phase == right_phase
-                    && left_content == right_content)
+                || (left_role == right_role && phases_compatible && left_content == right_content)
         }
         (
             Node::Image {

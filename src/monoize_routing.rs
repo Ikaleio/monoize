@@ -1,5 +1,5 @@
 use crate::db::DbPool;
-use crate::transforms::TransformRuleConfig;
+use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
 use crate::users::{canonicalize_groups, parse_groups_json};
 use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
@@ -336,7 +336,46 @@ fn generate_short_id() -> String {
 
 impl MonoizeRoutingStore {
     pub async fn new(db: DbPool) -> Result<Self, String> {
-        Ok(Self { db })
+        let store = Self { db };
+        store.migrate_transform_rule_ids().await?;
+        Ok(store)
+    }
+
+    async fn migrate_transform_rule_ids(&self) -> Result<(), String> {
+        let rows = self
+            .db
+            .read()
+            .query_all(
+                self.db
+                    .stmt("SELECT id, transforms FROM monoize_providers", vec![]),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        for row in rows {
+            let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+            let raw: String = row
+                .try_get("", "transforms")
+                .unwrap_or_else(|_| "[]".to_string());
+            let Ok(mut transforms) = serde_json::from_str::<Vec<TransformRuleConfig>>(&raw) else {
+                tracing::warn!(provider_id = %id, "skip invalid provider transforms during transform id migration");
+                continue;
+            };
+            if !canonicalize_transform_rules(&mut transforms) {
+                continue;
+            }
+            let encoded = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
+            self.db
+                .write()
+                .await
+                .execute(self.db.stmt(
+                    "UPDATE monoize_providers SET transforms = $1 WHERE id = $2",
+                    vec![encoded.into(), id.into()],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     pub async fn provider_count(&self) -> Result<i64, String> {
@@ -477,8 +516,9 @@ impl MonoizeRoutingStore {
             }
         };
 
-        let transforms_json =
-            serde_json::to_string(&input.transforms).map_err(|e| e.to_string())?;
+        let mut transforms = input.transforms.clone();
+        canonicalize_transform_rules(&mut transforms);
+        let transforms_json = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
         let api_type_overrides_json =
             serde_json::to_string(&input.api_type_overrides).map_err(|e| e.to_string())?;
         let groups_json = serialize_provider_groups_json(&input.groups)?;
@@ -602,7 +642,8 @@ impl MonoizeRoutingStore {
         let per_model_circuit_break = input
             .per_model_circuit_break
             .unwrap_or(existing.per_model_circuit_break);
-        let transforms = input.transforms.unwrap_or(existing.transforms.clone());
+        let mut transforms = input.transforms.unwrap_or(existing.transforms.clone());
+        canonicalize_transform_rules(&mut transforms);
         let api_type_overrides = input
             .api_type_overrides
             .unwrap_or(existing.api_type_overrides.clone());
@@ -1078,8 +1119,9 @@ impl MonoizeRoutingStore {
         let transforms_raw: String = row
             .try_get("", "transforms")
             .map_err(|e| format!("provider {id} missing transforms column: {e}"))?;
-        let transforms: Vec<TransformRuleConfig> = serde_json::from_str(&transforms_raw)
+        let mut transforms: Vec<TransformRuleConfig> = serde_json::from_str(&transforms_raw)
             .map_err(|e| format!("provider {id} invalid transforms JSON: {e}"))?;
+        canonicalize_transform_rules(&mut transforms);
         let api_type_overrides_raw: String = row
             .try_get("", "api_type_overrides")
             .map_err(|e| format!("provider {id} missing api_type_overrides column: {e}"))?;

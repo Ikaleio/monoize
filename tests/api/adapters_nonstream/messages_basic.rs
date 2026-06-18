@@ -1,4 +1,40 @@
 
+async fn enable_auto_cache_openai_prompt(ctx: &TestContext) {
+    ctx.state.monoize_runtime.write().await.global_transforms =
+        vec![monoize::transforms::TransformRuleConfig {
+            transform: "auto_cache_openai_prompt".to_string(),
+            enabled: true,
+            models: None,
+            phase: monoize::transforms::Phase::Request,
+            config: json!({}),
+        }];
+}
+
+#[tokio::test]
+async fn messages_upstream_auto_cache_openai_prompt_is_noop() {
+    let ctx = setup().await;
+    enable_auto_cache_openai_prompt(&ctx).await;
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "hello" }] }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert!(upstream.get("prompt_cache_key").is_none(), "{upstream}");
+    assert!(
+        upstream.get("prompt_cache_retention").is_none(),
+        "{upstream}"
+    );
+}
+
 #[tokio::test]
 async fn messages_tool_definition_metadata_preserved_same_family() {
     let ctx = setup().await;

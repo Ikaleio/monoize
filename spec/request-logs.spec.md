@@ -457,7 +457,9 @@ FL51. The aggregate fields `total` and `total_charge_nano_usd` (as defined in se
 
 ### 6.8 Name-cache enrichment model
 
-FL52. Both SSE events and REST responses MUST use in-memory ID-to-name caches for the enriched fields: `provider_name`, `channel_name`, `username`, and `api_key_name`. The server MUST NOT perform database JOINs at SSE event delivery time. If a cache miss occurs for a given ID, the enriched field MUST be null (not omitted), and the client MUST render the raw ID as fallback display text where applicable (per FL9 for channel, analogous for others).
+FL52. REST request-log responses MUST compute enriched fields by query-time joins against the related tables listed in section 1.2. A REST response MUST NOT replace a non-null joined enriched field with null because an in-memory name cache misses the same ID.
+
+FL52a. SSE request-log events MUST use in-memory ID-to-name caches for the enriched fields: `provider_name`, `channel_name`, `username`, and `api_key_name`. The server MUST NOT perform database JOINs at SSE event delivery time. If a cache miss occurs for a given ID in an SSE event, the enriched field MUST be null (not omitted), and the client MUST render the raw ID as fallback display text where applicable (per FL9 for channel, analogous for others).
 
 ### 6.9 No server-side filtering on SSE
 

@@ -13,11 +13,11 @@ use mozjpeg::{ColorSpace, Compress, ScanMode};
 use oxipng::Options;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::any::Any;
 use std::collections::HashMap;
+use xxhash_rust::xxh3::Xxh3;
 
-const TRANSFORM_VERSION: &str = "compress_user_message_images:v2";
+const TRANSFORM_VERSION: &str = "compress_user_message_images:v3";
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -450,17 +450,17 @@ fn is_supported_media_type(media_type: &str) -> bool {
 }
 
 fn build_cache_key(media_type: &str, cfg: &Config, original: &[u8]) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = Xxh3::new();
     hasher.update(TRANSFORM_VERSION.as_bytes());
-    hasher.update([0]);
+    hasher.update(&[0]);
     hasher.update(media_type.as_bytes());
-    hasher.update([0]);
-    hasher.update(cfg.max_edge_px.to_le_bytes());
-    hasher.update([cfg.jpeg_quality]);
-    hasher.update([u8::from(cfg.skip_if_smaller)]);
-    hasher.update([0]);
+    hasher.update(&[0]);
+    hasher.update(&cfg.max_edge_px.to_le_bytes());
+    hasher.update(&[cfg.jpeg_quality]);
+    hasher.update(&[u8::from(cfg.skip_if_smaller)]);
+    hasher.update(&[0]);
     hasher.update(original);
-    hex::encode(hasher.finalize())
+    format!("{:032x}", hasher.digest128())
 }
 
 struct CompressedImageBytes {
@@ -568,6 +568,33 @@ mod tests {
     use std::collections::HashMap;
     use tempfile::TempDir;
 
+    #[test]
+    fn image_cache_key_uses_128_bit_hex_digest_material() {
+        let cfg = Config {
+            max_edge_px: 1568,
+            jpeg_quality: 80,
+            skip_if_smaller: true,
+        };
+        let key = build_cache_key("image/png", &cfg, b"original bytes");
+        let same = build_cache_key("image/png", &cfg, b"original bytes");
+        let changed_config = build_cache_key(
+            "image/png",
+            &Config {
+                jpeg_quality: 81,
+                ..cfg.clone()
+            },
+            b"original bytes",
+        );
+        let changed_original = build_cache_key("image/png", &cfg, b"different bytes");
+
+        assert_eq!(key.len(), 32);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!key.chars().any(|c| c.is_ascii_uppercase()));
+        assert_eq!(key, same);
+        assert_ne!(key, changed_config);
+        assert_ne!(key, changed_original);
+    }
+
     #[tokio::test]
     async fn compresses_user_message_base64_images_and_persists_cache() {
         let temp_dir = TempDir::new().expect("temp dir");
@@ -580,6 +607,7 @@ mod tests {
         let context = TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
             http_client: reqwest::Client::new(),
+            upstream_provider_type: None,
         };
         let input_png = build_png_data_url_source();
         let mut req = UrpRequest {
@@ -668,6 +696,7 @@ mod tests {
         let context = TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
             http_client: reqwest::Client::new(),
+            upstream_provider_type: None,
         };
         let input_png = build_png_data_url_source();
         let input_data_url = format!("data:image/png;base64,{input_png}");
@@ -755,6 +784,7 @@ mod tests {
         let context = TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
             http_client: reqwest::Client::new(),
+            upstream_provider_type: None,
         };
         let input_png = build_png_data_url_source();
         let mut resp = UrpResponse {
@@ -824,6 +854,7 @@ mod tests {
         let context = TransformRuntimeContext {
             image_transform_cache: std::sync::Arc::new(cache),
             http_client: reqwest::Client::new(),
+            upstream_provider_type: None,
         };
         let rules = vec![crate::transforms::TransformRuleConfig {
             transform: "compress_assistant_output_images".to_string(),

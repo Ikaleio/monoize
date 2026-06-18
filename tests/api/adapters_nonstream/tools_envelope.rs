@@ -91,6 +91,67 @@ async fn responses_tool_result_multipart_roundtrip_via_responses_upstream() {
 }
 
 #[tokio::test]
+async fn responses_tool_results_to_messages_upstream_do_not_emit_empty_text_or_split_results() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "input": [
+              {
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "" }]
+              },
+              { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "tool_a", "arguments": "{}" },
+              { "type": "function_call", "id": "fc_2", "call_id": "call_2", "name": "tool_b", "arguments": "{}" },
+              { "type": "function_call_output", "call_id": "call_1", "output": "R1" },
+              { "type": "function_call_output", "call_id": "call_2", "output": "R2" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let messages = upstream["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 2, "unexpected messages shape: {upstream}");
+    assert_eq!(messages[0]["role"].as_str(), Some("assistant"));
+    assert_eq!(messages[1]["role"].as_str(), Some("user"));
+
+    let assistant_content = messages[0]["content"].as_array().expect("assistant content");
+    assert_eq!(
+        assistant_content
+            .iter()
+            .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("text"))
+            .count(),
+        0,
+        "empty assistant text block must not be sent before tool_use blocks: {upstream}"
+    );
+    assert_eq!(
+        assistant_content
+            .iter()
+            .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("tool_use"))
+            .count(),
+        2,
+        "tool calls should remain in the assistant message: {upstream}"
+    );
+
+    let user_content = messages[1]["content"].as_array().expect("user content");
+    assert_eq!(
+        user_content
+            .iter()
+            .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("tool_result"))
+            .count(),
+        2,
+        "parallel tool results must share one user message: {upstream}"
+    );
+    assert_eq!(user_content[0]["tool_use_id"].as_str(), Some("call_1"));
+    assert_eq!(user_content[1]["tool_use_id"].as_str(), Some("call_2"));
+}
+
+#[tokio::test]
 async fn responses_nonstream_image_generation_tool_returns_output_image() {
     let ctx = setup().await;
     let (status, body) = json_post(

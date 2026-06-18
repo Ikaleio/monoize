@@ -461,6 +461,8 @@ MSG-7. `ToolCall` nodes MUST reconstruct Anthropic `tool_use` blocks. Streamed t
 
 MSG-8. `ToolResult` nodes MUST reconstruct Anthropic `tool_result` blocks as distinct tool-result protocol objects. They MUST NOT be rewritten as ordinary role-bearing nodes.
 
+MSG-8a. Consecutive `ToolResult` nodes MUST reconstruct as consecutive `tool_result` blocks inside one Anthropic user message envelope. A Messages encoder MUST NOT emit an empty text block solely to preserve an empty `Text.content` value.
+
 ### 6.3 OpenRouter-compatible Chat stability and reconstruction
 
 CHAT-1. The Chat Completions encoder MUST preserve OpenRouter-compatible chat behavior. The flat redesign MUST NOT reduce the downstream contract to plain OpenAI Chat Completions.

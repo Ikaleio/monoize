@@ -1072,11 +1072,11 @@ async fn settings_store_round_trips_global_transforms() {
     assert_eq!(settings.monoize_request_capture_retention_days, 1);
 
     settings.global_transforms = vec![TransformRuleConfig {
-        transform: "inject_system_prompt".to_string(),
+        transform: "remove_anthropic_billing_header".to_string(),
         enabled: true,
         models: Some(vec!["gpt-*".to_string()]),
         phase: Phase::Request,
-        config: json!({"content": "global", "position": "prepend"}),
+        config: json!({}),
     }];
     settings.monoize_strip_cross_protocol_nested_extra = false;
     settings.monoize_request_capture_enabled = true;
@@ -1087,7 +1087,7 @@ async fn settings_store_round_trips_global_transforms() {
     assert_eq!(updated.global_transforms.len(), 1);
     assert_eq!(
         updated.global_transforms[0].transform,
-        "inject_system_prompt"
+        "strip_anthropic_billing_header"
     );
     assert_eq!(updated.global_transforms[0].phase, Phase::Request);
     assert!(!updated.monoize_strip_cross_protocol_nested_extra);

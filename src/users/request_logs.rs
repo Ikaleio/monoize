@@ -460,8 +460,13 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
                FROM request_logs rl
+               LEFT JOIN users u ON u.id = rl.user_id
+               LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
+               LEFT JOIN monoize_channels ch ON ch.id = rl.channel_id
+               LEFT JOIN monoize_providers p ON p.id = rl.provider_id
                WHERE rl.user_id = $1"#
             .to_string();
         let mut rows_values: Vec<SeaValue> = vec![user_id.into()];
@@ -612,8 +617,13 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
                FROM request_logs rl
+               LEFT JOIN users u ON u.id = rl.user_id
+               LEFT JOIN api_keys ak ON ak.id = rl.api_key_id
+               LEFT JOIN monoize_channels ch ON ch.id = rl.channel_id
+               LEFT JOIN monoize_providers p ON p.id = rl.provider_id
                WHERE 1 = 1"#
             .to_string();
         let mut rows_values: Vec<SeaValue> = Vec::new();
