@@ -83,6 +83,12 @@ fn api_stream_keep_alive() -> KeepAlive {
         .text("heartbeat")
 }
 
+fn messages_stream_keep_alive() -> KeepAlive {
+    KeepAlive::new()
+        .interval(Duration::from_secs(15))
+        .event(Event::default().event("ping").data(r#"{"type":"ping"}"#))
+}
+
 pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     let providers =
@@ -304,7 +310,7 @@ pub async fn create_messages(
         {
             Ok(stream) => {
                 return Ok(Sse::new(stream)
-                    .keep_alive(api_stream_keep_alive())
+                    .keep_alive(messages_stream_keep_alive())
                     .into_response());
             }
             Err(err) => return Err(err),

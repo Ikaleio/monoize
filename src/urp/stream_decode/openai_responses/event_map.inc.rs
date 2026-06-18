@@ -14,6 +14,14 @@ fn nodes_from_item_value(item: &Value) -> Vec<Node> {
                 }
                 let mut node = part.into_node(ordinary_role);
                 if nodes.is_empty() && !extra_body.is_empty() {
+                    if let Node::Text { phase, .. } = &mut node
+                        && phase.is_none()
+                    {
+                        *phase = extra_body
+                            .get("phase")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                    }
                     node.extra_body_mut().extend(extra_body.clone());
                 }
                 if nodes.is_empty() {

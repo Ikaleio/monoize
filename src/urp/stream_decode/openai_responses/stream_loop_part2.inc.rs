@@ -76,7 +76,7 @@ fn map_responses_event_to_urp_events_with_state(
             });
             events
         }
-        "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
+        "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
             let (reasoning_source, reasoning_item_id) = data_val
                 .get("output_index")
                 .and_then(|v| v.as_u64())
@@ -126,57 +126,11 @@ fn map_responses_event_to_urp_events_with_state(
                 extra_body,
             }]
         }
-        "response.reasoning.done" => {
-            let node_index = urp_node_index_from_delta(&data_val, index_state);
-            let reasoning_source = data_val
-                .get("output_index")
-                .and_then(|v| v.as_u64())
-                .and_then(|output_index| {
-                    let output_state = index_state
-                        .output_state_by_index
-                        .entry(output_index)
-                        .or_default();
-                    merge_reasoning_source(
-                        &mut output_state.reasoning_source,
-                        reasoning_source_from_value(&data_val),
-                    );
-                    output_state.reasoning_source.clone()
-                });
-            let output_index = data_val
-                .get("output_index")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            vec![UrpStreamEvent::NodeDone {
-                node_index,
-                node: Node::Reasoning {
-                    id: output_state_for(index_state, output_index)
-                        .item_id
-                        .clone()
-                        .or_else(|| Some(crate::urp::synthetic_reasoning_id())),
-                    content: data_val
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .filter(|text| !text.is_empty())
-                        .map(|text| text.to_string()),
-                    encrypted: None,
-                    summary: None,
-                    source: reasoning_source,
-                    extra_body: split_known_fields(
-                        data_val.clone(),
-                        &[
-                            "text",
-                            "delta",
-                            "output_index",
-                            "content_index",
-                            "part_index",
-                        ],
-                    ),
-                },
-                usage: None,
-                extra_body: HashMap::new(),
-            }]
-        }
+        "response.reasoning_text.done" | "response.reasoning_summary_text.done" => Vec::new(),
         "response.function_call_arguments.delta" => {
+            if let Some(output_index) = data_val.get("output_index").and_then(|v| v.as_u64()) {
+                output_state_for(index_state, output_index).function_arguments_delta_seen = true;
+            }
             vec![UrpStreamEvent::NodeDelta {
                 node_index: urp_node_index_from_delta(&data_val, index_state),
                 delta: NodeDelta::ToolCallArguments {
@@ -279,8 +233,10 @@ struct OutputItemStreamState {
     emitted_any_node: bool,
     control_emitted: bool,
     part_done_seen: bool,
+    node_done_seen: bool,
     reasoning_text_delta_seen: bool,
     reasoning_summary_delta_seen: bool,
+    function_arguments_delta_seen: bool,
     reasoning_source: Option<String>,
 }
 

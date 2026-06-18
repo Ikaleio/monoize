@@ -78,6 +78,7 @@ impl Transform for SetFieldTransform {
                 | crate::urp::UrpStreamEvent::NodeStart { extra_body, .. }
                 | crate::urp::UrpStreamEvent::NodeDelta { extra_body, .. }
                 | crate::urp::UrpStreamEvent::NodeDone { extra_body, .. }
+                | crate::urp::UrpStreamEvent::ProviderControl { extra_body, .. }
                 | crate::urp::UrpStreamEvent::Error { extra_body, .. } => {
                     set_extra_path(extra_body, &cfg.path, cfg.value.clone());
                 }

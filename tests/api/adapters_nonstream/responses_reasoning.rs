@@ -36,6 +36,46 @@ async fn responses_upstream_requests_include_encrypted_reasoning_content() {
 }
 
 #[tokio::test]
+async fn responses_upstream_request_does_not_default_reasoning_summary() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": "ping",
+            "reasoning": { "effort": "high" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["reasoning"]["effort"], json!("high"));
+    assert!(upstream["reasoning"].get("summary").is_none());
+}
+
+#[tokio::test]
+async fn responses_upstream_request_preserves_explicit_reasoning_summary_auto_without_effort() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": "ping",
+            "reasoning": { "summary": "auto" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["reasoning"]["summary"], json!("auto"));
+    assert!(upstream["reasoning"].get("effort").is_none());
+}
+
+#[tokio::test]
 async fn responses_reasoning_input_roundtrips_to_responses_upstream() {
     let ctx = setup().await;
     let (status, body) = json_post(

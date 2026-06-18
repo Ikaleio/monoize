@@ -253,8 +253,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .get("effort")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            effort.as_ref()?;
-            Some(ReasoningConfig {
+            (!reasoning_obj.is_empty()).then(|| ReasoningConfig {
                 effort,
                 extra_body: split_extra(reasoning_obj, &["effort"]),
             })
@@ -655,7 +654,7 @@ fn decode_reasoning_node(
             .map(|s| s.to_string());
         Node::Reasoning {
             id: id.or_else(|| synthesize_missing_id.then(crate::urp::synthetic_reasoning_id)),
-            content: text.or_else(|| summary.clone()),
+            content: text,
             encrypted,
             summary,
             source,
@@ -1072,6 +1071,20 @@ mod tests {
             Node::Reasoning { id: None, encrypted: Some(value), .. }
                 if value.as_str() == Some("opaque_without_item_id")
         ));
+    }
+
+    #[test]
+    fn decode_request_preserves_reasoning_summary_without_effort() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": "hello",
+            "reasoning": { "summary": "auto" }
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        let reasoning = decoded.reasoning.expect("reasoning should decode");
+        assert!(reasoning.effort.is_none());
+        assert_eq!(reasoning.extra_body.get("summary"), Some(&json!("auto")));
     }
 
     #[test]

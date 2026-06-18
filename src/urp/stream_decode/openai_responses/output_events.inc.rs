@@ -1,7 +1,7 @@
 fn map_response_completed_with_accumulated(
     data_val: Value,
     _index_state: &mut ResponsesStreamIndexState,
-    accumulated_outputs: &[Node],
+    accumulated_outputs: &[AccumulatedOutputEntry],
 ) -> Vec<UrpStreamEvent> {
     let mut events = Vec::new();
     let response_obj = data_val
@@ -14,17 +14,31 @@ fn map_response_completed_with_accumulated(
     };
     let response_value = Value::Object(response_obj.clone());
     let decoded = crate::urp::decode::openai_responses::decode_response(&response_value).ok();
-    let terminal_outputs = decoded
-        .as_ref()
-        .map(|resp| resp.output.clone())
-        .unwrap_or_else(|| {
-            response_obj
-                .get("output")
-                .and_then(|v| v.as_array())
-                .map(|items| items.iter().flat_map(nodes_from_item_value).collect())
-                .unwrap_or_default()
-        });
-    let outputs = merge_response_completed_outputs(terminal_outputs, accumulated_outputs);
+    let terminal_outputs = response_obj
+        .get("output")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .enumerate()
+                .map(|(output_index, item)| AccumulatedOutputEntry {
+                    output_index: output_index as u64,
+                    nodes: nodes_from_item_value(item),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let outputs = match merge_response_completed_outputs(terminal_outputs, accumulated_outputs) {
+        Ok(outputs) => outputs,
+        Err(reason) => {
+            events.push(UrpStreamEvent::Error {
+                code: Some("responses_terminal_conflict".to_string()),
+                message: format!("Responses stream terminal output conflicts with streamed state: {reason}"),
+                extra_body: HashMap::from([("conflict_reason".to_string(), Value::String(reason))]),
+            });
+            return events;
+        }
+    };
     let finish_reason = if outputs_have_tool_calls(&outputs) {
         Some(FinishReason::ToolCalls)
     } else {

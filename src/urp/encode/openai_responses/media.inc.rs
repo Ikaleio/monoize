@@ -648,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_request_defaults_responses_reasoning_summary_to_detailed() {
+    fn encode_request_does_not_default_responses_reasoning_summary() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
             input: items_to_nodes(vec![Item::Message {
@@ -674,8 +674,11 @@ mod tests {
         };
 
         let encoded = encode_request(&req, "gpt-5.4");
-        assert_eq!(encoded["reasoning"]["summary"], json!("detailed"));
-        assert!(encoded["reasoning"].get("effort").is_none());
+        assert!(encoded.get("reasoning").is_none());
+        assert_eq!(
+            encoded["include"],
+            json!(["reasoning.encrypted_content"])
+        );
     }
 
     #[test]

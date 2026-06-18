@@ -187,6 +187,16 @@ pub(crate) async fn stream_messages_to_urp_events(
                 )
                 .await;
             }
+            "ping" => {
+                let _ = tx
+                    .send(UrpStreamEvent::ProviderControl {
+                        protocol: "messages".to_string(),
+                        event_name: "ping".to_string(),
+                        data: data_val,
+                        extra_body: HashMap::new(),
+                    })
+                    .await;
+            }
             "message_stop" => {
                 record_stream_terminal_event(&runtime_metrics, "message_stop", None).await;
                 break;

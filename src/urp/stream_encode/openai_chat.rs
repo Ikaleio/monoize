@@ -606,6 +606,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 emitted_terminal_for_tools = true;
                 finished = true;
             }
+            UrpStreamEvent::ProviderControl { .. } => {}
             UrpStreamEvent::Error { code, message, .. } => {
                 let error = json!({
                     "error": {

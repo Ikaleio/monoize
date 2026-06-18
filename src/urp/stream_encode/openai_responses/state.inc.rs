@@ -127,17 +127,22 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
     let completed_item = state.completed_item.as_ref();
 
     match header {
-        urp::NodeHeader::Reasoning { id } => Some(urp::Node::Reasoning {
-            id: id
-                .clone()
-                .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),
-            content: completed_item
+        urp::NodeHeader::Reasoning { id } => {
+            let content = completed_item
                 .and_then(|item| item.get("text"))
                 .and_then(Value::as_str)
                 .map(|s| s.to_string())
-                .filter(|s| !s.is_empty()),
-            encrypted: completed_item.and_then(|item| item.get("encrypted_content").cloned()),
-            summary: completed_item
+                .filter(|s| !s.is_empty());
+            let encrypted = completed_item
+                .and_then(|item| item.get("encrypted_content").cloned())
+                .filter(|value| match value {
+                    Value::Null => false,
+                    Value::String(value) => !value.is_empty(),
+                    Value::Array(value) => !value.is_empty(),
+                    Value::Object(value) => !value.is_empty(),
+                    _ => true,
+                });
+            let summary = completed_item
                 .and_then(|item| item.get("summary"))
                 .and_then(Value::as_array)
                 .and_then(|summary| {
@@ -146,13 +151,24 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
                         .find_map(|entry| entry.get("text").and_then(Value::as_str))
                 })
                 .map(|s| s.to_string())
-                .filter(|s| !s.is_empty()),
-            source: completed_item
-                .and_then(|item| item.get("source"))
-                .and_then(Value::as_str)
-                .map(|s| s.to_string()),
-            extra_body: state.node_extra_body.clone(),
-        }),
+                .filter(|s| !s.is_empty());
+            if content.is_none() && encrypted.is_none() && summary.is_none() {
+                return None;
+            }
+            Some(urp::Node::Reasoning {
+                id: id
+                    .clone()
+                    .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),
+                content,
+                encrypted,
+                summary,
+                source: completed_item
+                    .and_then(|item| item.get("source"))
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string()),
+                extra_body: state.node_extra_body.clone(),
+            })
+        }
         urp::NodeHeader::ToolCall { id, call_id, name } => Some(urp::Node::ToolCall {
             id: id
                 .clone()
@@ -169,4 +185,3 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
         _ => None,
     }
 }
-

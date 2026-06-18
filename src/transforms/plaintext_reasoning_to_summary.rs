@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use std::any::Any;
 use std::collections::HashSet;
 
+const SUMMARY_FROM_PLAINTEXT_REASONING_KEY: &str = "_monoize_summary_from_plaintext_reasoning";
+
 #[derive(Debug, Deserialize)]
 struct Config {}
 
@@ -92,7 +94,10 @@ impl Transform for PlaintextReasoningToSummaryTransform {
 fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState) {
     match event {
         UrpStreamEvent::NodeDelta {
-            node_index, delta, ..
+            node_index,
+            delta,
+            extra_body,
+            ..
         } => {
             let NodeDelta::Reasoning {
                 content,
@@ -108,6 +113,10 @@ fn rewrite_stream_reasoning(event: &mut UrpStreamEvent, state: &mut StreamState)
             }
             if let Some(text) = content.take().filter(|text| !text.is_empty()) {
                 *summary = Some(text);
+                extra_body.insert(
+                    SUMMARY_FROM_PLAINTEXT_REASONING_KEY.to_string(),
+                    Value::Bool(true),
+                );
             }
         }
         UrpStreamEvent::NodeDone {
@@ -332,7 +341,10 @@ mod tests {
             .await
             .expect("apply");
 
-        let UrpStreamEvent::NodeDelta { delta, .. } = event else {
+        let UrpStreamEvent::NodeDelta {
+            delta, extra_body, ..
+        } = event
+        else {
             panic!("expected delta");
         };
         let NodeDelta::Reasoning {
@@ -348,6 +360,12 @@ mod tests {
         assert_eq!(encrypted, None);
         assert_eq!(summary.as_deref(), Some("plain"));
         assert_eq!(source, None);
+        assert_eq!(
+            extra_body
+                .get(SUMMARY_FROM_PLAINTEXT_REASONING_KEY)
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[tokio::test]

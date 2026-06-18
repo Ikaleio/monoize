@@ -225,7 +225,7 @@ async fn responses_streaming_uses_top_level_payload_fields_and_delta_ids() {
 
     let reasoning_text_delta = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning.delta")
+        .find(|(event, _)| event == "response.reasoning_text.delta")
         .expect("reasoning delta");
     assert_eq!(
         reasoning_text_delta.1["item_id"].as_str(),
@@ -309,12 +309,12 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
     assert!(
         frames
             .iter()
-            .any(|(event, _)| event == "response.reasoning.delta")
+            .any(|(event, _)| event == "response.reasoning_text.delta")
     );
     assert!(
         frames
             .iter()
-            .any(|(event, _)| event == "response.reasoning.done")
+            .any(|(event, _)| event == "response.reasoning_text.done")
     );
 
     let summary_added_count = frames
@@ -334,13 +334,13 @@ async fn responses_streaming_distinguishes_reasoning_summary_and_content() {
 
     let text_delta = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning.delta")
+        .find(|(event, _)| event == "response.reasoning_text.delta")
         .expect("text delta");
     assert_eq!(text_delta.1["delta"].as_str(), Some("mock_reasoning"));
 
     let reasoning_done = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning.done")
+        .find(|(event, _)| event == "response.reasoning_text.done")
         .expect("reasoning done");
     assert_eq!(reasoning_done.1["text"].as_str(), Some("mock_reasoning"));
 

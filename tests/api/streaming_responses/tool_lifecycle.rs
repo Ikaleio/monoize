@@ -36,13 +36,13 @@ async fn responses_streaming_preserves_explicit_reasoning_source_from_chat_upstr
 
     let reasoning_delta = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning.delta")
+        .find(|(event, _)| event == "response.reasoning_text.delta")
         .expect("reasoning delta");
     assert_eq!(reasoning_delta.1["source"].as_str(), Some(reasoning_source));
 
     let reasoning_done = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning.done")
+        .find(|(event, _)| event == "response.reasoning_text.done")
         .expect("reasoning done");
     assert_eq!(reasoning_done.1["source"].as_str(), Some(reasoning_source));
 
@@ -87,7 +87,7 @@ async fn responses_streaming_omits_reasoning_source_when_chat_upstream_does_not_
 
     let reasoning_delta = frames
         .iter()
-        .find(|(event, _)| event == "response.reasoning.delta")
+        .find(|(event, _)| event == "response.reasoning_text.delta")
         .expect("reasoning delta");
     assert!(
         reasoning_delta.1.get("source").is_none(),

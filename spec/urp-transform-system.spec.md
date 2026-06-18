@@ -429,7 +429,9 @@ PRTS-7. The transform MUST preserve `encrypted`, `source`, and node-local `extra
 
 PRTS-8. Empty plaintext content MUST NOT create a non-empty summary.
 
-PRTS-9. On streams, the transform MAY annotate `NodeDelta` event `extra_body` to mark summary-oriented reasoning deltas, but terminal correctness is defined by `NodeDone.node` and `ResponseDone.output` after applying PRTS-4 through PRTS-8 to `Reasoning` nodes.
+PRTS-9. On streams, if the transform moves non-empty `NodeDelta.delta.content` into `NodeDelta.delta.summary`, it MUST set `NodeDelta.extra_body["_monoize_summary_from_plaintext_reasoning"] = true` on that same stream event. The marker means the summary delta was originally raw plaintext reasoning and MAY be emitted by a downstream Messages encoder as incremental `thinking_delta`.
+
+PRTS-10. PRTS-9 MUST NOT be applied to terminal `NodeDone.node.extra_body` or `ResponseDone.output[].extra_body`. Terminal correctness is defined by `NodeDone.node` and `ResponseDone.output` after applying PRTS-4 through PRTS-8 to `Reasoning` nodes.
 
 RSRC-1. `reasoning_summary_to_raw_cot` is response-phase only.
 

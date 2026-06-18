@@ -29,22 +29,20 @@ async fn responses_streaming_response_done_does_not_reindex_terminal_tool_output
         .iter()
         .find(|(event, _)| event == "response.completed")
         .map(|(_, payload)| payload)
-        .expect("response.completed frame");
+        .unwrap_or_else(|| panic!("response.completed frame: {text}"));
     let output = completed["response"]["output"]
         .as_array()
         .expect("completed response output array");
     assert_eq!(
         output.len(),
-        3,
-        "terminal output must retain reasoning, message, and function call in their streamed order: {text}"
+        2,
+        "terminal output must not invent an empty reasoning item, and must retain message/function order: {text}"
     );
-    assert_eq!(output[0]["type"].as_str(), Some("reasoning"));
-    assert_eq!(output[0]["id"].as_str(), Some("rs_mock"));
-    assert_eq!(output[1]["type"].as_str(), Some("message"));
-    assert_eq!(output[1]["id"].as_str(), Some("msg_mock"));
-    assert_eq!(output[2]["type"].as_str(), Some("function_call"));
-    assert_eq!(output[2]["id"].as_str(), Some("fc_mock"));
-    assert_eq!(output[2]["call_id"].as_str(), Some("call_1"));
+    assert_eq!(output[0]["type"].as_str(), Some("message"));
+    assert_eq!(output[0]["id"].as_str(), Some("msg_mock"));
+    assert_eq!(output[1]["type"].as_str(), Some("function_call"));
+    assert_eq!(output[1]["id"].as_str(), Some("fc_mock"));
+    assert_eq!(output[1]["call_id"].as_str(), Some("call_1"));
 
     let output_item_done: Vec<&Value> = frames
         .iter()
@@ -226,6 +224,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(!text.contains("event: response.reasoning_text.delta"));
+    assert!(!text.contains("event: response.reasoning.delta"));
     assert!(text.contains("event: response.output_text.delta"));
     assert!(text.contains("event: response.completed"));
 }

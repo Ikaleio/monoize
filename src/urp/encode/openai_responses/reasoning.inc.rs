@@ -91,23 +91,6 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     }
 }
 
-fn ensure_default_responses_reasoning_summary(obj: &mut Map<String, Value>) {
-    let Some(existing) = obj.remove("reasoning") else {
-        obj.insert("reasoning".to_string(), json!({ "summary": "detailed" }));
-        return;
-    };
-
-    let Value::Object(mut reasoning_obj) = existing else {
-        obj.insert("reasoning".to_string(), existing);
-        return;
-    };
-
-    reasoning_obj
-        .entry("summary".to_string())
-        .or_insert_with(|| Value::String("detailed".to_string()));
-    obj.insert("reasoning".to_string(), Value::Object(reasoning_obj));
-}
-
 fn ensure_responses_encrypted_reasoning_include(obj: &mut Map<String, Value>) {
     const INCLUDE_REASONING_ENCRYPTED_CONTENT: &str = "reasoning.encrypted_content";
 

@@ -713,6 +713,13 @@ pub enum UrpStreamEvent {
         #[serde(flatten)]
         extra_body: HashMap<String, Value>,
     },
+    ProviderControl {
+        protocol: String,
+        event_name: String,
+        data: Value,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
     Error {
         code: Option<String>,
         message: String,

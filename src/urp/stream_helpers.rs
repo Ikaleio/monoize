@@ -455,7 +455,7 @@ pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) 
             }
         }
         if !parts.is_empty() {
-            summary_text = parts.join("\n");
+            summary_text = parts.concat();
         }
     }
     let mut signature = item

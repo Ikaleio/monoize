@@ -188,6 +188,7 @@ fn payload_is_redacted(extra: &HashMap<String, Value>) -> bool {
 #[derive(Debug, Clone)]
 struct LiveNodeBlockState {
     payload: AnthropicBlockPayload,
+    block_index: Option<u32>,
 }
 
 fn reasoning_signature_value(
@@ -420,6 +421,61 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
     }
 }
 
+fn apply_emitted_node_delta_to_block(
+    payload: &mut AnthropicBlockPayload,
+    delta: &NodeDelta,
+    stream_summary_as_thinking: bool,
+) {
+    match (payload, delta) {
+        (AnthropicBlockPayload::Text { content }, NodeDelta::Text { content: delta })
+        | (AnthropicBlockPayload::Text { content }, NodeDelta::Refusal { content: delta }) => {
+            content.push_str(delta);
+        }
+        (
+            AnthropicBlockPayload::Thinking {
+                thinking,
+                signature,
+                ..
+            },
+            NodeDelta::Reasoning {
+                content,
+                encrypted,
+                summary,
+                ..
+            },
+        ) => {
+            if let Some(delta) = content.as_deref().filter(|content| !content.is_empty()) {
+                thinking.push_str(delta);
+            } else if stream_summary_as_thinking
+                && let Some(delta) = summary.as_deref().filter(|summary| !summary.is_empty())
+            {
+                thinking.push_str(delta);
+            }
+            if let Some(signature_delta) = encrypted
+                .as_ref()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string())
+                })
+                .filter(|signature| !signature.is_empty())
+            {
+                signature
+                    .get_or_insert_with(String::new)
+                    .push_str(&signature_delta);
+            }
+        }
+        (
+            AnthropicBlockPayload::ToolUse { arguments, .. },
+            NodeDelta::ToolCallArguments { arguments: delta },
+        ) => {
+            arguments.push_str(delta);
+        }
+        _ => {}
+    }
+}
+
 fn maybe_override_reasoning_item_id(
     payload: &mut AnthropicBlockPayload,
     extra_body: &HashMap<String, Value>,
@@ -488,6 +544,337 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
         }
         _ => {}
     }
+}
+
+async fn emit_live_block_start(
+    tx: &mpsc::Sender<Event>,
+    block_state: &mut LiveNodeBlockState,
+    next_content_block_index: &mut u32,
+    saw_tool_use: &mut bool,
+) -> AppResult<()> {
+    if block_state.block_index.is_some() {
+        return Ok(());
+    }
+    let block_index = *next_content_block_index;
+    let block = PendingAnthropicBlock {
+        block_index,
+        payload: block_state.payload.clone(),
+    };
+    let start = json!({
+        "type": "content_block_start",
+        "index": block_index,
+        "content_block": block.content_block(saw_tool_use)
+    });
+    send_named_messages_event(tx, start).await?;
+    block_state.block_index = Some(block_index);
+    *next_content_block_index += 1;
+    Ok(())
+}
+
+fn summary_delta_is_plaintext_reasoning(extra_body: &HashMap<String, Value>) -> bool {
+    extra_body
+        .get("_monoize_summary_from_plaintext_reasoning")
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+async fn emit_live_delta_for_node_delta(
+    tx: &mpsc::Sender<Event>,
+    block_index: u32,
+    payload: &AnthropicBlockPayload,
+    delta: &NodeDelta,
+    extra_body: &HashMap<String, Value>,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    match (payload, delta) {
+        (AnthropicBlockPayload::Text { .. }, NodeDelta::Text { content })
+        | (AnthropicBlockPayload::Text { .. }, NodeDelta::Refusal { content }) => {
+            if !content.is_empty() {
+                send_messages_delta_string(
+                    tx,
+                    json!({
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": { "type": "text_delta", "text": "" }
+                    }),
+                    messages_delta_path_text,
+                    content,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+        }
+        (
+            AnthropicBlockPayload::Thinking { extra, .. },
+            NodeDelta::Reasoning {
+                content,
+                encrypted,
+                summary,
+                ..
+            },
+        ) => {
+            if payload_is_redacted(extra) {
+                return Ok(());
+            }
+            let text = content
+                .as_deref()
+                .filter(|content| !content.is_empty())
+                .or_else(|| {
+                    summary_delta_is_plaintext_reasoning(extra_body)
+                        .then(|| summary.as_deref().filter(|summary| !summary.is_empty()))
+                        .flatten()
+                });
+            if let Some(text) = text {
+                send_messages_delta_string(
+                    tx,
+                    json!({
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": { "type": "thinking_delta", "thinking": "" }
+                    }),
+                    messages_delta_path_thinking,
+                    text,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+            if let Some(signature) = encrypted
+                .as_ref()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string())
+                })
+                .filter(|signature| !signature.is_empty())
+            {
+                send_messages_delta_string(
+                    tx,
+                    json!({
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": { "type": "signature_delta", "signature": "" }
+                    }),
+                    messages_delta_path_signature,
+                    &signature,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+        }
+        (AnthropicBlockPayload::ToolUse { .. }, NodeDelta::ToolCallArguments { arguments }) => {
+            if !arguments.is_empty() {
+                send_messages_delta_string(
+                    tx,
+                    json!({
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": { "type": "input_json_delta", "partial_json": "" }
+                    }),
+                    messages_delta_path_partial_json,
+                    arguments,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn emit_accumulated_payload_deltas(
+    tx: &mpsc::Sender<Event>,
+    block_state: &LiveNodeBlockState,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let Some(block_index) = block_state.block_index else {
+        return Ok(());
+    };
+    let empty_extra_body = HashMap::new();
+    match &block_state.payload {
+        AnthropicBlockPayload::Text { content } => {
+            emit_live_delta_for_node_delta(
+                tx,
+                block_index,
+                &block_state.payload,
+                &NodeDelta::Text {
+                    content: content.clone(),
+                },
+                &empty_extra_body,
+                sse_max_frame_length,
+            )
+            .await?;
+        }
+        AnthropicBlockPayload::Thinking {
+            thinking,
+            signature,
+            extra,
+            ..
+        } => {
+            if payload_is_redacted(extra) {
+                return Ok(());
+            }
+            let delta = NodeDelta::Reasoning {
+                content: (!thinking.is_empty()).then(|| thinking.clone()),
+                encrypted: signature
+                    .as_ref()
+                    .filter(|signature| !signature.is_empty())
+                    .map(|signature| Value::String(signature.clone())),
+                summary: None,
+                source: None,
+            };
+            emit_live_delta_for_node_delta(
+                tx,
+                block_index,
+                &block_state.payload,
+                &delta,
+                &empty_extra_body,
+                sse_max_frame_length,
+            )
+            .await?;
+        }
+        AnthropicBlockPayload::ToolUse { arguments, .. } => {
+            emit_live_delta_for_node_delta(
+                tx,
+                block_index,
+                &block_state.payload,
+                &NodeDelta::ToolCallArguments {
+                    arguments: arguments.clone(),
+                },
+                &empty_extra_body,
+                sse_max_frame_length,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+fn terminal_text_suffix<'a>(current: &str, terminal: &'a str) -> Option<&'a str> {
+    if terminal.len() <= current.len() {
+        return None;
+    }
+    terminal.strip_prefix(current)
+}
+
+async fn emit_terminal_suffix_before_stop(
+    tx: &mpsc::Sender<Event>,
+    block_state: &LiveNodeBlockState,
+    terminal_node: &Node,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let Some(block_index) = block_state.block_index else {
+        return Ok(());
+    };
+    let empty_extra_body = HashMap::new();
+    match (&block_state.payload, terminal_node) {
+        (
+            AnthropicBlockPayload::Text { content: current },
+            Node::Text {
+                content: terminal, ..
+            }
+            | Node::Refusal {
+                content: terminal, ..
+            },
+        ) => {
+            if let Some(suffix) = terminal_text_suffix(current, terminal) {
+                emit_live_delta_for_node_delta(
+                    tx,
+                    block_index,
+                    &block_state.payload,
+                    &NodeDelta::Text {
+                        content: suffix.to_string(),
+                    },
+                    &empty_extra_body,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+        }
+        (
+            AnthropicBlockPayload::Thinking {
+                thinking: current,
+                signature: current_signature,
+                ..
+            },
+            Node::Reasoning {
+                content,
+                summary,
+                encrypted,
+                extra_body,
+                ..
+            },
+        ) => {
+            let terminal_text = content
+                .as_deref()
+                .filter(|content| !content.is_empty())
+                .or_else(|| summary.as_deref().filter(|summary| !summary.is_empty()));
+            let text_suffix =
+                terminal_text.and_then(|terminal| terminal_text_suffix(current, terminal));
+            let terminal_signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
+            let signature_suffix = terminal_signature.as_deref().and_then(|terminal| {
+                terminal_text_suffix(current_signature.as_deref().unwrap_or_default(), terminal)
+            });
+            if text_suffix.is_some() || signature_suffix.is_some() {
+                emit_live_delta_for_node_delta(
+                    tx,
+                    block_index,
+                    &block_state.payload,
+                    &NodeDelta::Reasoning {
+                        content: text_suffix.map(str::to_string),
+                        encrypted: signature_suffix
+                            .filter(|signature| !signature.is_empty())
+                            .map(|signature| Value::String(signature.to_string())),
+                        summary: None,
+                        source: None,
+                    },
+                    &empty_extra_body,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+        }
+        (
+            AnthropicBlockPayload::ToolUse {
+                arguments: current, ..
+            },
+            Node::ToolCall {
+                arguments: terminal,
+                ..
+            },
+        ) => {
+            if let Some(suffix) = terminal_text_suffix(current, terminal) {
+                emit_live_delta_for_node_delta(
+                    tx,
+                    block_index,
+                    &block_state.payload,
+                    &NodeDelta::ToolCallArguments {
+                        arguments: suffix.to_string(),
+                    },
+                    &empty_extra_body,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn emit_live_block_stop(
+    tx: &mpsc::Sender<Event>,
+    block_state: &LiveNodeBlockState,
+) -> AppResult<()> {
+    let Some(block_index) = block_state.block_index else {
+        return Ok(());
+    };
+    send_named_messages_event(
+        tx,
+        json!({ "type": "content_block_stop", "index": block_index }),
+    )
+    .await
 }
 
 async fn flush_ready_node_blocks(
@@ -561,6 +948,29 @@ async fn flush_all_remaining_node_blocks(
         )
         .await?;
     }
+    Ok(())
+}
+
+async fn try_start_next_live_block(
+    tx: &mpsc::Sender<Event>,
+    live_node_blocks: &mut HashMap<u32, LiveNodeBlockState>,
+    next_flush_node_index: &u32,
+    next_content_block_index: &mut u32,
+    saw_tool_use: &mut bool,
+    open_node_index: &mut Option<u32>,
+    emitted_node_owned_surfaces: &mut HashSet<MessagesSurfaceKind>,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    if open_node_index.is_some() {
+        return Ok(());
+    }
+    let Some(block_state) = live_node_blocks.get_mut(next_flush_node_index) else {
+        return Ok(());
+    };
+    emit_live_block_start(tx, block_state, next_content_block_index, saw_tool_use).await?;
+    emitted_node_owned_surfaces.insert(surface_kind_for_payload(&block_state.payload));
+    *open_node_index = Some(*next_flush_node_index);
+    emit_accumulated_payload_deltas(tx, block_state, sse_max_frame_length).await?;
     Ok(())
 }
 
@@ -659,6 +1069,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
     let mut pending_envelope_extra: HashMap<String, Value> = HashMap::new();
     let mut should_emit_terminal_message = false;
     let terminal_message_emitted = false;
+    let mut open_node_index: Option<u32> = None;
 
     async fn ensure_message_start(
         tx: &mpsc::Sender<Event>,
@@ -726,7 +1137,26 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 if matches!(surface, MessagesSurfaceKind::ToolUse) {
                     saw_tool_use = true;
                 }
-                live_node_blocks.insert(node_index, LiveNodeBlockState { payload });
+                live_node_blocks.insert(
+                    node_index,
+                    LiveNodeBlockState {
+                        payload,
+                        block_index: None,
+                    },
+                );
+                if node_index == next_flush_node_index && open_node_index.is_none() {
+                    try_start_next_live_block(
+                        &tx,
+                        &mut live_node_blocks,
+                        &next_flush_node_index,
+                        &mut next_content_block_index,
+                        &mut saw_tool_use,
+                        &mut open_node_index,
+                        &mut emitted_node_owned_surfaces,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
             }
             UrpStreamEvent::NodeDelta {
                 node_index,
@@ -741,7 +1171,26 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     continue;
                 };
                 maybe_override_reasoning_item_id(&mut block_state.payload, &extra_body);
-                apply_node_delta_to_block(&mut block_state.payload, &delta);
+                if let Some(block_index) = block_state.block_index {
+                    let stream_summary_as_thinking =
+                        summary_delta_is_plaintext_reasoning(&extra_body);
+                    emit_live_delta_for_node_delta(
+                        &tx,
+                        block_index,
+                        &block_state.payload,
+                        &delta,
+                        &extra_body,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                    apply_emitted_node_delta_to_block(
+                        &mut block_state.payload,
+                        &delta,
+                        stream_summary_as_thinking,
+                    );
+                } else {
+                    apply_node_delta_to_block(&mut block_state.payload, &delta);
+                }
             }
             UrpStreamEvent::NodeDone {
                 node_index,
@@ -760,6 +1209,60 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         &mut next_flush_node_index,
                         &mut next_content_block_index,
                         &mut saw_tool_use,
+                        &mut emitted_node_owned_surfaces,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                    continue;
+                }
+                let live_block_was_emitted = live_node_blocks
+                    .get(&node_index)
+                    .and_then(|state| state.block_index)
+                    .is_some();
+                if live_block_was_emitted {
+                    let block_state = live_node_blocks
+                        .remove(&node_index)
+                        .expect("emitted live block must still exist");
+                    emit_terminal_suffix_before_stop(
+                        &tx,
+                        &block_state,
+                        &node,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                    emit_live_block_stop(&tx, &block_state).await?;
+                    if open_node_index == Some(node_index) {
+                        open_node_index = None;
+                    }
+                    if node_index == next_flush_node_index {
+                        next_flush_node_index += 1;
+                    }
+                    if matches!(
+                        surface_kind_for_payload(&block_state.payload),
+                        MessagesSurfaceKind::ToolUse
+                    ) {
+                        saw_tool_use = true;
+                    }
+                    let surface = surface_kind_for_payload(&block_state.payload);
+                    node_owned_surfaces.insert(surface);
+                    completed_node_owned_surfaces.insert(surface);
+                    flush_ready_node_blocks(
+                        &tx,
+                        &mut pending_node_blocks,
+                        &mut next_flush_node_index,
+                        &mut next_content_block_index,
+                        &mut saw_tool_use,
+                        &mut emitted_node_owned_surfaces,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                    try_start_next_live_block(
+                        &tx,
+                        &mut live_node_blocks,
+                        &next_flush_node_index,
+                        &mut next_content_block_index,
+                        &mut saw_tool_use,
+                        &mut open_node_index,
                         &mut emitted_node_owned_surfaces,
                         sse_max_frame_length,
                     )
@@ -813,6 +1316,17 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     sse_max_frame_length,
                 )
                 .await?;
+                try_start_next_live_block(
+                    &tx,
+                    &mut live_node_blocks,
+                    &next_flush_node_index,
+                    &mut next_content_block_index,
+                    &mut saw_tool_use,
+                    &mut open_node_index,
+                    &mut emitted_node_owned_surfaces,
+                    sse_max_frame_length,
+                )
+                .await?;
             }
             UrpStreamEvent::ResponseDone {
                 finish_reason,
@@ -847,6 +1361,21 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     live_node_blocks.drain().collect();
                 remaining_live_node_blocks.sort_by_key(|(node_index, _)| *node_index);
                 for (node_index, mut block_state) in remaining_live_node_blocks {
+                    if block_state.block_index.is_some() {
+                        if let Some(node) = output.get(node_index as usize) {
+                            emit_terminal_suffix_before_stop(
+                                &tx,
+                                &block_state,
+                                node,
+                                sse_max_frame_length,
+                            )
+                            .await?;
+                        }
+                        emit_live_block_stop(&tx, &block_state).await?;
+                        completed_node_owned_surfaces
+                            .insert(surface_kind_for_payload(&block_state.payload));
+                        continue;
+                    }
                     if let Some(node) = output.get(node_index as usize) {
                         merge_node_payload_with_terminal(&mut block_state.payload, node);
                     }
@@ -919,6 +1448,19 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 send_named_messages_event(&tx, message_delta).await?;
                 send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
                 return Ok(());
+            }
+            UrpStreamEvent::ProviderControl {
+                protocol,
+                event_name,
+                ..
+            } => {
+                if protocol == "messages" && event_name != "ping" {
+                    tracing::debug!(
+                        protocol = %protocol,
+                        event_name = %event_name,
+                        "dropping unsupported messages provider-control stream event"
+                    );
+                }
             }
             UrpStreamEvent::Error { code, message, .. } => {
                 ensure_message_start(

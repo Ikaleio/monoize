@@ -193,6 +193,336 @@ mod tests {
     }
 
     #[test]
+    fn per_output_reasoning_accumulator_preserves_multiple_reasoning_items() {
+        let reasoning_by_output_index = HashMap::from([
+            (
+                0,
+                AccumulatedReasoningSlot {
+                    id: Some("rs_1".to_string()),
+                    content: "first".to_string(),
+                    ..Default::default()
+                },
+            ),
+            (
+                2,
+                AccumulatedReasoningSlot {
+                    id: Some("rs_2".to_string()),
+                    content: "second".to_string(),
+                    summary: "second summary".to_string(),
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let outputs = build_accumulated_output_nodes_from_reasoning_slots(
+            &reasoning_by_output_index,
+            &HashMap::from([(1, "answer".to_string())]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let reasoning_nodes = outputs
+            .iter()
+            .filter_map(|node| match node {
+                Node::Reasoning { id, content, .. } => Some((id.as_deref(), content.as_deref())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reasoning_nodes,
+            vec![(Some("rs_1"), Some("first")), (Some("rs_2"), Some("second"))]
+        );
+    }
+
+    #[test]
+    fn completed_snapshot_merges_reasoning_slot_without_duplicate_item() {
+        let accumulated = vec![AccumulatedOutputEntry {
+            output_index: 0,
+            nodes: vec![Node::Reasoning {
+                id: Some("rs_1".to_string()),
+                content: Some("think".to_string()),
+                encrypted: Some(json!("sig_1")),
+                summary: Some("summary".to_string()),
+                source: None,
+                extra_body: HashMap::new(),
+            }],
+        }];
+        let terminal = vec![AccumulatedOutputEntry {
+            output_index: 0,
+            nodes: vec![Node::Reasoning {
+                id: Some("rs_1".to_string()),
+                content: None,
+                encrypted: Some(json!("sig_1")),
+                summary: Some("summary".to_string()),
+                source: None,
+                extra_body: HashMap::new(),
+            }],
+        }];
+
+        let merged = merge_response_completed_outputs(terminal, &accumulated).unwrap();
+        assert_eq!(merged.len(), 1);
+        assert!(matches!(
+            &merged[0],
+            Node::Reasoning {
+                content: Some(content),
+                encrypted: Some(Value::String(sig)),
+                summary: Some(summary),
+                ..
+            } if content == "think" && sig == "sig_1" && summary == "summary"
+        ));
+    }
+
+    #[test]
+    fn reasoning_summary_parts_normalize_before_terminal_merge() {
+        let mut slot = AccumulatedReasoningSlot {
+            id: Some("rs_1".to_string()),
+            encrypted: Some(json!("sig_1")),
+            ..Default::default()
+        };
+        append_reasoning_summary_delta(&mut slot, Some(0), "first part");
+        append_reasoning_summary_delta(&mut slot, Some(1), "second part");
+        let accumulated = build_accumulated_output_entries(
+            &HashMap::from([(0, slot)]),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        let terminal = vec![AccumulatedOutputEntry {
+            output_index: 0,
+            nodes: vec![Node::Reasoning {
+                id: Some("rs_1".to_string()),
+                content: None,
+                encrypted: Some(json!("sig_1")),
+                summary: Some("first partsecond part".to_string()),
+                source: None,
+                extra_body: HashMap::new(),
+            }],
+        }];
+
+        let merged = merge_response_completed_outputs(terminal, &accumulated).unwrap();
+        assert!(matches!(
+            &merged[0],
+            Node::Reasoning {
+                summary: Some(summary),
+                ..
+            } if summary == "first partsecond part"
+        ));
+    }
+
+    #[test]
+    fn reasoning_done_snapshot_does_not_overwrite_summary_delta() {
+        let mut slot = AccumulatedReasoningSlot::default();
+        append_reasoning_summary_delta(&mut slot, Some(0), "streamed summary");
+        merge_reasoning_item_snapshot(
+            &mut slot,
+            &json!({
+                "type": "reasoning",
+                "summary": [{
+                    "type": "summary_text",
+                    "text": "snapshot summary"
+                }]
+            }),
+            false,
+        );
+
+        assert_eq!(slot.summary_text().as_deref(), Some("streamed summary"));
+    }
+
+    #[test]
+    fn completed_snapshot_omitted_reasoning_does_not_position_conflict_with_message() {
+        let accumulated = vec![
+            AccumulatedOutputEntry {
+                output_index: 0,
+                nodes: vec![Node::Reasoning {
+                    id: Some("rs_1".to_string()),
+                    content: None,
+                    encrypted: Some(json!("sig_1")),
+                    summary: None,
+                    source: None,
+                    extra_body: HashMap::new(),
+                }],
+            },
+            AccumulatedOutputEntry {
+                output_index: 1,
+                nodes: vec![Node::Text {
+                    id: Some("msg_1".to_string()),
+                    role: OrdinaryRole::Assistant,
+                    content: "I will inspect the codec.".to_string(),
+                    phase: None,
+                    extra_body: HashMap::new(),
+                }],
+            },
+            AccumulatedOutputEntry {
+                output_index: 2,
+                nodes: vec![Node::ToolCall {
+                    id: Some("fc_1".to_string()),
+                    call_id: "call_1".to_string(),
+                    name: "search_codebase".to_string(),
+                    arguments: "{\"query\":\"reasoning\"}".to_string(),
+                    extra_body: HashMap::new(),
+                }],
+            },
+        ];
+        let terminal = vec![
+            AccumulatedOutputEntry {
+                output_index: 0,
+                nodes: vec![Node::Text {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
+                    content: "I will inspect the codec.".to_string(),
+                    phase: None,
+                    extra_body: HashMap::new(),
+                }],
+            },
+            AccumulatedOutputEntry {
+                output_index: 1,
+                nodes: vec![Node::ToolCall {
+                    id: None,
+                    call_id: "call_1".to_string(),
+                    name: "search_codebase".to_string(),
+                    arguments: "{\"query\":\"reasoning\"}".to_string(),
+                    extra_body: HashMap::new(),
+                }],
+            },
+        ];
+
+        let merged = merge_response_completed_outputs(terminal, &accumulated).unwrap();
+        assert_eq!(merged.len(), 3);
+        assert!(matches!(&merged[0], Node::Reasoning { encrypted: Some(Value::String(sig)), .. } if sig == "sig_1"));
+        assert!(matches!(&merged[1], Node::Text { id: Some(id), content, .. } if id == "msg_1" && content == "I will inspect the codec."));
+        assert!(matches!(&merged[2], Node::ToolCall { id: Some(id), call_id, .. } if id == "fc_1" && call_id == "call_1"));
+    }
+
+    #[test]
+    fn completed_snapshot_typed_field_conflict_is_terminal_error_state() {
+        let accumulated = vec![AccumulatedOutputEntry {
+            output_index: 0,
+            nodes: vec![Node::Reasoning {
+                id: Some("rs_1".to_string()),
+                content: Some("streamed".to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
+                extra_body: HashMap::new(),
+            }],
+        }];
+        let terminal = vec![AccumulatedOutputEntry {
+            output_index: 0,
+            nodes: vec![Node::Reasoning {
+                id: Some("rs_1".to_string()),
+                content: Some("terminal".to_string()),
+                encrypted: None,
+                summary: None,
+                source: None,
+                extra_body: HashMap::new(),
+            }],
+        }];
+
+        let err = merge_response_completed_outputs(terminal, &accumulated).unwrap_err();
+        assert!(err.contains("reasoning.text"));
+
+        let mut state = ResponsesStreamIndexState::default();
+        let events = map_response_completed_with_accumulated(
+            json!({
+                "response": {
+                    "id": "resp_conflict",
+                    "object": "response",
+                    "created_at": 1,
+                    "model": "gpt-5.4",
+                    "status": "completed",
+                    "output": [{
+                        "id": "rs_1",
+                        "type": "reasoning",
+                        "text": "terminal"
+                    }]
+                }
+            }),
+            &mut state,
+            &accumulated,
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [UrpStreamEvent::Error { code: Some(code), .. }] if code == "responses_terminal_conflict"
+        ));
+    }
+
+    #[test]
+    fn output_item_done_closes_started_reasoning_and_function_call_nodes() {
+        let mut state = ResponsesStreamIndexState::default();
+        let _ = map_responses_event_to_urp_events_with_state(
+            "response.output_item.added",
+            json!({
+                "output_index": 0,
+                "item": { "type": "reasoning", "id": "rs_1" }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        let reasoning_done = map_responses_event_to_urp_events_with_state(
+            "response.output_item.done",
+            json!({
+                "output_index": 0,
+                "item": { "type": "reasoning", "id": "rs_1", "text": "think" }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(reasoning_done.iter().any(|event| matches!(
+            event,
+            UrpStreamEvent::NodeDone {
+                node: Node::Reasoning { content: Some(content), .. },
+                ..
+            } if content == "think"
+        )));
+
+        let mut state = ResponsesStreamIndexState::default();
+        let _ = map_responses_event_to_urp_events_with_state(
+            "response.output_item.added",
+            json!({
+                "output_index": 1,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "lookup"
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        let function_done = map_responses_event_to_urp_events_with_state(
+            "response.output_item.done",
+            json!({
+                "output_index": 1,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": "{}"
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(function_done.iter().any(|event| matches!(
+            event,
+            UrpStreamEvent::NodeDone {
+                node: Node::ToolCall { call_id, arguments, .. },
+                ..
+            } if call_id == "call_1" && arguments == "{}"
+        )));
+    }
+
+    #[test]
     fn map_response_completed_uses_greedy_nonstream_decoder_shape() {
         let event = json!({
             "response": {
@@ -239,17 +569,9 @@ mod tests {
 
         assert_eq!(*finish_reason, Some(FinishReason::ToolCalls));
         assert_eq!(output.len(), 3);
-        let output_items = nodes_to_items(output);
-        let Item::Message {
-            parts, extra_body, ..
-        } = &output_items[0]
-        else {
-            panic!("expected assistant message output");
-        };
-        assert_eq!(extra_body.get("phase"), Some(&json!("analysis")));
         assert!(matches!(
-            &parts[0],
-            Part::Reasoning {
+            &output[0],
+            Node::Reasoning {
                 content: Some(content),
                 summary: Some(summary),
                 encrypted: Some(Value::String(sig)),
@@ -257,10 +579,20 @@ mod tests {
             } if content == "think" && summary == "summary" && sig == "sig_1"
         ));
         assert!(matches!(
-            &parts[1],
-            Part::Text { content, extra_body } if content == "answer" && extra_body.get("phase") == Some(&json!("analysis"))
+            &output[1],
+            Node::Text {
+                content,
+                phase: Some(phase),
+                extra_body,
+                ..
+            } if content == "answer"
+                && phase == "analysis"
+                && extra_body.get("phase") == Some(&json!("analysis"))
         ));
-        assert!(matches!(&parts[2], Part::ToolCall { call_id, .. } if call_id == "call_1"));
+        assert!(matches!(
+            &output[2],
+            Node::ToolCall { call_id, .. } if call_id == "call_1"
+        ));
     }
 
     #[test]

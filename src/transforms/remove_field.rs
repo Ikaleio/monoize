@@ -70,6 +70,7 @@ impl Transform for RemoveFieldTransform {
                 | crate::urp::UrpStreamEvent::NodeStart { extra_body, .. }
                 | crate::urp::UrpStreamEvent::NodeDelta { extra_body, .. }
                 | crate::urp::UrpStreamEvent::NodeDone { extra_body, .. }
+                | crate::urp::UrpStreamEvent::ProviderControl { extra_body, .. }
                 | crate::urp::UrpStreamEvent::Error { extra_body, .. } => {
                     remove_extra_path(extra_body, &cfg.path);
                 }

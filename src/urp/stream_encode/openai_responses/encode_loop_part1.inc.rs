@@ -430,11 +430,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             send_responses_delta_string(
                                 &tx,
                                 &mut seq,
-                                "response.reasoning.delta",
+                                "response.reasoning_text.delta",
                                 insert_reasoning_source(
                                     json!({
                                         "item_id": node_state.item_id,
                                         "output_index": node_state.output_index,
+                                        "content_index": 0,
                                     }),
                                     source.as_deref(),
                                 ),
@@ -576,11 +577,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 send_responses_event(
                                     &tx,
                                     &mut seq,
-                                    "response.reasoning.done",
+                                    "response.reasoning_text.done",
                                     insert_reasoning_source(
                                         json!({
                                             "item_id": node_state.item_id,
                                             "output_index": node_state.output_index,
+                                            "content_index": 0,
                                             "text": content,
                                         }),
                                         source.as_deref(),
@@ -865,11 +867,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     send_responses_delta_string(
                                         &tx,
                                         &mut seq,
-                                        "response.reasoning.delta",
+                                        "response.reasoning_text.delta",
                                         insert_reasoning_source(
                                             json!({
                                                 "item_id": node_state.item_id,
                                                 "output_index": node_state.output_index,
+                                                "content_index": 0,
                                             }),
                                             source.as_deref(),
                                         ),
@@ -883,11 +886,12 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     send_responses_event(
                                         &tx,
                                         &mut seq,
-                                        "response.reasoning.done",
+                                        "response.reasoning_text.done",
                                         insert_reasoning_source(
                                             json!({
                                                 "item_id": node_state.item_id,
                                                 "output_index": node_state.output_index,
+                                                "content_index": 0,
                                                 "text": content,
                                             }),
                                             source.as_deref(),
@@ -1109,8 +1113,17 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     &tx,
                     &mut seq,
                     &mut completed_output_indices,
+                    &mut streamed_output_indices,
                     &mut completed_output_items,
                     &terminal_output,
+                    &mut reasoning_delta_indices,
+                    &mut reasoning_done_indices,
+                    &mut reasoning_summary_added_indices,
+                    &mut reasoning_summary_delta_indices,
+                    &mut reasoning_summary_text_done_indices,
+                    &mut reasoning_summary_part_done_indices,
+                    &mut function_args_delta_indices,
+                    &mut function_args_done_indices,
                     stream_started_at.elapsed().as_secs(),
                     sse_max_frame_length,
                 )
@@ -1148,6 +1161,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 .await?;
                 send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
             }
+            UrpStreamEvent::ProviderControl { .. } => {}
             UrpStreamEvent::Error {
                 code,
                 message,
@@ -1225,51 +1239,11 @@ fn node_header_name(header: &urp::NodeHeader) -> Option<String> {
 }
 
 fn synthesize_node_state_from_delta(
-    node_index: u32,
-    delta: &urp::NodeDelta,
-    extra_body: &HashMap<String, Value>,
+    _node_index: u32,
+    _delta: &urp::NodeDelta,
+    _extra_body: &HashMap<String, Value>,
 ) -> Option<(Value, StreamedNodeState)> {
-    let (zone, header, call_id, name) = match delta {
-        urp::NodeDelta::Reasoning { .. } => (
-            ResponsesOutputZone::Reasoning,
-            urp::NodeHeader::Reasoning {
-                id: extra_body
-                    .get("reasoning_item_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            },
-            None,
-            None,
-        ),
-        _ => return None,
-    };
-
-    let output_item =
-        stream_output_item_start_stub_from_node_header(zone, &header, extra_body, &HashMap::new());
-    let item_id = output_item
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    Some((
-        output_item.clone(),
-        StreamedNodeState {
-            output_index: node_index as usize,
-            zone,
-            content_index: None,
-            item_id,
-            phase: None,
-            call_id,
-            name,
-            reasoning_summary_part_added_sent: false,
-            message_start_emitted: true,
-            header: Some(header),
-            node_extra_body: extra_body.clone(),
-            completed_item: Some(complete_stream_output_item(output_item)),
-            is_shared_message_output: false,
-            reasoning_started_at: Some(Instant::now()),
-        },
-    ))
+    None
 }
 
 fn image_generation_call_downstream_event(extra_body: &HashMap<String, Value>) -> Option<String> {
@@ -1399,7 +1373,6 @@ fn stream_output_item_start_stub_from_node_header(
                 .unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()));
             obj.insert("id".to_string(), json!(id));
             obj.insert("status".to_string(), json!("in_progress"));
-            obj.insert("summary".to_string(), json!([]));
             obj.insert(
                 "started_at".to_string(),
                 json!(chrono::Utc::now().timestamp()),
@@ -2332,12 +2305,22 @@ fn merge_terminal_output_item(existing_item: &mut Value, terminal_item: &Value) 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn emit_missing_terminal_output_done_events(
     tx: &mpsc::Sender<Event>,
     seq: &mut u64,
     completed_output_indices: &mut HashSet<usize>,
+    streamed_output_indices: &mut HashSet<usize>,
     completed_output_items: &mut Vec<(usize, Value)>,
     terminal_output: &[Value],
+    reasoning_delta_indices: &mut HashSet<usize>,
+    reasoning_done_indices: &mut HashSet<usize>,
+    reasoning_summary_added_indices: &mut HashSet<usize>,
+    reasoning_summary_delta_indices: &mut HashSet<usize>,
+    reasoning_summary_text_done_indices: &mut HashSet<usize>,
+    reasoning_summary_part_done_indices: &mut HashSet<usize>,
+    function_args_delta_indices: &mut HashSet<usize>,
+    function_args_done_indices: &mut HashSet<usize>,
     default_reasoning_duration_secs: u64,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
@@ -2356,6 +2339,42 @@ async fn emit_missing_terminal_output_done_events(
             &reasoning_item_with_duration(item.clone(), Some(default_reasoning_duration_secs)),
             sse_max_frame_length,
         );
+        if streamed_output_indices.insert(output_index) {
+            send_responses_event(
+                tx,
+                seq,
+                "response.output_item.added",
+                json!({
+                    "output_index": output_index,
+                    "item": done_item.clone(),
+                }),
+            )
+            .await?;
+        }
+        emit_missing_terminal_message_child_lifecycles(
+            tx,
+            seq,
+            output_index,
+            &done_item,
+            sse_max_frame_length,
+        )
+        .await?;
+        let single_item = vec![(output_index, done_item.clone())];
+        emit_missing_terminal_sub_lifecycles(
+            tx,
+            seq,
+            &single_item,
+            reasoning_delta_indices,
+            reasoning_done_indices,
+            reasoning_summary_added_indices,
+            reasoning_summary_delta_indices,
+            reasoning_summary_text_done_indices,
+            reasoning_summary_part_done_indices,
+            function_args_delta_indices,
+            function_args_done_indices,
+            sse_max_frame_length,
+        )
+        .await?;
         send_responses_event(
             tx,
             seq,
@@ -2368,6 +2387,89 @@ async fn emit_missing_terminal_output_done_events(
         .await?;
         completed_output_indices.insert(output_index);
         completed_output_items.push((output_index, done_item));
+    }
+    Ok(())
+}
+
+async fn emit_missing_terminal_message_child_lifecycles(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    output_index: usize,
+    item: &Value,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return Ok(());
+    }
+    let item_id = item.get("id").cloned().unwrap_or(Value::Null);
+    let phase = item.get("phase").and_then(Value::as_str);
+    let Some(content) = item.get("content").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for (content_index, part) in content.iter().enumerate() {
+        let part_type = part.get("type").and_then(Value::as_str).unwrap_or_default();
+        if !matches!(part_type, "output_text" | "text") {
+            continue;
+        }
+        let text = part
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut added_part = part.clone();
+        if let Some(obj) = added_part.as_object_mut() {
+            obj.insert("text".to_string(), Value::String(String::new()));
+        }
+        send_responses_event(
+            tx,
+            seq,
+            "response.content_part.added",
+            json!({
+                "output_index": output_index,
+                "content_index": content_index,
+                "item_id": item_id.clone(),
+                "part": added_part,
+            }),
+        )
+        .await?;
+        if !text.is_empty() {
+            send_responses_delta_string(
+                tx,
+                seq,
+                "response.output_text.delta",
+                responses_text_delta_payload(
+                    phase,
+                    item,
+                    output_index as u64,
+                    content_index as u64,
+                ),
+                "delta",
+                text,
+                sse_max_frame_length,
+            )
+            .await?;
+        }
+        let mut done_payload = responses_text_delta_payload(
+            phase,
+            item,
+            output_index as u64,
+            content_index as u64,
+        );
+        if let Some(obj) = done_payload.as_object_mut() {
+            obj.insert("text".to_string(), Value::String(text.to_string()));
+        }
+        send_responses_event(tx, seq, "response.output_text.done", done_payload).await?;
+        send_responses_event(
+            tx,
+            seq,
+            "response.content_part.done",
+            json!({
+                "output_index": output_index,
+                "content_index": content_index,
+                "item_id": item_id.clone(),
+                "part": part,
+            }),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -2469,11 +2571,12 @@ async fn emit_missing_terminal_sub_lifecycles(
                         send_responses_delta_string(
                             tx,
                             seq,
-                            "response.reasoning.delta",
+                            "response.reasoning_text.delta",
                             insert_reasoning_source(
                                 json!({
                                     "item_id": item_id,
                                     "output_index": output_index,
+                                    "content_index": 0,
                                 }),
                                 source,
                             ),
@@ -2487,11 +2590,12 @@ async fn emit_missing_terminal_sub_lifecycles(
                         send_responses_event(
                             tx,
                             seq,
-                            "response.reasoning.done",
+                            "response.reasoning_text.done",
                             insert_reasoning_source(
                                 json!({
                                     "item_id": item_id,
                                     "output_index": output_index,
+                                    "content_index": 0,
                                     "text": text,
                                 }),
                                 source,

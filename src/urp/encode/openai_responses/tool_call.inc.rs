@@ -74,7 +74,6 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         apply_response_format(obj, format);
     }
     merge_extra(obj, &req.extra_body);
-    ensure_default_responses_reasoning_summary(obj);
     ensure_responses_encrypted_reasoning_include(obj);
     body
 }

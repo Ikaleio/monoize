@@ -12,13 +12,13 @@ use crate::urp::stream_helpers::{
 };
 use crate::urp::{
     FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent, node_is_empty_text,
-    nodes_semantically_match, push_unique_node,
+    nodes_semantically_match,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 

@@ -748,6 +748,193 @@ async fn messages_stream_passthrough_from_messages_upstream() {
 }
 
 #[tokio::test]
+async fn messages_stream_passthrough_preserves_chunked_deltas_and_suppresses_upstream_ping() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream passthrough chunks" }] }],
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }],
+            "stream": true,
+            "stream_mode": "messages_chunked_ping"
+        }),
+    )
+    .await;
+    let frames = parse_sse_frames(&text);
+    let events: Vec<(String, Value)> = frames
+        .into_iter()
+        .filter_map(|(event, data)| {
+            if data == "[DONE]" {
+                return None;
+            }
+            let payload = serde_json::from_str::<Value>(&data).ok()?;
+            Some((event.expect("messages frame should be named"), payload))
+        })
+        .collect();
+    let payloads: Vec<Value> = events.iter().map(|(_, payload)| payload.clone()).collect();
+
+    assert_messages_stream_invariants(&payloads, "same-family chunked messages stream");
+    assert_non_interleaved_message_blocks(&payloads, "same-family chunked messages stream");
+    assert_eq!(
+        count_done_sentinels(&text),
+        0,
+        "messages stream must not append [DONE]"
+    );
+    assert!(
+        events.iter().all(|(event_name, payload)| {
+            payload.get("type").and_then(Value::as_str) == Some(event_name.as_str())
+        }),
+        "every Messages SSE event name must equal payload type: {text}"
+    );
+    assert!(
+        !events.iter().any(|(event_name, payload)| {
+            event_name == "ping" || payload.get("type").and_then(Value::as_str) == Some("ping")
+        }),
+        "upstream Messages ping must not be re-emitted as a downstream content event: {text}"
+    );
+
+    let thinking_deltas: Vec<&str> = payloads
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
+        .filter_map(|event| event["delta"]["thinking"].as_str())
+        .collect();
+    assert_eq!(thinking_deltas, vec!["think-a", "think-b"]);
+
+    let signature_deltas: Vec<&str> = payloads
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("signature_delta"))
+        .filter_map(|event| event["delta"]["signature"].as_str())
+        .collect();
+    assert_eq!(signature_deltas.len(), 2);
+    assert!(
+        signature_deltas
+            .iter()
+            .all(|signature| signature.starts_with("mz2.")),
+        "signature chunks should preserve frame granularity while carrying reasoning envelopes: {text}"
+    );
+
+    let text_deltas: Vec<&str> = payloads
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("text_delta"))
+        .filter_map(|event| event["delta"]["text"].as_str())
+        .collect();
+    assert_eq!(text_deltas, vec!["look ", "here"]);
+
+    let tool_json_deltas: Vec<&str> = payloads
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("input_json_delta"))
+        .filter_map(|event| event["delta"]["partial_json"].as_str())
+        .collect();
+    assert_eq!(
+        tool_json_deltas,
+        vec!["{\"query\":\"stream_", "encode\",\"max_results\":3}"]
+    );
+
+    let msg_delta = payloads
+        .iter()
+        .find(|event| event["type"].as_str() == Some("message_delta"))
+        .expect("message_delta");
+    assert_eq!(msg_delta["delta"]["stop_reason"].as_str(), Some("tool_use"));
+}
+
+#[tokio::test]
+async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chunks() {
+    let ctx = setup().await;
+    let (upstream_addr, _, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+
+    let mut models = HashMap::new();
+    models.insert(
+        "chunked-msg-transform".to_string(),
+        monoize::monoize_routing::MonoizeModelEntry {
+            redirect: Some("gpt-5-mini-msg".to_string()),
+            multiplier: 1.0,
+        },
+    );
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-transform-chunked-messages".to_string(),
+            provider_type: monoize::monoize_routing::MonoizeProviderType::Messages,
+            models,
+            api_type_overrides: Vec::new(),
+            groups: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-transform-chunked-messages-ch1".to_string()),
+                name: "mono-transform-chunked-messages-ch1".to_string(),
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+            }],
+            max_retries: -1,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            transforms: vec![monoize::transforms::TransformRuleConfig {
+                transform: "plaintext_reasoning_to_summary".to_string(),
+                enabled: true,
+                models: None,
+                phase: monoize::transforms::Phase::Response,
+                config: json!({}),
+            }],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "chunked-msg-transform",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "stream transformed chunks" }] }],
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }],
+            "stream": true,
+            "stream_mode": "messages_chunked_ping"
+        }),
+    )
+    .await;
+    let payloads: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+
+    let thinking_deltas: Vec<&str> = payloads
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
+        .filter_map(|event| event["delta"]["thinking"].as_str())
+        .collect();
+    assert_eq!(
+        thinking_deltas,
+        vec!["think-a", "think-b"],
+        "plaintext_reasoning_to_summary must not merge transformed Messages thinking chunks: {text}"
+    );
+    assert!(
+        payloads
+            .iter()
+            .all(|event| event["type"].as_str() != Some("ping")),
+        "upstream Messages ping must not survive transformed Messages passthrough: {text}"
+    );
+    assert_non_interleaved_message_blocks(&payloads, "transformed same-family messages stream");
+}
+
+#[tokio::test]
 async fn messages_stream_passthrough_preserves_messages_upstream_error() {
     let ctx = setup().await;
     let text = collect_messages_stream_text(

@@ -96,11 +96,12 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     send_responses_delta_string(
                         &tx,
                         &mut seq,
-                        "response.reasoning.delta",
+                        "response.reasoning_text.delta",
                         insert_reasoning_source(
                             json!({
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
+                            "content_index": 0,
                             }),
                             source.as_deref(),
                         ),
@@ -112,11 +113,12 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     send_responses_event(
                         &tx,
                         &mut seq,
-                        "response.reasoning.done",
+                        "response.reasoning_text.done",
                         insert_reasoning_source(
                             json!({
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
+                            "content_index": 0,
                             "text": text,
                             }),
                             source.as_deref(),
@@ -264,4 +266,3 @@ pub(crate) async fn emit_synthetic_responses_stream(
     send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
     Ok(())
 }
-

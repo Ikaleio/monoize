@@ -14,11 +14,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut message_item_extra_by_output_index: HashMap<u64, HashMap<String, Value>> =
         HashMap::new();
     let mut item_ids_by_output_index: HashMap<u64, String> = HashMap::new();
-    let mut reasoning_text = String::new();
-    let mut reasoning_summary_text = String::new();
-    let mut reasoning_sig = String::new();
-    let mut reasoning_source: Option<String> = None;
-    let mut reasoning_output_index: Option<u64> = None;
+    let mut reasoning_by_output_index: HashMap<u64, AccumulatedReasoningSlot> = HashMap::new();
     let mut call_order: Vec<String> = Vec::new();
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
@@ -108,24 +104,28 @@ pub(crate) async fn stream_responses_to_urp_events(
                 saw_text_delta = true;
             }
         }
-        if ev.event == "response.reasoning.delta" {
+        if ev.event == "response.reasoning_text.delta" {
             if let Some(delta) = data_val
                 .get("delta")
                 .and_then(|v| v.as_str())
                 .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
             {
-                reasoning_text.push_str(delta);
+                append_reasoning_text_delta(
+                    reasoning_slot_for_event(&mut reasoning_by_output_index, &data_val),
+                    delta,
+                );
             }
         }
-        if ev.event == "response.reasoning.done" {
+        if ev.event == "response.reasoning_text.done" {
             if let Some(text) = data_val
                 .get("text")
                 .and_then(|v| v.as_str())
                 .or_else(|| data_val.get("delta").and_then(|v| v.as_str()))
             {
-                if reasoning_text.is_empty() {
-                    reasoning_text = text.to_string();
-                }
+                complete_reasoning_text(
+                    reasoning_slot_for_event(&mut reasoning_by_output_index, &data_val),
+                    text,
+                );
             }
         }
         if ev.event == "response.reasoning_summary_text.delta" {
@@ -134,7 +134,11 @@ pub(crate) async fn stream_responses_to_urp_events(
                 .and_then(|v| v.as_str())
                 .or_else(|| data_val.get("text").and_then(|v| v.as_str()))
             {
-                reasoning_summary_text.push_str(delta);
+                append_reasoning_summary_delta(
+                    reasoning_slot_for_event(&mut reasoning_by_output_index, &data_val),
+                    data_val.get("summary_index").and_then(Value::as_u64),
+                    delta,
+                );
             }
             if let (Some(idx), Some(id)) = (
                 data_val.get("output_index").and_then(|v| v.as_u64()),
@@ -144,6 +148,29 @@ pub(crate) async fn stream_responses_to_urp_events(
                     item_ids_by_output_index.insert(idx, id.to_string());
                 }
             }
+        }
+        if ev.event == "response.reasoning_summary_text.done" {
+            if let Some(summary) = data_val
+                .get("text")
+                .and_then(|v| v.as_str())
+                .or_else(|| data_val.get("delta").and_then(|v| v.as_str()))
+            {
+                complete_reasoning_summary(
+                    reasoning_slot_for_event(&mut reasoning_by_output_index, &data_val),
+                    data_val.get("summary_index").and_then(Value::as_u64),
+                    summary,
+                );
+            }
+        }
+        if ev.event == "response.reasoning_summary_part.done"
+            && let Some(part) = data_val.get("part")
+            && let Some(summary) = part.get("text").and_then(Value::as_str)
+        {
+            complete_reasoning_summary(
+                reasoning_slot_for_event(&mut reasoning_by_output_index, &data_val),
+                data_val.get("summary_index").and_then(Value::as_u64),
+                summary,
+            );
         }
         if ev.event == "response.output_item.added" {
             let item = data_val.get("item").unwrap_or(&data_val);
@@ -198,18 +225,8 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
-                    reasoning_output_index.get_or_insert(idx);
-                }
-                merge_reasoning_source(&mut reasoning_source, reasoning_source_from_value(item));
-                let (text, summary, sig) = extract_reasoning_parts(item);
-                if reasoning_text.is_empty() && !text.is_empty() {
-                    reasoning_text = text;
-                }
-                if reasoning_summary_text.is_empty() && !summary.is_empty() {
-                    reasoning_summary_text = summary;
-                }
-                if reasoning_sig.is_empty() && !sig.is_empty() {
-                    reasoning_sig = sig;
+                    let slot = reasoning_slot_for_item(&mut reasoning_by_output_index, idx, item);
+                    merge_reasoning_item_snapshot(slot, item, false);
                 }
             }
         }
@@ -295,18 +312,8 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
                 if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {
-                    reasoning_output_index.get_or_insert(idx);
-                }
-                merge_reasoning_source(&mut reasoning_source, reasoning_source_from_value(item));
-                let (text, summary, sig) = extract_reasoning_parts(item);
-                if !text.is_empty() {
-                    reasoning_text = text;
-                }
-                if !summary.is_empty() {
-                    reasoning_summary_text = summary;
-                }
-                if !sig.is_empty() {
-                    reasoning_sig = sig;
+                    let slot = reasoning_slot_for_item(&mut reasoning_by_output_index, idx, item);
+                    merge_reasoning_item_snapshot(slot, item, false);
                 }
             } else if item.get("type").and_then(|v| v.as_str()) == Some("message")
                 && !saw_text_delta
@@ -341,12 +348,8 @@ pub(crate) async fn stream_responses_to_urp_events(
         }
 
         let stream_events = if ev.event == "response.completed" {
-            let accumulated_output_nodes = build_accumulated_output_nodes(
-                &reasoning_text,
-                &reasoning_summary_text,
-                &reasoning_sig,
-                reasoning_source.as_deref(),
-                reasoning_output_index,
+            let accumulated_output_entries = build_accumulated_output_entries(
+                &reasoning_by_output_index,
                 &output_texts_by_output_index,
                 &message_phases_by_output_index,
                 &message_item_extra_by_output_index,
@@ -358,7 +361,7 @@ pub(crate) async fn stream_responses_to_urp_events(
             map_response_completed_with_accumulated(
                 data_val,
                 &mut index_state,
-                &accumulated_output_nodes,
+                &accumulated_output_entries,
             )
         } else {
             map_responses_event_to_urp_events_with_state(
@@ -369,18 +372,37 @@ pub(crate) async fn stream_responses_to_urp_events(
             )
         };
         for stream_event in stream_events {
+            if let UrpStreamEvent::Error {
+                code,
+                message,
+                extra_body: _,
+            } = &stream_event
+                && code.as_deref() == Some("responses_terminal_conflict")
+            {
+                let terminal_error = StreamTerminalError {
+                    code: code.clone().unwrap_or_else(|| "responses_terminal_conflict".to_string()),
+                    message: message.clone(),
+                    http_status: StatusCode::BAD_GATEWAY.as_u16(),
+                    error_type: Some("upstream_protocol_error".to_string()),
+                    param: Some("response.output".to_string()),
+                };
+                let _ = tx.send(stream_event).await;
+                record_stream_terminal_error(
+                    &runtime_metrics,
+                    "responses_terminal_conflict",
+                    terminal_error,
+                )
+                .await;
+                return Ok(());
+            }
             response_done_sent |= matches!(stream_event, UrpStreamEvent::ResponseDone { .. });
             let _ = tx.send(stream_event).await;
         }
     }
 
     if !response_done_sent {
-        let output_nodes = build_accumulated_output_nodes(
-            &reasoning_text,
-            &reasoning_summary_text,
-            &reasoning_sig,
-            reasoning_source.as_deref(),
-            reasoning_output_index,
+        let output_nodes = build_accumulated_output_nodes_from_reasoning_slots(
+            &reasoning_by_output_index,
             &output_texts_by_output_index,
             &message_phases_by_output_index,
             &message_item_extra_by_output_index,
