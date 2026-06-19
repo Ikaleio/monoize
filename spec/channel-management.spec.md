@@ -171,8 +171,13 @@ CP-DEL-1. After delete, runtime health entries for all deleted provider channel 
 ### 3.7 Fetch channel models
 
 - Method/Path: `POST /api/dashboard/fetch-channel-models`
-- Body: `{ "provider_type": ProviderType, "base_url": string, "api_key": string }`
+- Body: `{ "provider_type": ProviderType, "base_url": string, "api_key"?: string, "provider_id"?: string, "channel_id"?: string }`
 - Semantics:
+  - If `api_key` is present and non-empty after trimming, the request MUST use that key.
+  - If `api_key` is omitted or empty, `provider_id` and `channel_id` MUST both be present.
+  - If `api_key` is omitted or empty and `provider_id` plus `channel_id` identify an existing Channel, the request MUST use the stored Channel `api_key`.
+  - If `api_key` is omitted or empty and no stored Channel key can be resolved, return `400 invalid_input`.
+  - The request body `provider_type` and `base_url` are the source of truth for the upstream request. They MAY differ from the stored Channel values when the editor has unsaved changes.
   - For `responses`, `chat_completion`, `messages`, `openai_image`, and `replicate`, call `GET {base}/v1/models` with bearer authentication.
   - For `gemini`, call Gemini list models with `x-goog-api-key`.
   - Return unique model ids sorted ascending.
@@ -194,3 +199,17 @@ CP-DEL-1. After delete, runtime health entries for all deleted provider channel 
 CP-SEC-1. `api_key` MUST be accepted in create/update payloads.
 
 CP-SEC-2. `api_key` MUST NOT be returned in any read response.
+
+## 5. Dashboard Frontend Interaction
+
+CP-FE-1. Provider card move, edit, and delete actions MUST be invokable with a single tap or click. Tooltip visibility MUST NOT be required before the action runs.
+
+CP-FE-2. Provider card move, edit, and delete icon buttons MUST have a hit target of at least `44px` by `44px` below the `sm` breakpoint. They MAY use a smaller hit target at `sm` and wider breakpoints.
+
+CP-FE-3. Native HTML drag-and-drop reordering of provider cards MUST be enabled only when the browser matches `(pointer: fine)`. On coarse-pointer devices, provider reordering MUST remain available through the move up and move down buttons.
+
+CP-FE-4. While a provider child popup is open or is closing from a user action, the parent provider dialog MUST NOT treat that child popup interaction as an outside-click dismissal.
+
+CP-FE-5. Saving a provider child editor popup MUST update the parent provider draft and close only that child popup. It MUST NOT open the parent provider unsaved-changes confirmation.
+
+CP-FE-6. Saving from the provider unsaved-changes confirmation MUST invoke the provider create or update operation at most once for the same tap or click sequence. That same sequence MUST NOT reopen the unsaved-changes confirmation.

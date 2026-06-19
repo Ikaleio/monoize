@@ -187,3 +187,11 @@ DS45. Sidebar motion and floating-card layout MUST be preserved unless a separat
 ## 13. Selected Filters
 
 DS46. Selected filter presets SHOULD use `accent` surface and `accent-foreground` text instead of solid primary background.
+
+## 14. Tooltip and Touch Actions
+
+DS47. On coarse-pointer devices, shared tooltip triggers that do not contain an interactive element MUST open the tooltip on tap and close it on outside tap.
+
+DS48. On coarse-pointer devices, shared tooltip triggers that wrap a native interactive element (`button`, `a`, `input`, `textarea`, `select`, or `[role="button"]`) MUST preserve that element's native click activation. The wrapped element's primary action MUST run on the first tap.
+
+DS49. Icon-only dashboard action buttons intended for touch use MUST expose an accessible label and MUST provide a hit target of at least `44px` by `44px` below the `sm` breakpoint.

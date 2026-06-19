@@ -8,9 +8,9 @@ import { cn } from "@/lib/utils"
 const TooltipProvider = TooltipPrimitive.Provider
 
 // Radix Tooltip ignores touch events by design (hover-only).
-// On touch devices we take over via controlled open state and click handlers,
-// suppressing Radix's internal pointer/focus handlers via preventDefault
-// (Radix's composeEventHandlers skips its handler when defaultPrevented).
+// On touch devices we take over via controlled open state and click handlers.
+// Pointer down must keep its native default so button triggers still activate on
+// the first tap in mobile Chrome/Safari.
 
 type TouchTooltipCtx = {
   open: boolean
@@ -20,6 +20,8 @@ type TouchTooltipCtx = {
 } | null
 
 const TouchTooltipContext = React.createContext<TouchTooltipCtx>(null)
+const interactiveTriggerSelector =
+  "button,a,input,textarea,select,[role='button']"
 
 function useIsTouchDevice() {
   const [isTouch, setIsTouch] = React.useState(false)
@@ -87,22 +89,38 @@ const TooltipTrigger = React.forwardRef<
     return <TooltipPrimitive.Trigger ref={ref} {...props} />
   }
 
-  const suppress = (e: { preventDefault: () => void }) => { e.preventDefault() }
-
   return (
     <TooltipPrimitive.Trigger
       ref={ref}
       {...props}
-      onPointerDown={suppress}
-      onPointerMove={suppress}
-      onFocus={suppress}
-      onBlur={suppress}
+      onPointerMove={(e) => {
+        props.onPointerMove?.(e)
+        if (!e.defaultPrevented && e.pointerType === "touch") {
+          e.preventDefault()
+        }
+      }}
+      onFocus={(e) => {
+        props.onFocus?.(e)
+        if (!e.defaultPrevented) {
+          e.preventDefault()
+        }
+      }}
+      onBlur={(e) => {
+        props.onBlur?.(e)
+        if (!e.defaultPrevented) {
+          e.preventDefault()
+        }
+      }}
       onClick={(e) => {
         const target = e.currentTarget
         if (target instanceof HTMLElement) {
           target.dataset.tooltipInstanceId = ctx.instanceId
         }
-        ctx.toggle()
+        if (target instanceof HTMLElement && target.matches(interactiveTriggerSelector)) {
+          ctx.close()
+        } else {
+          ctx.toggle()
+        }
         props.onClick?.(e)
       }}
     />

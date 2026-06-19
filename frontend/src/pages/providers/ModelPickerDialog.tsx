@@ -17,7 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import type { ModelMetadataRecord, ProviderType } from '@/lib/api'
+import type { FetchChannelModelsInput, ModelMetadataRecord } from '@/lib/api'
 import {
 	buildPricedModelIdSet,
 	hasBillablePricingModelId
@@ -26,7 +26,7 @@ import {
 type ModelPickerDialogProps = {
 	open: boolean
 	onOpenChange: (open: boolean) => void
-	channelInfo?: { provider_type: ProviderType; base_url: string; api_key: string }
+	channelInfo?: FetchChannelModelsInput
 	providerName: string
 	existingModels: string[]
 	modelMetadata: ModelMetadataRecord[]
@@ -34,7 +34,14 @@ type ModelPickerDialogProps = {
 	onConfirm: (checkedModels: string[]) => void
 }
 
-type FetchModelsKey = readonly ['channel-models', ProviderType, string, string]
+type FetchModelsKey = readonly [
+	'channel-models',
+	FetchChannelModelsInput['provider_type'],
+	string,
+	string,
+	string,
+	string
+]
 
 export function ModelPickerDialog({
 	open,
@@ -66,18 +73,28 @@ function ModelPickerDialogContent({
 
 	const fetchKey =
 		channelInfo ?
-			([
-				'channel-models',
-				channelInfo.provider_type,
-				channelInfo.base_url,
-				channelInfo.api_key
-			] as FetchModelsKey)
-		: null
+				([
+					'channel-models',
+					channelInfo.provider_type,
+					channelInfo.base_url,
+					channelInfo.api_key ?? '',
+					channelInfo.provider_id ?? '',
+					channelInfo.channel_id ?? ''
+				] as FetchModelsKey)
+			: null
 
 	const { data: fetchedModels = [], isLoading: loading } = useSWR(
 		fetchKey,
 		async (key: FetchModelsKey) => {
-			return (await api.fetchChannelModels(key[1], key[2], key[3])).models
+			return (
+				await api.fetchChannelModels({
+					provider_type: key[1],
+					base_url: key[2],
+					api_key: key[3] || undefined,
+					provider_id: key[4] || undefined,
+					channel_id: key[5] || undefined
+				})
+			).models
 		},
 		{
 			revalidateOnFocus: false,

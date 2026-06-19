@@ -405,10 +405,85 @@ pub async fn fetch_provider_models(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FetchChannelModelsRequest {
     pub provider_type: crate::monoize_routing::MonoizeProviderType,
     pub base_url: String,
-    pub api_key: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+}
+
+async fn resolve_fetch_channel_api_key(
+    state: &AppState,
+    body: &FetchChannelModelsRequest,
+) -> AppResult<String> {
+    if let Some(api_key) = body
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(api_key.to_string());
+    }
+
+    let provider_id = body
+        .provider_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let channel_id = body
+        .channel_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let (Some(provider_id), Some(channel_id)) = (provider_id, channel_id) else {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            "api_key is required for unsaved channels",
+        ));
+    };
+
+    let provider = state
+        .monoize_store
+        .get_provider(provider_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                "stored channel key could not be resolved",
+            )
+        })?;
+
+    let channel = provider
+        .channels
+        .iter()
+        .find(|channel| channel.id == channel_id)
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                "stored channel key could not be resolved",
+            )
+        })?;
+
+    let api_key = channel.api_key.trim();
+    if api_key.is_empty() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            "api_key is required for unsaved channels",
+        ));
+    }
+
+    Ok(api_key.to_string())
 }
 
 pub async fn fetch_channel_models(
@@ -418,37 +493,41 @@ pub async fn fetch_channel_models(
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
 
-    if body.base_url.trim().is_empty() || body.api_key.trim().is_empty() {
+    let base_url = body.base_url.trim();
+    if base_url.is_empty() {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_input",
-            "base_url and api_key are required",
+            "base_url is required",
         ));
     }
+    let api_key = resolve_fetch_channel_api_key(&state, &body).await?;
 
     let url = match body.provider_type {
         crate::monoize_routing::MonoizeProviderType::Gemini => {
-            build_gemini_models_list_url(&body.base_url)
+            build_gemini_models_list_url(base_url)
         }
-        _ => build_models_list_url(&body.base_url),
+        _ => build_models_list_url(base_url),
     };
 
-    let mut request = state.http.get(&url).timeout(std::time::Duration::from_secs(15));
+    let mut request = state
+        .http
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(15));
     request = match body.provider_type {
         crate::monoize_routing::MonoizeProviderType::Gemini => {
-            request.header("x-goog-api-key", body.api_key.trim())
+            request.header("x-goog-api-key", api_key.as_str())
         }
-        _ => request.header("Authorization", format!("Bearer {}", body.api_key)),
+        _ => request.header("Authorization", format!("Bearer {api_key}")),
     };
 
-    let resp = request.send().await
-        .map_err(|e| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_fetch_failed",
-                format!("failed to fetch models: {e}"),
-            )
-        })?;
+    let resp = request.send().await.map_err(|e| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_fetch_failed",
+            format!("failed to fetch models: {e}"),
+        )
+    })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -508,7 +587,10 @@ pub async fn test_channel(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     if let Some(model) = requested_model.as_ref()
-        && !channel.supported_models.iter().any(|supported| supported == model)
+        && !channel
+            .supported_models
+            .iter()
+            .any(|supported| supported == model)
     {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -702,4 +784,178 @@ fn extract_model_ids(
     };
     models.sort();
     models
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{RuntimeConfig, load_state_with_runtime};
+    use crate::monoize_routing::{
+        CreateMonoizeChannelInput, CreateMonoizeProviderInput, MonoizeModelEntry,
+        MonoizeProviderType,
+    };
+    use crate::users::UserRole;
+    use axum::Json;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use http_body_util::BodyExt;
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    async fn start_models_list_server() -> (String, Arc<Mutex<Vec<String>>>) {
+        let captured_auth = Arc::new(Mutex::new(Vec::new()));
+
+        async fn models(
+            State(captured_auth): State<Arc<Mutex<Vec<String>>>>,
+            headers: HeaderMap,
+        ) -> Json<Value> {
+            if let Some(auth) = headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+            {
+                captured_auth.lock().unwrap().push(auth.to_string());
+            }
+
+            Json(json!({
+                "data": [
+                    { "id": "zeta-model" },
+                    { "id": "alpha-model" },
+                    { "id": "alpha-model" }
+                ]
+            }))
+        }
+
+        let router = axum::Router::new()
+            .route("/v1/models", get(models))
+            .with_state(Arc::clone(&captured_auth));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind model list server");
+        let addr = listener.local_addr().expect("local addr");
+
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("model list server");
+        });
+
+        (format!("http://{addr}"), captured_auth)
+    }
+
+    fn test_provider_input(base_url: String) -> CreateMonoizeProviderInput {
+        CreateMonoizeProviderInput {
+            name: "provider".to_string(),
+            enabled: true,
+            priority: Some(0),
+            max_retries: -1,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            models: HashMap::from([(
+                "alpha-model".to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
+            channels: vec![CreateMonoizeChannelInput {
+                id: None,
+                name: "channel".to_string(),
+                provider_type: MonoizeProviderType::ChatCompletion,
+                base_url,
+                api_key: Some("stored-secret".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["alpha-model".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
+            }],
+            groups: Vec::new(),
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_channel_models_uses_stored_key_for_existing_channel() {
+        let (base_url, captured_auth) = start_models_list_server().await;
+        let state = load_state_with_runtime(RuntimeConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_path: "/metrics".to_string(),
+            database_dsn: "sqlite::memory:".to_string(),
+        })
+        .await
+        .expect("state loads");
+
+        let admin = state
+            .user_store
+            .create_user("admin_user", "password123", UserRole::Admin, &[])
+            .await
+            .expect("admin created");
+        let session = state
+            .user_store
+            .create_session(&admin.id, 7)
+            .await
+            .expect("session created");
+        let provider = state
+            .monoize_store
+            .create_provider(test_provider_input(base_url.clone()))
+            .await
+            .expect("provider created");
+        let channel_id = provider.channels[0].id.clone();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {}", session.token)).expect("auth header"),
+        );
+        let response = fetch_channel_models(
+            State(state),
+            headers,
+            Json(FetchChannelModelsRequest {
+                provider_type: MonoizeProviderType::ChatCompletion,
+                base_url,
+                api_key: None,
+                provider_id: Some(provider.id),
+                channel_id: Some(channel_id),
+            }),
+        )
+        .await
+        .expect("fetch succeeds")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).expect("json body");
+        assert_eq!(
+            body["models"],
+            json!(["alpha-model".to_string(), "zeta-model".to_string()])
+        );
+        assert_eq!(
+            captured_auth.lock().unwrap().as_slice(),
+            &["Bearer stored-secret".to_string()]
+        );
+    }
 }

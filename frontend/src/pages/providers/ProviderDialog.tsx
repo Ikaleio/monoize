@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import type {
 	CreateProviderInput,
+	FetchChannelModelsInput,
 	ModelMetadataRecord,
 	Provider,
 	SystemSettings,
@@ -118,6 +119,8 @@ export function ProviderDialog({
 	const [v1KeepConfirmed, setV1KeepConfirmed] = useState<string | null>(null)
 	const [unsavedChangesOpen, setUnsavedChangesOpen] = useState(false)
 	const initialFormRef = useRef<string | null>(null)
+	const suppressParentOutsideInteractionRef = useRef(false)
+	const suppressParentOutsideInteractionTimerRef = useRef<number | null>(null)
 
 	const isEdit = mode === 'edit'
 	const { data: dashboardGroups = [], isLoading: isDashboardGroupsLoading } =
@@ -176,6 +179,25 @@ export function ProviderDialog({
 		() => ({ request_timeout_ms: settings?.monoize_request_timeout_ms }),
 		[settings]
 	)
+
+	const suppressParentOutsideInteraction = useCallback(() => {
+		suppressParentOutsideInteractionRef.current = true
+		if (suppressParentOutsideInteractionTimerRef.current !== null) {
+			window.clearTimeout(suppressParentOutsideInteractionTimerRef.current)
+		}
+		suppressParentOutsideInteractionTimerRef.current = window.setTimeout(() => {
+			suppressParentOutsideInteractionRef.current = false
+			suppressParentOutsideInteractionTimerRef.current = null
+		}, 400)
+	}, [])
+
+	useEffect(() => {
+		return () => {
+			if (suppressParentOutsideInteractionTimerRef.current !== null) {
+				window.clearTimeout(suppressParentOutsideInteractionTimerRef.current)
+			}
+		}
+	}, [])
 
 	const closeModelDialog = useCallback(() => {
 		setEditingModelIndex(null)
@@ -268,23 +290,32 @@ export function ProviderDialog({
 	}, [form])
 
 	const tryClose = useCallback(() => {
+		if (loading || suppressParentOutsideInteractionRef.current) {
+			return
+		}
 		if (isDirty()) {
 			setUnsavedChangesOpen(true)
 		} else {
 			resetFromCurrent()
 			onOpenChange(false)
 		}
-	}, [isDirty, onOpenChange, resetFromCurrent])
+	}, [isDirty, loading, onOpenChange, resetFromCurrent])
 
 	const fetchChannelInfo = useMemo(() => {
 		const channel = channelDraft
 		if (!channel) return undefined
+		const apiKey = channel.api_key.trim()
+		const providerId = current?.id || form.id || undefined
+		const channelId = channel.id.trim() || undefined
 		return {
 			provider_type: channel.provider_type,
 			base_url: channel.base_url.trim(),
-			api_key: channel.api_key.trim()
-		}
-	}, [channelDraft])
+			...(apiKey ? { api_key: apiKey } : {}),
+			...(providerId && channelId ?
+				{ provider_id: providerId, channel_id: channelId }
+			:	{})
+		} satisfies FetchChannelModelsInput
+	}, [channelDraft, current?.id, form.id])
 
 	const existingModelNames = useMemo(
 		() => channelDraft?.supported_models ?? [],
@@ -320,12 +351,18 @@ export function ProviderDialog({
 	)
 
 	const handleFetchChannelModels = useCallback(() => {
-		if (!channelDraft?.base_url.trim() || !channelDraft.api_key.trim()) {
+		const hasStoredChannelKey = Boolean(
+			(current?.id || form.id) && channelDraft?.id.trim()
+		)
+		if (
+			!channelDraft?.base_url.trim() ||
+			(!channelDraft.api_key.trim() && !hasStoredChannelKey)
+		) {
 			toast.error(t('providers.fetchModelsNeedChannel'))
 			return
 		}
 		setModelPickerOpen(true)
-	}, [channelDraft, t])
+	}, [channelDraft, current?.id, form.id, t])
 
 	const deleteModelAt = useCallback(
 		(idx: number) => {
@@ -436,8 +473,16 @@ export function ProviderDialog({
 				:	prev
 			)
 		}
+		suppressParentOutsideInteraction()
 		closeModelDialog()
-	}, [closeModelDialog, editingModelIndex, form.models, modelDraft, t])
+	}, [
+		closeModelDialog,
+		editingModelIndex,
+		form.models,
+		modelDraft,
+		suppressParentOutsideInteraction,
+		t
+	])
 
 	const deleteChannelAt = useCallback(
 		(idx: number) => {
@@ -522,8 +567,15 @@ export function ProviderDialog({
 						index === editingChannelIndex ? nextRow : row
 					)
 		}))
+		suppressParentOutsideInteraction()
 		closeChannelDialog()
-	}, [channelDraft, closeChannelDialog, editingChannelIndex, form.models])
+	}, [
+		channelDraft,
+		closeChannelDialog,
+		editingChannelIndex,
+		form.models,
+		suppressParentOutsideInteraction
+	])
 
 	const validateAndBuild = useCallback((): CreateProviderInput | null => {
 		if (!form.name.trim()) {
@@ -791,7 +843,11 @@ export function ProviderDialog({
 				<DialogContent
 					className='max-h-[calc(100dvh-2rem)] overflow-hidden p-0 w-[min(96vw,1200px)] max-w-[1200px] sm:max-h-[calc(100dvh-3rem)]'
 					onInteractOutside={event => {
-						if (isProviderChildDialogOpen) {
+						if (
+							loading ||
+							isProviderChildDialogOpen ||
+							suppressParentOutsideInteractionRef.current
+						) {
 							event.preventDefault()
 						}
 					}}
@@ -923,16 +979,19 @@ export function ProviderDialog({
 				t={t}
 				onOpenChange={value => {
 					if (!value) {
+						suppressParentOutsideInteraction()
 						setBaseUrlPrompt(null)
 					}
 				}}
 				onKeep={() => {
 					if (!baseUrlPrompt) return
+					suppressParentOutsideInteraction()
 					setV1KeepConfirmed(baseUrlPrompt.original.trim())
 					setBaseUrlPrompt(null)
 				}}
 				onRemove={() => {
 					if (!baseUrlPrompt) return
+					suppressParentOutsideInteraction()
 					setChannelDraft(prev =>
 						prev ? { ...prev, base_url: baseUrlPrompt.trimmed } : prev
 					)
@@ -944,13 +1003,20 @@ export function ProviderDialog({
 			<UnsavedChangesAlertDialog
 				open={unsavedChangesOpen}
 				t={t}
-				onOpenChange={setUnsavedChangesOpen}
+				onOpenChange={value => {
+					if (!value) {
+						suppressParentOutsideInteraction()
+					}
+					setUnsavedChangesOpen(value)
+				}}
 				onDiscard={() => {
+					suppressParentOutsideInteraction()
 					setUnsavedChangesOpen(false)
 					resetFromCurrent()
 					onOpenChange(false)
 				}}
 				onSave={() => {
+					suppressParentOutsideInteraction()
 					setUnsavedChangesOpen(false)
 					void onSubmit()
 				}}
@@ -958,7 +1024,12 @@ export function ProviderDialog({
 
 			<ModelPickerDialog
 				open={modelPickerOpen}
-				onOpenChange={setModelPickerOpen}
+				onOpenChange={value => {
+					if (!value) {
+						suppressParentOutsideInteraction()
+					}
+					setModelPickerOpen(value)
+				}}
 				channelInfo={fetchChannelInfo}
 				providerName={channelDraft?.name || form.name || current?.name || ''}
 				existingModels={existingModelNames}
@@ -975,6 +1046,7 @@ export function ProviderDialog({
 				t={t}
 				onOpenChange={value => {
 					if (!value) {
+						suppressParentOutsideInteraction()
 						closeModelDialog()
 					}
 				}}
@@ -990,6 +1062,7 @@ export function ProviderDialog({
 				onDelete={() => {
 					if (editingModelIndex === null) return
 					deleteModelAt(editingModelIndex)
+					suppressParentOutsideInteraction()
 					closeModelDialog()
 				}}
 				onSave={handleModelDialogSave}
@@ -1005,6 +1078,7 @@ export function ProviderDialog({
 				providerModels={form.models}
 				onOpenChange={value => {
 					if (!value) {
+						suppressParentOutsideInteraction()
 						closeChannelDialog()
 					}
 				}}
@@ -1015,6 +1089,7 @@ export function ProviderDialog({
 				onDelete={() => {
 					if (editingChannelIndex === null) return
 					deleteChannelAt(editingChannelIndex)
+					suppressParentOutsideInteraction()
 					closeChannelDialog()
 				}}
 				onSave={handleChannelDialogSave}

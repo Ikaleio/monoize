@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
 	AlertTriangle,
@@ -60,6 +60,24 @@ type ProviderCardProps = {
 	reasoningSuffixMap: Record<string, string>
 }
 
+const providerActionButtonClass = 'size-11 touch-manipulation sm:size-8'
+
+function useFinePointer() {
+	const [isFinePointer, setIsFinePointer] = useState(() =>
+		typeof window === 'undefined' ? false : window.matchMedia('(pointer: fine)').matches
+	)
+
+	useEffect(() => {
+		const media = window.matchMedia('(pointer: fine)')
+		const syncPointerState = () => setIsFinePointer(media.matches)
+		syncPointerState()
+		media.addEventListener('change', syncPointerState)
+		return () => media.removeEventListener('change', syncPointerState)
+	}, [])
+
+	return isFinePointer
+}
+
 export function ProviderCard({
 	provider,
 	index,
@@ -84,6 +102,7 @@ export function ProviderCard({
 	const [quickTestingChannelId, setQuickTestingChannelId] = useState<string | null>(
 		null
 	)
+	const canDragCard = useFinePointer()
 	const modelEntries = useMemo(
 		() => Object.entries(provider.models).sort(([a], [b]) => a.localeCompare(b)),
 		[provider.models]
@@ -137,25 +156,42 @@ export function ProviderCard({
 			initial={{ opacity: 0, y: 20 }}
 			animate={{ opacity: 1, y: 0 }}
 			transition={{ delay: index * 0.08, ...transitions.normal }}
-			whileHover={{ y: -2, transition: { duration: 0.2 } }}
+			whileHover={canDragCard ? { y: -2, transition: { duration: 0.2 } } : undefined}
 		>
 			<Card
 				className='transition-shadow hover:shadow-md'
-				draggable
-				onDragStart={() => onDragStart(provider.id)}
-				onDragOver={event => event.preventDefault()}
-				onDrop={() => onDrop(provider.id)}
+				draggable={canDragCard}
+				onDragStart={event => {
+					if (!canDragCard) {
+						event.preventDefault()
+						return
+					}
+					onDragStart(provider.id)
+				}}
+				onDragOver={event => {
+					if (canDragCard) {
+						event.preventDefault()
+					}
+				}}
+				onDrop={() => {
+					if (canDragCard) {
+						onDrop(provider.id)
+					}
+				}}
 			>
 				<CardHeader
 					className={cn('cursor-pointer select-none py-3', expanded && 'pb-4')}
 					onClick={() => setExpanded(value => !value)}
-				>
-					<div className='flex items-center justify-between gap-3'>
-						<div className='flex items-center gap-3 min-w-0'>
-							<GripVertical
-								className='h-4 w-4 text-muted-foreground/50 hover:text-muted-foreground cursor-grab transition-colors shrink-0'
-								onClick={event => event.stopPropagation()}
-							/>
+					>
+						<div className='flex items-center justify-between gap-3'>
+							<div className='flex items-center gap-3 min-w-0'>
+								<GripVertical
+									className={cn(
+										'h-4 w-4 text-muted-foreground/50 transition-colors shrink-0',
+										canDragCard ? 'cursor-grab hover:text-muted-foreground' : 'hidden sm:block'
+									)}
+									onClick={event => event.stopPropagation()}
+								/>
 							<motion.div
 								animate={{ rotate: expanded ? 90 : 0 }}
 								transition={{ duration: 0.15 }}
@@ -208,17 +244,18 @@ export function ProviderCard({
 								/>
 							</div>
 							<TooltipProvider delayDuration={300}>
-								<div className='flex items-center gap-1'>
+								<div className='flex items-center gap-0.5 sm:gap-1'>
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<Button
 												variant='ghost'
 												size='icon'
-												className='h-8 w-8'
+												className={providerActionButtonClass}
+												aria-label={t('providers.moveUp')}
 												onClick={() => onMove(index, index - 1)}
 												disabled={index === 0}
 											>
-												<ArrowUp className='h-4 w-4' />
+												<ArrowUp />
 											</Button>
 										</TooltipTrigger>
 										<TooltipContent>{t('providers.moveUp')}</TooltipContent>
@@ -228,27 +265,29 @@ export function ProviderCard({
 											<Button
 												variant='ghost'
 												size='icon'
-												className='h-8 w-8'
+												className={providerActionButtonClass}
+												aria-label={t('providers.moveDown')}
 												onClick={() => onMove(index, index + 1)}
 												disabled={index === total - 1}
 											>
-												<ArrowDown className='h-4 w-4' />
+												<ArrowDown />
 											</Button>
 										</TooltipTrigger>
 										<TooltipContent>{t('providers.moveDown')}</TooltipContent>
 									</Tooltip>
 
-									<Separator orientation='vertical' className='h-6 mx-1' />
+									<Separator orientation='vertical' className='h-7 mx-1 sm:h-6' />
 
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<Button
 												variant='ghost'
 												size='icon'
-												className='h-8 w-8'
+												className={providerActionButtonClass}
+												aria-label={t('common.edit')}
 												onClick={() => onEdit(provider)}
 											>
-												<Pencil className='h-4 w-4' />
+												<Pencil />
 											</Button>
 										</TooltipTrigger>
 										<TooltipContent>{t('common.edit')}</TooltipContent>
@@ -258,10 +297,11 @@ export function ProviderCard({
 											<Button
 												variant='ghost'
 												size='icon'
-												className='h-8 w-8 text-destructive hover:text-destructive'
+												className={cn(providerActionButtonClass, 'text-destructive hover:text-destructive')}
+												aria-label={t('common.delete')}
 												onClick={() => onDelete(provider)}
 											>
-												<Trash2 className='h-4 w-4' />
+												<Trash2 />
 											</Button>
 										</TooltipTrigger>
 										<TooltipContent>{t('common.delete')}</TooltipContent>

@@ -107,7 +107,10 @@ PL12. Provider list card header MUST place provider metadata and controls in a c
 
 PL13. Provider editor Channel dialog MUST include an explicit "Fetch Models" action that opens a model-diff selection dialog before insertion.
 
-- Dialog MUST fetch upstream model list from `POST /api/dashboard/fetch-channel-models` with the current Channel `provider_type`, `base_url`, and `api_key`.
+- Dialog MUST fetch upstream model list from `POST /api/dashboard/fetch-channel-models` with the current Channel `provider_type` and `base_url`.
+- If the current Channel is an existing saved Channel and the API key input is empty, Dialog MUST pass `provider_id` and `channel_id` instead of requiring API key entry.
+- If the current Channel is new or has no saved `channel_id`, Dialog MUST require a non-empty API key before opening the picker.
+- If the API key input is non-empty, Dialog MUST pass that value so unsaved key edits are used for the fetch request.
 - Dialog MUST split entries into `new` and `existing` tabs.
 - Dialog MUST initialize selection from the current Channel `supported_models`.
 - Dialog MUST allow selecting fetched models for the current Channel.

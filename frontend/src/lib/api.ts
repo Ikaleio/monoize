@@ -455,6 +455,14 @@ export interface ChannelTestResult {
   error: string | null;
 }
 
+export interface FetchChannelModelsInput {
+  provider_type: ProviderType;
+  base_url: string;
+  api_key?: string;
+  provider_id?: string;
+  channel_id?: string;
+}
+
 class ApiClient {
   private token: string | null = null;
 
@@ -719,12 +727,20 @@ class ApiClient {
     });
   }
 
-  async fetchChannelModels(providerType: ProviderType, baseUrl: string, apiKey: string): Promise<{
+  async fetchChannelModels(input: FetchChannelModelsInput): Promise<{
     models: string[];
   }> {
+    const body: FetchChannelModelsInput = {
+      provider_type: input.provider_type,
+      base_url: input.base_url,
+    };
+    if (input.api_key?.trim()) body.api_key = input.api_key.trim();
+    if (input.provider_id?.trim()) body.provider_id = input.provider_id.trim();
+    if (input.channel_id?.trim()) body.channel_id = input.channel_id.trim();
+
     return this.request("/fetch-channel-models", {
       method: "POST",
-      body: JSON.stringify({ provider_type: providerType, base_url: baseUrl, api_key: apiKey }),
+      body: JSON.stringify(body),
     });
   }
 
