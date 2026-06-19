@@ -142,6 +142,19 @@ impl NameCaches {
             timing: RequestLogTiming {
                 duration_ms: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),
                 ttfb_ms: raw.ttfb_ms.and_then(|v| i64::try_from(v).ok()),
+                first_visible_output_ms: raw
+                    .first_visible_output_ms
+                    .and_then(|v| i64::try_from(v).ok()),
+                last_visible_output_ms: raw
+                    .last_visible_output_ms
+                    .and_then(|v| i64::try_from(v).ok()),
+                visible_generation_ms: raw
+                    .visible_generation_ms
+                    .and_then(|v| i64::try_from(v).ok()),
+                visible_output_tokens: raw
+                    .visible_output_tokens
+                    .and_then(|v| i64::try_from(v).ok()),
+                tps_mode: raw.tps_mode.clone(),
                 duration_ms_alias: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),
                 elapsed_ms: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),
                 latency_ms: raw.duration_ms.and_then(|v| i64::try_from(v).ok()),

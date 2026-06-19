@@ -2008,6 +2008,51 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 return Sse::new(stream).into_response();
             }
 
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("delayed_final_usage")
+            {
+                let chunks = vec![
+                    json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{ "index": 0, "delta": { "content": text }, "finish_reason": Value::Null }]
+                    })
+                    .to_string(),
+                    json!({
+                        "id": "chatcmpl_mock",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": model,
+                        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
+                        "usage": {
+                            "prompt_tokens": 12,
+                            "completion_tokens": 8,
+                            "total_tokens": 20,
+                            "prompt_tokens_details": { "cached_tokens": 0 },
+                            "completion_tokens_details": { "reasoning_tokens": 0 }
+                        }
+                    })
+                    .to_string(),
+                    "[DONE]".to_string(),
+                ];
+                let stream = futures_util::stream::unfold(
+                    (0usize, chunks),
+                    |(index, chunks)| async move {
+                        let chunk = chunks.get(index)?.clone();
+                        if index > 0 {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                        }
+                        Some((
+                            Ok::<_, Infallible>(Event::default().data(chunk)),
+                            (index + 1, chunks),
+                        ))
+                    },
+                );
+                return Sse::new(stream).into_response();
+            }
+
             let chunk = json!({
                 "id": "chatcmpl_mock",
                 "object": "chat.completion.chunk",

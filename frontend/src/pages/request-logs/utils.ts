@@ -1,6 +1,28 @@
 import type { RequestLog } from '@/lib/api'
 
 type TimingValue = number | string | null | undefined
+type TpsSourceMode = 'exact' | 'estimated' | 'approx'
+
+const MIN_TPS_TOKENS = 8
+const MIN_TPS_DENOMINATOR_MS = 1000
+
+export type ComputedTps =
+	| {
+			state: 'display'
+			mode: TpsSourceMode | 'legacy'
+			value: number
+			tokens: number
+			denominatorMs: number
+	  }
+	| {
+			state: 'insufficient'
+			mode: TpsSourceMode | 'legacy'
+			tokens: number | null
+			denominatorMs: number | null
+	  }
+	| {
+			state: 'unavailable'
+	  }
 
 export type JsonObject = Record<string, unknown>
 
@@ -47,6 +69,61 @@ function parseTimingMs(value: TimingValue): number | null {
 	}
 
 	return null
+}
+
+function validTpsMode(value: unknown): TpsSourceMode | null {
+	return value === 'exact' || value === 'estimated' || value === 'approx' ?
+			value
+		:	null
+}
+
+function tpsFromBasis(
+	mode: TpsSourceMode | 'legacy',
+	tokens: number | null,
+	denominatorMs: number | null
+): ComputedTps {
+	if (tokens == null || denominatorMs == null) return { state: 'unavailable' }
+	if (tokens < MIN_TPS_TOKENS || denominatorMs < MIN_TPS_DENOMINATOR_MS) {
+		return { state: 'insufficient', mode, tokens, denominatorMs }
+	}
+	if (denominatorMs <= 0) {
+		return { state: 'insufficient', mode, tokens, denominatorMs }
+	}
+	return {
+		state: 'display',
+		mode,
+		value: tokens / (denominatorMs / 1000),
+		tokens,
+		denominatorMs
+	}
+}
+
+function legacyOutputTokens(log: RequestLog): number | null {
+	const usageOutput = asObject(asObject(log.usage)?.output)
+	const outputTotal = readTokenCount(usageOutput, 'total_tokens') ?? log.tokens.output ?? null
+	if (outputTotal == null) return null
+	const reasoning = readTokenCount(usageOutput, 'reasoning_tokens') ?? log.tokens.reasoning ?? null
+	return reasoning == null ? outputTotal : Math.max(outputTotal - reasoning, 0)
+}
+
+export function computeTps(log: RequestLog): ComputedTps {
+	const visibleTokens = readNumber(log.timing.visible_output_tokens)
+	const visibleGenerationMs = parseTimingMs(log.timing.visible_generation_ms)
+	if (visibleTokens != null && visibleGenerationMs != null) {
+		return tpsFromBasis(
+			validTpsMode(log.timing.tps_mode) ?? 'estimated',
+			visibleTokens,
+			visibleGenerationMs
+		)
+	}
+
+	const durationMs = getDurationMs(log)
+	const ttfbMs = getTtfbMs(log)
+	const legacyDenominatorMs =
+		durationMs == null ? null
+		: ttfbMs != null && durationMs > ttfbMs ? durationMs - ttfbMs
+		: durationMs
+	return tpsFromBasis('legacy', legacyOutputTokens(log), legacyDenominatorMs)
 }
 
 export function getDurationMs(log: RequestLog): number | null {

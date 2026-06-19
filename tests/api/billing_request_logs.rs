@@ -57,6 +57,20 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
     let log = matched.expect("request log should be inserted");
     assert!(log.is_stream);
     assert!(log.timing.ttfb_ms.is_some());
+    assert!(log.timing.first_visible_output_ms.is_some());
+    assert!(log.timing.last_visible_output_ms.is_some());
+    assert_eq!(log.timing.tps_mode.as_deref(), Some("estimated"));
+    assert!(
+        log.timing.visible_output_tokens.unwrap_or_default() > 0,
+        "visible TPS numerator should be persisted"
+    );
+    assert_eq!(
+        log.timing.visible_generation_ms,
+        Some(
+            log.timing.last_visible_output_ms.unwrap()
+                - log.timing.first_visible_output_ms.unwrap()
+        )
+    );
     assert_eq!(log.tokens.input, Some(12));
     assert_eq!(log.tokens.output, Some(8));
     assert_eq!(log.billing.charge_nano_usd.as_deref(), Some("20000"));
@@ -127,6 +141,123 @@ async fn chat_streaming_requests_upstream_include_usage_by_default() {
 
     let log = matched.expect("stream log should include usage without explicit emit_usage");
     assert!(log.timing.ttfb_ms.is_some());
+}
+
+#[tokio::test]
+async fn chat_streaming_downstream_disconnect_still_drains_final_usage_and_bills() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    ctx.state
+        .user_store
+        .update_user(
+            &user.id,
+            None,
+            None,
+            None,
+            None,
+            Some("1000000000"),
+            Some(false),
+            None,
+            None,
+        )
+        .await
+        .expect("set finite balance");
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user before")
+        .expect("user exists");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"disconnect-before-final-usage"}],
+                "stream": true,
+                "stream_mode": "delayed_final_usage"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut body = resp.into_body();
+    let first_frame = body
+        .frame()
+        .await
+        .expect("first downstream frame")
+        .expect("first downstream frame ok");
+    assert!(
+        first_frame.is_data(),
+        "first downstream SSE frame should carry data"
+    );
+    drop(body);
+
+    let mut matched = None;
+    for _ in 0..30 {
+        ctx.state.user_store.flush_all_batchers().await;
+        let (logs, _, _) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(
+                &user.id,
+                100,
+                0,
+                Some("gpt-5-mini-chat"),
+                Some("success"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("list request logs");
+        matched = logs.into_iter().find(|log| {
+            log.model == "gpt-5-mini-chat"
+                && log.is_stream
+                && log.tokens.input == Some(12)
+                && log.tokens.output == Some(8)
+                && log.billing.charge_nano_usd.as_deref() == Some("20000")
+        });
+        if matched.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    matched.expect("disconnect should still persist upstream terminal usage charge");
+
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user after")
+        .expect("user exists");
+    let before_nano: i128 = user_before
+        .balance_nano_usd
+        .parse()
+        .expect("parse before balance");
+    let after_nano: i128 = user_after
+        .balance_nano_usd
+        .parse()
+        .expect("parse after balance");
+    assert_eq!(before_nano - after_nano, 20000);
 }
 
 #[tokio::test]
@@ -408,6 +539,11 @@ async fn request_log_batcher_broadcasts_immediately_before_flush() {
         error_http_status: None,
         duration_ms: Some(50),
         ttfb_ms: None,
+        first_visible_output_ms: None,
+        last_visible_output_ms: None,
+        visible_generation_ms: None,
+        visible_output_tokens: None,
+        tps_mode: None,
         request_ip: Some("127.0.0.1".to_string()),
         reasoning_effort: None,
         tried_providers_json: None,
@@ -518,6 +654,97 @@ async fn chat_upstream_error_is_logged_and_not_billed() {
             .unwrap_or("")
             .contains("upstream status 422")
     );
+
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user after")
+        .expect("user exists");
+    assert_eq!(user_before.balance_nano_usd, user_after.balance_nano_usd);
+}
+
+#[tokio::test]
+async fn chat_streaming_prestream_upstream_error_is_logged_as_error_and_not_billed() {
+    let ctx = setup().await;
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user before")
+        .expect("user exists");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"force stream error"}],
+                "stream": true,
+                "force_upstream_error_status": 400,
+                "force_upstream_error_code": "cyber_policy",
+                "force_upstream_error_message": "mock cybersecurity policy block"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(
+        text.contains("\"code\":\"cyber_policy\""),
+        "downstream should receive upstream code in stream error: {text}"
+    );
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    let mut matched = None;
+    for _ in 0..20 {
+        ctx.state.user_store.flush_all_batchers().await;
+        let (logs, _, _) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(
+                &user.id,
+                100,
+                0,
+                Some("gpt-5-mini-chat"),
+                Some("error"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("list request logs");
+        matched = logs.into_iter().find(|log| {
+            log.model == "gpt-5-mini-chat"
+                && log.is_stream
+                && log.error.code.as_deref() == Some("cyber_policy")
+        });
+        if matched.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let log = matched.expect("prestream error request log should be inserted");
+    assert_eq!(log.status, "error");
+    assert_eq!(log.error.http_status, Some(400));
+    assert_eq!(log.billing.charge_nano_usd, None);
 
     let user_after = ctx
         .state
@@ -765,6 +992,11 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
             error_http_status: None,
             duration_ms: Some(1),
             ttfb_ms: None,
+            first_visible_output_ms: None,
+            last_visible_output_ms: None,
+            visible_generation_ms: None,
+            visible_output_tokens: None,
+            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: None,
@@ -807,6 +1039,11 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
             error_http_status: None,
             duration_ms: Some(1),
             ttfb_ms: None,
+            first_visible_output_ms: None,
+            last_visible_output_ms: None,
+            visible_generation_ms: None,
+            visible_output_tokens: None,
+            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: None,

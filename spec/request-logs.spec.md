@@ -38,6 +38,11 @@ A request log row has:
 - `error_http_status: integer?` (HTTP status returned to downstream client for failed requests)
 - `duration_ms: integer?` (wall-clock time from request start to upstream response)
 - `ttfb_ms: integer?` (time from request start to first byte/chunk from upstream; null for non-streaming)
+- `first_visible_output_ms: integer?` (time from request start to the first upstream decoded visible output delta; null when no visible streaming output basis exists)
+- `last_visible_output_ms: integer?` (time from request start to the last upstream decoded visible output delta; null when no visible streaming output basis exists)
+- `visible_generation_ms: integer?` (`last_visible_output_ms - first_visible_output_ms`; null when no visible streaming output basis exists)
+- `visible_output_tokens: integer?` (token count used as the TPS numerator; null when no visible streaming output basis exists)
+- `tps_mode: string?` (`"exact"`, `"estimated"`, or `"approx"`; null for rows without new TPS basis)
 - `request_ip: string?` (client IP address extracted from `x-forwarded-for` header or socket peer)
 - `tried_providers_json: object[]?` (array of `{ provider_id, channel_id, error }` objects recording providers/channels that were attempted and failed before the final result; persisted as JSON text in DB; null when no fallback occurred)
 - `request_kind: string?` (classification of log source; null for normal client requests. `"active_probe_connectivity"` for active health-probe connectivity tests)
@@ -114,6 +119,20 @@ RL6c. *(Removed — no incremental pending updates exist. Usage is written once 
 RL6d. For pass-through streaming requests that finalize successfully without a usage snapshot, Monoize MUST emit an observability warning containing the request identifier plus the in-memory terminal-stream diagnostics collected during adaptation. The warning payload MUST include whether a literal upstream `[DONE]` sentinel was observed, the last terminal event classification seen by the adapter, the terminal finish reason when the upstream protocol exposes one, and whether Monoize synthesized its own terminal chunk before closing the downstream stream.
 
 RL6e. For pass-through streaming requests, an upstream in-stream terminal error event is an API error response even when the upstream HTTP status is `200`. This includes OpenAI Responses SSE events named `error` and `response.failed`. Monoize MUST forward the protocol-correct downstream terminal error event, MUST finalize the request log with `status = "error"`, MUST leave `charge_nano_usd` and `billing_breakdown_json` null, and MUST populate `error_code`, `error_message`, and `error_http_status`. For OpenAI Responses `response.failed`, `error_code` MUST equal `response.error.code` when present, `error_message` MUST equal `response.error.message` when present, and `error_http_status` MUST be `400` unless the upstream stream exposes a more specific non-2xx status.
+
+RL6f. For successful pass-through streaming requests, Monoize MUST record a visible-output TPS basis when at least one visible upstream decoded output delta exists. The basis MUST be recorded during upstream stream decode, before downstream stream encode and before browser/network flushing can affect timing.
+
+RL6f-1. `NodeDelta::Text` and `NodeDelta::Refusal` are visible output deltas. `NodeDelta::Reasoning`, `NodeDelta::ToolCallArguments`, provider control events, ping events, usage-only events, and terminal-only image/audio/file nodes are not visible output deltas.
+
+RL6f-2. `first_visible_output_ms` MUST equal the elapsed milliseconds from request start to the first visible output delta. `last_visible_output_ms` MUST equal the elapsed milliseconds from request start to the most recent visible output delta. `visible_generation_ms` MUST equal `last_visible_output_ms - first_visible_output_ms`. Version 1 does not subtract tool pauses or reasoning-only pauses from this window.
+
+RL6f-3. When the visible-output token count is estimated from decoded visible text, the estimate MUST be `ceil(visible_utf8_bytes / 4)`, where `visible_utf8_bytes` is the UTF-8 byte length of visible text/refusal deltas accumulated during upstream decode. The estimated count MUST only populate `visible_output_tokens`; it MUST NOT populate or modify `output_tokens`, billing, or `usage_breakdown_json`.
+
+RL6f-4. `tps_mode` MUST describe the source of `visible_output_tokens`: `"exact"` for a trusted visible-output token count, `"estimated"` for the UTF-8 byte estimate in RL6f-3, and `"approx"` for a conservative usage-based fallback. Monoize MUST NOT mark an estimated or usage-difference numerator as `"exact"`.
+
+RL6f-5. Non-streaming requests and synthetic/buffered streams MUST leave `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, and `tps_mode` null. Such rows may use the frontend legacy fallback defined in FL4a.
+
+RL6f-6. Failed requests MUST leave the visible-output TPS basis fields null. A pass-through stream that finalizes as `status = "success"` after downstream disconnection MAY persist the visible-output TPS basis accumulated before the adapter stopped consuming upstream events.
 
 RL7. The `duration_ms` field MUST measure wall-clock time from the start of request processing (after auth) to the point where the upstream response is received.
 
@@ -227,7 +246,7 @@ RL-S2e. Request-log charge aggregation MUST continue to use backend-native compa
 
 RL-S3. The `user_id` foreign key MUST cascade on delete.
 
-RL-S4. New columns (`request_id`, `channel_id`, `ttfb_ms`, `request_ip`, `usage_breakdown_json`, `billing_breakdown_json`, `error_code`, `error_message`, `error_http_status`, `tried_providers_json`) MUST be added via `ALTER TABLE ADD COLUMN` statements in the migration logic. All new columns are nullable to preserve backward compatibility with existing rows.
+RL-S4. New columns (`request_id`, `channel_id`, `ttfb_ms`, `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, `tps_mode`, `request_ip`, `usage_breakdown_json`, `billing_breakdown_json`, `error_code`, `error_message`, `error_http_status`, `tried_providers_json`) MUST be added via `ALTER TABLE ADD COLUMN` statements in the migration logic. All new columns are nullable to preserve backward compatibility with existing rows.
 
 RL-S6. The migration from `prompt_tokens`/`completion_tokens` to `input_tokens`/`output_tokens` MUST be performed via `ALTER TABLE RENAME COLUMN` when the database supports it, otherwise via column addition + data copy. New usage detail columns (`cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`) MUST be added via `ALTER TABLE ADD COLUMN` with nullable defaults.
 
@@ -266,12 +285,15 @@ FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a 
 
 FL4b. The frontend MUST treat request-log timing values as numeric-compatible inputs. For badge rendering and tooltip math, it MUST accept canonical fields `duration_ms` and `ttfb_ms`, and it MUST also accept the compatibility aliases `durationMs`, `elapsed_ms`, or `latency_ms` (total duration) and `ttfbMs`, `first_token_ms`, or `firstTokenMs` (TTFB) when those aliases are present. String values that parse to finite numbers MUST be rendered identically to numeric values.
 FL4c. Backend request-log API responses MUST include compatibility aliases for timing fields (`durationMs`, `elapsed_ms`, `latency_ms`, `ttfbMs`, `first_token_ms`, `firstTokenMs`) with values equal to canonical `duration_ms` / `ttfb_ms`, so updated frontend builds do not rely on client-side fallback only.
-FL4a. Hovering or focusing the timing badge row MUST show a tooltip containing a duration detail row with the total duration, and an "Average TPS" (tokens per second) metric when `duration_ms > 0` and `output_tokens > 0`. The TPS denominator MUST be computed as follows:
+FL4a. Hovering or focusing the timing badge row MUST show a tooltip containing a duration detail row with the total duration. The tooltip MUST include an "Average TPS" (tokens per second) metric only when the row has a sufficient TPS basis.
 
-- If `ttfb_ms` is present and `duration_ms > ttfb_ms`: denominator = `duration_ms - ttfb_ms` (generation window only).
-- Otherwise (ttfb_ms is null, or ttfb_ms >= duration_ms, i.e. no visible streaming output such as pure reasoning then tool_call): denominator = `duration_ms` (total request time).
+FL4a-1. When `visible_output_tokens` and `visible_generation_ms` are present, the TPS numerator MUST be `visible_output_tokens` and the denominator MUST be `visible_generation_ms`. The UI MUST hide the TPS value when `visible_output_tokens < 8`, `visible_generation_ms < 1000`, or `visible_generation_ms <= 0`.
 
-TPS = `output_tokens / (denominator / 1000)`, displayed with two decimal places and unit `t/s`.
+FL4a-2. When FL4a-1 applies and `tps_mode = "exact"`, the UI MUST display `TPS` with two decimal places and unit `t/s`. When `tps_mode = "estimated"` or `tps_mode = "approx"`, the UI MUST prefix the value with `~`.
+
+FL4a-3. When the visible-output TPS basis is absent, the UI MAY use a legacy fallback for backward compatibility with existing rows. The legacy numerator MUST be `output_tokens - reasoning_tokens` when both fields are present, clamped at zero; otherwise it MUST be `output_tokens`. The legacy denominator MUST be `duration_ms - ttfb_ms` when both fields are present and `duration_ms > ttfb_ms`; otherwise it MUST be `duration_ms`. The UI MUST hide the legacy TPS value when the legacy numerator is less than `8`, the legacy denominator is less than `1000`, or the legacy denominator is less than or equal to zero. A displayed legacy value MUST be prefixed with `~`.
+
+FL4a-4. The tooltip MUST identify the TPS basis as exact, estimated, approx, legacy, or insufficient. For a displayed non-legacy visible-output value, the tooltip MUST show the visible-generation denominator in seconds. For a hidden insufficient value, the tooltip MUST state that the sample is insufficient.
 
 FL5. The `api_key_name` column header MUST be "Token" (referring to the API key name, not the literal token value).
 

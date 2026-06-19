@@ -1257,3 +1257,50 @@ async fn chat_streaming_header_only_tool_call_still_finishes_as_tool_calls() {
     );
     assert!(text.contains("[DONE]"));
 }
+
+#[tokio::test]
+async fn chat_streaming_prestream_upstream_error_returns_error_stream() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini-chat",
+                "messages":[{"role":"user","content":"blocked"}],
+                "stream": true,
+                "force_upstream_error_status": 400,
+                "force_upstream_error_code": "cyber_policy",
+                "force_upstream_error_message": "mock cybersecurity policy block"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert_eq!(
+        count_done_sentinels(&text),
+        1,
+        "chat pre-stream error must emit exactly one [DONE]: {text}"
+    );
+
+    let error = parse_sse_frames(&text)
+        .into_iter()
+        .filter(|(_, data)| data != "[DONE]")
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .find(|payload| payload.get("error").is_some())
+        .expect("chat error frame");
+    assert_eq!(error["error"]["code"].as_str(), Some("cyber_policy"));
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("mock cybersecurity policy block"),
+        "error message should expose upstream detail: {text}"
+    );
+}

@@ -2,7 +2,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_messages_object,
     record_stream_done_sentinel, record_stream_terminal_error, record_stream_terminal_event,
-    record_stream_usage_if_present,
+    record_stream_usage_if_present, record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
@@ -157,6 +157,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                 let node_index = data_val.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let delta = data_val.get("delta").cloned().unwrap_or(Value::Null);
                 for event in handle_content_block_delta(node_index, delta, &mut state) {
+                    record_visible_stream_event_delta(started_at, &runtime_metrics, &event).await;
                     let _ = tx.send(event).await;
                 }
             }

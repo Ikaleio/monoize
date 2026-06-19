@@ -190,7 +190,9 @@ function ApiKeyRestrictionBadges({
     <BadgeOverflowList
       items={items}
       visibleCount={2}
+      popoverOnSingle
       ariaLabel={t("apiKeys.restrictions")}
+      className="max-w-[24rem]"
       contentClassName="max-w-[min(34rem,calc(100vw-2rem))]"
     />
   );
@@ -967,15 +969,13 @@ export function ApiKeysPage() {
                         onCheckedChange={() => toggleSelectKey(key.id)}
                       />
                     </VirtualTableCell>
-                    <VirtualTableCell className="font-medium whitespace-nowrap">
-                      <div className="min-w-max">
-                        {key.name}
-                      </div>
-                      {key.allowed_groups && key.allowed_groups.length > 0 && (
-                        <div className="mt-1 min-w-max">
+                    <VirtualTableCell className="font-medium">
+                      <div className="flex min-w-max items-center gap-2 whitespace-nowrap">
+                        <span>{key.name}</span>
+                        {key.allowed_groups && key.allowed_groups.length > 0 && (
                           <GroupsBadge groups={key.allowed_groups} variant="secondary" />
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </VirtualTableCell>
                     <VirtualTableCell className="whitespace-nowrap">
                       <div className="flex min-w-max items-center gap-1">

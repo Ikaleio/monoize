@@ -272,7 +272,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                     continue;
                 }
                 for channel in provider.channels {
-                    if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate
+                    if channel.provider_type
+                        == crate::monoize_routing::MonoizeProviderType::Replicate
                     {
                         continue;
                     }
@@ -803,6 +804,11 @@ fn spawn_active_probe_request_log(
             error_http_status: None,
             duration_ms: Some(duration_ms),
             ttfb_ms: None,
+            first_visible_output_ms: None,
+            last_visible_output_ms: None,
+            visible_generation_ms: None,
+            visible_output_tokens: None,
+            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: None,

@@ -67,6 +67,11 @@ fn broadcast_pending_snapshot(
         error_http_status: None,
         duration_ms: None,
         ttfb_ms: None,
+        first_visible_output_ms: None,
+        last_visible_output_ms: None,
+        visible_generation_ms: None,
+        visible_output_tokens: None,
+        tps_mode: None,
         request_ip: request_ip.map(ToOwned::to_owned),
         reasoning_effort: None,
         tried_providers_json: None,
@@ -175,6 +180,7 @@ pub(super) fn spawn_request_log(
     request_ip: Option<String>,
     channel_id: String,
     ttfb_ms: Option<u64>,
+    visible_tps_basis: Option<VisibleOutputTpsBasis>,
     stream_terminal_diagnostics: Option<StreamTerminalDiagnostics>,
     reasoning_effort: Option<String>,
     tried_providers: Vec<TriedProvider>,
@@ -186,7 +192,8 @@ pub(super) fn spawn_request_log(
     let provider_id = attempt.provider_id.clone();
     let upstream_model = attempt.upstream_model.clone();
     let model_multiplier = attempt.model_multiplier;
-    let effective_provider_type = reasoning_envelope_provider_type(attempt.provider_type).to_string();
+    let effective_provider_type =
+        reasoning_envelope_provider_type(attempt.provider_type).to_string();
     let affinity_hit = attempt.affinity_hit;
     let affinity_key_hash = attempt.affinity_key_hash.clone();
     let affinity_target = attempt.affinity_target.clone();
@@ -279,6 +286,21 @@ pub(super) fn spawn_request_log(
             error_http_status: None,
             duration_ms: Some(duration_ms),
             ttfb_ms,
+            first_visible_output_ms: visible_tps_basis
+                .as_ref()
+                .map(|basis| basis.first_visible_output_ms),
+            last_visible_output_ms: visible_tps_basis
+                .as_ref()
+                .map(|basis| basis.last_visible_output_ms),
+            visible_generation_ms: visible_tps_basis
+                .as_ref()
+                .map(|basis| basis.visible_generation_ms),
+            visible_output_tokens: visible_tps_basis
+                .as_ref()
+                .map(|basis| basis.visible_output_tokens),
+            tps_mode: visible_tps_basis
+                .as_ref()
+                .map(|basis| basis.tps_mode.to_string()),
             request_ip,
             reasoning_effort,
             tried_providers_json,
@@ -318,7 +340,8 @@ pub(super) fn spawn_request_log_error(
     let upstream_model = attempt.upstream_model.clone();
     let model_multiplier = attempt.model_multiplier;
     let channel_id = attempt.channel_id.clone();
-    let effective_provider_type = reasoning_envelope_provider_type(attempt.provider_type).to_string();
+    let effective_provider_type =
+        reasoning_envelope_provider_type(attempt.provider_type).to_string();
     let affinity_hit = attempt.affinity_hit;
     let affinity_key_hash = attempt.affinity_key_hash.clone();
     let affinity_target = attempt.affinity_target.clone();
@@ -367,6 +390,11 @@ pub(super) fn spawn_request_log_error(
             error_http_status,
             duration_ms: Some(duration_ms),
             ttfb_ms: None,
+            first_visible_output_ms: None,
+            last_visible_output_ms: None,
+            visible_generation_ms: None,
+            visible_output_tokens: None,
+            tps_mode: None,
             request_ip,
             reasoning_effort,
             tried_providers_json,
@@ -406,7 +434,8 @@ pub(super) fn spawn_request_log_stream_terminal_error(
     let upstream_model = attempt.upstream_model.clone();
     let model_multiplier = attempt.model_multiplier;
     let channel_id = attempt.channel_id.clone();
-    let effective_provider_type = reasoning_envelope_provider_type(attempt.provider_type).to_string();
+    let effective_provider_type =
+        reasoning_envelope_provider_type(attempt.provider_type).to_string();
     let affinity_hit = attempt.affinity_hit;
     let affinity_key_hash = attempt.affinity_key_hash.clone();
     let affinity_target = attempt.affinity_target.clone();
@@ -447,6 +476,11 @@ pub(super) fn spawn_request_log_stream_terminal_error(
             error_http_status: Some(terminal_error.http_status),
             duration_ms: Some(duration_ms),
             ttfb_ms,
+            first_visible_output_ms: None,
+            last_visible_output_ms: None,
+            visible_generation_ms: None,
+            visible_output_tokens: None,
+            tps_mode: None,
             request_ip,
             reasoning_effort,
             tried_providers_json,
@@ -526,6 +560,11 @@ pub(super) fn spawn_request_log_error_no_attempt(
             error_http_status,
             duration_ms: Some(duration_ms),
             ttfb_ms: None,
+            first_visible_output_ms: None,
+            last_visible_output_ms: None,
+            visible_generation_ms: None,
+            visible_output_tokens: None,
+            tps_mode: None,
             request_ip,
             reasoning_effort,
             tried_providers_json,

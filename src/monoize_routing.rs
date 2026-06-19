@@ -1062,8 +1062,10 @@ impl MonoizeRoutingStore {
             let provider_type_raw: String = cr
                 .try_get("", "provider_type")
                 .map_err(|e| format!("channel {channel_id} missing provider_type: {e}"))?;
-            let provider_type = MonoizeProviderType::from_str(&provider_type_raw)
-                .ok_or_else(|| format!("channel {channel_id} invalid provider type: {provider_type_raw}"))?;
+            let provider_type =
+                MonoizeProviderType::from_str(&provider_type_raw).ok_or_else(|| {
+                    format!("channel {channel_id} invalid provider type: {provider_type_raw}")
+                })?;
             let supported_rows = self
                 .db
                 .read()

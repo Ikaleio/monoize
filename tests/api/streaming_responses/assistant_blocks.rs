@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn responses_streaming_emits_sse_events() {
     let ctx = setup().await;
@@ -122,7 +121,7 @@ async fn responses_streaming_upstream_error_is_terminal() {
 }
 
 #[tokio::test]
-async fn responses_streaming_prestream_upstream_error_returns_http_error() {
+async fn responses_streaming_prestream_upstream_error_returns_error_stream() {
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -143,26 +142,32 @@ async fn responses_streaming_prestream_upstream_error_returns_http_error() {
         .unwrap();
 
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(resp.status(), StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
     assert!(
-        !text.contains("event: error"),
-        "pre-stream error must not be converted to SSE: {text}"
+        text.contains("event: error"),
+        "pre-stream error must be converted to SSE: {text}"
     );
     assert!(
-        !text.contains("[DONE]"),
-        "pre-stream error must not append an SSE sentinel: {text}"
+        text.contains("[DONE]"),
+        "pre-stream error stream must append an SSE sentinel: {text}"
     );
-    let payload: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(payload["error"]["code"].as_str(), Some("upstream_error"));
     assert_eq!(
-        payload["error"]["upstream_code"].as_str(),
-        Some("forced_daily_limit")
+        count_done_sentinels(&text),
+        1,
+        "responses pre-stream error must emit exactly one [DONE]: {text}"
     );
-    assert_eq!(payload["error"]["upstream_status"].as_u64(), Some(422));
+    let frames = parse_responses_sse_json(&text);
+    let error = frames
+        .iter()
+        .find(|(event, _)| event == "error")
+        .map(|(_, payload)| payload)
+        .expect("error frame");
+    assert_eq!(error["type"].as_str(), Some("error"));
+    assert_eq!(error["code"].as_str(), Some("forced_daily_limit"));
     assert!(
-        payload["error"]["message"]
+        error["message"]
             .as_str()
             .unwrap_or("")
             .contains("daily usage limit exceeded"),

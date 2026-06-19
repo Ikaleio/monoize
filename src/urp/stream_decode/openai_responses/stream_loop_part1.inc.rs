@@ -396,6 +396,7 @@ pub(crate) async fn stream_responses_to_urp_events(
                 return Ok(());
             }
             response_done_sent |= matches!(stream_event, UrpStreamEvent::ResponseDone { .. });
+            record_visible_stream_event_delta(started_at, &runtime_metrics, &stream_event).await;
             let _ = tx.send(stream_event).await;
         }
     }

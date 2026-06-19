@@ -4,11 +4,20 @@ use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
+async fn send_sse_event(tx: &mpsc::Sender<Event>, event: Event) {
+    if let Err(err) = tx.send(event).await {
+        // Downstream disconnects must not stop upstream decoding before terminal usage arrives.
+        tracing::debug!(
+            error = %err,
+            "downstream SSE receiver closed; continuing upstream drain"
+        );
+    }
+}
+
 pub(crate) async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: String) -> AppResult<()> {
     crate::request_capture::capture_sse_frame(format!("data: {data}\n\n")).await;
-    tx.send(Event::default().data(data))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
+    send_sse_event(tx, Event::default().data(data)).await;
+    Ok(())
 }
 
 pub(crate) async fn send_named_sse_json(
@@ -18,9 +27,8 @@ pub(crate) async fn send_named_sse_json(
 ) -> AppResult<()> {
     let data = data.to_string();
     crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {data}\n\n")).await;
-    tx.send(Event::default().event(name).data(data))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
+    send_sse_event(tx, Event::default().event(name).data(data)).await;
+    Ok(())
 }
 
 pub(crate) async fn send_responses_event(
@@ -32,9 +40,8 @@ pub(crate) async fn send_responses_event(
     let payload = normalize_responses_payload(*seq, name, data).to_string();
     *seq += 1;
     crate::request_capture::capture_sse_frame(format!("event: {name}\ndata: {payload}\n\n")).await;
-    tx.send(Event::default().event(name).data(payload))
-        .await
-        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "stream_send_failed", e.to_string()))
+    send_sse_event(tx, Event::default().event(name).data(payload)).await;
+    Ok(())
 }
 
 pub(crate) async fn send_responses_delta_string(

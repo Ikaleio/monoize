@@ -367,8 +367,13 @@ export interface RequestLogTokens {
 }
 
 export interface RequestLogTiming {
-  duration_ms?: number;
-  ttfb_ms?: number;
+  duration_ms?: number | string | null;
+  ttfb_ms?: number | string | null;
+  first_visible_output_ms?: number | string | null;
+  last_visible_output_ms?: number | string | null;
+  visible_generation_ms?: number | string | null;
+  visible_output_tokens?: number | string | null;
+  tps_mode?: 'exact' | 'estimated' | 'approx' | string | null;
 }
 
 export interface RequestLogBilling {

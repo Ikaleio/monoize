@@ -45,6 +45,12 @@ pub struct Model {
     pub error_http_status: Option<i64>,
     pub duration_ms: Option<i64>,
     pub ttfb_ms: Option<i64>,
+    pub first_visible_output_ms: Option<i64>,
+    pub last_visible_output_ms: Option<i64>,
+    pub visible_generation_ms: Option<i64>,
+    pub visible_output_tokens: Option<i64>,
+    #[sea_orm(column_type = "Text")]
+    pub tps_mode: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub request_ip: Option<String>,
     #[sea_orm(column_type = "Text")]

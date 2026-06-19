@@ -267,6 +267,11 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
             RequestLogTiming {
                 duration_ms,
                 ttfb_ms,
+                first_visible_output_ms: row_optional_i64(row, "first_visible_output_ms"),
+                last_visible_output_ms: row_optional_i64(row, "last_visible_output_ms"),
+                visible_generation_ms: row_optional_i64(row, "visible_generation_ms"),
+                visible_output_tokens: row_optional_i64(row, "visible_output_tokens"),
+                tps_mode: row.try_get("", "tps_mode").unwrap_or(None),
                 duration_ms_alias: duration_ms,
                 elapsed_ms: duration_ms,
                 latency_ms: duration_ms,
@@ -470,7 +475,9 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind,
+                      rl.duration_ms, rl.ttfb_ms, rl.first_visible_output_ms, rl.last_visible_output_ms,
+                      rl.visible_generation_ms, rl.visible_output_tokens, rl.tps_mode,
+                      rl.request_ip, rl.reasoning_effort, rl.request_kind,
                       rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
                       rl.created_at,
                       u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
@@ -629,7 +636,9 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind,
+                      rl.duration_ms, rl.ttfb_ms, rl.first_visible_output_ms, rl.last_visible_output_ms,
+                      rl.visible_generation_ms, rl.visible_output_tokens, rl.tps_mode,
+                      rl.request_ip, rl.reasoning_effort, rl.request_kind,
                       rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
                       rl.created_at,
                       u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name

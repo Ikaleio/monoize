@@ -1,6 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, record_stream_done_sentinel, record_stream_terminal_event,
+    record_visible_output_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
@@ -82,6 +83,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
                 }
 
                 output_text.push_str(&ev.data);
+                record_visible_output_delta(started_at, &runtime_metrics, &ev.data).await;
                 let delta = NodeDelta::Text {
                     content: ev.data.clone(),
                 };

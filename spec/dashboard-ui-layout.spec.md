@@ -283,11 +283,17 @@ AK8. The `request_capture_mode` control MUST expose exactly these three options:
 
 AK9. The `"capture-only-abnormal"` option help text MUST explain that abnormal means upstream error, missing usage information, or usage total equal to zero.
 
-AK10. API key restriction indicators in `/dashboard/tokens` MUST render through a collapsed badge collection when more than 2 restriction badges are present.
+AK10. API key restriction indicators in `/dashboard/tokens` MUST render as a non-wrapping collapsed badge preview when at least one restriction badge is present.
 
 - The restriction preview MUST render no more than 2 badges before a `+N` overflow badge.
 - Restriction badges MUST NOT wrap.
+- The restriction preview MUST NOT render long help text inside the table cell.
 - The complete popover list MUST include model-limit, IP whitelist, max-multiplier, and request-capture badges when those restrictions are active.
+
+AK11. In the `/dashboard/tokens` list table, the API key name and allowed-group badge collection MUST render in a single non-wrapping inline row inside the name cell.
+
+- The allowed-group badge collection MUST remain adjacent to the API key name and MUST NOT move below the name.
+- If the inline row exceeds the available viewport width, the table container MUST handle overflow through horizontal scrolling.
 
 ## 5. Dashboard Home Page
 

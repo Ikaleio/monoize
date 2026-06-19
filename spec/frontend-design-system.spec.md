@@ -180,12 +180,16 @@ DS40b. A read-only collection containing more badges than its configured preview
 
 DS40c. In a collapsed badge collection preview, badge text that exceeds the available preview width MUST be truncated with an ellipsis.
 
-DS40d. Hovering, focusing, or clicking a collapsed badge collection MUST open a small portal-backed popover that contains the complete badge list.
+DS40d. Hovering or focusing a collapsed badge collection MUST open a small portal-backed popover that contains the complete badge list.
 
 - The popover list MUST contain every badge represented by the collection.
 - Badge entries in the popover MUST NOT wrap.
 - If the complete list exceeds the popover bounds, the popover content MUST scroll instead of wrapping badge text.
 - The popover surface MUST use a translucent `popover` token background with backdrop blur and MUST remain portal-backed.
+- On fine-pointer devices, clicking the collection trigger MUST NOT pin the popover open. The popover MUST close after the pointer leaves both the trigger and the popover content.
+- Focus caused by a fine-pointer trigger click MUST NOT reopen the popover after pointer-leave close logic runs.
+- A trigger activation whose PointerEvent reports `mouse` or `pen` MUST be treated as fine-pointer activation even when viewport media queries report coarse or no-hover capability.
+- On touch pointers, coarse-pointer devices, or devices that report no hover capability, tapping the collection trigger MAY toggle the popover open or closed.
 
 DS40d-1. A collapsed badge collection MUST call its `onOpenChange` callback only when the collection popover open state changes. Parent rerenders that do not change the popover open state MUST NOT emit an open-change callback.
 

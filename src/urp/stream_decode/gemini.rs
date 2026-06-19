@@ -2,6 +2,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_gemini_object,
     record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
+    record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
@@ -137,14 +138,14 @@ pub(crate) async fn stream_gemini_to_urp_events(
             if let Some(existing_active) = state.active_nodes.get_mut(&node_index) {
                 let deltas = update_active_node(existing_active, &next_active);
                 for delta in deltas {
-                    let _ = tx
-                        .send(UrpStreamEvent::NodeDelta {
-                            node_index,
-                            delta,
-                            usage: None,
-                            extra_body: next_extra.clone(),
-                        })
-                        .await;
+                    let event = UrpStreamEvent::NodeDelta {
+                        node_index,
+                        delta,
+                        usage: None,
+                        extra_body: next_extra.clone(),
+                    };
+                    record_visible_stream_event_delta(started_at, &runtime_metrics, &event).await;
+                    let _ = tx.send(event).await;
                 }
             } else {
                 state.active_nodes.insert(node_index, next_active.clone());
@@ -162,6 +163,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
                     });
                 }
                 for event in events {
+                    record_visible_stream_event_delta(started_at, &runtime_metrics, &event).await;
                     let _ = tx.send(event).await;
                 }
             }

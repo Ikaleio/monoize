@@ -47,6 +47,8 @@ export function BadgeOverflowList({
 	const pinnedOpenRef = React.useRef(false)
 	const didMountRef = React.useRef(false)
 	const onOpenChangeRef = React.useRef(onOpenChange)
+	const lastPointerTypeRef = React.useRef<string | null>(null)
+	const suppressPointerFocusOpenRef = React.useRef(false)
 	const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 	const safeVisibleCount = Math.max(1, visibleCount)
 	const visibleItems = items.slice(0, safeVisibleCount)
@@ -81,8 +83,36 @@ export function BadgeOverflowList({
 	const togglePinnedOpen = React.useCallback(() => {
 		if (!popoverEnabled) return
 		clearCloseTimer()
-		setPinnedOpen(!(open && pinnedOpenRef.current))
+		setPinnedOpen(!open)
 	}, [clearCloseTimer, open, popoverEnabled, setPinnedOpen])
+
+	const isTouchLikeClick = React.useCallback(() => {
+		if (lastPointerTypeRef.current === 'touch') return true
+		if (lastPointerTypeRef.current) return false
+		if (typeof window === 'undefined') return false
+		return (
+			window.matchMedia('(pointer: coarse)').matches ||
+			window.matchMedia('(hover: none)').matches
+		)
+	}, [])
+
+	const isFinePointerClick = React.useCallback(() => {
+		if (lastPointerTypeRef.current === 'touch') return false
+		if (lastPointerTypeRef.current) return true
+		if (typeof window === 'undefined') return true
+		return (
+			!window.matchMedia('(pointer: coarse)').matches &&
+			!window.matchMedia('(hover: none)').matches
+		)
+	}, [])
+
+	const handlePointerEnter = React.useCallback(
+		(event: React.PointerEvent) => {
+			if (event.pointerType === 'touch') return
+			openPopover()
+		},
+		[openPopover]
+	)
 
 	React.useEffect(() => {
 		onOpenChangeRef.current = onOpenChange
@@ -168,20 +198,35 @@ export function BadgeOverflowList({
 					tabIndex={0}
 					aria-label={ariaLabel}
 					className='inline-flex min-w-0 max-w-full cursor-default flex-nowrap whitespace-nowrap align-middle'
-					onPointerEnter={openPopover}
+					onPointerDown={event => {
+						lastPointerTypeRef.current = event.pointerType
+						suppressPointerFocusOpenRef.current =
+							event.pointerType !== 'touch' && isFinePointerClick()
+					}}
+					onPointerEnter={handlePointerEnter}
 					onPointerLeave={scheduleClose}
 					onClick={event => {
 						event.preventDefault()
 						event.stopPropagation()
+						if (!isTouchLikeClick()) {
+							pinnedOpenRef.current = false
+							return
+						}
 						togglePinnedOpen()
 					}}
-					onFocus={openPopover}
-					onBlur={scheduleClose}
+					onFocus={() => {
+						if (suppressPointerFocusOpenRef.current) return
+						openPopover()
+					}}
+					onBlur={() => {
+						suppressPointerFocusOpenRef.current = false
+						scheduleClose()
+					}}
 					onKeyDown={event => {
 						if (event.key === 'Enter' || event.key === ' ') {
 							event.preventDefault()
 							event.stopPropagation()
-							togglePinnedOpen()
+							openPopover()
 						}
 						if (event.key === 'Escape') {
 							setPinnedOpen(false)
@@ -199,7 +244,7 @@ export function BadgeOverflowList({
 					contentClassName
 				)}
 				onOpenAutoFocus={event => event.preventDefault()}
-				onPointerEnter={openPopover}
+				onPointerEnter={handlePointerEnter}
 				onPointerLeave={scheduleClose}
 				onClick={() => setPinnedOpen(false)}
 			>

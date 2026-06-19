@@ -403,6 +403,7 @@ pub(super) async fn execute_nonstream_typed(
                         attempt.channel_id.clone(),
                         None,
                         None,
+                        None,
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                     );

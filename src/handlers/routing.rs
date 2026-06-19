@@ -321,7 +321,12 @@ pub(super) async fn collect_provider_attempts(
     let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> = provider
         .channels
         .iter()
-        .filter(|channel| channel.supported_models.iter().any(|model| model == &urp.model))
+        .filter(|channel| {
+            channel
+                .supported_models
+                .iter()
+                .any(|model| model == &urp.model)
+        })
         .cloned()
         .collect();
     let channels = filter_eligible_channels(
@@ -731,7 +736,7 @@ pub(super) fn openai_error_json(err: &AppError) -> Value {
         "error": {
             "message": err.message,
             "type": err.error_type,
-            "code": err.code,
+            "code": err.upstream_code.as_ref().unwrap_or(&err.code),
             "param": err.param,
             "upstream_status": err.upstream_status,
             "upstream_code": err.upstream_code,

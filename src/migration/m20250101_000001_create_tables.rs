@@ -205,6 +205,11 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(RequestLogs::ErrorHttpStatus).integer())
                     .col(ColumnDef::new(RequestLogs::DurationMs).integer())
                     .col(ColumnDef::new(RequestLogs::TtfbMs).integer())
+                    .col(ColumnDef::new(RequestLogs::FirstVisibleOutputMs).integer())
+                    .col(ColumnDef::new(RequestLogs::LastVisibleOutputMs).integer())
+                    .col(ColumnDef::new(RequestLogs::VisibleGenerationMs).integer())
+                    .col(ColumnDef::new(RequestLogs::VisibleOutputTokens).integer())
+                    .col(ColumnDef::new(RequestLogs::TpsMode).text())
                     .col(ColumnDef::new(RequestLogs::RequestIp).text())
                     .col(ColumnDef::new(RequestLogs::ReasoningEffort).text())
                     .col(ColumnDef::new(RequestLogs::TriedProvidersJson).text())
@@ -964,6 +969,11 @@ enum RequestLogs {
     ErrorHttpStatus,
     DurationMs,
     TtfbMs,
+    FirstVisibleOutputMs,
+    LastVisibleOutputMs,
+    VisibleGenerationMs,
+    VisibleOutputTokens,
+    TpsMode,
     RequestIp,
     ReasoningEffort,
     TriedProvidersJson,

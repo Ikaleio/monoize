@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import type { RequestLog } from '@/lib/api'
 import {
 	asObject,
+	computeTps,
 	formatCost,
 	formatDuration,
 	formatTime,
@@ -76,6 +77,7 @@ export function LogRowCells({
 	const ttfbMs = getTtfbMs(log)
 	const duration = formatDuration(durationMs)
 	const ttfb = formatDuration(ttfbMs)
+	const computedTps = computeTps(log)
 	const channelDisplay = log.channel.name?.trim() || log.channel.id || null
 	const providerDisplay = log.provider.name?.trim() || log.provider.id || null
 	const costDisplay = formatCost(log.billing.charge_nano_usd)
@@ -222,16 +224,25 @@ export function LogRowCells({
 		outputDetailRows.push([t('requestLogs.imageTokens'), formatTokenCount(outputImage)])
 	}
 
-	const durationTps =
-		durationMs != null &&
-		durationMs > 0 &&
-		outputTotal != null &&
-		outputTotal > 0 ?
-			(() => {
-				const generationMs =
-					ttfbMs != null && durationMs > ttfbMs ? durationMs - ttfbMs : durationMs
-				return outputTotal / (generationMs / 1000)
-			})()
+	const tpsModeLabel = (mode: 'exact' | 'estimated' | 'approx' | 'legacy') => {
+		switch (mode) {
+			case 'exact':
+				return t('requestLogs.tpsExact')
+			case 'estimated':
+				return t('requestLogs.tpsEstimated')
+			case 'approx':
+				return t('requestLogs.tpsApprox')
+			case 'legacy':
+				return t('requestLogs.tpsLegacy')
+		}
+	}
+	const tpsValue =
+		computedTps.state === 'display' ?
+			`${computedTps.mode === 'exact' ? '' : '~'}${computedTps.value.toFixed(2)} t/s`
+		:	null
+	const tpsDenominator =
+		computedTps.state === 'display' || computedTps.state === 'insufficient' ?
+			formatDuration(computedTps.denominatorMs)
 		:	null
 	const durationBadge =
 		duration ?
@@ -275,10 +286,32 @@ export function LogRowCells({
 					<span className='font-mono'>{duration}</span>
 				</div>
 			)}
-			{durationTps != null && (
+			{tpsValue && computedTps.state === 'display' && (
 				<div className='flex items-center justify-between gap-3'>
 					<span className='text-muted-foreground'>{t('requestLogs.avgTps')}</span>
-					<span className='font-mono'>{durationTps.toFixed(2)} t/s</span>
+					<span className='font-mono'>{tpsValue}</span>
+				</div>
+			)}
+			{computedTps.state === 'insufficient' && (
+				<div className='flex items-center justify-between gap-3'>
+					<span className='text-muted-foreground'>{t('requestLogs.avgTps')}</span>
+					<span className='font-mono'>{t('requestLogs.tpsInsufficient')}</span>
+				</div>
+			)}
+			{computedTps.state !== 'unavailable' && (
+				<div className='flex items-center justify-between gap-3'>
+					<span className='text-muted-foreground'>{t('requestLogs.tpsBasis')}</span>
+					<span className='font-mono'>{tpsModeLabel(computedTps.mode)}</span>
+				</div>
+			)}
+			{tpsDenominator && computedTps.state !== 'unavailable' && (
+				<div className='flex items-center justify-between gap-3'>
+					<span className='text-muted-foreground'>
+						{computedTps.mode === 'legacy' ?
+							t('requestLogs.tpsLegacyWindow')
+						:	t('requestLogs.tpsVisibleGeneration')}
+					</span>
+					<span className='font-mono'>{tpsDenominator}</span>
 				</div>
 			)}
 			{ttfb && (

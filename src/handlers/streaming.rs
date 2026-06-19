@@ -2,6 +2,79 @@ use super::*;
 use crate::urp::stream_decode::stream_upstream_to_urp_events;
 use crate::urp::stream_encode::encode_urp_stream;
 
+type ForwardEventStream = futures_util::stream::Map<
+    tokio_stream::wrappers::ReceiverStream<Event>,
+    fn(Event) -> Result<Event, std::convert::Infallible>,
+>;
+
+fn event_ok(event: Event) -> Result<Event, std::convert::Infallible> {
+    Ok(event)
+}
+
+fn receiver_event_stream(rx: mpsc::Receiver<Event>) -> ForwardEventStream {
+    tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(event_ok as fn(Event) -> Result<Event, std::convert::Infallible>)
+}
+
+fn stream_error_code(err: &AppError) -> String {
+    err.upstream_code.as_ref().unwrap_or(&err.code).to_string()
+}
+
+fn stream_terminal_error_from_app(err: &AppError) -> StreamTerminalError {
+    StreamTerminalError {
+        code: stream_error_code(err),
+        message: err.message.clone(),
+        http_status: err.upstream_status.unwrap_or(err.status.as_u16()),
+        error_type: err
+            .upstream_type
+            .clone()
+            .or_else(|| Some(err.error_type.clone())),
+        param: err.upstream_param.clone().or_else(|| err.param.clone()),
+    }
+}
+
+fn prestream_error_stream(downstream: DownstreamProtocol, err: AppError) -> ForwardEventStream {
+    let (tx, rx) = mpsc::channel::<Event>(8);
+    tokio::spawn(async move {
+        match downstream {
+            DownstreamProtocol::Responses => {
+                let responses_error = responses_stream_error_json(1, &err);
+                let _ = tx
+                    .send(
+                        Event::default()
+                            .event("error")
+                            .data(responses_error.to_string()),
+                    )
+                    .await;
+                let _ = tx.send(Event::default().data("[DONE]")).await;
+            }
+            DownstreamProtocol::ChatCompletions => {
+                let error_json = openai_error_json(&err);
+                let _ = tx.send(Event::default().data(error_json.to_string())).await;
+                let _ = tx.send(Event::default().data("[DONE]")).await;
+            }
+            DownstreamProtocol::AnthropicMessages => {
+                let code = stream_error_code(&err);
+                let anthropic_error = json!({
+                    "type": "error",
+                    "error": {
+                        "type": code,
+                        "message": err.message
+                    }
+                });
+                let _ = tx
+                    .send(
+                        Event::default()
+                            .event("error")
+                            .data(anthropic_error.to_string()),
+                    )
+                    .await;
+            }
+        }
+    });
+    receiver_event_stream(rx)
+}
+
 pub(super) async fn forward_stream_typed(
     state: AppState,
     auth: crate::auth::AuthResult,
@@ -275,6 +348,7 @@ pub(super) async fn forward_stream_typed(
                             attempt.channel_id.clone(),
                             Some(started_at.elapsed().as_millis() as u64),
                             None,
+                            None,
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
                         );
@@ -310,7 +384,7 @@ pub(super) async fn forward_stream_typed(
                                 }
                             }
                         });
-                        return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
+                        return Ok(receiver_event_stream(rx));
                     }
                     Err(err) => {
                         if let Some(session) = capture.session.as_ref() {
@@ -341,23 +415,24 @@ pub(super) async fn forward_stream_typed(
                         let retryable_failure_class = classify_retryable_failure(&err);
                         let app_err = upstream_error_to_app(err);
                         if non_retryable {
-                            spawn_request_log_error(
+                            let terminal_error = stream_terminal_error_from_app(&app_err);
+                            spawn_request_log_stream_terminal_error(
                                 &state,
                                 &auth,
                                 &attempt,
                                 &logical_model,
-                                true,
                                 started_at,
                                 request_id.clone(),
                                 request_ip.clone(),
-                                &app_err,
+                                None,
+                                terminal_error,
                                 req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                                 tried_providers,
                             );
                             if let Some(session) = capture.session.as_ref() {
-                                session.persist_with_result(None, false).await;
+                                session.persist_with_result(None, true).await;
                             }
-                            return Err(app_err);
+                            return Ok(prestream_error_stream(downstream, app_err));
                         }
                         if retryable {
                             clear_channel_affinity(&state, &attempt).await;
@@ -384,23 +459,24 @@ pub(super) async fn forward_stream_typed(
                             }
                             break;
                         }
-                        spawn_request_log_error(
+                        let terminal_error = stream_terminal_error_from_app(&app_err);
+                        spawn_request_log_stream_terminal_error(
                             &state,
                             &auth,
                             &attempt,
                             &logical_model,
-                            true,
                             started_at,
                             request_id.clone(),
                             request_ip.clone(),
-                            &app_err,
+                            None,
+                            terminal_error,
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
                         );
                         if let Some(session) = capture.session.as_ref() {
                             session.persist_with_result(None, true).await;
                         }
-                        return Err(app_err);
+                        return Ok(prestream_error_stream(downstream, app_err));
                     }
                 }
             }
@@ -454,6 +530,9 @@ pub(super) async fn forward_stream_typed(
                         usage: None,
                         terminal: StreamTerminalDiagnostics::default(),
                         estimated_output_tokens: 0,
+                        first_visible_output_ms: None,
+                        last_visible_output_ms: None,
+                        visible_output_bytes: 0,
                     }));
                     let metrics_for_stream = runtime_metrics.clone();
                     let state_for_log = state.clone();
@@ -598,6 +677,7 @@ pub(super) async fn forward_stream_typed(
                             usage,
                             is_estimated,
                             terminal_diagnostics,
+                            visible_tps_basis,
                         ) = {
                             let guard = runtime_metrics.lock().await;
                             let actual_upstream_usage = guard.usage.clone();
@@ -629,11 +709,14 @@ pub(super) async fn forward_stream_typed(
                                 usage,
                                 is_estimated,
                                 guard.terminal.clone(),
+                                guard.visible_tps_basis(),
                             )
                         };
 
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {
-                            if terminal_error.http_status == 429 || terminal_error.http_status >= 500 {
+                            if terminal_error.http_status == 429
+                                || terminal_error.http_status >= 500
+                            {
                                 clear_channel_affinity(&state_for_log, &attempt_for_log).await;
                             }
                             spawn_request_log_stream_terminal_error(
@@ -741,6 +824,7 @@ pub(super) async fn forward_stream_typed(
                             request_ip_for_log,
                             channel_id_for_log,
                             ttfb_ms,
+                            visible_tps_basis,
                             Some(terminal_diagnostics),
                             reasoning_effort_for_log,
                             tried_providers_for_log,
@@ -843,7 +927,7 @@ pub(super) async fn forward_stream_typed(
                                 .await;
                         }
                     });
-                    return Ok(tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok));
+                    return Ok(receiver_event_stream(rx));
                 }
                 Err(err) => {
                     if let Some(session) = capture.session.as_ref() {
@@ -874,23 +958,24 @@ pub(super) async fn forward_stream_typed(
                     let retryable_failure_class = classify_retryable_failure(&err);
                     let app_err = upstream_error_to_app(err);
                     if non_retryable {
-                        spawn_request_log_error(
+                        let terminal_error = stream_terminal_error_from_app(&app_err);
+                        spawn_request_log_stream_terminal_error(
                             &state,
                             &auth,
                             &attempt,
                             &logical_model,
-                            true,
                             started_at,
                             request_id.clone(),
                             request_ip.clone(),
-                            &app_err,
+                            None,
+                            terminal_error,
                             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                             tried_providers,
                         );
                         if let Some(session) = capture.session.as_ref() {
                             session.persist_with_result(None, true).await;
                         }
-                        return Err(app_err);
+                        return Ok(prestream_error_stream(downstream, app_err));
                     }
                     if retryable {
                         clear_channel_affinity(&state, &attempt).await;
@@ -913,39 +998,41 @@ pub(super) async fn forward_stream_typed(
                         }
                         break;
                     }
-                    spawn_request_log_error(
+                    let terminal_error = stream_terminal_error_from_app(&app_err);
+                    spawn_request_log_stream_terminal_error(
                         &state,
                         &auth,
                         &attempt,
                         &logical_model,
-                        true,
                         started_at,
                         request_id.clone(),
                         request_ip.clone(),
-                        &app_err,
+                        None,
+                        terminal_error,
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                     );
                     if let Some(session) = capture.session.as_ref() {
                         session.persist_with_result(None, true).await;
                     }
-                    return Err(app_err);
+                    return Ok(prestream_error_stream(downstream, app_err));
                 }
             }
         }
     }
     let final_err = build_exhausted_upstream_error(&logical_model, &tried_providers);
     if let Some(attempt) = last_failed_attempt {
-        spawn_request_log_error(
+        let terminal_error = stream_terminal_error_from_app(&final_err);
+        spawn_request_log_stream_terminal_error(
             &state,
             &auth,
             &attempt,
             &logical_model,
-            true,
             started_at,
             request_id,
             request_ip,
-            &final_err,
+            None,
+            terminal_error,
             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
             tried_providers,
         );
@@ -966,5 +1053,5 @@ pub(super) async fn forward_stream_typed(
     if let Some(session) = capture.session.as_ref() {
         session.persist_with_result(None, true).await;
     }
-    Err(final_err)
+    Ok(prestream_error_stream(downstream, final_err))
 }

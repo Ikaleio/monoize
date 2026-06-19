@@ -199,7 +199,18 @@ C7. For embeddings responses, billing MUST treat usage as:
 
 L1. Billing deduction MUST run after successful non-stream proxy response decode.
 
-L2. For pass-through streaming requests, billing MAY be skipped when usage cannot be determined from stream payload.
+L2. For pass-through streaming requests, Monoize MUST continue consuming the upstream stream until one of these conditions is true:
+
+- upstream sends a protocol terminal frame that contains usage;
+- upstream sends a protocol terminal frame that proves no more usage can arrive;
+- upstream closes the response body;
+- the configured upstream stream idle timeout is reached.
+
+L2.1. A downstream client disconnect MUST NOT by itself stop upstream stream consumption. After downstream disconnect, Monoize MAY discard encoded SSE frames that can no longer be delivered, but MUST continue decoding upstream events for usage, terminal diagnostics, request logging, request capture, and billing.
+
+L2.2. If upstream terminal usage is received after downstream disconnect, Monoize MUST bill from that upstream usage using the same charge calculation as a normally completed stream.
+
+L2.3. If the upstream stream is fully consumed under L2 and usage still cannot be determined from stream payload, Monoize MAY skip billing only when estimated billing is disabled or no estimated usage basis exists. If estimated billing is enabled and an estimated usage basis exists, Monoize MUST apply estimated billing and mark the billing breakdown as estimated.
 
 L2a. Requests that return a normal model response payload (including truncated/cutoff completions such as `finish_reason = "length"`) MUST be treated as billable-success requests, not failed requests.
 

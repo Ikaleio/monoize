@@ -2,6 +2,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_chat_object,
     record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
+    record_visible_output_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::parse_tool_call_arguments_value;
@@ -140,6 +141,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &mut text_node_index,
                 &mut next_node_index,
                 &mut output_text,
+                started_at,
+                &runtime_metrics,
             )
             .await?;
         }
@@ -157,6 +160,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                         &mut text_node_index,
                         &mut next_node_index,
                         &mut output_text,
+                        started_at,
+                        &runtime_metrics,
                     )
                     .await?;
                     continue;
@@ -223,6 +228,8 @@ pub(crate) async fn stream_chat_to_urp_events(
                             &mut text_node_index,
                             &mut next_node_index,
                             &mut output_text,
+                            started_at,
+                            &runtime_metrics,
                         )
                         .await?;
                         recognized = true;
@@ -468,6 +475,8 @@ async fn process_text_delta(
     text_node_index: &mut Option<u32>,
     next_node_index: &mut u32,
     output_text: &mut String,
+    started_at: Option<std::time::Instant>,
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> AppResult<()> {
     if text.is_empty() {
         return Ok(());
@@ -489,6 +498,7 @@ async fn process_text_delta(
     )
     .await?;
     output_text.push_str(text);
+    record_visible_output_delta(started_at, runtime_metrics, text).await;
     send_node_delta(
         tx,
         node_index,
@@ -991,6 +1001,8 @@ mod tests {
             &mut text_node_index,
             &mut next_node_index,
             &mut output_text,
+            None,
+            &None,
         )
         .await
         .expect("text delta should succeed");

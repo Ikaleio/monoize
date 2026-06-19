@@ -987,6 +987,45 @@ async fn messages_stream_passthrough_preserves_messages_upstream_error() {
 }
 
 #[tokio::test]
+async fn messages_streaming_prestream_upstream_error_returns_error_stream() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "blocked" }] }],
+            "stream": true,
+            "force_upstream_error_status": 400,
+            "force_upstream_error_code": "cyber_policy",
+            "force_upstream_error_message": "mock cybersecurity policy block"
+        }),
+    )
+    .await;
+
+    assert!(
+        !text.contains("[DONE]"),
+        "messages pre-stream error must not append [DONE]: {text}"
+    );
+    let events: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+    let error = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("error"))
+        .expect("messages error frame");
+    assert_eq!(error["error"]["type"].as_str(), Some("cyber_policy"));
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("mock cybersecurity policy block"),
+        "error message should expose upstream detail: {text}"
+    );
+}
+
+#[tokio::test]
 async fn messages_streaming_consumes_next_envelope_extra_exactly_once() {
     let ctx = setup().await;
     let events = collect_messages_stream_events(

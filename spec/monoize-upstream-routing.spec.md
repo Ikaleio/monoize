@@ -182,7 +182,7 @@ RTA-4. Execute provider with intra-provider retry:
 
 RTA-5. Error policy per attempt:
 
-- non-retryable client errors (`400`, `401`, `403`, `422`) MUST stop immediately and return error to downstream
+- non-retryable client errors (`400`, `401`, `403`, `422`) MUST stop immediately. For non-streaming downstream requests, Monoize MUST return an HTTP error response to downstream. For streaming downstream requests, Monoize MUST return the protocol-specific stream error defined by `spec/unified_responses_proxy.spec.md` FP4e.
 - retryable errors (`429`, `5xx`, timeout, connection refused) MUST advance to next channel attempt
 
 RTA-6. On retryable attempt failure, channel passive health state MUST be updated.
@@ -191,7 +191,7 @@ RTA-6a. If `provider.circuit_breaker_enabled == false`, retryable attempt failur
 
 RTA-7. If all attempts in provider fail, router MUST continue with next provider.
 
-RTA-8. If all providers are exhausted, return `502` with message indicating no available upstream provider for requested model.
+RTA-8. If all providers are exhausted for a non-streaming downstream request, return `502` with message indicating no available upstream provider for requested model. If all providers are exhausted before the first downstream byte for a streaming downstream request, return the protocol-specific stream error defined by `spec/unified_responses_proxy.spec.md` FP4e with `error.code = "upstream_error"` unless a final upstream error code is available.
 
 ## 5. Streaming-specific Rule
 

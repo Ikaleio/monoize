@@ -138,6 +138,14 @@ FP4c. The request-shape observability log in FP4b MUST include at minimum:
 
 FP4d. For streaming upstream calls, Monoize MUST track terminal-stream evidence in memory during adaptation. At minimum the tracked evidence consists of whether a literal `[DONE]` sentinel was received, which terminal protocol event was last observed, the terminal finish reason when present, and whether Monoize emitted a synthetic terminal chunk. This evidence is observability-only and MUST NOT change downstream response semantics by itself.
 
+FP4e. If a downstream request has `stream=true` and an upstream attempt returns a non-2xx HTTP response before Monoize receives any upstream SSE frame, Monoize MUST NOT return the upstream HTTP status as the downstream HTTP status. Monoize MUST return a downstream SSE response with HTTP `200` and a protocol-specific terminal error frame:
+
+- `/v1/responses`: one `event: error` frame whose JSON payload has `type = "error"`, `code` equal to the upstream error code when present, and `message` equal to the upstream error message as exposed by Monoize, followed by one plain `data: [DONE]` frame.
+- `/v1/chat/completions`: one plain `data:` frame whose JSON payload has an `error` object, with `error.code` equal to the upstream error code when present, followed by one plain `data: [DONE]` frame.
+- `/v1/messages`: one `event: error` frame whose JSON payload has `type = "error"` and an `error` object, with `error.type` equal to the upstream error code when present. Monoize MUST NOT append a `[DONE]` frame on `/v1/messages`.
+
+FP4f. The synthetic stream error in FP4e MUST finalize the request log with `status = "error"`, `error_code` equal to the upstream error code when present, `error_http_status` equal to the upstream HTTP status when present, no token usage, and no billing charge.
+
 FP5. **Decode upstream response:**
 
 - for non-streaming calls, decode the upstream response into `UrpResponseV2`;
