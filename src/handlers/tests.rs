@@ -65,6 +65,15 @@ fn build_test_urp_request(model: &str) -> urp::UrpRequest {
     }
 }
 
+fn build_test_routing_request(model: &str) -> UrpRequest {
+    UrpRequest {
+        model: model.to_string(),
+        max_multiplier: None,
+        affinity_explicit: None,
+        affinity_prefix_hash: crate::handlers::helpers::short_xxh3_hex(model),
+    }
+}
+
 fn build_model_redirect_rule(pattern: &str, replace: &str) -> ModelRedirectRule {
     ModelRedirectRule {
         pattern: pattern.to_string(),
@@ -241,7 +250,6 @@ async fn seed_group_routing_provider(
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: name.to_string(),
-            provider_type: MonoizeProviderType::Responses,
             max_retries: -1,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -482,7 +490,6 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            provider_type: MonoizeProviderType::Responses,
             max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -510,6 +517,7 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
+                provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
                 api_key: Some("secret".to_string()),
                 enabled: true,
@@ -518,6 +526,11 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["gpt-5-mini".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
             }],
         })
         .await
@@ -574,7 +587,6 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            provider_type: MonoizeProviderType::Responses,
             max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -602,6 +614,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
+                provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
                 api_key: Some("secret".to_string()),
                 enabled: true,
@@ -610,15 +623,17 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["gpt-unpriced".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
             }],
         })
         .await
         .expect("provider created");
 
-    let req = UrpRequest {
-        model: "gpt-unpriced".to_string(),
-        max_multiplier: None,
-    };
+    let req = build_test_routing_request("gpt-unpriced");
     let auth = build_test_auth(None);
     let err = build_monoize_attempts(&state, &req, &auth)
         .await
@@ -642,7 +657,6 @@ async fn build_monoize_attempts_allows_admin_unpriced_models_without_pricing() {
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            provider_type: MonoizeProviderType::Responses,
             max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -670,6 +684,7 @@ async fn build_monoize_attempts_allows_admin_unpriced_models_without_pricing() {
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
+                provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
                 api_key: Some("secret".to_string()),
                 enabled: true,
@@ -678,15 +693,17 @@ async fn build_monoize_attempts_allows_admin_unpriced_models_without_pricing() {
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["gpt-unpriced".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
             }],
         })
         .await
         .expect("provider created");
 
-    let req = UrpRequest {
-        model: "gpt-unpriced".to_string(),
-        max_multiplier: None,
-    };
+    let req = build_test_routing_request("gpt-unpriced");
     let auth = build_test_auth_with_role(None, UserRole::Admin);
     let attempts = build_monoize_attempts(&state, &req, &auth)
         .await
@@ -729,7 +746,6 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
         .monoize_store
         .create_provider(CreateMonoizeProviderInput {
             name: "OpenAI".to_string(),
-            provider_type: MonoizeProviderType::Responses,
             max_retries: 0,
             channel_max_retries: 0,
             channel_retry_interval_ms: 0,
@@ -757,6 +773,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
+                provider_type: MonoizeProviderType::Responses,
                 base_url: "https://example.com".to_string(),
                 api_key: Some("secret".to_string()),
                 enabled: true,
@@ -765,6 +782,11 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["gpt-fallback-src".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
             }],
         })
         .await
@@ -790,10 +812,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
         .await
         .expect("logical pricing seeded");
 
-    let req = UrpRequest {
-        model: "gpt-fallback-src".to_string(),
-        max_multiplier: None,
-    };
+    let req = build_test_routing_request("gpt-fallback-src");
     let auth = build_test_auth(None);
     let attempts = build_monoize_attempts(&state, &req, &auth)
         .await
@@ -820,6 +839,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         vec![CreateMonoizeChannelInput {
             id: Some("public".to_string()),
             name: "public".to_string(),
+            provider_type: MonoizeProviderType::Responses,
             base_url: "https://public.example.com".to_string(),
             api_key: Some("secret".to_string()),
             enabled: true,
@@ -828,6 +848,11 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
+            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
         }],
     )
     .await;
@@ -839,6 +864,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         vec![CreateMonoizeChannelInput {
             id: Some("team-a".to_string()),
             name: "team-a".to_string(),
+            provider_type: MonoizeProviderType::Responses,
             base_url: "https://team-a.example.com".to_string(),
             api_key: Some("secret".to_string()),
             enabled: true,
@@ -847,6 +873,11 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
+            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
         }],
     )
     .await;
@@ -858,6 +889,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
         vec![CreateMonoizeChannelInput {
             id: Some("team-b".to_string()),
             name: "team-b".to_string(),
+            provider_type: MonoizeProviderType::Responses,
             base_url: "https://team-b.example.com".to_string(),
             api_key: Some("secret".to_string()),
             enabled: true,
@@ -866,15 +898,17 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
+            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
         }],
     )
     .await;
     seed_model_pricing(&state, GROUP_ROUTING_MODEL).await;
 
-    let req = UrpRequest {
-        model: GROUP_ROUTING_MODEL.to_string(),
-        max_multiplier: None,
-    };
+    let req = build_test_routing_request(GROUP_ROUTING_MODEL);
 
     let unrestricted_auth = build_test_auth(None);
     let unrestricted = build_monoize_attempts(&state, &req, &unrestricted_auth)
@@ -917,6 +951,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         vec![CreateMonoizeChannelInput {
             id: Some("team-a".to_string()),
             name: "team-a".to_string(),
+            provider_type: MonoizeProviderType::Responses,
             base_url: "https://team-a.example.com".to_string(),
             api_key: Some("secret".to_string()),
             enabled: true,
@@ -925,6 +960,11 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
+            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
         }],
     )
     .await;

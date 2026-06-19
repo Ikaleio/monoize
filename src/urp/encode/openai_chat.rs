@@ -5,8 +5,8 @@ use crate::urp::encode::{
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, ResponseFormat, ToolDefinition,
-    ToolResultContent, UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, ProviderProtocol, ResponseFormat,
+    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -71,8 +71,29 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
             }
             Some(block)
         }
+        Part::ProviderItem {
+            origin_protocol,
+            body,
+            extra_body,
+            ..
+        } => encode_chat_provider_part(*origin_protocol, body, extra_body),
         _ => None,
     }
+}
+
+fn encode_chat_provider_part(
+    origin_protocol: ProviderProtocol,
+    body: &Value,
+    extra_body: &HashMap<String, Value>,
+) -> Option<Value> {
+    if origin_protocol != ProviderProtocol::ChatCompletion {
+        return None;
+    }
+    let mut part = body.clone();
+    if let Some(obj) = part.as_object_mut() {
+        merge_extra(obj, extra_body);
+    }
+    Some(part)
 }
 
 fn finalize_chat_message_content(m: &mut Map<String, Value>, content_parts: Vec<Value>) {
@@ -97,6 +118,14 @@ fn finalize_chat_message_content(m: &mut Map<String, Value>, content_parts: Vec<
 }
 
 fn finalize_chat_response_content(m: &mut Map<String, Value>, content_parts: Vec<Value>) {
+    if content_parts
+        .iter()
+        .any(|part| part.get("type").and_then(Value::as_str) != Some("text"))
+    {
+        m.insert("content".to_string(), Value::Array(content_parts));
+        return;
+    }
+
     let content = content_parts
         .into_iter()
         .filter_map(|part| {
@@ -172,7 +201,7 @@ fn push_part_into_pending_chat_message(
     });
 
     match part {
-        Part::Text { .. } | Part::Image { .. } | Part::File { .. } => {
+        Part::Text { .. } | Part::Image { .. } | Part::File { .. } | Part::ProviderItem { .. } => {
             if let Some(content) = encode_chat_content_part(part) {
                 entry.content_parts.push(content);
             }
@@ -453,6 +482,21 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                         "arguments": arguments
                     }
                 }));
+            }
+            Node::ProviderItem {
+                role: OrdinaryRole::Assistant,
+                origin_protocol,
+                body,
+                extra_body,
+                ..
+            } => {
+                if let Some(part) = encode_chat_provider_part(*origin_protocol, body, extra_body) {
+                    merge_extra_preserving_existing(
+                        &mut message_extra,
+                        assistant_message_extra_from_node(node),
+                    );
+                    content_parts.push(part);
+                }
             }
             _ => {}
         }
@@ -914,6 +958,74 @@ mod tests {
             encoded["messages"][0]["content"],
             Value::String("hello".to_string())
         );
+    }
+
+    #[test]
+    fn chat_unknown_content_part_round_trips_only_for_chat_protocol() {
+        let downstream = json!({
+            "model": "gpt-5.4",
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "vendor_part",
+                    "payload": { "x": 1 }
+                }]
+            }]
+        });
+
+        let decoded = decode_chat::decode_request(&downstream).expect("decode chat request");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::ProviderItem {
+                origin_protocol: ProviderProtocol::ChatCompletion,
+                role: OrdinaryRole::User,
+                item_type,
+                body,
+                ..
+            } if item_type == "vendor_part"
+                && body == &downstream["messages"][0]["content"][0]
+        ));
+
+        let encoded = encode_request(&decoded, "gpt-5.4");
+        assert_eq!(
+            encoded["messages"][0]["content"][0],
+            downstream["messages"][0]["content"][0]
+        );
+    }
+
+    #[test]
+    fn chat_encoder_ignores_cross_protocol_provider_item_without_textifying() {
+        let req = UrpRequest {
+            model: "logical-model".to_string(),
+            input: vec![Node::ProviderItem {
+                id: Some("cmp_1".to_string()),
+                origin_protocol: ProviderProtocol::Responses,
+                role: OrdinaryRole::User,
+                item_type: "compaction".to_string(),
+                body: json!({
+                    "type": "compaction",
+                    "encrypted_content": "opaque"
+                }),
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+        let wire = serde_json::to_string(&encoded).expect("chat json");
+        assert_eq!(encoded["messages"], json!([]));
+        assert!(!wire.contains("compaction"));
+        assert!(!wire.contains("opaque"));
     }
 
     #[test]

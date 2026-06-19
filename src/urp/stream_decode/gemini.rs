@@ -4,7 +4,9 @@ use crate::handlers::usage::{
     record_stream_done_sentinel, record_stream_terminal_event, record_stream_usage_if_present,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
-use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol, UrpStreamEvent,
+};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -39,6 +41,11 @@ enum ActiveNodeKind {
         call_id: String,
         name: String,
         arguments: String,
+    },
+    ProviderItem {
+        id: Option<String>,
+        item_type: String,
+        body: Value,
     },
 }
 
@@ -213,8 +220,10 @@ fn parse_candidate_parts(parts: &[Value]) -> Vec<CandidatePartState> {
     let mut parsed = Vec::new();
     let mut next_tool_node_index: u32 = 2;
 
-    for part in parts {
+    for (part_pos, part) in parts.iter().enumerate() {
+        let mut recognized = false;
         if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+            recognized = true;
             if part.get("thought").and_then(|v| v.as_bool()) == Some(true) {
                 let signature = part
                     .get("thoughtSignature")
@@ -248,6 +257,7 @@ fn parse_candidate_parts(parts: &[Value]) -> Vec<CandidatePartState> {
         }
 
         if let Some(fc) = part.get("functionCall").and_then(|v| v.as_object()) {
+            recognized = true;
             let call_id = fc
                 .get("id")
                 .or_else(|| fc.get("name"))
@@ -280,6 +290,27 @@ fn parse_candidate_parts(parts: &[Value]) -> Vec<CandidatePartState> {
                 });
                 next_tool_node_index += 1;
             }
+        }
+        if !recognized {
+            parsed.push(CandidatePartState {
+                node_index: 10_000 + part_pos as u32,
+                active_node: ActiveNodeState {
+                    kind: ActiveNodeKind::ProviderItem {
+                        id: part
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                        item_type: part
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        body: part.clone(),
+                    },
+                    extra_body: HashMap::new(),
+                },
+            });
         }
     }
 
@@ -357,6 +388,14 @@ fn update_active_node(current: &mut ActiveNodeState, next: &ActiveNodeState) -> 
             *name = next_name.clone();
             *arguments = next_arguments.clone();
         }
+        (
+            ActiveNodeKind::ProviderItem { body, .. },
+            ActiveNodeKind::ProviderItem {
+                body: next_body, ..
+            },
+        ) => {
+            *body = next_body.clone();
+        }
         _ => {
             *current = next.clone();
         }
@@ -388,6 +427,7 @@ fn initial_deltas_for_active_node(active_node: &ActiveNodeState) -> Vec<NodeDelt
                 arguments: arguments.clone(),
             }]
         }
+        ActiveNodeKind::ProviderItem { .. } => Vec::new(),
         _ => Vec::new(),
     }
 }
@@ -418,6 +458,18 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),
+            extra_body: active_node.extra_body.clone(),
+        },
+        ActiveNodeKind::ProviderItem {
+            id,
+            item_type,
+            body,
+        } => Node::ProviderItem {
+            id: id.clone(),
+            origin_protocol: ProviderProtocol::Gemini,
+            role: OrdinaryRole::Assistant,
+            item_type: item_type.clone(),
+            body: body.clone(),
             extra_body: active_node.extra_body.clone(),
         },
     }
@@ -454,9 +506,13 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             id: node.id().cloned(),
         },
         Node::ProviderItem {
-            role, item_type, ..
+            role,
+            origin_protocol,
+            item_type,
+            ..
         } => NodeHeader::ProviderItem {
             id: node.id().cloned(),
+            origin_protocol: *origin_protocol,
             role: *role,
             item_type: item_type.clone(),
         },

@@ -1,4 +1,6 @@
-use super::{AudioSource, FileSource, ImageSource, Node, OrdinaryRole, ToolResultContent};
+use super::{
+    AudioSource, FileSource, ImageSource, Node, OrdinaryRole, ProviderProtocol, ToolResultContent,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -90,6 +92,7 @@ pub enum Part {
     ProviderItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        origin_protocol: ProviderProtocol,
         item_type: String,
         body: Value,
         #[serde(flatten)]
@@ -189,6 +192,7 @@ pub enum PartHeader {
     ProviderItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        origin_protocol: ProviderProtocol,
         item_type: String,
         body: Value,
     },
@@ -302,11 +306,13 @@ impl Part {
             },
             Part::ProviderItem {
                 id,
+                origin_protocol,
                 item_type,
                 body,
                 extra_body,
             } => Node::ProviderItem {
                 id,
+                origin_protocol,
                 role,
                 item_type,
                 body,
@@ -578,12 +584,14 @@ fn node_to_part(node: &Node) -> Part {
         },
         Node::ProviderItem {
             id,
+            origin_protocol,
             item_type,
             body,
             extra_body,
             ..
         } => Part::ProviderItem {
             id: id.clone(),
+            origin_protocol: *origin_protocol,
             item_type: item_type.clone(),
             body: body.clone(),
             extra_body: extra_body.clone(),

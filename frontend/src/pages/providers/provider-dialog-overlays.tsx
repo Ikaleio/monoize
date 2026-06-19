@@ -1,8 +1,16 @@
-import { Trash2 } from 'lucide-react'
+import { Download, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue
+} from '@/components/ui/select'
 import {
 	Dialog,
 	DialogContent,
@@ -22,7 +30,12 @@ import {
 	AlertDialogTitle
 } from '@/components/ui/alert-dialog'
 import { Separator } from '@/components/ui/separator'
-import type { ChannelRow, ModelRow } from './shared'
+import type { ProviderType } from '@/lib/api'
+import {
+	PROVIDER_TYPE_CONFIG,
+	type ChannelRow,
+	type ModelRow
+} from './shared'
 
 type Translator = (key: string) => string
 
@@ -211,11 +224,17 @@ interface ChannelEditorDialogProps {
 		passive_window_seconds?: number
 		passive_cooldown_seconds?: number
 		passive_rate_limit_cooldown_seconds?: number
+		active_probe_enabled?: boolean
+		active_probe_interval_seconds?: number
+		active_probe_success_threshold?: number
+		active_probe_model?: string | null
 	}
+	providerModels: ModelRow[]
 	onOpenChange: (open: boolean) => void
 	onChange: (patch: Partial<ChannelRow>) => void
 	onBaseUrlChange: (value: string) => void
 	onBaseUrlBlur: () => void
+	onFetchModels: () => void
 	onDelete: () => void
 	onSave: () => void
 }
@@ -227,14 +246,19 @@ export function ChannelEditorDialog({
 	isEdit,
 	canDelete,
 	globalDefaults,
+	providerModels,
 	onOpenChange,
 	onChange,
 	onBaseUrlChange,
 	onBaseUrlBlur,
+	onFetchModels,
 	onDelete,
 	onSave
 }: ChannelEditorDialogProps) {
 	const inheritGlobal = t('providers.inheritGlobal')
+	const providerModelNames = providerModels.map(row => row.model.trim()).filter(Boolean)
+	const selectedSet = new Set(channel?.supported_models ?? [])
+	const selectedValidModels = providerModelNames.filter(model => selectedSet.has(model))
 
 	return (
 		<Dialog open={open && channel !== null} onOpenChange={onOpenChange}>
@@ -254,6 +278,35 @@ export function ChannelEditorDialog({
 								value={channel.name}
 								onChange={e => onChange({ name: e.target.value })}
 							/>
+						</div>
+
+						<div className='space-y-2'>
+							<Label>{t('providers.type')}</Label>
+							<Select
+								value={channel.provider_type}
+								onValueChange={value =>
+									onChange({ provider_type: value as ProviderType })
+								}
+							>
+								<SelectTrigger>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{(Object.keys(PROVIDER_TYPE_CONFIG) as ProviderType[]).map(type => {
+										const cfg = PROVIDER_TYPE_CONFIG[type]
+										const Icon = cfg.icon
+										return (
+											<SelectItem key={type} value={type}>
+												<span className='flex items-center gap-2'>
+													<Icon className='h-4 w-4' />
+													{cfg.label}
+													<span className='text-xs opacity-60'>{cfg.path}</span>
+												</span>
+											</SelectItem>
+										)
+									})}
+								</SelectContent>
+							</Select>
 						</div>
 
 						<div className='space-y-2'>
@@ -279,6 +332,18 @@ export function ChannelEditorDialog({
 							/>
 						</div>
 
+						<div className='flex justify-end'>
+							<Button
+								type='button'
+								variant='outline'
+								size='sm'
+								onClick={onFetchModels}
+							>
+								<Download className='h-4 w-4 mr-2' />
+								{t('providers.fetchModels')}
+							</Button>
+						</div>
+
 						<div className='space-y-2'>
 							<Label>{t('providers.weight')}</Label>
 							<Input
@@ -290,6 +355,56 @@ export function ChannelEditorDialog({
 						</div>
 
 						<Separator />
+
+						<div className='space-y-2'>
+							<div className='flex items-center justify-between gap-2'>
+								<Label>{t('providers.supportedModels')}</Label>
+								<div className='flex items-center gap-2'>
+									<Button
+										type='button'
+										variant='outline'
+										size='sm'
+										onClick={() => onChange({ supported_models: providerModelNames })}
+										disabled={providerModelNames.length === 0}
+									>
+										{t('providers.selectAll')}
+									</Button>
+									<Button
+										type='button'
+										variant='outline'
+										size='sm'
+										onClick={() => onChange({ supported_models: [] })}
+									>
+										{t('providers.deselectAll')}
+									</Button>
+								</div>
+							</div>
+							{providerModelNames.length === 0 ? (
+								<p className='text-sm text-muted-foreground'>
+									{t('providers.validationAtLeastOneModel')}
+								</p>
+							) : (
+								<div className='max-h-44 overflow-y-auto rounded-md border p-2 space-y-1'>
+									{providerModelNames.map(model => (
+										<label
+											key={model}
+											className='flex min-h-8 items-center gap-2 rounded px-2 text-sm hover:bg-muted/50'
+										>
+											<Checkbox
+												checked={selectedSet.has(model)}
+												onCheckedChange={checked => {
+													const next = new Set(selectedValidModels)
+													if (checked) next.add(model)
+													else next.delete(model)
+													onChange({ supported_models: providerModelNames.filter(item => next.has(item)) })
+												}}
+											/>
+											<span className='truncate font-mono text-xs'>{model}</span>
+										</label>
+									))}
+								</div>
+							)}
+						</div>
 
 						<div className='space-y-2'>
 							<Label>{t('providers.passiveFailureCountThresholdOverride')}</Label>
@@ -345,6 +460,74 @@ export function ChannelEditorDialog({
 									})
 								}
 							/>
+						</div>
+
+						<Separator />
+
+						<div className='space-y-2'>
+							<Label>{t('providers.probeEnabledOverride')}</Label>
+							<Select
+								value={
+									channel.active_probe_enabled_override === null ?
+										'inherit'
+									: channel.active_probe_enabled_override ?
+										'enabled'
+									:	'disabled'
+								}
+								onValueChange={value =>
+									onChange({
+										active_probe_enabled_override:
+											value === 'inherit' ? null : value === 'enabled'
+									})
+								}
+							>
+								<SelectTrigger>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value='inherit'>
+										{inheritGlobal} ({globalDefaults?.active_probe_enabled ?? true ? t('common.enabled') : t('common.disabled')})
+									</SelectItem>
+									<SelectItem value='enabled'>{t('common.enabled')}</SelectItem>
+									<SelectItem value='disabled'>{t('common.disabled')}</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+
+						<div className='space-y-2'>
+							<Label>{t('providers.probeModelOverride')}</Label>
+							<Input
+								value={channel.active_probe_model_override}
+								placeholder={
+									globalDefaults?.active_probe_model?.trim() ?
+										`${inheritGlobal} (${globalDefaults.active_probe_model})`
+									:	t('providers.probeModelOverridePlaceholder')
+								}
+								onChange={e => onChange({ active_probe_model_override: e.target.value })}
+							/>
+						</div>
+
+						<div className='grid grid-cols-1 sm:grid-cols-2 gap-3'>
+							<div className='space-y-2'>
+								<Label>{t('providers.probeIntervalOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={`${inheritGlobal} (${globalDefaults?.active_probe_interval_seconds ?? 30})`}
+									value={channel.active_probe_interval_seconds_override}
+									onChange={e => onChange({ active_probe_interval_seconds_override: e.target.value })}
+								/>
+							</div>
+							<div className='space-y-2'>
+								<Label>{t('providers.probeSuccessThresholdOverride')}</Label>
+								<Input
+									type='number'
+									min='1'
+									placeholder={`${inheritGlobal} (${globalDefaults?.active_probe_success_threshold ?? 1})`}
+									value={channel.active_probe_success_threshold_override}
+									onChange={e => onChange({ active_probe_success_threshold_override: e.target.value })}
+								/>
+							</div>
 						</div>
 
 						<div className='flex items-center gap-2'>

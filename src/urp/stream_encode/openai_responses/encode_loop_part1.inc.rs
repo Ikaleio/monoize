@@ -141,6 +141,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
                     continue;
                 }
+                if let urp::NodeHeader::ProviderItem {
+                    origin_protocol, ..
+                } = &header
+                    && *origin_protocol != urp::ProviderProtocol::Responses
+                {
+                    continue;
+                }
                 let zone = zone_from_node_header(&header);
                 let phase = node_header_phase(&header);
                 let starts_new_shared_message = zone == ResponsesOutputZone::Message
@@ -469,7 +476,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .await?;
                         function_args_delta_indices.insert(node_state.output_index);
                     }
-                    urp::NodeDelta::ProviderItem { .. } => {}
+                    urp::NodeDelta::ProviderItem { data } => {
+                        append_node_delta_to_completed_item(
+                            node_state,
+                            &urp::NodeDelta::ProviderItem { data },
+                            None,
+                        );
+                    }
                     urp::NodeDelta::Image { .. }
                     | urp::NodeDelta::Audio { .. }
                     | urp::NodeDelta::File { .. } => {}
@@ -479,6 +492,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 node_index, node, ..
             } => {
                 if matches!(node, urp::Node::NextDownstreamEnvelopeExtra { .. }) {
+                    continue;
+                }
+                if let urp::Node::ProviderItem {
+                    origin_protocol, ..
+                } = &node
+                    && *origin_protocol != urp::ProviderProtocol::Responses
+                {
                     continue;
                 }
                 let Some(mut node_state) = node_states.remove(&node_index) else {
@@ -1196,6 +1216,7 @@ fn zone_from_node_header(header: &urp::NodeHeader) -> ResponsesOutputZone {
     match header {
         urp::NodeHeader::Reasoning { .. } => ResponsesOutputZone::Reasoning,
         urp::NodeHeader::ToolCall { .. } => ResponsesOutputZone::FunctionCall,
+        urp::NodeHeader::ProviderItem { .. } => ResponsesOutputZone::ProviderItem,
         _ => ResponsesOutputZone::Message,
     }
 }
@@ -1411,6 +1432,28 @@ fn stream_output_item_start_stub_from_node_header(
             merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }
+        ResponsesOutputZone::ProviderItem => {
+            let urp::NodeHeader::ProviderItem { id, item_type, .. } = header else {
+                return Value::Null;
+            };
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), json!(item_type));
+            if let Some(id) = id
+                .clone()
+                .or_else(|| extra_body.get("id").and_then(Value::as_str).map(str::to_string))
+                .or_else(|| {
+                    envelope_extra
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+            {
+                obj.insert("id".to_string(), json!(id));
+            }
+            merge_json_extra_preserving_typed(&mut obj, envelope_extra);
+            merge_json_extra(&mut obj, extra_body);
+            Value::Object(obj)
+        }
     }
 }
 
@@ -1423,7 +1466,7 @@ fn encode_node_start_content_part(header: &urp::NodeHeader) -> Value {
         urp::NodeHeader::Image { .. } => json!({ "type": "output_image" }),
         urp::NodeHeader::Audio { .. } => json!({ "type": "audio" }),
         urp::NodeHeader::File { .. } => json!({ "type": "output_file" }),
-        urp::NodeHeader::ProviderItem { item_type, .. } => json!({ "type": item_type }),
+        urp::NodeHeader::ProviderItem { .. } => Value::Null,
         _ => Value::Null,
     }
 }
@@ -1470,11 +1513,15 @@ fn encode_node_done_content_part(node: &urp::Node) -> Value {
             source, extra_body, ..
         } => encode_file_part(source, extra_body),
         urp::Node::ProviderItem {
+            origin_protocol,
             item_type,
             body,
             extra_body,
             ..
         } => {
+            if *origin_protocol != urp::ProviderProtocol::Responses {
+                return Value::Null;
+            }
             let mut obj = match body {
                 Value::Object(map) => map.clone(),
                 other => {
@@ -1490,6 +1537,30 @@ fn encode_node_done_content_part(node: &urp::Node) -> Value {
         }
         _ => Value::Null,
     }
+}
+
+fn encode_responses_provider_output_item(
+    item_type: &str,
+    body: &Value,
+    extra_body: &HashMap<String, Value>,
+    id: Option<&String>,
+) -> Value {
+    let mut obj = match body {
+        Value::Object(map) => map.clone(),
+        other => {
+            let mut map = Map::new();
+            map.insert("body".to_string(), other.clone());
+            map
+        }
+    };
+    obj.entry("type".to_string())
+        .or_insert_with(|| Value::String(item_type.to_string()));
+    if let Some(id) = id.filter(|id| !id.is_empty()) {
+        obj.entry("id".to_string())
+            .or_insert_with(|| Value::String(id.clone()));
+    }
+    merge_json_extra(&mut obj, extra_body);
+    Value::Object(obj)
 }
 
 fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
@@ -1686,32 +1757,16 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             Value::Object(obj)
         }
         urp::Node::ProviderItem {
-            role,
+            origin_protocol,
             item_type,
             body,
             extra_body,
             ..
         } => {
-            let mut obj = Map::new();
-            obj.insert("type".to_string(), json!("message"));
-            obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
-            obj.insert(
-                "content".to_string(),
-                json!([{
-                    "type": item_type,
-                    "body": body,
-                }]),
-            );
-            let id = extra_body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
-                .or_else(|| node.id().cloned())
-                .unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4()));
-            obj.insert("id".to_string(), json!(id));
-            obj.insert("status".to_string(), json!("completed"));
-            merge_json_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            if *origin_protocol != urp::ProviderProtocol::Responses {
+                return Value::Null;
+            }
+            encode_responses_provider_output_item(item_type, body, extra_body, node.id())
         }
         urp::Node::ToolResult {
             id,
@@ -1847,6 +1902,22 @@ fn append_node_delta_to_completed_item(
         (ResponsesOutputZone::FunctionCall, urp::NodeDelta::ToolCallArguments { arguments }) => {
             append_string_field(&mut item, "arguments", arguments);
         }
+        (ResponsesOutputZone::ProviderItem, urp::NodeDelta::ProviderItem { data }) => {
+            match (item.as_object_mut(), data) {
+                (Some(obj), Value::Object(delta_obj)) => {
+                    for (key, value) in delta_obj {
+                        obj.insert(key.clone(), value.clone());
+                    }
+                }
+                (Some(obj), Value::Null) => {
+                    let _ = obj;
+                }
+                (Some(obj), other) => {
+                    obj.insert("data".to_string(), other.clone());
+                }
+                _ => {}
+            }
+        }
         _ => {}
     }
     if let Some(extra_body) = extra_body
@@ -1910,6 +1981,16 @@ fn apply_node_done_to_stream_output_item_state(
                 obj.insert("id".to_string(), existing_id);
             }
         }
+        ResponsesOutputZone::ProviderItem => {
+            let existing_id = item.get("id").cloned();
+            *item = encode_stream_output_item_from_node(node);
+            if let Some(existing_id) = existing_id
+                && item.get("id").is_none()
+                && let Some(obj) = item.as_object_mut()
+            {
+                obj.insert("id".to_string(), existing_id);
+            }
+        }
     }
 }
 
@@ -1964,7 +2045,9 @@ fn apply_node_done_to_stream_output_item(
                 }
             }
         }
-        ResponsesOutputZone::Reasoning | ResponsesOutputZone::FunctionCall => {}
+        ResponsesOutputZone::Reasoning
+        | ResponsesOutputZone::FunctionCall
+        | ResponsesOutputZone::ProviderItem => {}
     }
 }
 
@@ -2061,7 +2144,12 @@ fn ensure_response_object_user_field(mut response: Value) -> Value {
 
 fn complete_stream_output_item(mut item: Value) -> Value {
     if let Some(obj) = item.as_object_mut() {
-        obj.insert("status".to_string(), json!("completed"));
+        if matches!(
+            obj.get("type").and_then(Value::as_str),
+            Some("message" | "reasoning" | "function_call" | "function_call_output")
+        ) {
+            obj.insert("status".to_string(), json!("completed"));
+        }
     }
     item
 }

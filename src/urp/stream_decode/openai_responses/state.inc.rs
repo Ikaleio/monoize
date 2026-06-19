@@ -210,12 +210,12 @@ fn map_output_item_done(
             }
         }
         _ => {
-            let emitted_any_node = index_state
+            let (emitted_any_node, node_done_seen) = index_state
                 .output_state_by_index
                 .get(&output_index)
-                .map(|state| state.emitted_any_node)
-                .unwrap_or(false);
-            if !emitted_any_node {
+                .map(|state| (state.emitted_any_node, state.node_done_seen))
+                .unwrap_or((false, false));
+            if !node_done_seen {
                 let role = output_state_for(index_state, output_index)
                     .role
                     .unwrap_or(Role::Assistant);
@@ -235,12 +235,26 @@ fn map_output_item_done(
                 });
                 let node_index = index_state.synthetic_node_index_for_output(output_index);
                 if !node_is_empty_text(&node) {
+                    if !emitted_any_node {
+                        emit_pending_envelope_control_if_needed(
+                            output_index,
+                            index_state,
+                            &mut events,
+                        );
+                        events.push(UrpStreamEvent::NodeStart {
+                            node_index,
+                            header: node_header_from_node(&node),
+                            extra_body: part_extra_body_from_value(item),
+                        });
+                        output_state_for(index_state, output_index).emitted_any_node = true;
+                    }
                     events.push(UrpStreamEvent::NodeDone {
                         node_index,
                         node,
                         usage: None,
                         extra_body: part_extra_body_from_value(item),
                     });
+                    output_state_for(index_state, output_index).node_done_seen = true;
                 }
             }
         }

@@ -16,6 +16,7 @@ enum MessagesSurfaceKind {
     Text,
     Reasoning,
     ToolUse,
+    ProviderItem,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,9 @@ enum AnthropicBlockPayload {
         call_id: String,
         name: String,
         arguments: String,
+    },
+    ProviderItem {
+        body: Value,
     },
 }
 
@@ -83,6 +87,7 @@ impl PendingAnthropicBlock {
                 *saw_tool_use = true;
                 json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })
             }
+            AnthropicBlockPayload::ProviderItem { body } => body.clone(),
         }
     }
 
@@ -172,6 +177,7 @@ impl PendingAnthropicBlock {
                     .await?;
                 }
             }
+            AnthropicBlockPayload::ProviderItem { .. } => {}
         }
 
         let stop = json!({ "type": "content_block_stop", "index": self.block_index });
@@ -235,7 +241,29 @@ fn surface_kind_for_payload(payload: &AnthropicBlockPayload) -> MessagesSurfaceK
         AnthropicBlockPayload::Text { .. } => MessagesSurfaceKind::Text,
         AnthropicBlockPayload::Thinking { .. } => MessagesSurfaceKind::Reasoning,
         AnthropicBlockPayload::ToolUse { .. } => MessagesSurfaceKind::ToolUse,
+        AnthropicBlockPayload::ProviderItem { .. } => MessagesSurfaceKind::ProviderItem,
     }
+}
+
+fn messages_provider_block_from_node(node: &Node) -> Option<Value> {
+    let Node::ProviderItem {
+        origin_protocol: urp::ProviderProtocol::Messages,
+        item_type,
+        body,
+        extra_body,
+        ..
+    } = node
+    else {
+        return None;
+    };
+    let mut obj = match body {
+        Value::Object(obj) => obj.clone(),
+        _ => return None,
+    };
+    obj.entry("type".to_string())
+        .or_insert_with(|| Value::String(item_type.clone()));
+    merge_json_extra_preserving_typed(&mut obj, extra_body);
+    Some(Value::Object(obj))
 }
 
 fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
@@ -285,6 +313,11 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
             name: name.clone(),
             arguments: arguments.clone(),
         }),
+        Node::ProviderItem {
+            origin_protocol: urp::ProviderProtocol::Messages,
+            ..
+        } => messages_provider_block_from_node(node)
+            .map(|body| AnthropicBlockPayload::ProviderItem { body }),
         Node::Image { .. }
         | Node::Audio { .. }
         | Node::File { .. }
@@ -338,6 +371,21 @@ fn merge_hashmap_extra_preserving_typed(
         if !dst.contains_key(key) {
             dst.insert(key.clone(), value.clone());
         }
+    }
+}
+
+fn merge_provider_delta_body(body: &mut Value, data: &Value) {
+    match (body.as_object_mut(), data) {
+        (Some(obj), Value::Object(delta_obj)) => {
+            for (key, value) in delta_obj {
+                obj.insert(key.clone(), value.clone());
+            }
+        }
+        (Some(_), Value::Null) => {}
+        (Some(obj), other) => {
+            obj.insert("data".to_string(), other.clone());
+        }
+        _ => {}
     }
 }
 
@@ -417,6 +465,9 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
         ) => {
             arguments.push_str(delta);
         }
+        (AnthropicBlockPayload::ProviderItem { body }, NodeDelta::ProviderItem { data }) => {
+            merge_provider_delta_body(body, data);
+        }
         _ => {}
     }
 }
@@ -471,6 +522,9 @@ fn apply_emitted_node_delta_to_block(
             NodeDelta::ToolCallArguments { arguments: delta },
         ) => {
             arguments.push_str(delta);
+        }
+        (AnthropicBlockPayload::ProviderItem { body }, NodeDelta::ProviderItem { data }) => {
+            merge_provider_delta_body(body, data);
         }
         _ => {}
     }
@@ -540,6 +594,17 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
         | (AnthropicBlockPayload::Text { content }, Node::Refusal { content: done, .. }) => {
             if !done.is_empty() {
                 *content = done.clone();
+            }
+        }
+        (
+            AnthropicBlockPayload::ProviderItem { body },
+            Node::ProviderItem {
+                origin_protocol: urp::ProviderProtocol::Messages,
+                ..
+            },
+        ) => {
+            if let Some(terminal_body) = messages_provider_block_from_node(node) {
+                *body = terminal_body;
             }
         }
         _ => {}
@@ -747,6 +812,7 @@ async fn emit_accumulated_payload_deltas(
             )
             .await?;
         }
+        AnthropicBlockPayload::ProviderItem { .. } => {}
     }
     Ok(())
 }
@@ -1017,7 +1083,12 @@ pub(crate) async fn emit_synthetic_messages_stream(
             }
             | Node::Refusal { .. }
             | Node::Reasoning { .. }
-            | Node::ToolCall { .. } => {
+            | Node::ToolCall { .. }
+            | Node::ProviderItem {
+                role: urp::OrdinaryRole::Assistant,
+                origin_protocol: urp::ProviderProtocol::Messages,
+                ..
+            } => {
                 let Some(payload) = anthropic_block_from_node(node) else {
                     continue;
                 };

@@ -75,6 +75,9 @@ pub(super) async fn forward_stream_typed(
             // that the cross-family strip runs BEFORE provider, global, and
             // API-key transforms; see `execute_nonstream_typed`.
             let mut req_attempt = original_req.clone();
+            if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
+                urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
+            }
             if attempt.strip_cross_protocol_nested_extra
                 && !downstream.is_same_family(attempt.provider_type)
             {
@@ -168,6 +171,7 @@ pub(super) async fn forward_stream_typed(
                         )
                         .await;
                         mark_channel_success(&state, &attempt).await;
+                        refresh_channel_affinity(&state, &attempt).await;
                         let mut resp = match decode_response_from_provider(
                             attempt.provider_type,
                             &value,
@@ -356,6 +360,7 @@ pub(super) async fn forward_stream_typed(
                             return Err(app_err);
                         }
                         if retryable {
+                            clear_channel_affinity(&state, &attempt).await;
                             tried_providers.push(TriedProvider::from_app_error(
                                 attempt_number,
                                 &attempt,
@@ -628,6 +633,9 @@ pub(super) async fn forward_stream_typed(
                         };
 
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {
+                            if terminal_error.http_status == 429 || terminal_error.http_status >= 500 {
+                                clear_channel_affinity(&state_for_log, &attempt_for_log).await;
+                            }
                             spawn_request_log_stream_terminal_error(
                                 &state_for_log,
                                 &auth_for_log,
@@ -712,6 +720,13 @@ pub(super) async fn forward_stream_typed(
                             }
                         }
 
+                        let stream_failed = stream_result.is_err();
+                        if stream_failed {
+                            clear_channel_affinity(&state_for_log, &attempt_for_log).await;
+                        } else {
+                            refresh_channel_affinity(&state_for_log, &attempt_for_log).await;
+                        }
+
                         spawn_request_log(
                             &state_for_log,
                             &auth_for_log,
@@ -731,7 +746,6 @@ pub(super) async fn forward_stream_typed(
                             tried_providers_for_log,
                         );
 
-                        let stream_failed = stream_result.is_err();
                         if let Err(ref err) = stream_result {
                             tracing::warn!("stream passthrough adapter failed: {}", err.message);
                             let error_json = openai_error_json(err);
@@ -879,6 +893,7 @@ pub(super) async fn forward_stream_typed(
                         return Err(app_err);
                     }
                     if retryable {
+                        clear_channel_affinity(&state, &attempt).await;
                         tried_providers.push(TriedProvider::from_app_error(
                             attempt_number,
                             &attempt,

@@ -1,7 +1,8 @@
 use super::{
     AnalyticsModelBucketRow, AnalyticsProviderBucketRow, DashboardAnalyticsRaw, InsertRequestLog,
-    RequestLogApiKey, RequestLogBilling, RequestLogChannel, RequestLogError, RequestLogProvider,
-    RequestLogRow, RequestLogTiming, RequestLogTokens, RequestLogUser, UserStore,
+    RequestLogAffinity, RequestLogApiKey, RequestLogBilling, RequestLogChannel, RequestLogError,
+    RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens, RequestLogUser,
+    UserStore,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -217,6 +218,7 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
         is_stream,
         model: row.try_get("", "model").unwrap_or_default(),
         upstream_model: row.try_get("", "upstream_model").unwrap_or(None),
+        effective_provider_type: row.try_get("", "effective_provider_type").unwrap_or(None),
         request_kind: row.try_get("", "request_kind").unwrap_or(None),
         reasoning_effort: row.try_get("", "reasoning_effort").unwrap_or(None),
         request_ip: row.try_get("", "request_ip").unwrap_or(None),
@@ -232,6 +234,14 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> RequestLogRow {
         channel: RequestLogChannel {
             id: row.try_get("", "channel_id").unwrap_or(None),
             name: row.try_get("", "channel_name").unwrap_or(None),
+        },
+        affinity: RequestLogAffinity {
+            hit: row
+                .try_get::<Option<i32>>("", "affinity_hit")
+                .unwrap_or(None)
+                .map(|v| v != 0),
+            key_hash: row.try_get("", "affinity_key_hash").unwrap_or(None),
+            target: row.try_get("", "affinity_target").unwrap_or(None),
         },
         user: RequestLogUser {
             id: row.try_get("", "user_id").unwrap_or_default(),
@@ -460,7 +470,9 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind,
+                      rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
+                      rl.created_at,
                       u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON u.id = rl.user_id
@@ -617,7 +629,9 @@ impl UserStore {
                       rl.provider_multiplier, rl.charge_nano_usd, rl.status,
                       rl.usage_breakdown_json, rl.billing_breakdown_json,
                       rl.error_code, rl.error_message, rl.error_http_status,
-                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind, rl.created_at,
+                      rl.duration_ms, rl.ttfb_ms, rl.request_ip, rl.reasoning_effort, rl.request_kind,
+                      rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
+                      rl.created_at,
                       u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON u.id = rl.user_id

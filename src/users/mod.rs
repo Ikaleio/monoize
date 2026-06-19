@@ -404,6 +404,10 @@ pub struct InsertRequestLog {
     pub reasoning_effort: Option<String>,
     pub tried_providers_json: Option<Value>,
     pub request_kind: Option<String>,
+    pub effective_provider_type: Option<String>,
+    pub affinity_hit: Option<bool>,
+    pub affinity_key_hash: Option<String>,
+    pub affinity_target: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -422,6 +426,13 @@ pub struct RequestLogProvider {
 pub struct RequestLogChannel {
     pub id: Option<String>,
     pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestLogAffinity {
+    pub hit: Option<bool>,
+    pub key_hash: Option<String>,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -485,12 +496,14 @@ pub struct RequestLogRow {
     pub is_stream: bool,
     pub model: String,
     pub upstream_model: Option<String>,
+    pub effective_provider_type: Option<String>,
     pub request_kind: Option<String>,
     pub reasoning_effort: Option<String>,
     pub request_ip: Option<String>,
     pub tried_providers: Option<Value>,
     pub provider: RequestLogProvider,
     pub channel: RequestLogChannel,
+    pub affinity: RequestLogAffinity,
     pub user: RequestLogUser,
     pub api_key: RequestLogApiKey,
     pub tokens: RequestLogTokens,

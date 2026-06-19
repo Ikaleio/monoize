@@ -6,10 +6,10 @@ use crate::image_transform_cache::ImageTransformCache;
 use crate::model_registry::ModelRegistry;
 use crate::model_registry_store::ModelRegistryStore;
 use crate::monoize_routing::{
-    ChannelHealthState, MonoizeRoutingStore, MonoizeRuntimeConfig, probe_channel_completion,
+    ChannelAffinityBinding, ChannelHealthState, MonoizeRoutingStore, MonoizeRuntimeConfig,
+    probe_channel_completion,
 };
 use crate::name_cache::NameCaches;
-use crate::providers::ProviderStore;
 use crate::rate_limit::RateLimiter;
 use crate::request_capture::RequestCaptureStore;
 use crate::settings::{SettingsStore, normalize_pricing_model_key};
@@ -43,10 +43,10 @@ pub struct AppState {
     pub user_store: UserStore,
     pub name_caches: NameCaches,
     pub settings_store: SettingsStore,
-    pub provider_store: ProviderStore,
     pub monoize_store: MonoizeRoutingStore,
     pub monoize_runtime: Arc<tokio::sync::RwLock<MonoizeRuntimeConfig>>,
     pub channel_health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
+    pub channel_affinity: Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
     pub model_registry_store: ModelRegistryStore,
     pub transform_registry: Arc<TransformRegistry>,
     pub auth_rate_limiter: RateLimiter,
@@ -163,13 +163,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             err,
         )
     })?;
-    let provider_store = ProviderStore::new(db.clone()).await.map_err(|err| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "provider_store_init_failed",
-            err,
-        )
-    })?;
     let monoize_store = MonoizeRoutingStore::new(db.clone()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
@@ -240,6 +233,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         .monoize_request_capture_retention_days
         .max(1);
     let channel_health = Arc::new(Mutex::new(HashMap::new()));
+    let channel_affinity = Arc::new(Mutex::new(HashMap::new()));
     let transform_registry = Arc::new(crate::transforms::registry());
     let image_transform_cache = Arc::new(ImageTransformCache::from_env().await.map_err(|err| {
         AppError::new(
@@ -277,26 +271,28 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                 if !provider.circuit_breaker_enabled {
                     continue;
                 }
-                if provider.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate
-                {
-                    continue;
-                }
-                let active_enabled = provider
-                    .active_probe_enabled_override
-                    .unwrap_or(rt_snap.active_enabled);
-                if !active_enabled {
-                    continue;
-                }
-                let probe_interval_seconds = provider
-                    .active_probe_interval_seconds_override
-                    .unwrap_or(rt_snap.active_interval_seconds)
-                    .max(1);
-                let probe_success_threshold = provider
-                    .active_probe_success_threshold_override
-                    .unwrap_or(rt_snap.active_success_threshold)
-                    .max(1);
-
                 for channel in provider.channels {
+                    if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate
+                    {
+                        continue;
+                    }
+                    let active_enabled = channel
+                        .active_probe_enabled_override
+                        .or(provider.active_probe_enabled_override)
+                        .unwrap_or(rt_snap.active_enabled);
+                    if !active_enabled {
+                        continue;
+                    }
+                    let probe_interval_seconds = channel
+                        .active_probe_interval_seconds_override
+                        .or(provider.active_probe_interval_seconds_override)
+                        .unwrap_or(rt_snap.active_interval_seconds)
+                        .max(1);
+                    let probe_success_threshold = channel
+                        .active_probe_success_threshold_override
+                        .or(provider.active_probe_success_threshold_override)
+                        .unwrap_or(rt_snap.active_success_threshold)
+                        .max(1);
                     let probe_due = {
                         let guard = probe_health.lock().await;
                         let states = if provider.per_model_circuit_break {
@@ -336,15 +332,37 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                         continue;
                     }
 
-                    let configured_model = provider
+                    let configured_model = channel
                         .active_probe_model_override
                         .clone()
+                        .or(provider.active_probe_model_override.clone())
                         .or(rt_snap.active_probe_model.clone());
-                    let first_model = provider.models.keys().next().cloned();
+                    let first_model = channel
+                        .supported_models
+                        .iter()
+                        .filter(|model| provider.models.contains_key(*model))
+                        .min()
+                        .cloned();
                     let probe_model = configured_model.clone().or(first_model.clone());
                     let Some(ref model_name) = probe_model else {
                         continue;
                     };
+                    if !provider.models.contains_key(model_name)
+                        || !channel
+                            .supported_models
+                            .iter()
+                            .any(|supported| supported == model_name)
+                    {
+                        continue;
+                    }
+                    let upstream_model = provider
+                        .models
+                        .get(model_name)
+                        .and_then(|entry| entry.redirect.as_deref())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(model_name)
+                        .to_string();
                     let active_probe_user_id =
                         ensure_active_probe_system_user(&probe_user_store).await;
                     let probe_started_at = std::time::Instant::now();
@@ -352,8 +370,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                         &probe_http,
                         &channel,
                         rt_snap.request_timeout_ms,
-                        model_name,
-                        provider.provider_type,
+                        &upstream_model,
+                        channel.provider_type,
                         &provider.api_type_overrides,
                     )
                     .await;
@@ -456,10 +474,10 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         user_store,
         name_caches,
         settings_store,
-        provider_store,
         monoize_store,
         monoize_runtime,
         channel_health,
+        channel_affinity,
         model_registry_store,
         transform_registry,
         auth_rate_limiter: RateLimiter::new(10, std::time::Duration::from_secs(60)),
@@ -789,6 +807,10 @@ fn spawn_active_probe_request_log(
             reasoning_effort: None,
             tried_providers_json: None,
             request_kind: Some(ACTIVE_PROBE_CONNECTIVITY_KIND.to_string()),
+            effective_provider_type: None,
+            affinity_hit: None,
+            affinity_key_hash: None,
+            affinity_target: None,
             created_at: chrono::Utc::now(),
         };
 
@@ -1057,10 +1079,6 @@ fn build_dashboard_api_router() -> Router<AppState> {
             get(crate::dashboard_handlers::get_model_metadata)
                 .put(crate::dashboard_handlers::upsert_model_metadata)
                 .delete(crate::dashboard_handlers::delete_model_metadata),
-        )
-        .route(
-            "/dashboard/providers/{provider_id}/fetch-models",
-            post(crate::dashboard_handlers::fetch_provider_models),
         )
         .route(
             "/dashboard/providers/{provider_id}/channels/{channel_id}/test",

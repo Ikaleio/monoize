@@ -2,24 +2,24 @@
 
 ## 0. Status
 
-- **Subsystem:** OpenAI Image upstream provider type.
-- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/images/generations`, `/v1/images/edits`) and forwards them to the upstream provider configured with `provider_type = "openai_image"`. Text-only requests are sent to `POST /v1/images/generations` as JSON. Requests that contain user image inputs are sent to `POST /v1/images/edits` as `multipart/form-data`.
+- **Subsystem:** OpenAI Image upstream channel type.
+- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/images/generations`, `/v1/images/edits`) and forwards them through an attempt whose effective upstream type is `openai_image`. Text-only requests are sent to `POST /v1/images/generations` as JSON. Requests that contain user image inputs are sent to `POST /v1/images/edits` as `multipart/form-data`.
 - **Dependency:** This spec extends `unified_responses_proxy.spec.md` §7 (Adapters) and `monoize-upstream-routing.spec.md` §2.3 (Provider).
 
 ## 1. Terminology
 
-- **OpenAI Image upstream:** A provider whose `provider_type` is `openai_image`.
+- **OpenAI Image upstream:** An upstream attempt whose effective upstream type is `openai_image`.
 - **Upstream Image Generation Request:** The `POST /v1/images/generations` request Monoize sends to the upstream provider for text-only image generation.
 - **Upstream Image Edit Request:** The `POST /v1/images/edits` request Monoize sends to the upstream provider when the URP request contains at least one user-role `Node::Image`.
 - **Upstream Image Response:** The JSON response from the upstream provider containing `data[].b64_json` or `data[].url` image fields.
 
 ## 2. Provider Type Registration
 
-OIU-1. `openai_image` MUST be a valid `provider_type` value for provider configuration. It MUST be accepted in provider create/update payloads and stored in the database.
+OIU-1. `openai_image` MUST be a valid `provider_type` value for Channel configuration. It MUST be accepted in Channel create/update payloads and stored on the Channel row.
 
 OIU-2. `openai_image` MUST be a valid value in `api_type_overrides[].api_type`, allowing per-model override to this upstream type.
 
-OIU-3. `openai_image` MUST appear in the frontend provider type selector alongside existing types.
+OIU-3. `openai_image` MUST appear in the frontend Channel type selector alongside existing types.
 
 ## 3. Request Encoding
 

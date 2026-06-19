@@ -199,7 +199,102 @@ pub(super) async fn build_monoize_attempts(
             format!("pricing metadata required for model(s): {blocked_list}"),
         ));
     }
-    Ok(allowed_attempts)
+    apply_channel_affinity(state, urp, auth, allowed_attempts).await
+}
+
+fn affinity_tenant(auth: &crate::auth::AuthResult) -> Option<String> {
+    auth.api_key_id
+        .as_ref()
+        .map(|id| format!("api_key:{id}"))
+        .or_else(|| auth.user_id.as_ref().map(|id| format!("user:{id}")))
+}
+
+fn affinity_key_for_request(
+    urp: &UrpRequest,
+    auth: &crate::auth::AuthResult,
+) -> Option<(String, String)> {
+    let tenant = affinity_tenant(auth)?;
+    let source = urp
+        .affinity_explicit
+        .as_ref()
+        .map(|value| format!("explicit:{value}"))
+        .unwrap_or_else(|| format!("prefix:{}", urp.affinity_prefix_hash));
+    let key = format!("v1|{tenant}|model:{}|{source}", urp.model);
+    let key_hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(key.as_bytes()));
+    Some((key, key_hash))
+}
+
+async fn apply_channel_affinity(
+    state: &AppState,
+    urp: &UrpRequest,
+    auth: &crate::auth::AuthResult,
+    mut attempts: Vec<MonoizeAttempt>,
+) -> AppResult<Vec<MonoizeAttempt>> {
+    let Some((key, key_hash)) = affinity_key_for_request(urp, auth) else {
+        return Ok(attempts);
+    };
+    let now = now_ts();
+    let binding = {
+        let mut guard = state.channel_affinity.lock().await;
+        guard.retain(|_, binding| {
+            now.saturating_sub(binding.updated_at)
+                <= crate::monoize_routing::CHANNEL_AFFINITY_IDLE_TTL_SECONDS
+        });
+        guard.get(&key).cloned()
+    };
+
+    let mut bound_target = None;
+    if let Some(binding) = binding {
+        let target = format!("{}/{}", binding.provider_id, binding.channel_id);
+        if let Some(pos) = attempts.iter().position(|attempt| {
+            attempt.provider_id == binding.provider_id && attempt.channel_id == binding.channel_id
+        }) {
+            let mut attempt = attempts.remove(pos);
+            attempt.affinity_key = Some(key.clone());
+            attempt.affinity_key_hash = Some(key_hash.clone());
+            attempt.affinity_hit = Some(true);
+            attempt.affinity_target = Some(target.clone());
+            attempts.insert(0, attempt);
+            bound_target = Some(target);
+        } else {
+            state.channel_affinity.lock().await.remove(&key);
+        }
+    }
+
+    for attempt in &mut attempts {
+        if attempt.affinity_key.is_none() {
+            attempt.affinity_key = Some(key.clone());
+            attempt.affinity_key_hash = Some(key_hash.clone());
+            attempt.affinity_hit = Some(false);
+            attempt.affinity_target = bound_target
+                .clone()
+                .or_else(|| Some(format!("{}/{}", attempt.provider_id, attempt.channel_id)));
+        }
+    }
+
+    Ok(attempts)
+}
+
+pub(super) async fn refresh_channel_affinity(state: &AppState, attempt: &MonoizeAttempt) {
+    let Some(key) = attempt.affinity_key.as_ref() else {
+        return;
+    };
+    let mut guard = state.channel_affinity.lock().await;
+    guard.insert(
+        key.clone(),
+        crate::monoize_routing::ChannelAffinityBinding {
+            provider_id: attempt.provider_id.clone(),
+            channel_id: attempt.channel_id.clone(),
+            updated_at: now_ts(),
+        },
+    );
+}
+
+pub(super) async fn clear_channel_affinity(state: &AppState, attempt: &MonoizeAttempt) {
+    let Some(key) = attempt.affinity_key.as_ref() else {
+        return;
+    };
+    state.channel_affinity.lock().await.remove(key);
 }
 
 pub(super) async fn collect_provider_attempts(
@@ -223,9 +318,15 @@ pub(super) async fn collect_provider_attempts(
     if !crate::users::is_channel_group_eligible(&provider.groups, effective_groups) {
         return;
     }
+    let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> = provider
+        .channels
+        .iter()
+        .filter(|channel| channel.supported_models.iter().any(|model| model == &urp.model))
+        .cloned()
+        .collect();
     let channels = filter_eligible_channels(
         state,
-        &provider.channels,
+        &supporting_channels,
         provider.circuit_breaker_enabled,
         provider
             .per_model_circuit_break
@@ -246,14 +347,13 @@ pub(super) async fn collect_provider_attempts(
         .unwrap_or(ordered.len())
         .min(ordered.len());
     let upstream_model = resolve_upstream_model(&urp.model, model_entry);
-    let effective_provider_type = crate::monoize_routing::resolve_effective_api_type(
-        &provider.api_type_overrides,
-        provider.provider_type,
-        &urp.model,
-    );
-
     let runtime = state.monoize_runtime.read().await;
     for channel in ordered.into_iter().take(max_attempts) {
+        let effective_provider_type = crate::monoize_routing::resolve_effective_api_type(
+            &provider.api_type_overrides,
+            channel.provider_type,
+            &urp.model,
+        );
         let passive_failure_count_threshold = channel
             .passive_failure_count_threshold_override
             .unwrap_or(runtime.passive_failure_count_threshold)
@@ -303,6 +403,10 @@ pub(super) async fn collect_provider_attempts(
                 .strip_cross_protocol_nested_extra
                 .unwrap_or(runtime.strip_cross_protocol_nested_extra),
             billable_pricing_available: false,
+            affinity_key: None,
+            affinity_key_hash: None,
+            affinity_hit: None,
+            affinity_target: None,
         });
     }
 }

@@ -5,7 +5,9 @@ use crate::handlers::usage::{
     record_stream_usage_if_present,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
-use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol, UrpStreamEvent,
+};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -42,6 +44,11 @@ enum ActiveNodeKind {
         name: String,
         arguments: String,
         replace_on_next_delta: bool,
+    },
+    ProviderItem {
+        id: Option<String>,
+        item_type: String,
+        body: Value,
     },
 }
 
@@ -428,7 +435,18 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
             },
             extra_body: object_without_keys(content_block, &["type", "id", "name", "input"]),
         }),
-        _ => None,
+        _ => Some(ActiveNodeState {
+            kind: ActiveNodeKind::ProviderItem {
+                id: content_block
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                item_type: content_type.to_string(),
+                body: content_block.clone(),
+            },
+            extra_body: HashMap::new(),
+        }),
     }
 }
 
@@ -472,6 +490,18 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             arguments: arguments.clone(),
             extra_body: active_node.extra_body.clone(),
         },
+        ActiveNodeKind::ProviderItem {
+            id,
+            item_type,
+            body,
+        } => Node::ProviderItem {
+            id: id.clone(),
+            origin_protocol: ProviderProtocol::Messages,
+            role: OrdinaryRole::Assistant,
+            item_type: item_type.clone(),
+            body: body.clone(),
+            extra_body: active_node.extra_body.clone(),
+        },
     }
 }
 
@@ -506,9 +536,13 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             id: node.id().cloned(),
         },
         Node::ProviderItem {
-            role, item_type, ..
+            role,
+            origin_protocol,
+            item_type,
+            ..
         } => NodeHeader::ProviderItem {
             id: node.id().cloned(),
+            origin_protocol: *origin_protocol,
             role: *role,
             item_type: item_type.clone(),
         },

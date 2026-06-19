@@ -122,24 +122,21 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                     }
 
                     if let Part::ProviderItem {
+                        origin_protocol,
                         item_type,
                         body,
                         extra_body,
                         ..
                     } = part
                     {
-                        let mut item = match body {
-                            Value::Object(obj) => obj.clone(),
-                            other => {
-                                let mut obj = Map::new();
-                                obj.insert("body".to_string(), other.clone());
-                                obj
-                            }
-                        };
-                        item.entry("type".to_string())
-                            .or_insert_with(|| Value::String(item_type.clone()));
-                        merge_extra(&mut item, extra_body);
-                        output.push(Value::Object(item));
+                        if let Some(item) = encode_provider_item_for_responses(
+                            *origin_protocol,
+                            item_type,
+                            body,
+                            extra_body,
+                        ) {
+                            output.push(item);
+                        }
                     }
                 }
                 flush_pending_message_item(&mut pending_message, &mut output);
@@ -272,6 +269,24 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
                     encode_reasoning_request_item(part).or_else(|| encode_tool_call_item(part))
                 {
                     sanitize_reasoning_request_item(&mut item);
+                    out.push(item);
+                    continue;
+                }
+
+                if let Part::ProviderItem {
+                    origin_protocol,
+                    item_type,
+                    body,
+                    extra_body,
+                    ..
+                } = part
+                    && let Some(item) = encode_provider_item_for_responses(
+                        *origin_protocol,
+                        item_type,
+                        body,
+                        extra_body,
+                    )
+                {
                     out.push(item);
                 }
             }

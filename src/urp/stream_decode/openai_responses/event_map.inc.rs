@@ -85,11 +85,13 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
         },
         Node::ProviderItem {
             id,
+            origin_protocol,
             role,
             item_type,
             ..
         } => NodeHeader::ProviderItem {
             id: id.clone(),
+            origin_protocol: *origin_protocol,
             role: *role,
             item_type: item_type.clone(),
         },
@@ -234,6 +236,7 @@ fn map_output_item_added(
             });
             output_state_for(index_state, output_index).emitted_any_node = true;
         }
+        "message" => {}
         "function_call" => {
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolCall {
                 id: item
@@ -293,7 +296,28 @@ fn map_output_item_added(
             });
             output_state_for(index_state, output_index).emitted_any_node = true;
         }
-        _ => {}
+        _ => {
+            let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ProviderItem {
+                id: item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                origin_protocol: ProviderProtocol::Responses,
+                role: OrdinaryRole::Assistant,
+                item_type: item_type.to_string(),
+                body: item.clone(),
+                extra_body: HashMap::new(),
+            });
+            let node_index = index_state.synthetic_node_index_for_output(output_index);
+            emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+            events.push(UrpStreamEvent::NodeStart {
+                node_index,
+                header: node_header_from_node(&node),
+                extra_body: item_extra_body_from_value(item),
+            });
+            output_state_for(index_state, output_index).emitted_any_node = true;
+        }
     }
 
     events

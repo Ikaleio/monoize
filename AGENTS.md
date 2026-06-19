@@ -9,6 +9,9 @@ During the development process, you must strictly adhere to the rules in this do
 
 - You are an automated coding / tooling agent working inside this repository.
 - You must **not** modify files outside the project root.
+- For the Provider/Channel model-routing migration, you must not preserve old compatibility fields or tables.
+  The migration must remove obsolete API fields, database columns, tables, entities, and stores instead of
+  keeping compatibility aliases.
 - Whenever you change observable behavior of the system, you **must**:
   1. Update the corresponding specification file under `spec/`.
   2. Update the implementation.

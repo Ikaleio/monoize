@@ -12,13 +12,26 @@ impl MigrationTrait for Migration {
 
         match backend {
             DbBackend::Sqlite => {
-                for sql in [
-                    "ALTER TABLE monoize_channels DROP COLUMN passive_min_samples_override",
-                    "ALTER TABLE monoize_channels DROP COLUMN passive_failure_rate_threshold_override",
-                    "ALTER TABLE monoize_channels DROP COLUMN request_timeout_ms_override",
+                let rows = conn
+                    .query_all(Statement::from_string(
+                        DbBackend::Sqlite,
+                        "PRAGMA table_info(monoize_channels)".to_string(),
+                    ))
+                    .await?;
+                let existing = rows
+                    .into_iter()
+                    .filter_map(|row| row.try_get::<String>("", "name").ok())
+                    .collect::<std::collections::HashSet<_>>();
+                for column in [
+                    "passive_min_samples_override",
+                    "passive_failure_rate_threshold_override",
+                    "request_timeout_ms_override",
                 ] {
-                    conn.execute(Statement::from_string(DbBackend::Sqlite, sql.to_string()))
-                        .await?;
+                    if existing.contains(column) {
+                        let sql = format!("ALTER TABLE monoize_channels DROP COLUMN {column}");
+                        conn.execute(Statement::from_string(DbBackend::Sqlite, sql))
+                            .await?;
+                    }
                 }
             }
             DbBackend::Postgres => {

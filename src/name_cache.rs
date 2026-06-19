@@ -1,8 +1,9 @@
 use crate::db_cache::ApiKeyCache;
 use crate::entity::{api_keys, monoize_channels, monoize_providers, users};
 use crate::users::{
-    InsertRequestLog, RequestLogApiKey, RequestLogBilling, RequestLogChannel, RequestLogError,
-    RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens, RequestLogUser,
+    InsertRequestLog, RequestLogAffinity, RequestLogApiKey, RequestLogBilling, RequestLogChannel,
+    RequestLogError, RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens,
+    RequestLogUser,
 };
 use dashmap::DashMap;
 use sea_orm::{DatabaseConnection, EntityTrait};
@@ -86,6 +87,7 @@ impl NameCaches {
             is_stream: raw.is_stream,
             model: raw.model.clone(),
             upstream_model: raw.upstream_model.clone(),
+            effective_provider_type: raw.effective_provider_type.clone(),
             request_kind: raw.request_kind.clone(),
             reasoning_effort: raw.reasoning_effort.clone(),
             request_ip: raw.request_ip.clone(),
@@ -104,6 +106,11 @@ impl NameCaches {
                     .channel_id
                     .as_ref()
                     .and_then(|channel_id| self.get_channel_name(channel_id)),
+            },
+            affinity: RequestLogAffinity {
+                hit: raw.affinity_hit,
+                key_hash: raw.affinity_key_hash.clone(),
+                target: raw.affinity_target.clone(),
             },
             user: RequestLogUser {
                 id: raw.user_id.clone(),

@@ -42,6 +42,7 @@ import {
 	buildPricedModelIdSet,
 	hasBillablePricingModelId,
 	PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
+	PROVIDER_TYPE_CONFIG,
 	statusBadge
 } from './shared'
 
@@ -78,6 +79,7 @@ export function ProviderCard({
 	const [testDialogChannel, setTestDialogChannel] = useState<{
 		id: string
 		name: string
+		models: string[]
 	} | null>(null)
 	const [quickTestingChannelId, setQuickTestingChannelId] = useState<string | null>(
 		null
@@ -100,10 +102,13 @@ export function ProviderCard({
 
 	const unpricedCount = provider.unpriced_model_count ?? 0
 
-	const modelNames = useMemo(
-		() => Object.keys(provider.models).sort(),
-		[provider.models]
-	)
+	const channelTypeLabels = useMemo(() => {
+		const types = Array.from(new Set(provider.channels.map(channel => channel.provider_type)))
+		return types
+			.map(type => PROVIDER_TYPE_CONFIG[type]?.label ?? type)
+			.sort()
+			.join(' / ')
+	}, [provider.channels])
 
 	const handleQuickTest = async (channelId: string) => {
 		setQuickTestingChannelId(channelId)
@@ -169,9 +174,11 @@ export function ProviderCard({
 								<CardTitle className='text-base leading-normal -translate-y-px'>
 									{provider.name}
 								</CardTitle>
-								<Badge variant='outline' className='font-mono text-xs'>
-									{provider.provider_type}
-								</Badge>
+								{channelTypeLabels && (
+									<Badge variant='outline' className='text-xs'>
+										{channelTypeLabels}
+									</Badge>
+								)}
 								<StatusBadge variant={provider.enabled ? 'success' : 'info'}>
 									{provider.enabled ?
 										t('common.enabled')
@@ -374,7 +381,8 @@ export function ProviderCard({
 																onClick={() => {
 																	setTestDialogChannel({
 																		id: channel.id,
-																		name: channel.name
+																		name: channel.name,
+																		models: [...channel.supported_models].sort()
 																	})
 																	setTestDialogOpen(true)
 																}}
@@ -383,6 +391,7 @@ export function ProviderCard({
 															</button>
 														</span>
 														<span className='text-xs text-muted-foreground'>
+															{channel.supported_models.length}M ·{' '}
 															W:{channel.weight}
 														</span>
 														<StatusBadge variant={channel.enabled ? 'success' : 'info'}>
@@ -413,7 +422,7 @@ export function ProviderCard({
 					channelId={testDialogChannel.id}
 					channelName={testDialogChannel.name}
 					providerName={provider.name}
-					models={modelNames}
+					models={testDialogChannel.models}
 				/>
 			)}
 		</motion.div>

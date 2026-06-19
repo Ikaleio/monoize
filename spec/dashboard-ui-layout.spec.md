@@ -54,9 +54,9 @@ PL3. Provider list MUST support drag-and-drop reordering and persist order throu
 
 PL4. Provider detail/editor MUST display:
 
-- provider-level fields: `name`, `provider_type`, `enabled`, `max_retries`
+- provider-level fields: `name`, `enabled`, `max_retries`
 - compact model editor list with per-row controls for: downstream model, redirect target, multiplier, delete
-- channel table: name, base URL, weight, enabled
+- channel table: name, default type, base URL, weight, enabled, supported model count
 - channel runtime health indicator: healthy/probing/unhealthy
 
 PL5. API keys/secrets for channels MUST never be shown after save (write-only behavior).
@@ -105,15 +105,17 @@ PL12. Provider list card header MUST place provider metadata and controls in a c
 - provider enable switch MUST be colocated in the header action zone;
 - edit/delete/reorder controls MUST remain available without expanding card height.
 
-PL13. Provider editor model section MUST include an explicit "Fetch Models" action that opens a model-diff selection dialog before insertion.
+PL13. Provider editor Channel dialog MUST include an explicit "Fetch Models" action that opens a model-diff selection dialog before insertion.
 
-- Dialog MUST fetch upstream model list from `POST /api/dashboard/providers/{provider_id}/fetch-models`.
+- Dialog MUST fetch upstream model list from `POST /api/dashboard/fetch-channel-models` with the current Channel `provider_type`, `base_url`, and `api_key`.
 - Dialog MUST split entries into `new` and `existing` tabs.
-- Dialog MUST allow selecting only `new` models for insertion.
+- Dialog MUST initialize selection from the current Channel `supported_models`.
+- Dialog MUST allow selecting fetched models for the current Channel.
 - While the dialog remains open, a successful fetched model list MUST remain visible and MUST NOT be cleared by unrelated parent rerenders.
 - Dialog model list container MUST have a bounded positive height with internal scrolling so fetched rows are visible immediately after load.
 - Dialog model list items MUST render as compact stacked badges (wrapping rows), not forced single-column rows.
-- Confirming selection MUST append selected models with default `{ redirect: "", multiplier: "1" }` while preserving existing rows.
+- Confirming selection MUST append selected models absent from the Provider model table with default `{ redirect: "", multiplier: "1" }` while preserving existing rows.
+- Confirming selection MUST set only the current Channel `supported_models` to the selected model IDs.
 
 PL14. Provider model badges (overview and model-diff dialog) MUST display provider logo using model metadata (`models_dev_provider`) when available, with graceful fallback icon behavior when unavailable.
 

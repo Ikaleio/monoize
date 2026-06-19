@@ -3,6 +3,7 @@ enum ResponsesOutputZone {
     Message,
     Reasoning,
     FunctionCall,
+    ProviderItem,
 }
 
 #[derive(Clone, Debug)]
@@ -68,8 +69,14 @@ fn terminal_output_node_matches_state(node: &urp::Node, state: &StreamedNodeStat
         | urp::Node::Audio { id, .. }
         | urp::Node::File { id, .. }
         | urp::Node::Refusal { id, .. }
-        | urp::Node::ProviderItem { id, .. } => {
+        => {
             state.zone == ResponsesOutputZone::Message
+                && ((!state.item_id.is_empty() && id.as_deref() == Some(state.item_id.as_str()))
+                    || (header_family_matches && id.is_none())
+                    || (state.item_id.is_empty() && header_family_matches))
+        }
+        urp::Node::ProviderItem { id, .. } => {
+            state.zone == ResponsesOutputZone::ProviderItem
                 && ((!state.item_id.is_empty() && id.as_deref() == Some(state.item_id.as_str()))
                     || (header_family_matches && id.is_none())
                     || (state.item_id.is_empty() && header_family_matches))
@@ -182,6 +189,28 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
                 .to_string(),
             extra_body: state.node_extra_body.clone(),
         }),
+        urp::NodeHeader::ProviderItem {
+            id,
+            origin_protocol,
+            item_type,
+            role,
+        } => {
+            let body = completed_item.cloned().unwrap_or_else(|| {
+                let mut obj = Map::new();
+                obj.insert("type".to_string(), Value::String(item_type.clone()));
+                Value::Object(obj)
+            });
+            Some(urp::Node::ProviderItem {
+                id: id
+                    .clone()
+                    .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),
+                origin_protocol: *origin_protocol,
+                role: *role,
+                item_type: item_type.clone(),
+                body,
+                extra_body: state.node_extra_body.clone(),
+            })
+        }
         _ => None,
     }
 }

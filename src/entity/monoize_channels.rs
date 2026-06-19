@@ -11,6 +11,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub name: String,
     #[sea_orm(column_type = "Text")]
+    pub provider_type: String,
+    #[sea_orm(column_type = "Text")]
     pub base_url: String,
     #[sea_orm(column_type = "Text")]
     pub api_key: String,
@@ -20,6 +22,11 @@ pub struct Model {
     pub passive_cooldown_seconds_override: Option<i32>,
     pub passive_window_seconds_override: Option<i32>,
     pub passive_rate_limit_cooldown_seconds_override: Option<i32>,
+    pub active_probe_enabled_override: Option<i32>,
+    pub active_probe_interval_seconds_override: Option<i32>,
+    pub active_probe_success_threshold_override: Option<i32>,
+    #[sea_orm(column_type = "Text")]
+    pub active_probe_model_override: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub created_at: String,
     #[sea_orm(column_type = "Text")]

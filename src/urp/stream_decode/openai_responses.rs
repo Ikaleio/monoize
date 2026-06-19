@@ -11,8 +11,8 @@ use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,
 };
 use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent, node_is_empty_text,
-    nodes_semantically_match,
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol, UrpStreamEvent,
+    node_is_empty_text, nodes_semantically_match,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;

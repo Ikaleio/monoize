@@ -106,8 +106,9 @@ DBT3. On startup, the server MUST ensure the following Monoize routing tables ex
 - `monoize_providers`
 - `monoize_provider_models`
 - `monoize_channels`
+- `monoize_channel_models`
 
-DBT4. On startup, the server MUST also create legacy provider tables:
+DBT4. On startup, the server MUST NOT create legacy provider tables:
 
 - `providers`
 - `model_mappings`
@@ -133,11 +134,11 @@ DBO2. `model_registry_records` is the persistent source of dashboard-managed mod
 
 DBO2.1. `model_metadata_records` is the persistent source of per-model pricing/capability metadata used by billing and dashboard diagnostics.
 
-DBO3. `monoize_providers`, `monoize_provider_models`, and `monoize_channels` are the primary source of truth for provider/channel routing configuration.
+DBO3. `monoize_providers`, `monoize_provider_models`, `monoize_channels`, and `monoize_channel_models` are the primary source of truth for provider/channel routing configuration.
 
 DBO3.1. `billing_ledger` is append-only request charge / admin adjustment history.
 
-DBO4. Legacy provider tables MAY exist for compatibility and dashboard maintenance, but forwarding routing MUST NOT read them.
+DBO4. Legacy provider tables MUST NOT exist after the Provider/Channel model-routing migration completes.
 
 ## 9. Store Initialization
 
@@ -147,7 +148,7 @@ DB19. Application initialization order:
 
 1. `DbPool::connect(&runtime.database_dsn)`
 2. `Migrator::up(db.write(), None)` — auto-migrate
-3. Construct stores: `UserStore`, `SettingsStore`, `ProviderStore`, `MonoizeRoutingStore`, `ModelRegistryStore`
+3. Construct stores: `UserStore`, `SettingsStore`, `MonoizeRoutingStore`, `ModelRegistryStore`
 
 ## 10. Cross-Backend SQL Compatibility
 

@@ -310,22 +310,25 @@ Q2. `GET /api/dashboard/model-metadata/{model_id}` MUST return single row or `40
 
 ## 10. Upstream model list fetch
 
-UF1. Admin endpoint `POST /api/dashboard/providers/{provider_id}/fetch-models` MUST:
+UF1. Admin endpoint `POST /api/dashboard/fetch-channel-models` MUST accept:
 
-1. Look up the provider by `provider_id` from `MonoizeRoutingStore`.
-2. If the provider has no channels, return `400` with code `no_channels`.
-3. Pick the first enabled channel (or the first channel if none are enabled).
-4. Let `base = trim_trailing_slash(channel.base_url)`. Build the upstream models URL as:
+- `provider_type: responses | chat_completion | messages | gemini | openai_image | replicate`
+- `base_url: string`
+- `api_key: string`
+
+UF2. For `responses`, `chat_completion`, `messages`, `openai_image`, and `replicate`, the endpoint MUST:
+
+1. Let `base = trim_trailing_slash(base_url)`.
+2. Build the upstream models URL as:
    - `GET {base}/models` when `base` ends with `/v1`;
    - otherwise `GET {base}/v1/models`.
-   This rule MUST produce exactly one `/v1` segment before `/models`.
-   The request MUST include `Authorization: Bearer {channel.api_key}`.
-5. Parse the response as OpenAI-compatible `{ data: [{ id: string, ... }] }`.
-6. Return a JSON object containing:
-   - `provider_id: string`
-   - `provider_name: string`
-   - `models: string[]` (list of model IDs from the response)
+3. Include `Authorization: Bearer {api_key}`.
+4. Parse OpenAI-compatible `{ data: [{ id: string, ... }] }`.
 
-UF2. On upstream fetch or parse failure, endpoint MUST return `502` with code `upstream_fetch_failed`.
+UF3. For `gemini`, the endpoint MUST call the Gemini model-list API using `api_key` and parse model names as model IDs after removing a leading `models/` prefix.
+
+UF4. The response MUST be `{ models: string[] }` ordered lexicographically with duplicate IDs removed.
+
+UF5. On upstream fetch or parse failure, endpoint MUST return `502` with code `upstream_fetch_failed`.
 
 UF3. Request timeout for the upstream call MUST be 15 seconds.

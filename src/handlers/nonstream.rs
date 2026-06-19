@@ -114,6 +114,9 @@ pub(super) async fn execute_nonstream_typed(
             // encoded upstream request even when the downstream and upstream
             // protocol families differ.
             let mut req_attempt = original_req.clone();
+            if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
+                urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
+            }
             if attempt.strip_cross_protocol_nested_extra
                 && !downstream.is_same_family(attempt.provider_type)
             {
@@ -295,6 +298,7 @@ pub(super) async fn execute_nonstream_typed(
                     )
                     .await;
                     mark_channel_success(state, &attempt).await;
+                    refresh_channel_affinity(state, &attempt).await;
                     let mut resp = match collected_resp {
                         Some(resp) => resp,
                         None => match decode_response_from_provider(
@@ -457,6 +461,7 @@ pub(super) async fn execute_nonstream_typed(
                         return Err(app_err);
                     }
                     if retryable {
+                        clear_channel_affinity(state, &attempt).await;
                         tried_providers.push(TriedProvider::from_app_error(
                             attempt_number,
                             &attempt,

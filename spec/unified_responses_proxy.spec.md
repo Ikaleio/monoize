@@ -316,6 +316,31 @@ TRC1. `ToolResultContent` is an enum representing typed content within `ToolResu
 
 TRC2. Each `ToolResult.content` field contains zero or more `ToolResultContent` entries. An empty `content` vector represents a tool result with no output payload.
 
+### 7.1.1b ProviderItem opaque native items
+
+PI1. `ProviderItem` is an opaque native item, block, or part preservation container. It is not a cross-protocol semantic node.
+
+PI2. `ProviderItem.origin_protocol` MUST be one of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `replicate`.
+
+PI3. A decoder MUST emit `ProviderItem` only for a native carrier unit that the source adapter cannot decode into a typed URP node. Required cases are:
+
+- Responses unknown `input[]` or `output[]` items, including items with `type = "compaction"`;
+- Chat Completions unknown `messages[].content[]` parts and unknown assistant content parts;
+- Anthropic Messages unknown `content[]` blocks;
+- Gemini unknown `parts[]` parts.
+
+PI4. A `ProviderItem` MUST preserve the native carrier object in `body` without text stringification. The decoder MUST set `origin_protocol` to the exact source protocol and MUST keep the source native `type` string in `item_type` when one exists.
+
+PI5. An encoder MUST replay `ProviderItem.body` only when `ProviderItem.origin_protocol` exactly equals the target provider protocol. Exact protocol equality is required; `responses` and `chat_completion` are different protocols.
+
+PI6. If `ProviderItem.origin_protocol` does not equal the target provider protocol, the encoder MUST ignore that node. It MUST NOT stringify `body`, insert JSON text into any prompt, convert it to `Text`, or disguise it as another typed node.
+
+PI7. ProviderItem same-protocol replay does not expand any `extra_body` passthrough rule. Top-level `extra_body`, node-local `extra_body`, tool-definition `extra_body`, and envelope-control rules remain governed by §7.6.
+
+PI8. Immediately before request-phase transforms run for each upstream attempt, Monoize MUST remove from `UrpRequestV2.input` every downstream-origin `ProviderItem` whose `origin_protocol` differs from the selected upstream provider protocol. A later transform MAY insert a `ProviderItem` only if it sets `origin_protocol` to the intended target provider protocol.
+
+PI9. In streaming, `NodeStart.header.type = "provider_item"` MUST carry `origin_protocol`. A downstream stream encoder MUST reconstruct a ProviderItem lifecycle only for same-protocol ProviderItems. A mismatched ProviderItem stream node MUST be skipped without producing downstream text or a typed replacement node.
+
 ### 7.1.2 URP v2 reasoning node
 
 RSN1. URP v2 `output` MAY contain reasoning state represented as one or more ordinary `Reasoning` nodes.
@@ -411,13 +436,13 @@ ENC2. Each `Reasoning` node MUST encode as one top-level Responses `reasoning` i
 
 ENC3. Each `ToolCall` node MUST encode as one top-level Responses `function_call` item.
 
-ENC4. Each maximal run of adjacent ordinary nodes that are not `Reasoning` and not `ToolCall`, and that share the same `role`, MAY encode as one Responses `message` item.
+ENC4. Each maximal run of adjacent ordinary nodes that are not `Reasoning`, not `ToolCall`, and not `ProviderItem`, and that share the same `role`, MAY encode as one Responses `message` item.
 
 ENC5. A change in `Text.phase` inside a Responses message run MUST force a new Responses `message` item boundary.
 
 ENC6. The Chat Completions encoder MUST prevent content and `tool_calls` interleaving within one streamed downstream chunk. It MAY reconstruct one downstream assistant message object from several flat assistant nodes for non-stream responses when that reconstruction preserves source order and all tool, reasoning, and text fields.
 
-ENC7. In a non-streaming Chat Completions response, `choices[0].message.content` MUST always be a JSON string. If multiple assistant text nodes are merged into one downstream message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator.
+ENC7. In a non-streaming Chat Completions response, `choices[0].message.content` MUST be a JSON string when the reconstructed assistant content contains only text. If multiple assistant text nodes are merged into one downstream message, Monoize MUST concatenate their text in source order using `"\n\n"` as the separator. If the reconstructed same-protocol Chat output contains one or more `ProviderItem(origin_protocol = "chat_completion")` content parts, Monoize MAY emit `choices[0].message.content` as a content-part array to preserve those native parts.
 
 ENC8. Structured reasoning in Chat Completions responses MUST be encoded in `reasoning_details`, not in `reasoning`. Plaintext reasoning MAY also populate the simple `reasoning` alias where that downstream field already exists.
 
@@ -438,6 +463,10 @@ PR2b. When a non-streaming upstream Responses `output[]` item has `type = "image
 - The decoded `media_type` MUST be derived from `output_format` when present: `png -> image/png`, `webp -> image/webp`, `jpeg -> image/jpeg`.
 - If `output_format` is absent or unrecognized, Monoize MUST default the decoded `media_type` to `image/png`.
 - Monoize MUST preserve unknown fields from that item in node-local `extra_body`, excluding adapter-consumed keys `type`, `result`, and `output_format`.
+
+PR2c. When decoding Responses `input[]` or `output[]`, Monoize MUST decode every unknown top-level item type as `ProviderItem(origin_protocol = "responses")`, except that `type = "item_reference"` in `input[]` remains rejected under S4. This includes `type = "compaction"`.
+
+PR2d. When encoding URP v2 to a Responses request or response, Monoize MUST replay a `ProviderItem` as one native Responses `input[]` or `output[]` item only when `origin_protocol = "responses"`. It MUST omit all other ProviderItems.
 
 PR2a. Responses order preservation:
 
@@ -573,6 +602,7 @@ PR6b. Responses streaming phase preservation:
 - When Monoize emits Responses-style downstream SSE, it MUST NOT merge text across distinct `phase` values or across reasoning or tool-call boundaries.
 - When Monoize synthesizes missing downstream events from `response.completed.output[]`, it MUST preserve both output order and `phase` metadata from the completed payload.
 - Unknown SSE event names, unknown item types, and unknown fields MUST NOT terminate streaming adaptation solely because they are unknown.
+- Unknown Responses output item types in streaming, including `type = "compaction"`, MUST decode as one `ProviderItem(origin_protocol = "responses")` slot. The slot MUST produce at most one logical `ProviderItem` in `NodeDone.node` and `ResponseDone.output`.
 - When Monoize emits downstream `/v1/responses` SSE from flat URP v2 nodes, it MUST emit canonical Responses output-item boundaries derived by encoder reconstruction, not raw upstream boundaries.
 - For downstream `/v1/responses` SSE, every `response.output_item.done` event MUST have exactly one earlier matching `response.output_item.added` event with the same `output_index`.
 - Monoize MUST emit `response.content_part.added` and `response.content_part.done` only for Responses `message` items. Monoize MUST NOT encode `Reasoning` or `ToolCall` nodes as `message.content[]` stream parts.
@@ -588,7 +618,7 @@ PR6c. Final Responses-stream object synthesis:
 - If `response.output_item.done` carries a reasoning item snapshot after Monoize has already accumulated non-empty reasoning text, summary, or encrypted content from prior events for the same slot, Monoize MUST NOT overwrite those accumulated fields with the done snapshot. The done snapshot MAY fill fields that are still missing or empty.
 - On such an inconsistent terminal merge, Monoize MUST emit a terminal canonical `Error` event with code `responses_terminal_conflict`, and downstream `/v1/responses` MUST terminate as `response.failed` followed by the plain `[DONE]` sentinel. Monoize MUST NOT emit a successful `ResponseDone` for that stream.
 - When accumulated assistant text is empty, Monoize MUST NOT synthesize an empty assistant `Text` node solely to carry that empty string.
-- When Monoize emits downstream `response.completed` from `ResponseDone.output`, the `response.output` array MUST be encoded with the same Responses encoder logic used for non-streaming responses so that top-level `reasoning`, `message`, and `function_call` items remain in canonical Responses output positions rather than being nested incorrectly inside `message.content[]`.
+- When Monoize emits downstream `response.completed` from `ResponseDone.output`, the `response.output` array MUST be encoded with the same Responses encoder logic used for non-streaming responses so that top-level `reasoning`, `message`, `function_call`, and same-protocol `ProviderItem` items remain in canonical Responses output positions rather than being nested incorrectly inside `message.content[]`.
 - If Monoize synthesizes missing assistant text stream events because upstream omitted text deltas, it MUST synthesize one downstream text segment per recovered text-bearing node run in output order. Each synthesized segment MUST preserve `phase` metadata and MUST allocate fresh encoder-local coordinates instead of reusing URP `node_index` as a wire coordinate.
 
 PR7. For URP v2 `ToolResult` nodes with non-string multimodal output, Monoize MUST preserve multimodal output parts when forwarding to Responses upstream:
@@ -642,6 +672,8 @@ PC2.3. Chat content-block compatibility decode:
   - `name` from `name`, else `function.name`;
   - `arguments` from `arguments`, else `function.arguments`, else `input`, else `function.input`, else `args`, else `function.args`.
 - If the resolved `arguments` value is not a string, Monoize MUST serialize it as JSON.
+- Any other object content block in `messages[].content[]` or assistant `content[]` MUST decode as `ProviderItem(origin_protocol = "chat_completion")`.
+- When encoding to `type=chat_completion`, Monoize MUST replay only `ProviderItem` nodes whose `origin_protocol = "chat_completion"` as native `messages[].content[]` parts. Other ProviderItems MUST be omitted.
 
 PC2.4. Assistant message history preservation for chat adapter:
 
@@ -686,6 +718,7 @@ PC7d. For downstream `POST /v1/chat/completions` translated from upstream `type=
 PC7e. For upstream `type=chat_completion` streaming chunks that carry assistant state as `choices[0].delta.content[]` block arrays:
 
 - Monoize MUST decode text blocks and tool-call blocks in block-array order using the same field mapping as PC2.3.
+- Monoize MUST decode unknown block-array objects as `ProviderItem(origin_protocol = "chat_completion")` in block-array order.
 - If one streamed assistant turn contains both text blocks and at least one tool-call block, downstream `POST /v1/chat/completions` streaming MUST preserve the assistant text deltas that precede the tool-call deltas, MUST emit the tool-call deltas after those text deltas, and MUST terminate the turn with `finish_reason="tool_calls"`.
 
 PC7f. For upstream `type=chat_completion` streaming chunks that carry assistant state in terminal `choices[0].message` snapshots instead of incremental `choices[0].delta.tool_calls[]`:
@@ -725,6 +758,8 @@ PM2b. For downstream `POST /v1/messages` request parsing, Monoize MUST decode or
 - `source: { type: "url", url: <url> }` -> `ImageSource::Url`.
 
 PM2c. For downstream `POST /v1/messages` request parsing, Monoize MUST decode ordinary `messages[].content[]` blocks with `type = "document"` or `type = "file"` into role-bearing URP `File` nodes when a supported file source is present.
+
+PM2d. For downstream `POST /v1/messages` request parsing and upstream `type=messages` response parsing, Monoize MUST decode any unknown `content[]` block object as `ProviderItem(origin_protocol = "messages")`. When encoding to `type=messages`, Monoize MUST replay only `ProviderItem` nodes whose `origin_protocol = "messages"` as native `content[]` blocks. Other ProviderItems MUST be omitted.
 
 PM2.1. Input coercion for Messages adapter:
 
@@ -799,6 +834,8 @@ PM5d. When encoding a URP v2 request to an upstream `type=messages` provider, Mo
 PM5e. When encoding a URP v2 request to an upstream `type=responses` provider, Monoize MUST preserve `Reasoning.id` as the upstream reasoning item `id`. If `Reasoning.id` is a non-empty string, the upstream `reasoning` item `id` MUST equal that string byte-for-byte. Monoize MUST NOT synthesize a fresh `rs_...` identifier solely because the URP node originated from a different protocol family. This rule is required because OpenAI Responses `encrypted_content` is cryptographically bound to the reasoning item `id`, and regenerating the id invalidates the signature.
 
 PM6. Monoize MUST convert Messages streaming deltas into canonical URP v2 stream events.
+
+PM6a. For Messages streaming, unknown `content_block_start.content_block` block types MUST decode as `ProviderItem(origin_protocol = "messages")`. Downstream Messages stream encoding MUST emit a ProviderItem content-block lifecycle only for same-protocol ProviderItems.
 
 PM7. Messages `tool_choice` normalization:
 
@@ -880,6 +917,8 @@ PG6. Monoize MUST map Gemini usage metadata to URP usage fields using:
 - `rejectedPredictionOutputTokenCount -> output_details.rejected_prediction_tokens` when present
 
 PG7. Monoize MUST preserve unknown Gemini request and response fields in URP v2 passthrough state according to §3 and §7.6.
+
+PG8. Unknown Gemini `parts[]` entries MUST decode as `ProviderItem(origin_protocol = "gemini")`. A Gemini encoder MUST replay such parts only when the target provider protocol is `gemini`.
 
 ### 7.6 Extra field forwarding
 
@@ -1143,13 +1182,15 @@ DMO3. The response body MUST be JSON with the shape:
 }
 ```
 
-DMO4. `data` MUST contain the set union of logical model keys across all configured providers.
+DMO4. `data` MUST contain only logical model keys for which at least one enabled provider has at least one channel where `enabled == true`, `weight > 0`, and `supported_models` contains the logical model.
 
 DMO5. If a logical model key appears in two or more providers, `data` MUST include exactly one item for that key.
 
 DMO6. `data` MUST be sorted by `id` in ascending lexicographic order.
 
-DMO7. If the authenticated API key has `model_limits_enabled = true` and `model_limits` is non-empty, Monoize MUST filter `data` to include only models whose `id` is present in the `model_limits` list. If `model_limits_enabled` is false or `model_limits` is empty, no filtering is applied.
+DMO7. Runtime health state MUST NOT affect `GET /v1/models`.
+
+DMO8. If the authenticated API key has `model_limits_enabled = true` and `model_limits` is non-empty, Monoize MUST filter `data` to include only models whose `id` is present in the `model_limits` list. If `model_limits_enabled` is false or `model_limits` is empty, no filtering is applied.
 
 ## 8. Streaming requirements, Responses downstream
 

@@ -125,7 +125,7 @@ impl Default for NodeGreedyMerger {
 #[cfg(test)]
 mod tests {
     use super::{NodeAction, NodeGreedyMerger};
-    use crate::urp::{Node, OrdinaryRole};
+    use crate::urp::{Node, OrdinaryRole, ProviderProtocol};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -303,6 +303,7 @@ mod tests {
     fn provider_item() -> Node {
         Node::ProviderItem {
             id: None,
+            origin_protocol: ProviderProtocol::Responses,
             role: OrdinaryRole::Assistant,
             item_type: "raw".to_owned(),
             body: json!({"ok": true}),

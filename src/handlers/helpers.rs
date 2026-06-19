@@ -345,10 +345,82 @@ pub(crate) fn typed_request_to_legacy(
     parse_urp_request(&encoded, extra)
 }
 
+fn affinity_value_from_json(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            value
+                .as_i64()
+                .map(|v| v.to_string())
+                .or_else(|| value.as_u64().map(|v| v.to_string()))
+        })
+}
+
+fn stable_affinity_field(req: &urp::UrpRequest) -> Option<String> {
+    if let Some(user) = req.user.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        return Some(format!("user:{user}"));
+    }
+    const KEYS: &[&str] = &[
+        "session_id",
+        "session",
+        "conversation_id",
+        "conversation",
+        "thread_id",
+        "thread",
+        "user_id",
+        "user",
+    ];
+    for key in KEYS {
+        if *key == "request_id" {
+            continue;
+        }
+        if let Some(value) = req.extra_body.get(*key).and_then(affinity_value_from_json) {
+            return Some(format!("{key}:{value}"));
+        }
+    }
+    if let Some(metadata) = req.extra_body.get("metadata").and_then(Value::as_object) {
+        for key in KEYS {
+            if *key == "request_id" {
+                continue;
+            }
+            if let Some(value) = metadata.get(*key).and_then(affinity_value_from_json) {
+                return Some(format!("metadata.{key}:{value}"));
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn short_xxh3_hex(input: &str) -> String {
+    format!("{:016x}", xxhash_rust::xxh3::xxh3_64(input.as_bytes()))
+}
+
+fn truncate_utf8_bytes(input: &str, max_bytes: usize) -> &str {
+    if input.len() <= max_bytes {
+        return input;
+    }
+    let mut end = max_bytes;
+    while !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    &input[..end]
+}
+
+fn affinity_prefix_hash(req: &urp::UrpRequest) -> String {
+    let prefix_nodes: Vec<&urp::Node> = req.input.iter().take(8).collect();
+    let material = serde_json::to_string(&prefix_nodes).unwrap_or_default();
+    short_xxh3_hex(truncate_utf8_bytes(&material, 16 * 1024))
+}
+
 pub(super) fn build_routing_stub(req: &urp::UrpRequest, max_multiplier: Option<f64>) -> UrpRequest {
     UrpRequest {
         model: req.model.clone(),
         max_multiplier,
+        affinity_explicit: stable_affinity_field(req),
+        affinity_prefix_hash: affinity_prefix_hash(req),
     }
 }
 
@@ -359,6 +431,8 @@ pub(super) fn build_embeddings_routing_stub(
     UrpRequest {
         model: model.to_string(),
         max_multiplier,
+        affinity_explicit: None,
+        affinity_prefix_hash: short_xxh3_hex(model),
     }
 }
 

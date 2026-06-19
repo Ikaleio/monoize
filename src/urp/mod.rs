@@ -323,6 +323,30 @@ pub fn synthetic_provider_item_id() -> String {
     format!("pi_urp_{}", uuid::Uuid::new_v4().simple())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderProtocol {
+    Responses,
+    ChatCompletion,
+    Messages,
+    Gemini,
+    OpenaiImage,
+    Replicate,
+}
+
+impl ProviderProtocol {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProviderProtocol::Responses => "responses",
+            ProviderProtocol::ChatCompletion => "chat_completion",
+            ProviderProtocol::Messages => "messages",
+            ProviderProtocol::Gemini => "gemini",
+            ProviderProtocol::OpenaiImage => "openai_image",
+            ProviderProtocol::Replicate => "replicate",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpRequest {
     pub model: String,
@@ -422,6 +446,7 @@ pub enum Node {
     ProviderItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        origin_protocol: ProviderProtocol,
         role: OrdinaryRole,
         item_type: String,
         body: Value,
@@ -770,6 +795,7 @@ pub enum NodeHeader {
     ProviderItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        origin_protocol: ProviderProtocol,
         role: OrdinaryRole,
         item_type: String,
     },
@@ -932,10 +958,21 @@ pub fn nodes_semantically_match(left: &Node, right: &Node) -> bool {
         ) => (left_id.is_some() && left_id == right_id) || left_source == right_source,
         (Node::Audio { id: left_id, .. }, Node::Audio { id: right_id, .. })
         | (Node::File { id: left_id, .. }, Node::File { id: right_id, .. })
-        | (Node::Refusal { id: left_id, .. }, Node::Refusal { id: right_id, .. })
-        | (Node::ProviderItem { id: left_id, .. }, Node::ProviderItem { id: right_id, .. }) => {
+        | (Node::Refusal { id: left_id, .. }, Node::Refusal { id: right_id, .. }) => {
             left_id.is_some() && left_id == right_id
         }
+        (
+            Node::ProviderItem {
+                id: left_id,
+                origin_protocol: left_origin,
+                ..
+            },
+            Node::ProviderItem {
+                id: right_id,
+                origin_protocol: right_origin,
+                ..
+            },
+        ) => left_origin == right_origin && left_id.is_some() && left_id == right_id,
         (
             Node::Reasoning {
                 id: left_id,
@@ -1017,6 +1054,18 @@ pub fn strip_nested_extra_body(nodes: &mut Vec<Node>) {
         }
     }
     nodes.retain(|node| !matches!(node, Node::NextDownstreamEnvelopeExtra { .. }));
+}
+
+pub fn retain_provider_items_for_protocol(nodes: &mut Vec<Node>, target: ProviderProtocol) {
+    nodes.retain(|node| {
+        !matches!(
+            node,
+            Node::ProviderItem {
+                origin_protocol,
+                ..
+            } if *origin_protocol != target
+        )
+    });
 }
 
 #[cfg(test)]

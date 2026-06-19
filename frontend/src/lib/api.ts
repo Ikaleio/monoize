@@ -181,6 +181,7 @@ export interface MonoizeModelEntry {
 export interface MonoizeChannel {
   id: string;
   name: string;
+  provider_type: ProviderType;
   base_url: string;
   weight: number;
   enabled: boolean;
@@ -188,6 +189,11 @@ export interface MonoizeChannel {
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
   passive_rate_limit_cooldown_seconds_override?: number | null;
+  supported_models: string[];
+  active_probe_enabled_override?: boolean | null;
+  active_probe_interval_seconds_override?: number | null;
+  active_probe_success_threshold_override?: number | null;
+  active_probe_model_override?: string | null;
   _healthy?: boolean;
   _last_success_at?: string;
   _health_status?: "healthy" | "probing" | "unhealthy";
@@ -202,7 +208,6 @@ export interface ApiTypeOverride {
 export interface Provider {
   id: string;
   name: string;
-  provider_type: ProviderType;
   models: Record<string, MonoizeModelEntry>;
   channels: MonoizeChannel[];
   max_retries: number;
@@ -230,6 +235,7 @@ export interface Provider {
 export interface CreateMonoizeChannelInput {
   id?: string;
   name: string;
+  provider_type: ProviderType;
   base_url: string;
   api_key?: string;
   weight?: number;
@@ -238,11 +244,15 @@ export interface CreateMonoizeChannelInput {
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
   passive_rate_limit_cooldown_seconds_override?: number | null;
+  supported_models?: string[];
+  active_probe_enabled_override?: boolean | null;
+  active_probe_interval_seconds_override?: number | null;
+  active_probe_success_threshold_override?: number | null;
+  active_probe_model_override?: string | null;
 }
 
 export interface CreateProviderInput {
   name: string;
-  provider_type: ProviderType;
   models: Record<string, MonoizeModelEntry>;
   channels: CreateMonoizeChannelInput[];
   max_retries?: number;
@@ -266,7 +276,6 @@ export interface CreateProviderInput {
 
 export interface UpdateProviderInput {
   name?: string;
-  provider_type?: ProviderType;
   models?: Record<string, MonoizeModelEntry>;
   channels?: CreateMonoizeChannelInput[];
   max_retries?: number;
@@ -373,6 +382,12 @@ export interface RequestLogError {
   http_status?: number;
 }
 
+export interface RequestLogAffinity {
+  hit?: boolean;
+  key_hash?: string;
+  target?: string;
+}
+
 export interface RequestLog {
   id: string;
   request_id?: string;
@@ -381,12 +396,14 @@ export interface RequestLog {
   is_stream: boolean;
   model: string;
   upstream_model?: string;
+  effective_provider_type?: string;
   request_kind?: string;
   reasoning_effort?: string;
   request_ip?: string;
   tried_providers?: Array<{ provider_id: string; channel_id: string; error: string }>;
   provider: RequestLogProvider;
   channel: RequestLogChannel;
+  affinity?: RequestLogAffinity;
   user: RequestLogUser;
   api_key: RequestLogApiKey;
   tokens: RequestLogTokens;
@@ -702,22 +719,12 @@ class ApiClient {
     });
   }
 
-  async fetchProviderModels(providerId: string): Promise<{
-    provider_id: string;
-    provider_name: string;
-    models: string[];
-  }> {
-    return this.request(`/providers/${providerId}/fetch-models`, {
-      method: "POST",
-    });
-  }
-
-  async fetchChannelModels(baseUrl: string, apiKey: string): Promise<{
+  async fetchChannelModels(providerType: ProviderType, baseUrl: string, apiKey: string): Promise<{
     models: string[];
   }> {
     return this.request("/fetch-channel-models", {
       method: "POST",
-      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+      body: JSON.stringify({ provider_type: providerType, base_url: baseUrl, api_key: apiKey }),
     });
   }
 

@@ -72,6 +72,7 @@ pub struct MonoizeModelEntry {
 pub struct MonoizeChannel {
     pub id: String,
     pub name: String,
+    pub provider_type: MonoizeProviderType,
     pub base_url: String,
     #[serde(skip_serializing)]
     pub api_key: String,
@@ -87,6 +88,16 @@ pub struct MonoizeChannel {
     pub passive_window_seconds_override: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
+    #[serde(default)]
+    pub supported_models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_probe_enabled_override: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_probe_interval_seconds_override: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_probe_success_threshold_override: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_probe_model_override: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _healthy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,7 +110,6 @@ pub struct MonoizeChannel {
 pub struct MonoizeProvider {
     pub id: String,
     pub name: String,
-    pub provider_type: MonoizeProviderType,
     pub models: HashMap<String, MonoizeModelEntry>,
     pub channels: Vec<MonoizeChannel>,
     pub max_retries: i32,
@@ -129,9 +139,11 @@ pub struct MonoizeProvider {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateMonoizeChannelInput {
     pub id: Option<String>,
     pub name: String,
+    pub provider_type: MonoizeProviderType,
     pub base_url: String,
     #[serde(default)]
     pub api_key: Option<String>,
@@ -147,12 +159,18 @@ pub struct CreateMonoizeChannelInput {
     pub passive_window_seconds_override: Option<u64>,
     #[serde(default)]
     pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
+    #[serde(default)]
+    pub supported_models: Vec<String>,
+    pub active_probe_enabled_override: Option<bool>,
+    pub active_probe_interval_seconds_override: Option<u64>,
+    pub active_probe_success_threshold_override: Option<u32>,
+    pub active_probe_model_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateMonoizeProviderInput {
     pub name: String,
-    pub provider_type: MonoizeProviderType,
     pub models: HashMap<String, MonoizeModelEntry>,
     pub channels: Vec<CreateMonoizeChannelInput>,
     #[serde(default = "default_max_retries")]
@@ -186,9 +204,9 @@ pub struct CreateMonoizeProviderInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateMonoizeProviderInput {
     pub name: Option<String>,
-    pub provider_type: Option<MonoizeProviderType>,
     pub models: Option<HashMap<String, MonoizeModelEntry>>,
     pub channels: Option<Vec<CreateMonoizeChannelInput>>,
     pub max_retries: Option<i32>,
@@ -275,6 +293,15 @@ pub struct ChannelHealthState {
     pub last_probe_at: Option<i64>,
     pub passive_samples: VecDeque<PassiveHealthSample>,
 }
+
+#[derive(Debug, Clone)]
+pub struct ChannelAffinityBinding {
+    pub provider_id: String,
+    pub channel_id: String,
+    pub updated_at: i64,
+}
+
+pub const CHANNEL_AFFINITY_IDLE_TTL_SECONDS: i64 = 30 * 60;
 
 impl ChannelHealthState {
     pub fn new() -> Self {
@@ -397,7 +424,7 @@ impl MonoizeRoutingStore {
             .db
             .read()
             .query_all(self.db.stmt(
-                r#"SELECT id, name, provider_type, max_retries, channel_max_retries,
+                r#"SELECT id, name, max_retries, channel_max_retries,
                           channel_retry_interval_ms, circuit_breaker_enabled,
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
@@ -436,7 +463,7 @@ impl MonoizeRoutingStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                r#"SELECT id, name, provider_type, max_retries, channel_max_retries,
+                r#"SELECT id, name, max_retries, channel_max_retries,
                           channel_retry_interval_ms, circuit_breaker_enabled,
                           per_model_circuit_break, transforms, api_type_overrides,
                           active_probe_enabled_override, active_probe_interval_seconds_override,
@@ -533,7 +560,7 @@ impl MonoizeRoutingStore {
             .await
             .execute(self.db.stmt(
                 r#"INSERT INTO monoize_providers (
-                        id, name, provider_type, max_retries, channel_max_retries,
+                        id, name, max_retries, channel_max_retries,
                         channel_retry_interval_ms, circuit_breaker_enabled,
                         per_model_circuit_break, transforms, api_type_overrides,
                         active_probe_enabled_override, active_probe_interval_seconds_override,
@@ -541,11 +568,10 @@ impl MonoizeRoutingStore {
                         request_timeout_ms_override, extra_fields_whitelist,
                         strip_cross_protocol_nested_extra, groups,
                         enabled, priority, created_at, updated_at
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)"#,
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
                 vec![
                         id.clone().into(),
                         input.name.clone().into(),
-                        input.provider_type.as_str().into(),
                         SeaValue::Int(Some(input.max_retries)),
                         SeaValue::Int(Some(input.channel_max_retries)),
                         SeaValue::Int(Some(input.channel_retry_interval_ms)),
@@ -595,8 +621,9 @@ impl MonoizeRoutingStore {
         if let Some(models) = &input.models {
             validate_models(models)?;
         }
+        let models_for_validation = input.models.as_ref().unwrap_or(&existing.models);
         if let Some(channels) = &input.channels {
-            validate_channels(channels, false)?;
+            validate_channels(channels, false, models_for_validation)?;
         }
         if let Some(Some(v)) = input.active_probe_interval_seconds_override {
             if !(1..=i32::MAX as u64).contains(&v) {
@@ -628,7 +655,6 @@ impl MonoizeRoutingStore {
         }
 
         let name = input.name.unwrap_or(existing.name.clone());
-        let provider_type = input.provider_type.unwrap_or(existing.provider_type);
         let max_retries = input.max_retries.unwrap_or(existing.max_retries);
         let channel_max_retries = input
             .channel_max_retries
@@ -687,25 +713,24 @@ impl MonoizeRoutingStore {
 
         txn.execute(self.db.stmt(
             r#"UPDATE monoize_providers
-                   SET name = $1, provider_type = $2, max_retries = $3,
-                       channel_max_retries = $4,
-                       channel_retry_interval_ms = $5,
-                       circuit_breaker_enabled = $6,
-                       per_model_circuit_break = $7,
-                       transforms = $8, api_type_overrides = $9,
-                       active_probe_enabled_override = $10,
-                       active_probe_interval_seconds_override = $11,
-                       active_probe_success_threshold_override = $12,
-                       active_probe_model_override = $13,
-                       request_timeout_ms_override = $14,
-                       extra_fields_whitelist = $15,
-                       strip_cross_protocol_nested_extra = $16,
-                       groups = $17,
-                       enabled = $18, priority = $19, updated_at = $20
-                   WHERE id = $21"#,
+                   SET name = $1, max_retries = $2,
+                       channel_max_retries = $3,
+                       channel_retry_interval_ms = $4,
+                       circuit_breaker_enabled = $5,
+                       per_model_circuit_break = $6,
+                       transforms = $7, api_type_overrides = $8,
+                       active_probe_enabled_override = $9,
+                       active_probe_interval_seconds_override = $10,
+                       active_probe_success_threshold_override = $11,
+                       active_probe_model_override = $12,
+                       request_timeout_ms_override = $13,
+                       extra_fields_whitelist = $14,
+                       strip_cross_protocol_nested_extra = $15,
+                       groups = $16,
+                       enabled = $17, priority = $18, updated_at = $19
+                   WHERE id = $20"#,
             vec![
                 name.into(),
-                provider_type.as_str().into(),
                 SeaValue::Int(Some(max_retries)),
                 SeaValue::Int(Some(channel_max_retries)),
                 SeaValue::Int(Some(channel_retry_interval_ms)),
@@ -844,6 +869,18 @@ impl MonoizeRoutingStore {
             .await
             .map_err(|e| e.to_string())?;
         }
+        conn.execute(self.db.stmt(
+            r#"DELETE FROM monoize_channel_models
+               WHERE channel_id IN (
+                   SELECT id FROM monoize_channels WHERE provider_id = $1
+               )
+               AND model_name NOT IN (
+                   SELECT model_name FROM monoize_provider_models WHERE provider_id = $1
+               )"#,
+            vec![provider_id.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -864,11 +901,7 @@ impl MonoizeRoutingStore {
     ) -> Result<(), String> {
         let existing_rows = conn
             .query_all(self.db.stmt(
-                "SELECT id, api_key,
-                        passive_failure_count_threshold_override,
-                        passive_cooldown_seconds_override,
-                        passive_window_seconds_override,
-                        passive_rate_limit_cooldown_seconds_override
+                "SELECT id, api_key
                  FROM monoize_channels
                  WHERE provider_id = $1",
                 vec![provider_id.into()],
@@ -879,10 +912,6 @@ impl MonoizeRoutingStore {
         #[derive(Clone)]
         struct ExistingChannel {
             api_key: String,
-            passive_failure_count_threshold_override: Option<u32>,
-            passive_cooldown_seconds_override: Option<u64>,
-            passive_window_seconds_override: Option<u64>,
-            passive_rate_limit_cooldown_seconds_override: Option<u64>,
         }
         let mut existing_channels: HashMap<String, ExistingChannel> = HashMap::new();
         for row in &existing_rows {
@@ -891,50 +920,6 @@ impl MonoizeRoutingStore {
                 id,
                 ExistingChannel {
                     api_key: row.try_get("", "api_key").map_err(|e| e.to_string())?,
-                    passive_failure_count_threshold_override: row
-                        .try_get::<Option<i32>>("", "passive_failure_count_threshold_override")
-                        .map_err(|e| e.to_string())?
-                        .map(|v| {
-                            decode_positive_u32(
-                                provider_id,
-                                "passive_failure_count_threshold_override",
-                                i64::from(v),
-                            )
-                        })
-                        .transpose()?,
-                    passive_cooldown_seconds_override: row
-                        .try_get::<Option<i32>>("", "passive_cooldown_seconds_override")
-                        .map_err(|e| e.to_string())?
-                        .map(|v| {
-                            decode_positive_u64(
-                                provider_id,
-                                "passive_cooldown_seconds_override",
-                                i64::from(v),
-                            )
-                        })
-                        .transpose()?,
-                    passive_window_seconds_override: row
-                        .try_get::<Option<i32>>("", "passive_window_seconds_override")
-                        .map_err(|e| e.to_string())?
-                        .map(|v| {
-                            decode_positive_u64(
-                                provider_id,
-                                "passive_window_seconds_override",
-                                i64::from(v),
-                            )
-                        })
-                        .transpose()?,
-                    passive_rate_limit_cooldown_seconds_override: row
-                        .try_get::<Option<i32>>("", "passive_rate_limit_cooldown_seconds_override")
-                        .map_err(|e| e.to_string())?
-                        .map(|v| {
-                            decode_positive_u64(
-                                provider_id,
-                                "passive_rate_limit_cooldown_seconds_override",
-                                i64::from(v),
-                            )
-                        })
-                        .transpose()?,
                 },
             );
         }
@@ -964,61 +949,65 @@ impl MonoizeRoutingStore {
                         )
                     })?,
             };
-            let existing = existing_channels.get(&id);
-            let passive_failure_count_threshold_override = input
-                .passive_failure_count_threshold_override
-                .or_else(|| existing.and_then(|c| c.passive_failure_count_threshold_override));
-            let passive_cooldown_seconds_override = input
-                .passive_cooldown_seconds_override
-                .or_else(|| existing.and_then(|c| c.passive_cooldown_seconds_override));
-            let passive_window_seconds_override = input
-                .passive_window_seconds_override
-                .or_else(|| existing.and_then(|c| c.passive_window_seconds_override));
-            let passive_rate_limit_cooldown_seconds_override = input
-                .passive_rate_limit_cooldown_seconds_override
-                .or_else(|| existing.and_then(|c| c.passive_rate_limit_cooldown_seconds_override));
-
             let now_str = Utc::now().to_rfc3339();
+            let supported_models = canonicalize_supported_models(&input.supported_models);
 
             conn.execute(self.db.stmt(
                     r#"INSERT INTO monoize_channels
-                       (id, provider_id, name, base_url, api_key, weight, enabled,
+                       (id, provider_id, name, provider_type, base_url, api_key, weight, enabled,
                           passive_failure_count_threshold_override, passive_cooldown_seconds_override,
                           passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override,
+                          active_probe_enabled_override, active_probe_interval_seconds_override,
+                          active_probe_success_threshold_override, active_probe_model_override,
                           created_at, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)"#,
                     vec![
-                        id.into(),
+                        id.clone().into(),
                         provider_id.into(),
                         input.name.as_str().into(),
+                        input.provider_type.as_str().into(),
                         input.base_url.as_str().into(),
                         api_key.into(),
                         SeaValue::Int(Some(input.weight)),
                         SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
                         opt_u64_to_value(
-                            passive_failure_count_threshold_override.map(|v| v as u64),
+                            input.passive_failure_count_threshold_override.map(|v| v as u64),
                         ),
-                        opt_u64_to_value(passive_cooldown_seconds_override),
-                        opt_u64_to_value(passive_window_seconds_override),
-                        opt_u64_to_value(passive_rate_limit_cooldown_seconds_override),
+                        opt_u64_to_value(input.passive_cooldown_seconds_override),
+                        opt_u64_to_value(input.passive_window_seconds_override),
+                        opt_u64_to_value(input.passive_rate_limit_cooldown_seconds_override),
+                        opt_bool_to_value(input.active_probe_enabled_override),
+                        opt_u64_to_value(input.active_probe_interval_seconds_override),
+                        opt_u64_to_value(input.active_probe_success_threshold_override.map(|v| v as u64)),
+                        input.active_probe_model_override.clone().into(),
                         now_str.clone().into(),
                         now_str.into(),
                     ],
                 ))
                 .await
                 .map_err(|e| e.to_string())?;
+
+            for model in supported_models {
+                conn.execute(self.db.stmt(
+                    r#"INSERT INTO monoize_channel_models
+                       (id, channel_id, model_name, created_at)
+                       VALUES ($1, $2, $3, $4)"#,
+                    vec![
+                        format!("mono_ch_model_{}", uuid::Uuid::new_v4().simple()).into(),
+                        id.clone().into(),
+                        model.into(),
+                        Utc::now().to_rfc3339().into(),
+                    ],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            }
         }
         Ok(())
     }
 
     async fn row_to_provider(&self, row: &QueryResult) -> Result<MonoizeProvider, String> {
         let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-        let provider_type_raw: String = row
-            .try_get("", "provider_type")
-            .map_err(|e| e.to_string())?;
-        let provider_type = MonoizeProviderType::from_str(&provider_type_raw)
-            .ok_or_else(|| format!("invalid provider type: {provider_type_raw}"))?;
-
         let model_rows = self
             .db
             .read()
@@ -1050,10 +1039,15 @@ impl MonoizeRoutingStore {
             .read()
             .query_all(self.db.stmt(
                 r#"SELECT id, name, base_url, api_key, weight, enabled,
+                          provider_type,
                           passive_failure_count_threshold_override,
                           passive_cooldown_seconds_override,
                           passive_window_seconds_override,
-                          passive_rate_limit_cooldown_seconds_override
+                          passive_rate_limit_cooldown_seconds_override,
+                          active_probe_enabled_override,
+                          active_probe_interval_seconds_override,
+                          active_probe_success_threshold_override,
+                          active_probe_model_override
                    FROM monoize_channels
                    WHERE provider_id = $1
                    ORDER BY created_at ASC"#,
@@ -1064,9 +1058,32 @@ impl MonoizeRoutingStore {
 
         let mut channels = Vec::new();
         for cr in &channel_rows {
+            let channel_id: String = cr.try_get("", "id").map_err(|e| e.to_string())?;
+            let provider_type_raw: String = cr
+                .try_get("", "provider_type")
+                .map_err(|e| format!("channel {channel_id} missing provider_type: {e}"))?;
+            let provider_type = MonoizeProviderType::from_str(&provider_type_raw)
+                .ok_or_else(|| format!("channel {channel_id} invalid provider type: {provider_type_raw}"))?;
+            let supported_rows = self
+                .db
+                .read()
+                .query_all(self.db.stmt(
+                    r#"SELECT model_name
+                       FROM monoize_channel_models
+                       WHERE channel_id = $1
+                       ORDER BY model_name ASC"#,
+                    vec![channel_id.clone().into()],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            let supported_models = supported_rows
+                .iter()
+                .filter_map(|row| row.try_get::<String>("", "model_name").ok())
+                .collect();
             channels.push(MonoizeChannel {
-                id: cr.try_get("", "id").map_err(|e| e.to_string())?,
+                id: channel_id.clone(),
                 name: cr.try_get("", "name").map_err(|e| e.to_string())?,
+                provider_type,
                 base_url: cr.try_get("", "base_url").map_err(|e| e.to_string())?,
                 api_key: cr.try_get("", "api_key").map_err(|e| e.to_string())?,
                 weight: cr.try_get("", "weight").map_err(|e| e.to_string())?,
@@ -1110,6 +1127,28 @@ impl MonoizeRoutingStore {
                         )
                     })
                     .transpose()?,
+                supported_models,
+                active_probe_enabled_override: cr
+                    .try_get::<Option<i32>>("", "active_probe_enabled_override")
+                    .map_err(|e| format!("channel {channel_id} invalid active_probe_enabled_override: {e}"))?
+                    .map(|v| v != 0),
+                active_probe_interval_seconds_override: cr
+                    .try_get::<Option<i32>>("", "active_probe_interval_seconds_override")
+                    .map_err(|e| format!("channel {channel_id} invalid active_probe_interval_seconds_override: {e}"))?
+                    .map(|v| {
+                        decode_positive_u64(&channel_id, "active_probe_interval_seconds_override", i64::from(v))
+                    })
+                    .transpose()?,
+                active_probe_success_threshold_override: cr
+                    .try_get::<Option<i32>>("", "active_probe_success_threshold_override")
+                    .map_err(|e| format!("channel {channel_id} invalid active_probe_success_threshold_override: {e}"))?
+                    .map(|v| {
+                        decode_positive_u32(&channel_id, "active_probe_success_threshold_override", i64::from(v))
+                    })
+                    .transpose()?,
+                active_probe_model_override: cr
+                    .try_get("", "active_probe_model_override")
+                    .map_err(|e| format!("channel {channel_id} invalid active_probe_model_override: {e}"))?,
                 _healthy: None,
                 _last_success_at: None,
                 _health_status: None,
@@ -1177,7 +1216,6 @@ impl MonoizeRoutingStore {
         Ok(MonoizeProvider {
             id: id.clone(),
             name: row.try_get("", "name").map_err(|e| e.to_string())?,
-            provider_type,
             models,
             channels,
             max_retries: row.try_get("", "max_retries").map_err(|e| e.to_string())?,
@@ -1248,6 +1286,18 @@ fn decode_positive_u64(provider_id: &str, field: &str, value: i64) -> Result<u64
         .ok_or_else(|| format!("provider {provider_id} invalid {field}: must be >= 1"))
 }
 
+fn canonicalize_supported_models(models: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = models
+        .iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    out.sort();
+    out
+}
+
 fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), String> {
     if models.is_empty() {
         return Err("models must not be empty".to_string());
@@ -1256,8 +1306,8 @@ fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), St
         if model.trim().is_empty() {
             return Err("model key must not be empty".to_string());
         }
-        if !(entry.multiplier.is_finite() && entry.multiplier >= 0.0) {
-            return Err("model multiplier must be >= 0".to_string());
+        if !(entry.multiplier.is_finite() && entry.multiplier > 0.0) {
+            return Err("model multiplier must be > 0".to_string());
         }
     }
     Ok(())
@@ -1266,6 +1316,7 @@ fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), St
 fn validate_channels(
     channels: &[CreateMonoizeChannelInput],
     require_api_key: bool,
+    models: &HashMap<String, MonoizeModelEntry>,
 ) -> Result<(), String> {
     if channels.is_empty() {
         return Err("channels must not be empty".to_string());
@@ -1317,6 +1368,39 @@ fn validate_channels(
                 );
             }
         }
+        if let Some(v) = c.active_probe_interval_seconds_override {
+            if !(1..=i32::MAX as u64).contains(&v) {
+                return Err(
+                    "channel active_probe_interval_seconds_override must be between 1 and 2147483647".to_string(),
+                );
+            }
+        }
+        if let Some(v) = c.active_probe_success_threshold_override {
+            if !(1..=i32::MAX as u32).contains(&v) {
+                return Err(
+                    "channel active_probe_success_threshold_override must be between 1 and 2147483647".to_string(),
+                );
+            }
+        }
+        let mut supported_seen = HashSet::new();
+        for model in &c.supported_models {
+            let model = model.trim();
+            if model.is_empty() {
+                return Err("channel supported_models entries must not be empty".to_string());
+            }
+            if !models.contains_key(model) {
+                return Err(format!(
+                    "channel '{}' supports model '{}' that is not defined by provider",
+                    c.name, model
+                ));
+            }
+            if !supported_seen.insert(model.to_string()) {
+                return Err(format!(
+                    "channel '{}' has duplicate supported model '{}'",
+                    c.name, model
+                ));
+            }
+        }
         if let Some(id) = &c.id {
             if !ids.insert(id.clone()) {
                 return Err("duplicate channel id".to_string());
@@ -1336,7 +1420,7 @@ fn validate_provider_input(
         return Err("provider name must not be empty".to_string());
     }
     validate_models(models)?;
-    validate_channels(channels, true)?;
+    validate_channels(channels, true, models)?;
     validate_api_type_overrides(api_type_overrides)?;
     Ok(())
 }

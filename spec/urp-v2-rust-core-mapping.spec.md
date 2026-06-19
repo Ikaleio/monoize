@@ -160,6 +160,7 @@ Node =
       extra_body: HashMap<String, JsonValue>
     }
   | ProviderItem {
+      origin_protocol: ProviderProtocol,
       role: OrdinaryRole,
       item_type: String,
       body: JsonValue,
@@ -177,6 +178,8 @@ Node =
 ```
 
 RTYPE-6. `OrdinaryRole` in the Rust core layer MUST contain exactly `System`, `Developer`, `User`, and `Assistant`.
+
+RTYPE-6a. `ProviderProtocol` in the Rust core layer MUST contain exactly `Responses`, `ChatCompletion`, `Messages`, `Gemini`, `OpenaiImage`, and `Replicate`, serialized as `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, and `replicate`.
 
 RTYPE-7. The Rust core role enum MUST NOT contain `Tool`.
 
@@ -235,7 +238,7 @@ MAP-5. Any legacy grouped-part concept translates to the corresponding flat node
 | refusal part | `Node::Refusal` with `role = OrdinaryRole::Assistant` |
 | reasoning part | `Node::Reasoning` with `role = OrdinaryRole::Assistant` |
 | tool-call part | `Node::ToolCall` with `role = OrdinaryRole::Assistant` |
-| provider-item part | `Node::ProviderItem` with copied `role` |
+| provider-item part | `Node::ProviderItem` with copied `role` and copied `origin_protocol` |
 
 MAP-6. The legacy grouped role `Role::Tool` has no flat canonical target. Any tool-result semantics MUST be represented only as top-level `Node::ToolResult`.
 
@@ -281,6 +284,8 @@ NH-4. Ordinary-node helper code MUST treat source order in `Vec<Node>` as canoni
 NH-5. `Refusal`, `Reasoning`, and `ToolCall` MUST always behave as assistant-role ordinary nodes. Helpers MUST NOT accept any other role for those variants.
 
 NH-6. `Text.phase` is node-local metadata. A helper MAY read it only from `Node::Text` and MUST NOT synthesize a message-level phase cache that becomes canonical state.
+
+NH-6a. `ProviderItem.origin_protocol` is typed node state. Shared helpers MUST preserve it when converting through legacy grouped helper forms and MUST NOT infer it from role, model name, or provider family.
 
 ### 3.2 Top-level `ToolResult`
 
@@ -345,6 +350,8 @@ NH-31. Shared decode helpers MUST assign request tool-definition unknown fields 
 
 NH-32. Shared encode helpers MUST consume request tool-definition unknown fields from the ownership layer that matches the target wire object being emitted. A helper MUST NOT read provider-native built-in config from top-level request `extra_body` when that config belongs to one `ToolDefinition.extra_body`.
 
+NH-33. The Rust core layer MUST provide a helper that removes every `Node::ProviderItem` from a `Vec<Node>` unless its `origin_protocol` exactly equals the selected target `ProviderProtocol`. This helper MUST leave all non-ProviderItem nodes unchanged.
+
 ## 4. Deterministic encoder grouping invariants
 
 ### 4.1 General grouping contract
@@ -386,6 +393,8 @@ EGR-10. `MessageCompatibleOrdinary` means only that the node is eligible for fam
 EGR-11. `StandaloneOrdinary` means the generic grouping helper MUST start a fresh family-specific branch for that node kind instead of merging it into the current `MessageCompatibleOrdinary` run.
 
 EGR-12. `ProviderItem` MUST be treated as `StandaloneOrdinary` by shared generic grouping helpers. A family-specific adapter MAY consume a provider item through a dedicated branch, but generic same-role message grouping MUST NOT absorb it.
+
+EGR-12a. A family-specific adapter MAY consume `ProviderItem` only when `origin_protocol` exactly equals that adapter's target `ProviderProtocol`. A mismatched `ProviderItem` MUST be ignored and MUST NOT be converted to text, JSON text, or any other typed node.
 
 ### 4.3 Family-specific grouping rules
 

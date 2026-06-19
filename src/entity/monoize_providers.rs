@@ -8,8 +8,6 @@ pub struct Model {
     pub id: String,
     #[sea_orm(column_type = "Text")]
     pub name: String,
-    #[sea_orm(column_type = "Text")]
-    pub provider_type: String,
     pub max_retries: i32,
     pub channel_max_retries: i32,
     pub channel_retry_interval_ms: i32,

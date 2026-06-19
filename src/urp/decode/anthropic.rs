@@ -4,9 +4,9 @@ use crate::urp::decode::{
     value_to_text,
 };
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest,
-    UrpResponse, Usage, unwrap_reasoning_signature_sigil,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
+    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage, unwrap_reasoning_signature_sigil,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -253,11 +253,9 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                         }
                     }
                     _ => {
-                        input_nodes.push(text_node_with_phase(
+                        input_nodes.push(provider_item_from_messages_block(
+                            bobj,
                             OrdinaryRole::System,
-                            serde_json::to_string(block).unwrap_or_default(),
-                            None,
-                            HashMap::new(),
                         ));
                     }
                 }
@@ -377,12 +375,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                         }
                     }
                     _ => {
-                        message_nodes.push(text_node_with_phase(
-                            base_role,
-                            serde_json::to_string(block).unwrap_or_default(),
-                            None,
-                            HashMap::new(),
-                        ));
+                        message_nodes.push(provider_item_from_messages_block(bobj, base_role));
                     }
                 }
             }
@@ -564,11 +557,9 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                     .into_iter()
                     .collect(),
                 _ => {
-                    vec![text_node_with_phase(
+                    vec![provider_item_from_messages_block(
+                        bobj,
                         OrdinaryRole::Assistant,
-                        serde_json::to_string(block).unwrap_or_default(),
-                        None,
-                        HashMap::new(),
                     )]
                 }
             };
@@ -618,6 +609,26 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             ],
         ),
     })
+}
+
+fn provider_item_from_messages_block(block: &Map<String, Value>, role: OrdinaryRole) -> Node {
+    let item_type = block
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Node::ProviderItem {
+        id: block
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+        origin_protocol: ProviderProtocol::Messages,
+        role,
+        item_type,
+        body: Value::Object(block.clone()),
+        extra_body: HashMap::new(),
+    }
 }
 
 fn tool_choice_from_messages_value(v: Value) -> ToolChoice {

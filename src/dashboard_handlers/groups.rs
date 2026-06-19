@@ -136,7 +136,6 @@ mod tests {
             .monoize_store
             .create_provider(crate::monoize_routing::CreateMonoizeProviderInput {
                 name: "provider".to_string(),
-                provider_type: crate::monoize_routing::MonoizeProviderType::Responses,
                 enabled: true,
                 priority: Some(0),
                 max_retries: -1,
@@ -155,6 +154,7 @@ mod tests {
                 channels: vec![crate::monoize_routing::CreateMonoizeChannelInput {
                     id: None,
                     name: "ch".to_string(),
+                    provider_type: crate::monoize_routing::MonoizeProviderType::Responses,
                     base_url: "https://example.com".to_string(),
                     api_key: Some("secret".to_string()),
                     weight: 1,
@@ -163,6 +163,11 @@ mod tests {
                     passive_window_seconds_override: None,
                     passive_cooldown_seconds_override: None,
                     passive_rate_limit_cooldown_seconds_override: None,
+                    supported_models: vec!["gpt-5".to_string()],
+                    active_probe_enabled_override: None,
+                    active_probe_interval_seconds_override: None,
+                    active_probe_success_threshold_override: None,
+                    active_probe_model_override: None,
                 }],
                 transforms: Vec::new(),
                 api_type_overrides: Vec::new(),

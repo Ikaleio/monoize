@@ -54,7 +54,15 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub request_kind: Option<String>,
     #[sea_orm(column_type = "Text")]
+    pub effective_provider_type: Option<String>,
+    pub affinity_hit: Option<i32>,
+    #[sea_orm(column_type = "Text")]
+    pub affinity_key_hash: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub affinity_target: Option<String>,
+    #[sea_orm(column_type = "Text")]
     pub created_at: String,
+    pub created_at_unix_ms: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

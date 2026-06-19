@@ -22,6 +22,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260404_000014_api_key_reasoning_envelope_switch::Migration),
             Box::new(m20260501_000015_api_key_request_capture_switch::Migration),
             Box::new(m20260509_000016_api_key_request_capture_mode::Migration),
+            Box::new(m20260618_000017_channel_model_affinity_schema::Migration),
         ]
     }
 }
@@ -42,3 +43,4 @@ mod m20260403_000013_drop_orphan_channel_override_columns;
 mod m20260404_000014_api_key_reasoning_envelope_switch;
 mod m20260501_000015_api_key_request_capture_switch;
 mod m20260509_000016_api_key_request_capture_mode;
+mod m20260618_000017_channel_model_affinity_schema;

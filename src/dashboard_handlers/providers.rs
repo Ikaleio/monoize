@@ -33,8 +33,31 @@ async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) 
     }
     let health = state.channel_health.lock().await;
     for channel in &mut provider.channels {
-        let state = health
-            .get(&health_key(&channel.id, None))
+        let now = chrono::Utc::now().timestamp();
+        let states: Vec<ChannelHealthState> = if provider.per_model_circuit_break {
+            channel
+                .supported_models
+                .iter()
+                .map(|model| {
+                    health
+                        .get(&health_key(&channel.id, Some(model)))
+                        .cloned()
+                        .unwrap_or_else(ChannelHealthState::new)
+                })
+                .collect()
+        } else {
+            vec![
+                health
+                    .get(&health_key(&channel.id, None))
+                    .cloned()
+                    .unwrap_or_else(ChannelHealthState::new),
+            ]
+        };
+        let state = states
+            .iter()
+            .find(|state| state.status(now) == "unhealthy")
+            .or_else(|| states.iter().find(|state| state.status(now) == "probing"))
+            .or_else(|| states.first())
             .cloned()
             .unwrap_or_else(ChannelHealthState::new);
         apply_channel_runtime(channel, &state);
@@ -383,6 +406,7 @@ pub async fn fetch_provider_models(
 
 #[derive(Debug, Deserialize)]
 pub struct FetchChannelModelsRequest {
+    pub provider_type: crate::monoize_routing::MonoizeProviderType,
     pub base_url: String,
     pub api_key: String,
 }
@@ -402,15 +426,22 @@ pub async fn fetch_channel_models(
         ));
     }
 
-    let url = build_models_list_url(&body.base_url);
+    let url = match body.provider_type {
+        crate::monoize_routing::MonoizeProviderType::Gemini => {
+            build_gemini_models_list_url(&body.base_url)
+        }
+        _ => build_models_list_url(&body.base_url),
+    };
 
-    let resp = state
-        .http
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", body.api_key))
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
+    let mut request = state.http.get(&url).timeout(std::time::Duration::from_secs(15));
+    request = match body.provider_type {
+        crate::monoize_routing::MonoizeProviderType::Gemini => {
+            request.header("x-goog-api-key", body.api_key.trim())
+        }
+        _ => request.header("Authorization", format!("Bearer {}", body.api_key)),
+    };
+
+    let resp = request.send().await
         .map_err(|e| {
             AppError::new(
                 StatusCode::BAD_GATEWAY,
@@ -437,17 +468,7 @@ pub async fn fetch_channel_models(
         )
     })?;
 
-    let models: Vec<String> = resp_body
-        .get("data")
-        .and_then(|d| d.as_array())
-        .map(|arr| {
-            let mut seen = std::collections::HashSet::new();
-            arr.iter()
-                .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(String::from))
-                .filter(|id| seen.insert(id.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let models: Vec<String> = extract_model_ids(body.provider_type, &resp_body);
 
     Ok(Json(json!({ "models": models })))
 }
@@ -486,10 +507,36 @@ pub async fn test_channel(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
+    if let Some(model) = requested_model.as_ref()
+        && !channel.supported_models.iter().any(|supported| supported == model)
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "model is not supported by this channel",
+        ));
+    }
+
+    if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "replicate channels do not support completion probe tests",
+        ));
+    }
+
+    let first_supported_model = channel
+        .supported_models
+        .iter()
+        .filter(|model| provider.models.contains_key(*model))
+        .min()
+        .cloned();
+
     let probe_model = requested_model
+        .or_else(|| channel.active_probe_model_override.clone())
         .or_else(|| provider.active_probe_model_override.clone())
         .or_else(|| settings.monoize_active_probe_model.clone())
-        .or_else(|| provider.models.keys().next().cloned());
+        .or(first_supported_model);
 
     let Some(model_name) = probe_model else {
         return Err(AppError::new(
@@ -498,6 +545,17 @@ pub async fn test_channel(
             "no model available for testing; specify a model or add models to this provider",
         ));
     };
+    if !channel
+        .supported_models
+        .iter()
+        .any(|supported| supported == &model_name)
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "resolved probe model is not supported by this channel",
+        ));
+    }
 
     let upstream_model = provider
         .models
@@ -511,7 +569,7 @@ pub async fn test_channel(
         channel,
         state.monoize_runtime.read().await.request_timeout_ms,
         &upstream_model,
-        provider.provider_type,
+        channel.provider_type,
         &provider.api_type_overrides,
     )
     .await;
@@ -604,4 +662,44 @@ pub(super) fn build_models_list_url(base_url: &str) -> String {
     } else {
         format!("{base}/v1/models")
     }
+}
+
+pub(super) fn build_gemini_models_list_url(base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    if base.ends_with("/v1beta") || base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1beta/models")
+    }
+}
+
+fn extract_model_ids(
+    provider_type: crate::monoize_routing::MonoizeProviderType,
+    body: &Value,
+) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut models: Vec<String> = match provider_type {
+        crate::monoize_routing::MonoizeProviderType::Gemini => body
+            .get("models")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                item.get("name")
+                    .and_then(|id| id.as_str())
+                    .map(|value| value.strip_prefix("models/").unwrap_or(value).to_string())
+            })
+            .filter(|id| seen.insert(id.clone()))
+            .collect(),
+        _ => body
+            .get("data")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(String::from))
+            .filter(|id| seen.insert(id.clone()))
+            .collect(),
+    };
+    models.sort();
+    models
 }

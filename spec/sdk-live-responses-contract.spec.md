@@ -56,12 +56,14 @@ SDK19. Each runner MUST create exactly one provider by sending `POST /api/dashbo
 - one model entry for `gpt-4o-mini` with multiplier `1.0`
 - one channel entry with:
   - `name = "sdk-mock-channel"`
+  - `provider_type` set by SDK19a or SDK19b
   - `base_url = http://127.0.0.1:{MOCK_PORT}`
   - `api_key = MOCK_API_KEY`
+  - `supported_models = ["gpt-4o-mini"]`
 
-SDK19a. `sdk-tests/openai-smoke.ts` MUST set `provider_type = "responses"` in the provider request from SDK19.
+SDK19a. `sdk-tests/openai-smoke.ts` MUST set the channel `provider_type = "responses"` in the provider request from SDK19.
 
-SDK19b. `sdk-tests/openai-agent-tool-smoke.ts` MUST set `provider_type = "chat_completion"` in the provider request from SDK19.
+SDK19b. `sdk-tests/openai-agent-tool-smoke.ts` MUST set the channel `provider_type = "chat_completion"` in the provider request from SDK19.
 
 SDK20. The runner MUST fail if any request in SDK14-SDK19 returns a non-success HTTP status or omits a required response field.
 

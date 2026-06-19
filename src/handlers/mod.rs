@@ -98,7 +98,19 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
 
     let mut model_ids: Vec<String> = providers
         .into_iter()
-        .flat_map(|provider| provider.models.into_keys())
+        .filter(|provider| provider.enabled)
+        .flat_map(|provider| {
+            let supported: HashSet<String> = provider
+                .channels
+                .into_iter()
+                .filter(|channel| channel.enabled && channel.weight > 0)
+                .flat_map(|channel| channel.supported_models)
+                .collect();
+            provider
+                .models
+                .into_keys()
+                .filter(move |model| supported.contains(model))
+        })
         .collect();
     model_ids.sort();
     model_ids.dedup();
@@ -617,6 +629,8 @@ const URP_KNOWN_MESSAGES_FIELDS: [&str; 8] = [
 pub(crate) struct UrpRequest {
     pub(crate) model: String,
     pub(crate) max_multiplier: Option<f64>,
+    pub(crate) affinity_explicit: Option<String>,
+    pub(crate) affinity_prefix_hash: String,
 }
 
 #[derive(Clone, Debug)]
@@ -643,6 +657,10 @@ struct MonoizeAttempt {
     extra_fields_whitelist: Option<Vec<String>>,
     strip_cross_protocol_nested_extra: bool,
     billable_pricing_available: bool,
+    affinity_key: Option<String>,
+    affinity_key_hash: Option<String>,
+    affinity_hit: Option<bool>,
+    affinity_target: Option<String>,
 }
 
 fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str {
@@ -783,6 +801,18 @@ impl DownstreamProtocol {
                 | (Self::ChatCompletions, ProviderType::ChatCompletion)
                 | (Self::AnthropicMessages, ProviderType::Messages)
         )
+    }
+}
+
+pub(crate) fn provider_type_protocol(provider_type: ProviderType) -> Option<urp::ProviderProtocol> {
+    match provider_type {
+        ProviderType::Responses => Some(urp::ProviderProtocol::Responses),
+        ProviderType::ChatCompletion => Some(urp::ProviderProtocol::ChatCompletion),
+        ProviderType::Messages => Some(urp::ProviderProtocol::Messages),
+        ProviderType::Gemini => Some(urp::ProviderProtocol::Gemini),
+        ProviderType::OpenaiImage => Some(urp::ProviderProtocol::OpenaiImage),
+        ProviderType::Replicate => Some(urp::ProviderProtocol::Replicate),
+        ProviderType::Group => None,
     }
 }
 
@@ -977,6 +1007,8 @@ fn parse_urp_request(known: &Value, extra: Map<String, Value>) -> AppResult<UrpR
         .filter(|n| *n > 0.0);
 
     Ok(UrpRequest {
+        affinity_explicit: None,
+        affinity_prefix_hash: crate::handlers::helpers::short_xxh3_hex(&model),
         model,
         max_multiplier,
     })

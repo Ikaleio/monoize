@@ -504,6 +504,9 @@ async fn execute_stream_collected_image_typed(
 
             let attempt_number = execution_state.record_upstream_attempt();
             let mut req_attempt = original_req.clone();
+            if let Some(target_protocol) = super::provider_type_protocol(attempt.provider_type) {
+                urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
+            }
             if attempt.strip_cross_protocol_nested_extra
                 && !super::DownstreamProtocol::Responses.is_same_family(attempt.provider_type)
             {
@@ -705,6 +708,7 @@ async fn execute_stream_collected_image_typed(
                     decode_result?;
                     transform_result?;
                     if let Some(err) = stream_error {
+                        clear_channel_affinity(state, &attempt).await;
                         return Err(err);
                     }
 
@@ -718,6 +722,7 @@ async fn execute_stream_collected_image_typed(
 
                     let charge =
                         maybe_charge_response(state, auth, &attempt, &logical_model, &resp).await?;
+                    refresh_channel_affinity(state, &attempt).await;
                     spawn_request_log(
                         state,
                         auth,
@@ -760,6 +765,7 @@ async fn execute_stream_collected_image_typed(
                         return Err(app_err);
                     }
                     if retryable {
+                        clear_channel_affinity(state, &attempt).await;
                         tried_providers.push(TriedProvider::from_app_error(
                             attempt_number,
                             &attempt,

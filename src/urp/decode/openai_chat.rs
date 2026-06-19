@@ -4,8 +4,9 @@ use crate::urp::decode::{
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ReasoningConfig, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage, parse_reasoning_envelope,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
+    ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    parse_reasoning_envelope,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -185,6 +186,7 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
         let Some(item_obj) = item.as_object() else {
             continue;
         };
+        let mut recognized = false;
         if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
             let item_type = item_obj.get("type").and_then(|v| v.as_str());
             if !text.is_empty()
@@ -195,18 +197,37 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
                     message_phase,
                     split_extra(item_obj, &["type", "text"]),
                 ));
+                recognized = true;
             }
         }
         if let Some(image_part) = parse_image_part_from_obj(item_obj) {
             parts.push(image_part);
-            continue;
+            recognized = true;
         }
         if let Some(file_part) = parse_file_part_from_obj(item_obj) {
             parts.push(file_part);
-            continue;
+            recognized = true;
         }
         if let Some(tool_call_part) = parse_tool_call_part_from_obj(item_obj) {
             parts.push(tool_call_part);
+            recognized = true;
+        }
+        if !recognized {
+            parts.push(Part::ProviderItem {
+                id: item_obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                origin_protocol: ProviderProtocol::ChatCompletion,
+                item_type: item_obj
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                body: Value::Object(item_obj.clone()),
+                extra_body: HashMap::new(),
+            });
         }
     }
 }

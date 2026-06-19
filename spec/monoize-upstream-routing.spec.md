@@ -74,17 +74,19 @@ A provider record MUST include:
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
 
 Implementation-specific extension:
-- `provider_type: enum("responses","chat_completion","messages","gemini","openai_image")` MUST be present and determines the default upstream request shape.
-- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
+- A provider MUST NOT contain `provider_type`.
+- Each channel MUST contain `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","replicate")`; this value determines the channel default upstream request shape.
+- Each channel MUST contain `supported_models: string[]`; every element MUST exist in the provider model map.
+- `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","replicate") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
 
 ### 2.4 API Type Resolution
 
-AT-1. For a given request model, the effective API type MUST be resolved as follows:
+AT-1. For a given request model and selected channel, the effective API type MUST be resolved as follows:
 
 1. Iterate `api_type_overrides` in array order.
 2. For each entry, test if `pattern` matches the requested model using glob semantics (case-sensitive, anchored).
 3. If a match is found, the effective API type is that entry's `api_type`. Stop.
-4. If no entry matches (or `api_type_overrides` is empty), the effective API type is `provider_type`.
+4. If no entry matches (or `api_type_overrides` is empty), the effective API type is the selected channel's `provider_type`.
 
 AT-2. Glob matching MUST use the same semantics as transform model filtering: `*` matches zero or more characters, `?` matches exactly one character, matching is anchored (full string).
 
@@ -114,7 +116,9 @@ CFG-2. Each provider MAY define probe override fields:
 
 CFG-3. Probe precedence MUST be provider override first, then global settings fallback.
 
-CFG-4. Global active probe settings MUST be treated as defaults. If global `enabled == false`, providers with `active_probe_enabled_override == true` MUST still be active-probed. Providers with `active_probe_enabled_override == false` MUST remain excluded regardless of global value.
+CFG-3a. Each channel MAY define the same active probe override fields. Active probe precedence MUST be channel override, then provider override, then global settings fallback.
+
+CFG-4. Global active probe settings MUST be treated as defaults. If global `enabled == false`, channels or providers with `active_probe_enabled_override == true` MUST still be active-probed. If a channel or provider resolves `active_probe_enabled_override == false`, that channel MUST remain excluded regardless of global value.
 
 CFG-5. Passive breaker effective parameters MUST be resolved per channel with precedence:
 
@@ -160,7 +164,7 @@ RTA-2. Static filter rules for each provider:
 
 RTA-3. Availability pre-check:
 
-- candidate channels are those where `enabled == true`, `weight > 0`, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
+- candidate channels are those where `enabled == true`, `weight > 0`, `supported_models` contains the requested logical model, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
 - if `provider.circuit_breaker_enabled == false`, runtime health state MUST be ignored for normal routing eligibility. Disabled or zero-weight channels are still excluded.
 - if candidate channels are empty, skip provider.
 
@@ -194,6 +198,37 @@ RTA-8. If all providers are exhausted, return `502` with message indicating no a
 STRM-1. If downstream streaming has already emitted any bytes, router MUST NOT switch provider/channel for that request.
 
 STRM-2. Provider/channel fallback is allowed only before first downstream byte is emitted.
+
+STRM-3. A streaming request MUST write or refresh affinity only after the upstream stream completes without terminal error.
+
+STRM-4. If a partial stream later fails with a retryable upstream/adapter error, Monoize MUST clear any existing affinity binding for that request affinity key.
+
+## 5.1 Channel Affinity
+
+AFF-1. Affinity MUST be enabled by default and stored in process memory only.
+
+AFF-2. An affinity binding expires after 30 minutes of idle time.
+
+AFF-3. The affinity cache key MUST include:
+
+- forwarding API key id if present, otherwise authenticated user id if present
+- logical model
+- explicit stable metadata field value if present
+- otherwise a hash of the normalized input prefix
+
+AFF-4. Explicit stable metadata fields are session, conversation, thread, and user-like fields from request metadata or extra body. Per-request ids, including `request_id`, MUST NOT be used as affinity keys.
+
+AFF-5. The fallback input-prefix hash MUST hash normalized request input only. It MUST consider at most the first 8 input nodes and at most 16384 bytes of normalized JSON/text material. Raw affinity material MUST NOT be persisted.
+
+AFF-6. The affinity value MUST be `(provider_id, channel_id)`.
+
+AFF-7. If an affinity hit points to a Provider+Channel that is still eligible for the request, routing MAY jump directly to that attempt before normal provider-order attempts. This jump consumes the normal provider/channel attempt budget.
+
+AFF-8. If the bound Provider+Channel is stale, disabled, zero weight, unhealthy, group-ineligible, multiplier-ineligible, or does not support the logical model, the binding MUST be cleared and normal waterfall routing MUST begin from the first provider.
+
+AFF-9. Retryable failures (`429`, `5xx`, timeout, and connection errors) MUST clear affinity. Non-retryable client errors MUST NOT clear affinity by themselves.
+
+AFF-10. Successful non-stream requests MUST write or refresh affinity after success.
 
 ## 6. Health Check
 
@@ -231,7 +266,7 @@ PHS-6. On successful attempts, the health state entry MUST be restored to health
 - `enabled` default `true`
 - `interval_seconds` default `30`
 - `method` default `completion`
-- `probe_model` default `null` (when null, use provider first model)
+- `probe_model` default `null` (when null, use channel first supported provider model)
 - `success_threshold` default `1`
 
 AHS-1. Active probing MUST target unhealthy channels whose cooldown has elapsed.
@@ -240,7 +275,7 @@ AHS-1a. If `provider.circuit_breaker_enabled == false`, active probing MUST be s
 
 AHS-2. Channel MUST return to healthy only after reaching success threshold.
 
-AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using `probe_model` when configured; otherwise it MUST use the provider's first model from its model map. If no model can be resolved, probing for that provider/channel MUST be skipped.
+AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using the resolved probe model. Resolution order is channel probe model override, provider probe model override, global probe model, then the first channel-supported provider model in lexicographic order. If no model can be resolved, probing for that provider/channel MUST be skipped.
 
 AHS-4. The completion probe request MUST use `max_tokens: 16` and a minimal single-user-message payload to minimize cost and latency.
 
@@ -252,6 +287,8 @@ AHS-7. When `per_model_circuit_break == true`, a successful active probe MUST cl
 
 AHS-8. Active probe failure cooldown MUST use the effective `passive_cooldown_seconds` for the channel (channel override first, global fallback), consistent with passive breaker resolution.
 
+AHS-9. Replicate channels MUST be skipped by active probing.
+
 ## 7. Dashboard Requirements
 
 UI-1. Providers page MUST be provider-centric and editable without exposing `api_key` values in read responses.
@@ -262,7 +299,7 @@ UI-3. Provider editor MUST include:
 
 - provider enable toggle
 - per-model redirect and multiplier table
-- channel table (name, base URL, weight, enabled)
+- channel table (name, type, base URL, weight, enabled, supported model count)
 - channel runtime indicator (healthy/probing/unhealthy)
 - max_retries setting
 - channel_max_retries setting
@@ -273,3 +310,7 @@ UI-3. Provider editor MUST include:
 UI-4. Override fields (provider-level probe overrides, channel-level breaker overrides, timeout override) MUST display the effective global default value as placeholder text when the override is not set. Leaving a field empty MUST mean "inherit from global settings".
 
 UI-5. Nullable boolean overrides MUST use a three-value selector (inherit / enabled / disabled). When "inherit" is selected, the selector label MUST include the effective global boolean value (e.g. "Inherit Global (Enabled)").
+
+UI-6. Provider model fetching MUST NOT exist as a provider-level action. Each channel editor MUST expose model fetching using the channel's type, base URL, and API key.
+
+UI-7. A channel model fetch confirmation MUST add selected models to the provider model map with `redirect = null` and `multiplier = 1`, and MUST mark the selected models as supported by that channel only.

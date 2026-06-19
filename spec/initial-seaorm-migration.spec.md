@@ -35,13 +35,11 @@ ISM2.2. `up()` MUST create tables in this dependency-safe order:
 9. `monoize_providers`
 10. `monoize_provider_models`
 11. `monoize_channels`
-12. `providers`
-13. `model_mappings`
-14. `group_members`
-15. `state_records`
-16. `file_bytes`
+12. `monoize_channel_models`
+13. `state_records`
+14. `file_bytes`
 
-ISM2.3. `down()` MUST drop the same 16 tables in reverse dependency order.
+ISM2.3. `down()` MUST drop the same 14 tables in reverse dependency order.
 
 ## 3. Type mapping and key rules
 
@@ -153,6 +151,10 @@ ISM4.5. `request_logs` columns:
 - `reasoning_effort` TEXT NULL
 - `tried_providers_json` TEXT NULL
 - `request_kind` TEXT NULL
+- `effective_provider_type` TEXT NULL
+- `affinity_hit` INTEGER NULL
+- `affinity_key_hash` TEXT NULL
+- `affinity_target` TEXT NULL
 - `created_at` TEXT NOT NULL
 
 ISM4.6. `system_settings` columns:
@@ -195,7 +197,6 @@ ISM4.9. `monoize_providers` columns:
 
 - `id` TEXT PK
 - `name` TEXT NOT NULL
-- `provider_type` TEXT NOT NULL
 - `max_retries` INTEGER NOT NULL DEFAULT 3
 - `transforms` TEXT NOT NULL DEFAULT '[]'
 - `api_type_overrides` TEXT NOT NULL DEFAULT '[]'
@@ -224,6 +225,7 @@ ISM4.11. `monoize_channels` columns:
 - `id` TEXT PK
 - `provider_id` TEXT NOT NULL
 - `name` TEXT NOT NULL
+- `provider_type` TEXT NOT NULL
 - `base_url` TEXT NOT NULL
 - `api_key` TEXT NOT NULL
 - `weight` INTEGER NOT NULL DEFAULT 1
@@ -231,58 +233,29 @@ ISM4.11. `monoize_channels` columns:
 - `passive_failure_threshold_override` INTEGER NULL
 - `passive_cooldown_seconds_override` INTEGER NULL
 - `passive_window_seconds_override` INTEGER NULL
-- `passive_min_samples_override` INTEGER NULL
-- `passive_failure_rate_threshold_override` REAL NULL
 - `passive_rate_limit_cooldown_seconds_override` INTEGER NULL
-- `request_timeout_ms_override` INTEGER NULL
+- `active_probe_enabled_override` INTEGER NULL
+- `active_probe_interval_seconds_override` INTEGER NULL
+- `active_probe_success_threshold_override` INTEGER NULL
+- `active_probe_model_override` TEXT NULL
 - `created_at` TEXT NOT NULL
 - `updated_at` TEXT NOT NULL
 
-ISM4.10a. Migration `m20260403_000013_drop_orphan_channel_override_columns` MUST remove these unused `monoize_channels` columns from the effective schema:
+ISM4.10a. Migration `m20260403_000013_drop_orphan_channel_override_columns` MUST be idempotent when these obsolete columns are absent from a fresh baseline schema:
 
 - `passive_min_samples_override`
 - `passive_failure_rate_threshold_override`
 - `request_timeout_ms_override`
 
-ISM4.12. `providers` columns:
+ISM4.12. `monoize_channel_models` columns:
 
 - `id` TEXT PK
-- `name` TEXT NOT NULL
-- `provider_type` TEXT NOT NULL
-- `base_url` TEXT NULL
-- `auth_type` TEXT NULL
-- `auth_value` TEXT NULL
-- `auth_header_name` TEXT NULL
-- `auth_query_name` TEXT NULL
-- `capabilities_json` TEXT NULL
-- `strategy_json` TEXT NULL
-- `enabled` INTEGER NOT NULL DEFAULT 1
-- `priority` INTEGER NOT NULL DEFAULT 0
-- `weight` INTEGER NOT NULL DEFAULT 1
-- `tag` TEXT NULL
-- `groups_json` TEXT NOT NULL DEFAULT '[]'
-- `balance` REAL NULL
+- `channel_id` TEXT NOT NULL
+- `model_name` TEXT NOT NULL
 - `created_at` TEXT NOT NULL
-- `updated_at` TEXT NOT NULL
+- UNIQUE(`channel_id`, `model_name`)
 
-ISM4.13. `model_mappings` columns:
-
-- `id` TEXT PK
-- `provider_id` TEXT NOT NULL
-- `logical_model` TEXT NOT NULL
-- `upstream_model` TEXT NOT NULL
-- `created_at` TEXT NOT NULL
-- UNIQUE(`provider_id`, `logical_model`)
-
-ISM4.14. `group_members` columns:
-
-- `id` TEXT PK
-- `group_provider_id` TEXT NOT NULL
-- `member_provider_id` TEXT NOT NULL
-- `weight` INTEGER NOT NULL DEFAULT 1
-- `priority` INTEGER NOT NULL DEFAULT 0
-- `created_at` TEXT NOT NULL
-- UNIQUE(`group_provider_id`, `member_provider_id`)
+ISM4.13. Legacy `providers`, `model_mappings`, and `group_members` tables MUST NOT be created.
 
 ISM4.15. `state_records` columns:
 
@@ -308,8 +281,7 @@ ISM5.1. Required unique constraints:
 - `sessions.token`
 - `model_registry_records(logical_model, provider_id)`
 - `monoize_provider_models(provider_id, model_name)`
-- `model_mappings(provider_id, logical_model)`
-- `group_members(group_provider_id, member_provider_id)`
+- `monoize_channel_models(channel_id, model_name)`
 
 ISM5.2. Required indexes:
 
@@ -323,8 +295,7 @@ ISM5.2. Required indexes:
 - `idx_request_logs_model` on `request_logs(model)`
 - `idx_mpm_provider_id` on `monoize_provider_models(provider_id)`
 - `idx_mc_provider_id` on `monoize_channels(provider_id)`
-- `idx_mm_provider_id` on `model_mappings(provider_id)`
-- `idx_gm_group_provider_id` on `group_members(group_provider_id)`
+- `idx_mcm_channel_id` on `monoize_channel_models(channel_id)`
 
 ## 6. Foreign keys
 
@@ -338,6 +309,4 @@ ISM6.2. If defined, foreign key edges SHOULD follow:
 - `request_logs.user_id -> users.id`
 - `monoize_provider_models.provider_id -> monoize_providers.id`
 - `monoize_channels.provider_id -> monoize_providers.id`
-- `model_mappings.provider_id -> providers.id`
-- `group_members.group_provider_id -> providers.id`
-- `group_members.member_provider_id -> providers.id`
+- `monoize_channel_models.channel_id -> monoize_channels.id`

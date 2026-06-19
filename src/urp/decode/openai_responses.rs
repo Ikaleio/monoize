@@ -4,8 +4,8 @@ use crate::urp::decode::{
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ReasoningConfig, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
+    ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -486,18 +486,28 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
             );
         }
         _ => {
-            push_message_nodes_with_envelope_control(
-                out,
-                Role::User,
-                Some(crate::urp::synthetic_message_id()),
-                vec![text_part_with_phase(
-                    serde_json::to_string(obj).unwrap_or_default(),
-                    None,
-                    HashMap::new(),
-                )],
-                HashMap::new(),
-            );
+            out.push(Node::ProviderItem {
+                id: obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                origin_protocol: ProviderProtocol::Responses,
+                role: responses_item_role(obj),
+                item_type: item_type.to_string(),
+                body: Value::Object(obj.clone()),
+                extra_body: HashMap::new(),
+            });
         }
+    }
+}
+
+fn responses_item_role(obj: &Map<String, Value>) -> OrdinaryRole {
+    match obj.get("role").and_then(|v| v.as_str()) {
+        Some("system") => OrdinaryRole::System,
+        Some("developer") => OrdinaryRole::Developer,
+        Some("user") => OrdinaryRole::User,
+        _ => OrdinaryRole::Assistant,
     }
 }
 
@@ -771,6 +781,7 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                             .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                        origin_protocol: ProviderProtocol::Responses,
                         role: OrdinaryRole::Assistant,
                         item_type: item_type.to_string(),
                         body: Value::Object(item_obj.clone()),
@@ -1085,6 +1096,79 @@ mod tests {
         let reasoning = decoded.reasoning.expect("reasoning should decode");
         assert!(reasoning.effort.is_none());
         assert_eq!(reasoning.extra_body.get("summary"), Some(&json!("auto")));
+    }
+
+    #[test]
+    fn responses_compaction_input_is_same_protocol_provider_item_only() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": [{
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": "opaque_compaction",
+                "metadata": { "turn": 3 }
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        assert_eq!(decoded.input.len(), 1);
+        assert!(matches!(
+            &decoded.input[0],
+            Node::ProviderItem {
+                id: Some(id),
+                origin_protocol: ProviderProtocol::Responses,
+                item_type,
+                body,
+                ..
+            } if id == "cmp_1"
+                && item_type == "compaction"
+                && body == &value["input"][0]
+        ));
+
+        let responses_encoded =
+            crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5-mini");
+        assert_eq!(responses_encoded["input"][0], value["input"][0]);
+
+        let mut chat_attempt = decoded.clone();
+        crate::urp::retain_provider_items_for_protocol(
+            &mut chat_attempt.input,
+            ProviderProtocol::ChatCompletion,
+        );
+        let chat_encoded =
+            crate::urp::encode::openai_chat::encode_request(&chat_attempt, "gpt-5-mini");
+        let chat_wire = serde_json::to_string(&chat_encoded).expect("chat json");
+        assert!(!chat_wire.contains("compaction"));
+        assert!(!chat_wire.contains("opaque_compaction"));
+        assert_eq!(chat_encoded["messages"], json!([]));
+    }
+
+    #[test]
+    fn responses_provider_output_item_encodes_without_message_wrapper() {
+        let body = json!({
+            "type": "compaction",
+            "id": "cmp_out_1",
+            "encrypted_content": "terminal_opaque"
+        });
+        let response = UrpResponse {
+            id: "resp_provider".to_string(),
+            model: "gpt-5-mini".to_string(),
+            created_at: Some(1770000000),
+            output: vec![Node::ProviderItem {
+                id: Some("cmp_out_1".to_string()),
+                origin_protocol: ProviderProtocol::Responses,
+                role: OrdinaryRole::Assistant,
+                item_type: "compaction".to_string(),
+                body: body.clone(),
+                extra_body: HashMap::new(),
+            }],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: HashMap::new(),
+        };
+
+        let encoded =
+            crate::urp::encode::openai_responses::encode_response(&response, "gpt-5-mini");
+        assert_eq!(encoded["output"], json!([body]));
     }
 
     #[test]

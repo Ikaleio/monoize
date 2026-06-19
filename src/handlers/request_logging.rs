@@ -30,6 +30,10 @@ fn broadcast_pending_snapshot(
     channel_id: Option<&str>,
     upstream_model: Option<&str>,
     provider_multiplier: Option<f64>,
+    effective_provider_type: Option<&str>,
+    affinity_hit: Option<bool>,
+    affinity_key_hash: Option<&str>,
+    affinity_target: Option<&str>,
     created_at: chrono::DateTime<Utc>,
 ) {
     let Some(user_id) = auth.user_id.as_deref() else {
@@ -67,6 +71,10 @@ fn broadcast_pending_snapshot(
         reasoning_effort: None,
         tried_providers_json: None,
         request_kind: None,
+        effective_provider_type: effective_provider_type.map(ToOwned::to_owned),
+        affinity_hit,
+        affinity_key_hash: affinity_key_hash.map(ToOwned::to_owned),
+        affinity_target: affinity_target.map(ToOwned::to_owned),
         created_at,
     };
 
@@ -99,6 +107,10 @@ pub(super) async fn insert_pending_request_log(
         model,
         is_stream,
         request_ip,
+        None,
+        None,
+        None,
+        None,
         None,
         None,
         None,
@@ -140,6 +152,10 @@ pub(super) async fn update_pending_channel_info(
         Some(&attempt.channel_id),
         Some(&attempt.upstream_model),
         Some(attempt.model_multiplier),
+        Some(reasoning_envelope_provider_type(attempt.provider_type)),
+        attempt.affinity_hit,
+        attempt.affinity_key_hash.as_deref(),
+        attempt.affinity_target.as_deref(),
         request_created_at(started_at),
     );
 }
@@ -170,6 +186,10 @@ pub(super) fn spawn_request_log(
     let provider_id = attempt.provider_id.clone();
     let upstream_model = attempt.upstream_model.clone();
     let model_multiplier = attempt.model_multiplier;
+    let effective_provider_type = reasoning_envelope_provider_type(attempt.provider_type).to_string();
+    let affinity_hit = attempt.affinity_hit;
+    let affinity_key_hash = attempt.affinity_key_hash.clone();
+    let affinity_target = attempt.affinity_target.clone();
     let model = model.to_string();
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let created_at = request_created_at(started_at);
@@ -263,6 +283,10 @@ pub(super) fn spawn_request_log(
             reasoning_effort,
             tried_providers_json,
             request_kind: None,
+            effective_provider_type: Some(effective_provider_type),
+            affinity_hit,
+            affinity_key_hash,
+            affinity_target,
             created_at,
         };
         if let Err(e) = user_store.finalize_request_log(log).await {
@@ -294,6 +318,10 @@ pub(super) fn spawn_request_log_error(
     let upstream_model = attempt.upstream_model.clone();
     let model_multiplier = attempt.model_multiplier;
     let channel_id = attempt.channel_id.clone();
+    let effective_provider_type = reasoning_envelope_provider_type(attempt.provider_type).to_string();
+    let affinity_hit = attempt.affinity_hit;
+    let affinity_key_hash = attempt.affinity_key_hash.clone();
+    let affinity_target = attempt.affinity_target.clone();
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let created_at = request_created_at(started_at);
     let user_store = state.user_store.clone();
@@ -343,6 +371,10 @@ pub(super) fn spawn_request_log_error(
             reasoning_effort,
             tried_providers_json,
             request_kind: None,
+            effective_provider_type: Some(effective_provider_type),
+            affinity_hit,
+            affinity_key_hash,
+            affinity_target,
             created_at,
         };
         if let Err(e) = user_store.finalize_request_log(log).await {
@@ -374,6 +406,10 @@ pub(super) fn spawn_request_log_stream_terminal_error(
     let upstream_model = attempt.upstream_model.clone();
     let model_multiplier = attempt.model_multiplier;
     let channel_id = attempt.channel_id.clone();
+    let effective_provider_type = reasoning_envelope_provider_type(attempt.provider_type).to_string();
+    let affinity_hit = attempt.affinity_hit;
+    let affinity_key_hash = attempt.affinity_key_hash.clone();
+    let affinity_target = attempt.affinity_target.clone();
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let created_at = request_created_at(started_at);
     let user_store = state.user_store.clone();
@@ -415,6 +451,10 @@ pub(super) fn spawn_request_log_stream_terminal_error(
             reasoning_effort,
             tried_providers_json,
             request_kind: None,
+            effective_provider_type: Some(effective_provider_type),
+            affinity_hit,
+            affinity_key_hash,
+            affinity_target,
             created_at,
         };
         if let Err(e) = user_store.finalize_request_log(log).await {
@@ -490,6 +530,10 @@ pub(super) fn spawn_request_log_error_no_attempt(
             reasoning_effort,
             tried_providers_json,
             request_kind: None,
+            effective_provider_type: None,
+            affinity_hit: None,
+            affinity_key_hash: None,
+            affinity_target: None,
             created_at,
         };
         if let Err(e) = user_store.finalize_request_log(log).await {

@@ -1,7 +1,7 @@
 use crate::urp::encode::{merge_extra, usage_input_details, usage_output_details};
 use crate::urp::{
     AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Node, OrdinaryRole,
-    ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    ProviderProtocol, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -231,6 +231,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             Node::Refusal { content, .. } => parts.push(json!({ "text": content })),
             Node::ProviderItem {
                 role: OrdinaryRole::Assistant,
+                origin_protocol: ProviderProtocol::Gemini,
                 body,
                 ..
             } => parts.push(body.clone()),
@@ -542,10 +543,12 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
         Node::Reasoning { .. } => None,
         Node::ProviderItem {
             role,
+            origin_protocol: ProviderProtocol::Gemini,
             body,
             extra_body,
             ..
         } => Some((*role, body.clone(), extra_body.clone())),
+        Node::ProviderItem { .. } => None,
         Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
     }
 }
@@ -560,6 +563,24 @@ mod tests {
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
+    }
+
+    fn request_with_input(input: Vec<Node>) -> UrpRequest {
+        UrpRequest {
+            model: "logical-model".to_string(),
+            input,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        }
     }
 
     #[test]
@@ -690,5 +711,41 @@ mod tests {
             Some(&json!("lookup")),
             "Gemini functionResponse.name must use the function name, not the call_id"
         );
+    }
+
+    #[test]
+    fn gemini_provider_part_round_trips_only_for_gemini_protocol() {
+        let native_part = json!({
+            "vendorPart": { "x": 1 },
+            "metadata": "native"
+        });
+        let req = request_with_input(vec![Node::ProviderItem {
+            id: None,
+            origin_protocol: ProviderProtocol::Gemini,
+            role: OrdinaryRole::User,
+            item_type: "".to_string(),
+            body: native_part.clone(),
+            extra_body: empty_map(),
+        }]);
+
+        let encoded = encode_request(&req, "gemini-2.5-pro");
+        assert_eq!(encoded["contents"][0]["parts"][0], native_part);
+
+        let cross_protocol_req = request_with_input(vec![Node::ProviderItem {
+            id: Some("cmp_1".to_string()),
+            origin_protocol: ProviderProtocol::Responses,
+            role: OrdinaryRole::User,
+            item_type: "compaction".to_string(),
+            body: json!({
+                "type": "compaction",
+                "encrypted_content": "opaque"
+            }),
+            extra_body: empty_map(),
+        }]);
+        let cross_protocol = encode_request(&cross_protocol_req, "gemini-2.5-pro");
+        let wire = serde_json::to_string(&cross_protocol).expect("gemini json");
+        assert_eq!(cross_protocol["contents"], json!([]));
+        assert!(!wire.contains("compaction"));
+        assert!(!wire.contains("opaque"));
     }
 }

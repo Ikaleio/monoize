@@ -87,14 +87,12 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
             Some(block)
         }
         Node::ProviderItem {
-            body, extra_body, ..
-        } => {
-            let mut block = body.clone();
-            if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
-            }
-            Some(block)
-        }
+            origin_protocol,
+            item_type,
+            body,
+            extra_body,
+            ..
+        } => encode_messages_provider_block(*origin_protocol, item_type, body, extra_body),
         Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ToolResult { .. }
@@ -202,16 +200,12 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
         }
         Node::ProviderItem {
             role: OrdinaryRole::Assistant,
+            origin_protocol,
+            item_type,
             body,
             extra_body,
             ..
-        } => {
-            let mut block = body.clone();
-            if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
-            }
-            Some(block)
-        }
+        } => encode_messages_provider_block(*origin_protocol, item_type, body, extra_body),
         Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ToolResult { .. }

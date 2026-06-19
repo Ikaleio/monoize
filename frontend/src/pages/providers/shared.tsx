@@ -19,6 +19,7 @@ export type ModelRow = {
 export type ChannelRow = {
 	id: string
 	name: string
+	provider_type: ProviderType
 	base_url: string
 	api_key: string
 	weight: string
@@ -27,12 +28,16 @@ export type ChannelRow = {
 	passive_cooldown_seconds_override: string
 	passive_window_seconds_override: string
 	passive_rate_limit_cooldown_seconds_override: string
+	supported_models: string[]
+	active_probe_enabled_override: boolean | null
+	active_probe_interval_seconds_override: string
+	active_probe_success_threshold_override: string
+	active_probe_model_override: string
 }
 
 export type ProviderForm = {
 	id?: string
 	name: string
-	provider_type: ProviderType
 	enabled: boolean
 	max_retries: number
 	channel_max_retries: number
@@ -55,7 +60,7 @@ export type ProviderForm = {
 }
 
 export const PROVIDER_TYPE_CONFIG: Record<
-	ProviderForm['provider_type'],
+	ProviderType,
 	{
 		label: string
 		path: string
@@ -108,7 +113,6 @@ export function emptyForm(): ProviderForm {
 	return {
 		id: '',
 		name: '',
-		provider_type: 'chat_completion',
 		enabled: true,
 		max_retries: -1,
 		channel_max_retries: 0,
@@ -143,6 +147,7 @@ export function emptyChannelRow(): ChannelRow {
 	return {
 		id: '',
 		name: '',
+		provider_type: 'chat_completion',
 		base_url: '',
 		api_key: '',
 		weight: '1',
@@ -150,7 +155,12 @@ export function emptyChannelRow(): ChannelRow {
 		passive_failure_count_threshold_override: '',
 		passive_cooldown_seconds_override: '',
 		passive_window_seconds_override: '',
-		passive_rate_limit_cooldown_seconds_override: ''
+		passive_rate_limit_cooldown_seconds_override: '',
+		supported_models: [],
+		active_probe_enabled_override: null,
+		active_probe_interval_seconds_override: '',
+		active_probe_success_threshold_override: '',
+		active_probe_model_override: ''
 	}
 }
 
@@ -158,7 +168,6 @@ export function fromProvider(provider: Provider): ProviderForm {
 	return {
 		id: provider.id,
 		name: provider.name,
-		provider_type: provider.provider_type,
 		enabled: provider.enabled,
 		max_retries: provider.max_retries,
 		channel_max_retries: provider.channel_max_retries ?? 0,
@@ -190,6 +199,7 @@ export function fromProvider(provider: Provider): ProviderForm {
 		channels: provider.channels.map(channel => ({
 			id: channel.id,
 			name: channel.name,
+			provider_type: channel.provider_type,
 			base_url: channel.base_url,
 			api_key: '',
 			weight: String(channel.weight),
@@ -209,7 +219,19 @@ export function fromProvider(provider: Provider): ProviderForm {
 			passive_rate_limit_cooldown_seconds_override:
 				channel.passive_rate_limit_cooldown_seconds_override != null ?
 					String(channel.passive_rate_limit_cooldown_seconds_override)
-				:	''
+				:	'',
+			supported_models: channel.supported_models ?? [],
+			active_probe_enabled_override:
+				channel.active_probe_enabled_override ?? null,
+			active_probe_interval_seconds_override:
+				channel.active_probe_interval_seconds_override != null ?
+					String(channel.active_probe_interval_seconds_override)
+				:	'',
+			active_probe_success_threshold_override:
+				channel.active_probe_success_threshold_override != null ?
+					String(channel.active_probe_success_threshold_override)
+				:	'',
+			active_probe_model_override: channel.active_probe_model_override ?? ''
 		})),
 		transforms: provider.transforms ?? [],
 		api_type_overrides: provider.api_type_overrides ?? []

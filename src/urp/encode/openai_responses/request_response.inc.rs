@@ -62,6 +62,29 @@ fn encode_tool_result_item(
     out.push(Value::Object(obj));
 }
 
+fn encode_provider_item_for_responses(
+    origin_protocol: ProviderProtocol,
+    item_type: &str,
+    body: &Value,
+    extra_body: &HashMap<String, Value>,
+) -> Option<Value> {
+    if origin_protocol != ProviderProtocol::Responses {
+        return None;
+    }
+    let mut item = match body {
+        Value::Object(obj) => obj.clone(),
+        other => {
+            let mut obj = Map::new();
+            obj.insert("body".to_string(), other.clone());
+            obj
+        }
+    };
+    item.entry("type".to_string())
+        .or_insert_with(|| Value::String(item_type.to_string()));
+    merge_extra(&mut item, extra_body);
+    Some(Value::Object(item))
+}
+
 fn encode_input_image(
     source: &ImageSource,
     extra_body: &std::collections::HashMap<String, Value>,
@@ -203,4 +226,3 @@ fn encode_output_file(
         }
     }
 }
-

@@ -161,10 +161,15 @@ fn append_tool_result_to_pending_anthropic_message(
 
 fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
     match node {
-        Node::Text { role, .. }
-        | Node::Image { role, .. }
-        | Node::File { role, .. }
-        | Node::ProviderItem { role, .. } => match role {
+        Node::Text { role, .. } | Node::Image { role, .. } | Node::File { role, .. } => match role {
+            OrdinaryRole::System | OrdinaryRole::Developer => None,
+            OrdinaryRole::User | OrdinaryRole::Assistant => Some(*role),
+        },
+        Node::ProviderItem {
+            role,
+            origin_protocol: ProviderProtocol::Messages,
+            ..
+        } => match role {
             OrdinaryRole::System | OrdinaryRole::Developer => None,
             OrdinaryRole::User | OrdinaryRole::Assistant => Some(*role),
         },
@@ -172,7 +177,8 @@ fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
         Node::ToolResult { .. }
         | Node::NextDownstreamEnvelopeExtra { .. }
         | Node::Audio { .. }
-        | Node::Refusal { .. } => None,
+        | Node::Refusal { .. }
+        | Node::ProviderItem { .. } => None,
     }
 }
 
@@ -190,12 +196,17 @@ fn anthropic_message_extra_from_node(node: &Node) -> HashMap<String, Value> {
         Node::Image { extra_body, .. }
         | Node::File { extra_body, .. }
         | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. }
-        | Node::ProviderItem { extra_body, .. } => extra_body.clone(),
+        | Node::ToolCall { extra_body, .. } => extra_body.clone(),
+        Node::ProviderItem {
+            origin_protocol: ProviderProtocol::Messages,
+            extra_body,
+            ..
+        } => extra_body.clone(),
         Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ToolResult { .. }
-        | Node::NextDownstreamEnvelopeExtra { .. } => HashMap::new(),
+        | Node::NextDownstreamEnvelopeExtra { .. }
+        | Node::ProviderItem { .. } => HashMap::new(),
     }
 }
 
@@ -216,6 +227,14 @@ fn encode_system_block(node: &Node) -> Option<Value> {
             }
             Some(block)
         }
+        Node::ProviderItem {
+            role: OrdinaryRole::System | OrdinaryRole::Developer,
+            origin_protocol,
+            item_type,
+            body,
+            extra_body,
+            ..
+        } => encode_messages_provider_block(*origin_protocol, item_type, body, extra_body),
         _ => None,
     }
 }

@@ -17,13 +17,13 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-summary".to_string(),
-            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-ch1".to_string()),
                 name: "mono-transform-summary-ch1".to_string(),
+                provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
@@ -32,6 +32,11 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["gpt-5-mini".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
             }],
             max_retries: -1,
             channel_max_retries: 0,
@@ -206,13 +211,13 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-streaming-markdown-images".to_string(),
-            provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-streaming-markdown-images-ch1".to_string()),
                 name: "mono-transform-streaming-markdown-images-ch1".to_string(),
+                provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
                 base_url,
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
@@ -221,6 +226,11 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["gpt-5-mini".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
             }],
             max_retries: -1,
             channel_max_retries: 0,

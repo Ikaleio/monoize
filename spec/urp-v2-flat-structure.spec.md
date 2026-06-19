@@ -19,6 +19,8 @@
   - `chat_completion`: downstream `/v1/chat/completions` or upstream provider type `chat_completion`
   - `messages`: downstream `/v1/messages` or upstream provider type `messages`
 - **Cross-family hop**: Any encode step whose source family differs from its target family. Any hop involving `gemini` or `openai_image` is cross-family.
+- **Provider protocol**: One of `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `replicate`.
+- **Same-protocol hop**: An encode step whose target provider protocol exactly equals the source protocol recorded on an opaque provider item.
 
 ## 2. Canonical non-stream objects
 
@@ -122,6 +124,7 @@ Node =
     }
   | ProviderItem {
       type: "provider_item",
+      origin_protocol: ProviderProtocol,
       role: OrdinaryRole,
       item_type: String,
       body: JsonValue,
@@ -191,6 +194,12 @@ ORD-6. A decoder MUST emit one ordinary node for each source-order semantic unit
 ORD-7. Ordinary node `extra_body` stores unknown fields that belong to exactly that ordinary node's protocol object.
 
 ORD-8. If a key exists in both an ordinary node typed field and that node's `extra_body`, the typed field value MUST win.
+
+ORD-9. `ProviderItem.origin_protocol` MUST be one of the Provider protocol names from §1. It records the exact protocol that supplied `ProviderItem.body`.
+
+ORD-10. `ProviderItem` is a same-protocol opaque native carrier. A decoder MUST use it only for one native item, block, or part that the source adapter cannot represent as `Text`, `Image`, `Audio`, `File`, `Refusal`, `Reasoning`, `ToolCall`, or `ToolResult`.
+
+ORD-11. An encoder MUST replay `ProviderItem.body` only when `ProviderItem.origin_protocol` exactly equals the target provider protocol. If the protocols differ, the encoder MUST ignore that `ProviderItem`. It MUST NOT stringify the body, insert it into a prompt, wrap it as `Text`, or disguise it as another typed node.
 
 ### 3.2 Reasoning invariants
 
@@ -279,6 +288,10 @@ XTRA-6. After XTRA-5, later transforms or adapters for the target family MAY add
 
 XTRA-7. On a same-family encode step, the runtime MUST preserve node `extra_body`, `ToolResultContent.extra_body`, and control nodes.
 
+XTRA-8. The same-family passthrough rules in XTRA-4 through XTRA-7 do not authorize `ProviderItem` replay. `ProviderItem` replay is governed only by exact same-protocol equality under ORD-11.
+
+XTRA-9. Before request-phase transforms run for one upstream attempt, the runtime MUST remove every downstream-origin `ProviderItem` whose `origin_protocol` differs from the selected upstream provider protocol. Later transforms MAY insert a `ProviderItem` only when they set `origin_protocol` to the intended target provider protocol.
+
 ## 5. Canonical flat streaming events
 
 STR-1. The canonical URP v2 streaming representation MUST be:
@@ -331,7 +344,7 @@ NodeHeader =
   | Refusal { role: "assistant" }
   | Reasoning { role: "assistant" }
   | ToolCall { role: "assistant", call_id: String, name: String }
-  | ProviderItem { role: OrdinaryRole, item_type: String }
+  | ProviderItem { origin_protocol: ProviderProtocol, role: OrdinaryRole, item_type: String }
   | ToolResult { call_id: String }
   | NextDownstreamEnvelopeExtra
 ```
@@ -389,6 +402,8 @@ SACC-7. For `NodeDelta::Reasoning.source`, the terminal `Reasoning.source` value
 
 SACC-8. An empty-string `Reasoning.source` delta MUST be ignored.
 
+SACC-9. `NodeHeader::ProviderItem` MUST carry `origin_protocol`. A downstream stream encoder MUST open and complete a ProviderItem lifecycle only when that origin protocol equals the downstream provider protocol. A mismatched ProviderItem stream node MUST be skipped without producing text or another typed node.
+
 ## 6. Encoder-owned logical envelope reconstruction
 
 RECON-1. URP v2 canonical storage is only the flat node sequence. Message grouping, output-item grouping, and block grouping are encoder responsibilities.
@@ -402,6 +417,8 @@ RECON-2. An encoder MAY place consecutive ordinary nodes into one consumable env
 5. grouping does not violate a protocol-specific boundary rule in this section.
 
 RECON-3. A `ToolResult` node is always its own top-level semantic unit. An encoder MUST NOT merge a `ToolResult` node into an ordinary-node envelope.
+
+RECON-4. A `ProviderItem` node is never eligible for generic message-compatible grouping. A family-specific encoder MAY replay it as a native item, block, or part only under ORD-11.
 
 RECON-4. A control node is not itself emitted downstream. Its only effect is to modify the next consumable envelope under CTL-5 through CTL-8.
 

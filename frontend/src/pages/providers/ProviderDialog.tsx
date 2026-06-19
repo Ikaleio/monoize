@@ -64,7 +64,7 @@ function cloneModelRow(row: ModelRow): ModelRow {
 }
 
 function cloneChannelRow(row: ChannelRow): ChannelRow {
-	return { ...row }
+	return { ...row, supported_models: [...row.supported_models] }
 }
 
 function hasModelNameConflict(
@@ -163,6 +163,12 @@ export function ProviderDialog({
 			passive_cooldown_seconds: settings?.monoize_passive_cooldown_seconds,
 			passive_rate_limit_cooldown_seconds:
 				settings?.monoize_passive_rate_limit_cooldown_seconds,
+			active_probe_enabled: settings?.monoize_active_probe_enabled,
+			active_probe_interval_seconds:
+				settings?.monoize_active_probe_interval_seconds,
+			active_probe_success_threshold:
+				settings?.monoize_active_probe_success_threshold,
+			active_probe_model: settings?.monoize_active_probe_model ?? null
 		}),
 		[settings]
 	)
@@ -179,6 +185,7 @@ export function ProviderDialog({
 	const closeChannelDialog = useCallback(() => {
 		setEditingChannelIndex(null)
 		setChannelDraft(null)
+		setModelPickerOpen(false)
 		setBaseUrlPrompt(null)
 		setV1KeepConfirmed(null)
 	}, [])
@@ -269,73 +276,80 @@ export function ProviderDialog({
 		}
 	}, [isDirty, onOpenChange, resetFromCurrent])
 
-	const handleFetchModels = useCallback(() => {
-		if (isEdit) {
-			if (!current) return
-			setModelPickerOpen(true)
-			return
-		}
-		const channel = form.channels.find(c => c.base_url.trim() && c.api_key.trim())
-		if (!channel) {
-			toast.error(t('providers.fetchModelsNeedChannel'))
-			return
-		}
-		setModelPickerOpen(true)
-	}, [current, form.channels, isEdit, t])
-
 	const fetchChannelInfo = useMemo(() => {
-		if (isEdit) return undefined
-		const channel = form.channels.find(c => c.base_url.trim() && c.api_key.trim())
+		const channel = channelDraft
 		if (!channel) return undefined
-		return { base_url: channel.base_url.trim(), api_key: channel.api_key.trim() }
-	}, [isEdit, form.channels])
+		return {
+			provider_type: channel.provider_type,
+			base_url: channel.base_url.trim(),
+			api_key: channel.api_key.trim()
+		}
+	}, [channelDraft])
 
 	const existingModelNames = useMemo(
-		() => form.models.map(m => m.model.trim()).filter(Boolean),
-		[form.models]
+		() => channelDraft?.supported_models ?? [],
+		[channelDraft?.supported_models]
 	)
 
 	const handleModelsConfirm = useCallback(
 		(checkedModels: string[]) => {
-			const checkedSet = new Set(checkedModels)
-			const currentModelNames = form.models.map(m => m.model.trim())
-			const kept = form.models.filter(m => checkedSet.has(m.model.trim()))
-			const newModels = checkedModels.filter(m => !currentModelNames.includes(m))
+			const selected = Array.from(new Set(checkedModels.map(model => model.trim()).filter(Boolean)))
+			const currentModelNames = new Set(form.models.map(m => m.model.trim()).filter(Boolean))
+			const newModels = selected.filter(model => !currentModelNames.has(model))
 			const added = newModels.map(model => ({
 				...emptyModelRow(),
 				model
 			}))
 
-			const removedCount = form.models.length - kept.length
 			const addedCount = added.length
 
 			setForm(prev => ({
 				...prev,
-				models: [...kept, ...added]
+				models: [...prev.models, ...added]
 			}))
+			setChannelDraft(prev =>
+				prev ? { ...prev, supported_models: selected } : prev
+			)
 			closeModelDialog()
 
-			if (addedCount > 0 && removedCount > 0) {
-				toast.success(
-					t('providers.modelsAdded', { count: addedCount }) +
-						', ' +
-						t('providers.modelsRemoved', { count: removedCount })
-				)
-			} else if (addedCount > 0) {
+			if (addedCount > 0) {
 				toast.success(t('providers.modelsAdded', { count: addedCount }))
-			} else if (removedCount > 0) {
-				toast.success(t('providers.modelsRemoved', { count: removedCount }))
 			}
 		},
 		[closeModelDialog, form.models, t]
 	)
 
+	const handleFetchChannelModels = useCallback(() => {
+		if (!channelDraft?.base_url.trim() || !channelDraft.api_key.trim()) {
+			toast.error(t('providers.fetchModelsNeedChannel'))
+			return
+		}
+		setModelPickerOpen(true)
+	}, [channelDraft, t])
+
 	const deleteModelAt = useCallback(
 		(idx: number) => {
+			const removedModel = form.models[idx]?.model.trim()
 			setForm(prev => ({
 				...prev,
-				models: prev.models.filter((_, index) => index !== idx)
+				models: prev.models.filter((_, index) => index !== idx),
+				channels: removedModel ?
+					prev.channels.map(channel => ({
+						...channel,
+						supported_models: channel.supported_models.filter(model => model !== removedModel)
+					}))
+				:	prev.channels
 			}))
+			if (removedModel) {
+				setChannelDraft(prev =>
+					prev ?
+						{
+							...prev,
+							supported_models: prev.supported_models.filter(model => model !== removedModel)
+						}
+					:	prev
+				)
+			}
 			setEditingModelIndex(prev => {
 				if (prev === null) return null
 				if (prev === idx) return null
@@ -347,7 +361,7 @@ export function ProviderDialog({
 				return null
 			})
 		},
-		[editingModelIndex]
+		[editingModelIndex, form.models]
 	)
 
 	const openCreateModelDialog = useCallback(() => {
@@ -380,11 +394,12 @@ export function ProviderDialog({
 		}
 
 		const multiplier = Number(modelDraft.multiplier)
-		if (!Number.isFinite(multiplier) || multiplier < 0) {
+		if (!Number.isFinite(multiplier) || multiplier <= 0) {
 			toast.error(t('providers.validationMultiplier'))
 			return
 		}
 
+		const previousModel = editingModelIndex === null ? null : form.models[editingModelIndex]?.model.trim()
 		const nextRow: ModelRow = {
 			model: trimmedModel,
 			redirect: modelDraft.redirect,
@@ -398,8 +413,29 @@ export function ProviderDialog({
 					[...prev.models, nextRow]
 				: 	prev.models.map((row, index) =>
 						index === editingModelIndex ? nextRow : row
-					)
+					),
+			channels:
+				previousModel && previousModel !== trimmedModel ?
+					prev.channels.map(channel => ({
+						...channel,
+						supported_models: channel.supported_models.map(model =>
+							model === previousModel ? trimmedModel : model
+						)
+					}))
+				:	prev.channels
 		}))
+		if (previousModel && previousModel !== trimmedModel) {
+			setChannelDraft(prev =>
+				prev ?
+					{
+						...prev,
+						supported_models: prev.supported_models.map(model =>
+							model === previousModel ? trimmedModel : model
+						)
+					}
+				:	prev
+			)
+		}
 		closeModelDialog()
 	}, [closeModelDialog, editingModelIndex, form.models, modelDraft, t])
 
@@ -472,7 +508,11 @@ export function ProviderDialog({
 	const handleChannelDialogSave = useCallback(() => {
 		if (!channelDraft) return
 
+		const providerModelNames = new Set(form.models.map(row => row.model.trim()).filter(Boolean))
 		const nextRow = cloneChannelRow(channelDraft)
+		nextRow.supported_models = nextRow.supported_models.filter(model =>
+			providerModelNames.has(model)
+		)
 		setForm(prev => ({
 			...prev,
 			channels:
@@ -483,7 +523,7 @@ export function ProviderDialog({
 					)
 		}))
 		closeChannelDialog()
-	}, [channelDraft, closeChannelDialog, editingChannelIndex])
+	}, [channelDraft, closeChannelDialog, editingChannelIndex, form.models])
 
 	const validateAndBuild = useCallback((): CreateProviderInput | null => {
 		if (!form.name.trim()) {
@@ -523,6 +563,7 @@ export function ProviderDialog({
 		const channels = form.channels.map(row => ({
 			id: row.id.trim() || undefined,
 			name: row.name.trim(),
+			provider_type: row.provider_type,
 			base_url: row.base_url.trim(),
 			api_key: row.api_key.trim() || undefined,
 			weight: Number(row.weight),
@@ -542,6 +583,20 @@ export function ProviderDialog({
 			passive_rate_limit_cooldown_seconds_override:
 				row.passive_rate_limit_cooldown_seconds_override.trim() ?
 					Number(row.passive_rate_limit_cooldown_seconds_override)
+				: null,
+			supported_models: row.supported_models,
+			active_probe_enabled_override: row.active_probe_enabled_override,
+			active_probe_interval_seconds_override:
+				row.active_probe_interval_seconds_override.trim() ?
+					Number(row.active_probe_interval_seconds_override)
+				: null,
+			active_probe_success_threshold_override:
+				row.active_probe_success_threshold_override.trim() ?
+					Number(row.active_probe_success_threshold_override)
+				: null,
+			active_probe_model_override:
+				row.active_probe_model_override.trim() ?
+					row.active_probe_model_override.trim()
 				: null
 		}))
 
@@ -592,6 +647,28 @@ export function ProviderDialog({
 					channel.passive_rate_limit_cooldown_seconds_override < 1)
 			) {
 				toast.error(t('providers.validationChannelRateLimitCooldown'))
+				return null
+			}
+			for (const model of channel.supported_models) {
+				if (!seenModelNames.has(model)) {
+					toast.error(t('providers.validationChannelUnsupportedModel'))
+					return null
+				}
+			}
+			if (
+				channel.active_probe_interval_seconds_override !== null &&
+				(!Number.isFinite(channel.active_probe_interval_seconds_override) ||
+					channel.active_probe_interval_seconds_override < 1)
+			) {
+				toast.error(t('providers.validationProbeInterval'))
+				return null
+			}
+			if (
+				channel.active_probe_success_threshold_override !== null &&
+				(!Number.isFinite(channel.active_probe_success_threshold_override) ||
+					channel.active_probe_success_threshold_override < 1)
+			) {
+				toast.error(t('providers.validationProbeSuccessThreshold'))
 				return null
 			}
 		}
@@ -648,7 +725,6 @@ export function ProviderDialog({
 
 		return {
 			name: form.name.trim(),
-			provider_type: form.provider_type,
 			api_type_overrides: apiTypeOverrides,
 			models,
 			channels,
@@ -779,17 +855,16 @@ export function ProviderDialog({
 
 							<ProviderDialogSectionsDivider />
 
-							<ModelsSection
-								form={form}
-								editingModelIndex={editingModelIndex}
-								modelProviderMap={modelProviderMap}
-								pricedModelIdSet={pricedModelIdSet}
-								reasoningSuffixMap={reasoningSuffixMap}
-								t={t}
-								onFetchModels={handleFetchModels}
-								onAddModel={openCreateModelDialog}
-								onEditModel={openEditModelDialog}
-								onDeleteModel={deleteModelAt}
+				<ModelsSection
+					form={form}
+					editingModelIndex={editingModelIndex}
+					modelProviderMap={modelProviderMap}
+					pricedModelIdSet={pricedModelIdSet}
+					reasoningSuffixMap={reasoningSuffixMap}
+					t={t}
+					onAddModel={openCreateModelDialog}
+					onEditModel={openEditModelDialog}
+					onDeleteModel={deleteModelAt}
 							/>
 
 							<ProviderDialogSectionsDivider />
@@ -884,9 +959,8 @@ export function ProviderDialog({
 			<ModelPickerDialog
 				open={modelPickerOpen}
 				onOpenChange={setModelPickerOpen}
-				providerId={isEdit ? current?.id : undefined}
 				channelInfo={fetchChannelInfo}
-				providerName={form.name || current?.name || ''}
+				providerName={channelDraft?.name || form.name || current?.name || ''}
 				existingModels={existingModelNames}
 				modelMetadata={modelMetadata}
 				reasoningSuffixMap={reasoningSuffixMap}
@@ -928,6 +1002,7 @@ export function ProviderDialog({
 				isEdit={isEdit}
 				canDelete={editingChannelIndex !== null}
 				globalDefaults={channelGlobalDefaults}
+				providerModels={form.models}
 				onOpenChange={value => {
 					if (!value) {
 						closeChannelDialog()
@@ -936,6 +1011,7 @@ export function ProviderDialog({
 				onChange={updateChannelDraft}
 				onBaseUrlChange={updateChannelDraftBaseUrl}
 				onBaseUrlBlur={handleBaseUrlBlur}
+				onFetchModels={handleFetchChannelModels}
 				onDelete={() => {
 					if (editingChannelIndex === null) return
 					deleteChannelAt(editingChannelIndex)

@@ -348,7 +348,6 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "fisx-style-image-test".to_string(),
-            provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
             models,
             api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
                 pattern: "gpt-image-test".to_string(),
@@ -358,6 +357,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("fisx-style-image-test-ch".to_string()),
                 name: "fisx-style-image-test-ch".to_string(),
+                provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
                 base_url,
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
@@ -366,6 +366,11 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec!["gpt-image-test".to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
             }],
             max_retries: -1,
             channel_max_retries: 0,

@@ -105,7 +105,7 @@ Standard waterfall routing applies (§ database-provider-routing.spec.md):
 
 ## 7. Active Probing
 
-Replicate providers are **excluded** from the active health probe loop. `probe_channel_completion` skips providers where `provider_type == Replicate`. Health assessment relies on passive failure tracking only.
+Replicate Channels are **excluded** from the active health probe loop. Active probing skips Channels where `provider_type == Replicate`. Health assessment relies on passive failure tracking only.
 
 ## 8. Transform Support
 

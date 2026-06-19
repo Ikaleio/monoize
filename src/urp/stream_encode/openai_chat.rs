@@ -197,6 +197,13 @@ pub(crate) async fn emit_synthetic_chat_stream(
                     .await?;
                 }
             }
+            Node::ProviderItem {
+                origin_protocol: urp::ProviderProtocol::ChatCompletion,
+                body,
+                ..
+            } => {
+                emit_chat_provider_content_part(&tx, &id, created, logical_model, body).await?;
+            }
             _ => continue,
         }
     }
@@ -452,6 +459,15 @@ pub(crate) async fn encode_urp_stream_as_chat(
                         .await?;
                         tool_call.arguments_streamed = true;
                     }
+                } else if let Node::ProviderItem {
+                    origin_protocol: urp::ProviderProtocol::ChatCompletion,
+                    body,
+                    ..
+                } = node
+                {
+                    node_owned_kinds.insert(ChatNodeKind::Content);
+                    emit_chat_provider_content_part(&tx, &chat_id, created, logical_model, &body)
+                        .await?;
                 }
             }
             UrpStreamEvent::ResponseDone {
@@ -632,8 +648,32 @@ fn node_header_streams_as_content(header: &NodeHeader) -> bool {
             | NodeHeader::Image { .. }
             | NodeHeader::Audio { .. }
             | NodeHeader::File { .. }
-            | NodeHeader::ProviderItem { .. }
+            | NodeHeader::ProviderItem {
+                origin_protocol: urp::ProviderProtocol::ChatCompletion,
+                ..
+            }
     )
+}
+
+async fn emit_chat_provider_content_part(
+    tx: &mpsc::Sender<Event>,
+    chat_id: &str,
+    created: i64,
+    logical_model: &str,
+    body: &Value,
+) -> AppResult<()> {
+    let chunk = json!({
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": logical_model,
+        "choices": [{
+            "index": 0,
+            "delta": { "content": [body.clone()] },
+            "finish_reason": Value::Null
+        }]
+    });
+    send_plain_sse_data(tx, chunk.to_string()).await
 }
 
 async fn emit_tool_call_header(

@@ -209,6 +209,10 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(RequestLogs::ReasoningEffort).text())
                     .col(ColumnDef::new(RequestLogs::TriedProvidersJson).text())
                     .col(ColumnDef::new(RequestLogs::RequestKind).text())
+                    .col(ColumnDef::new(RequestLogs::EffectiveProviderType).text())
+                    .col(ColumnDef::new(RequestLogs::AffinityHit).integer())
+                    .col(ColumnDef::new(RequestLogs::AffinityKeyHash).text())
+                    .col(ColumnDef::new(RequestLogs::AffinityTarget).text())
                     .col(ColumnDef::new(RequestLogs::CreatedAt).text().not_null())
                     .col(ColumnDef::new(RequestLogs::CreatedAtUnixMs).big_integer())
                     .foreign_key(
@@ -357,11 +361,6 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(MonoizeProviders::Name).text().not_null())
                     .col(
-                        ColumnDef::new(MonoizeProviders::ProviderType)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(
                         ColumnDef::new(MonoizeProviders::MaxRetries)
                             .integer()
                             .not_null()
@@ -480,6 +479,11 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(MonoizeChannels::Name).text().not_null())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ProviderType)
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(MonoizeChannels::BaseUrl).text().not_null())
                     .col(ColumnDef::new(MonoizeChannels::ApiKey).text().not_null())
                     .col(
@@ -497,16 +501,20 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(MonoizeChannels::PassiveFailureThresholdOverride).integer())
                     .col(ColumnDef::new(MonoizeChannels::PassiveCooldownSecondsOverride).integer())
                     .col(ColumnDef::new(MonoizeChannels::PassiveWindowSecondsOverride).integer())
-                    .col(ColumnDef::new(MonoizeChannels::PassiveMinSamplesOverride).integer())
-                    .col(
-                        ColumnDef::new(MonoizeChannels::PassiveFailureRateThresholdOverride)
-                            .double(),
-                    )
                     .col(
                         ColumnDef::new(MonoizeChannels::PassiveRateLimitCooldownSecondsOverride)
                             .integer(),
                     )
-                    .col(ColumnDef::new(MonoizeChannels::RequestTimeoutMsOverride).integer())
+                    .col(ColumnDef::new(MonoizeChannels::ActiveProbeEnabledOverride).integer())
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ActiveProbeIntervalSecondsOverride)
+                            .integer(),
+                    )
+                    .col(
+                        ColumnDef::new(MonoizeChannels::ActiveProbeSuccessThresholdOverride)
+                            .integer(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannels::ActiveProbeModelOverride).text())
                     .col(ColumnDef::new(MonoizeChannels::CreatedAt).text().not_null())
                     .col(ColumnDef::new(MonoizeChannels::UpdatedAt).text().not_null())
                     .foreign_key(
@@ -523,135 +531,34 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(Providers::Table)
+                    .table(MonoizeChannelModels::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(Providers::Id)
-                            .text()
-                            .not_null()
-                            .primary_key(),
-                    )
-                    .col(ColumnDef::new(Providers::Name).text().not_null())
-                    .col(ColumnDef::new(Providers::ProviderType).text().not_null())
-                    .col(ColumnDef::new(Providers::BaseUrl).text())
-                    .col(ColumnDef::new(Providers::AuthType).text())
-                    .col(ColumnDef::new(Providers::AuthValue).text())
-                    .col(ColumnDef::new(Providers::AuthHeaderName).text())
-                    .col(ColumnDef::new(Providers::AuthQueryName).text())
-                    .col(ColumnDef::new(Providers::CapabilitiesJson).text())
-                    .col(ColumnDef::new(Providers::StrategyJson).text())
-                    .col(
-                        ColumnDef::new(Providers::Enabled)
-                            .integer()
-                            .not_null()
-                            .default(1),
-                    )
-                    .col(
-                        ColumnDef::new(Providers::Priority)
-                            .integer()
-                            .not_null()
-                            .default(0),
-                    )
-                    .col(
-                        ColumnDef::new(Providers::Weight)
-                            .integer()
-                            .not_null()
-                            .default(1),
-                    )
-                    .col(ColumnDef::new(Providers::Tag).text())
-                    .col(
-                        ColumnDef::new(Providers::GroupsJson)
-                            .text()
-                            .not_null()
-                            .default("[]"),
-                    )
-                    .col(ColumnDef::new(Providers::Balance).double())
-                    .col(ColumnDef::new(Providers::CreatedAt).text().not_null())
-                    .col(ColumnDef::new(Providers::UpdatedAt).text().not_null())
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_table(
-                Table::create()
-                    .table(ModelMappings::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(ModelMappings::Id)
-                            .text()
-                            .not_null()
-                            .primary_key(),
-                    )
-                    .col(ColumnDef::new(ModelMappings::ProviderId).text().not_null())
-                    .col(
-                        ColumnDef::new(ModelMappings::LogicalModel)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(ModelMappings::UpstreamModel)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(ModelMappings::CreatedAt).text().not_null())
-                    .foreign_key(
-                        ForeignKey::create()
-                            .name("fk_model_mappings_provider_id")
-                            .from(ModelMappings::Table, ModelMappings::ProviderId)
-                            .to(Providers::Table, Providers::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_table(
-                Table::create()
-                    .table(GroupMembers::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(GroupMembers::Id)
+                        ColumnDef::new(MonoizeChannelModels::Id)
                             .text()
                             .not_null()
                             .primary_key(),
                     )
                     .col(
-                        ColumnDef::new(GroupMembers::GroupProviderId)
+                        ColumnDef::new(MonoizeChannelModels::ChannelId)
                             .text()
                             .not_null(),
                     )
                     .col(
-                        ColumnDef::new(GroupMembers::MemberProviderId)
+                        ColumnDef::new(MonoizeChannelModels::ModelName)
                             .text()
                             .not_null(),
                     )
                     .col(
-                        ColumnDef::new(GroupMembers::Weight)
-                            .integer()
-                            .not_null()
-                            .default(1),
-                    )
-                    .col(
-                        ColumnDef::new(GroupMembers::Priority)
-                            .integer()
-                            .not_null()
-                            .default(0),
-                    )
-                    .col(ColumnDef::new(GroupMembers::CreatedAt).text().not_null())
-                    .foreign_key(
-                        ForeignKey::create()
-                            .name("fk_group_members_group_provider_id")
-                            .from(GroupMembers::Table, GroupMembers::GroupProviderId)
-                            .to(Providers::Table, Providers::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
+                        ColumnDef::new(MonoizeChannelModels::CreatedAt)
+                            .text()
+                            .not_null(),
                     )
                     .foreign_key(
                         ForeignKey::create()
-                            .name("fk_group_members_member_provider_id")
-                            .from(GroupMembers::Table, GroupMembers::MemberProviderId)
-                            .to(Providers::Table, Providers::Id)
+                            .name("fk_mcm_channel_id")
+                            .from(MonoizeChannelModels::Table, MonoizeChannelModels::ChannelId)
+                            .to(MonoizeChannels::Table, MonoizeChannels::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
                     .to_owned(),
@@ -846,9 +753,9 @@ impl MigrationTrait for Migration {
             .create_index(
                 Index::create()
                     .if_not_exists()
-                    .name("idx_mm_provider_id")
-                    .table(ModelMappings::Table)
-                    .col(ModelMappings::ProviderId)
+                    .name("idx_mcm_channel_id")
+                    .table(MonoizeChannelModels::Table)
+                    .col(MonoizeChannelModels::ChannelId)
                     .to_owned(),
             )
             .await?;
@@ -856,33 +763,10 @@ impl MigrationTrait for Migration {
             .create_index(
                 Index::create()
                     .if_not_exists()
-                    .name("uq_mm_provider_id_logical_model")
-                    .table(ModelMappings::Table)
-                    .col(ModelMappings::ProviderId)
-                    .col(ModelMappings::LogicalModel)
-                    .unique()
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_gm_group_provider_id")
-                    .table(GroupMembers::Table)
-                    .col(GroupMembers::GroupProviderId)
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("uq_gm_group_provider_id_member_provider_id")
-                    .table(GroupMembers::Table)
-                    .col(GroupMembers::GroupProviderId)
-                    .col(GroupMembers::MemberProviderId)
+                    .name("uq_mcm_channel_id_model_name")
+                    .table(MonoizeChannelModels::Table)
+                    .col(MonoizeChannelModels::ChannelId)
+                    .col(MonoizeChannelModels::ModelName)
                     .unique()
                     .to_owned(),
             )
@@ -906,21 +790,10 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(
                 Table::drop()
-                    .table(GroupMembers::Table)
+                    .table(MonoizeChannelModels::Table)
                     .if_exists()
                     .to_owned(),
             )
-            .await?;
-        manager
-            .drop_table(
-                Table::drop()
-                    .table(ModelMappings::Table)
-                    .if_exists()
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .drop_table(Table::drop().table(Providers::Table).if_exists().to_owned())
             .await?;
         manager
             .drop_table(
@@ -1095,6 +968,10 @@ enum RequestLogs {
     ReasoningEffort,
     TriedProvidersJson,
     RequestKind,
+    EffectiveProviderType,
+    AffinityHit,
+    AffinityKeyHash,
+    AffinityTarget,
     CreatedAt,
     CreatedAtUnixMs,
 }
@@ -1145,7 +1022,6 @@ enum MonoizeProviders {
     Table,
     Id,
     Name,
-    ProviderType,
     MaxRetries,
     Transforms,
     ApiTypeOverrides,
@@ -1177,6 +1053,7 @@ enum MonoizeChannels {
     Id,
     ProviderId,
     Name,
+    ProviderType,
     BaseUrl,
     ApiKey,
     Weight,
@@ -1184,55 +1061,21 @@ enum MonoizeChannels {
     PassiveFailureThresholdOverride,
     PassiveCooldownSecondsOverride,
     PassiveWindowSecondsOverride,
-    PassiveMinSamplesOverride,
-    PassiveFailureRateThresholdOverride,
     PassiveRateLimitCooldownSecondsOverride,
-    RequestTimeoutMsOverride,
+    ActiveProbeEnabledOverride,
+    ActiveProbeIntervalSecondsOverride,
+    ActiveProbeSuccessThresholdOverride,
+    ActiveProbeModelOverride,
     CreatedAt,
     UpdatedAt,
 }
 
 #[derive(Iden)]
-enum Providers {
+enum MonoizeChannelModels {
     Table,
     Id,
-    Name,
-    ProviderType,
-    BaseUrl,
-    AuthType,
-    AuthValue,
-    AuthHeaderName,
-    AuthQueryName,
-    CapabilitiesJson,
-    StrategyJson,
-    Enabled,
-    Priority,
-    Weight,
-    Tag,
-    GroupsJson,
-    Balance,
-    CreatedAt,
-    UpdatedAt,
-}
-
-#[derive(Iden)]
-enum ModelMappings {
-    Table,
-    Id,
-    ProviderId,
-    LogicalModel,
-    UpstreamModel,
-    CreatedAt,
-}
-
-#[derive(Iden)]
-enum GroupMembers {
-    Table,
-    Id,
-    GroupProviderId,
-    MemberProviderId,
-    Weight,
-    Priority,
+    ChannelId,
+    ModelName,
     CreatedAt,
 }
 

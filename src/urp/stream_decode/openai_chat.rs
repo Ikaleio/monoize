@@ -8,7 +8,9 @@ use crate::urp::decode::parse_tool_call_arguments_value;
 use crate::urp::stream_helpers::{
     extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks,
 };
-use crate::urp::{FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, UrpStreamEvent};
+use crate::urp::{
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol, UrpStreamEvent,
+};
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -44,6 +46,7 @@ pub(crate) async fn stream_chat_to_urp_events(
     let mut call_order: Vec<String> = Vec::new();
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut call_id_by_index: HashMap<usize, String> = HashMap::new();
+    let mut provider_items: Vec<(u32, Node)> = Vec::new();
 
     let mut response_started = false;
     let mut next_node_index = 0u32;
@@ -206,6 +209,7 @@ pub(crate) async fn stream_chat_to_urp_events(
                     continue;
                 }
 
+                let mut recognized = false;
                 if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
                     let item_type = block_obj.get("type").and_then(|v| v.as_str());
                     if !matches!(item_type, Some("tool_call" | "function_call" | "tool_use")) {
@@ -221,9 +225,11 @@ pub(crate) async fn stream_chat_to_urp_events(
                             &mut output_text,
                         )
                         .await?;
+                        recognized = true;
                     }
                 }
 
+                let tool_like = chat_stream_block_is_tool_call_like(block_obj);
                 let mut tool_state = ChatToolCallStreamState {
                     call_order: &mut call_order,
                     calls: &mut calls,
@@ -241,6 +247,21 @@ pub(crate) async fn stream_chat_to_urp_events(
                     &mut tool_state,
                 )
                 .await?;
+                if tool_like {
+                    recognized = true;
+                }
+                if !recognized {
+                    process_provider_item_block(
+                        &tx,
+                        &response_id,
+                        &urp.model,
+                        block_obj,
+                        &mut response_started,
+                        &mut next_node_index,
+                        &mut provider_items,
+                    )
+                    .await?;
+                }
             }
         }
 
@@ -346,6 +367,7 @@ pub(crate) async fn stream_chat_to_urp_events(
         &call_order,
         &calls,
         &tool_node_index_by_call_id,
+        &provider_items,
     );
 
     for (node_index, node) in &output_nodes {
@@ -373,6 +395,66 @@ pub(crate) async fn stream_chat_to_urp_events(
     .await?;
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_provider_item_block(
+    tx: &mpsc::Sender<UrpStreamEvent>,
+    response_id: &str,
+    model: &str,
+    block_obj: &Map<String, Value>,
+    response_started: &mut bool,
+    next_node_index: &mut u32,
+    provider_items: &mut Vec<(u32, Node)>,
+) -> AppResult<()> {
+    ensure_response_started(tx, response_id, model, response_started).await?;
+    let node_index = *next_node_index;
+    *next_node_index += 1;
+    let node = Node::ProviderItem {
+        id: block_obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+        origin_protocol: ProviderProtocol::ChatCompletion,
+        role: OrdinaryRole::Assistant,
+        item_type: block_obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        body: Value::Object(block_obj.clone()),
+        extra_body: HashMap::new(),
+    };
+    send_event(
+        tx,
+        UrpStreamEvent::NodeStart {
+            node_index,
+            header: NodeHeader::ProviderItem {
+                id: node.id().cloned(),
+                origin_protocol: ProviderProtocol::ChatCompletion,
+                role: OrdinaryRole::Assistant,
+                item_type: block_obj
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            },
+            extra_body: HashMap::new(),
+        },
+    )
+    .await?;
+    provider_items.push((node_index, node));
+    Ok(())
+}
+
+fn chat_stream_block_is_tool_call_like(block_obj: &Map<String, Value>) -> bool {
+    matches!(
+        block_obj.get("type").and_then(|v| v.as_str()),
+        Some("tool_call" | "function_call" | "tool_use")
+    ) || block_obj.contains_key("function")
+        || block_obj.contains_key("call_id")
+        || block_obj.contains_key("input")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -805,6 +887,7 @@ fn sorted_nodes(
     call_order: &[String],
     calls: &HashMap<String, (String, String)>,
     tool_node_index_by_call_id: &HashMap<String, u32>,
+    provider_items: &[(u32, Node)],
 ) -> Vec<(u32, Node)> {
     let mut nodes = Vec::new();
 
@@ -855,6 +938,7 @@ fn sorted_nodes(
         ));
     }
 
+    nodes.extend(provider_items.iter().cloned());
     nodes.sort_by_key(|(node_index, _)| *node_index);
     nodes
 }
@@ -1015,6 +1099,7 @@ mod tests {
             &call_order,
             &calls,
             &tool_node_index_by_call_id,
+            &[],
         );
 
         assert_eq!(nodes.len(), 4);

@@ -227,6 +227,7 @@ fn decode_item_from_value(item: &Value) -> Item {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                origin_protocol: ProviderProtocol::Responses,
                 item_type: other.to_string(),
                 body: item.clone(),
                 extra_body: HashMap::new(),
@@ -323,6 +324,7 @@ fn decode_part_from_value(part: &Value) -> Part {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+                origin_protocol: ProviderProtocol::Responses,
                 item_type: "image_generation_call".to_string(),
                 body: part.clone(),
                 extra_body: HashMap::new(),
@@ -333,6 +335,7 @@ fn decode_part_from_value(part: &Value) -> Part {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+            origin_protocol: ProviderProtocol::Responses,
             item_type: other.to_string(),
             body: part.clone(),
             extra_body: HashMap::new(),

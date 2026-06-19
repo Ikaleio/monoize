@@ -4,8 +4,8 @@ use crate::urp::encode::{
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, ResponseFormat, ToolDefinition, ToolResultContent,
-    UrpRequest, UrpResponse,
+    FileSource, FinishReason, ImageSource, ProviderProtocol, ResponseFormat, ToolDefinition,
+    ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;

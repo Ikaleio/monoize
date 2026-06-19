@@ -205,6 +205,12 @@ impl RequestLogBatcher {
                     .map(serde_json::Value::to_string)
                     .into(),
                 log.request_kind.clone().into(),
+                log.effective_provider_type.clone().into(),
+                log.affinity_hit
+                    .map(|v| sea_orm::Value::Int(Some(if v { 1 } else { 0 })))
+                    .unwrap_or(sea_orm::Value::Int(None)),
+                log.affinity_key_hash.clone().into(),
+                log.affinity_target.clone().into(),
                 created_at.into(),
                 created_at_unix_ms.into(),
             ];
@@ -215,8 +221,10 @@ impl RequestLogBatcher {
                     accepted_prediction_tokens, rejected_prediction_tokens,
                     provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
                     billing_breakdown_json, error_code, error_message, error_http_status,
-                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind, created_at, created_at_unix_ms)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)"#;
+                    duration_ms, ttfb_ms, request_ip, reasoning_effort, tried_providers_json, request_kind,
+                    effective_provider_type, affinity_hit, affinity_key_hash, affinity_target,
+                    created_at, created_at_unix_ms)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)"#;
 
             if let Err(e) = tx.execute(db.stmt(sql, values)).await {
                 tracing::warn!("request_log_batcher flush error: {e}");

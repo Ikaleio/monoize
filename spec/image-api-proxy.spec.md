@@ -87,7 +87,7 @@ IM4. All remaining fields from the request body → `UrpRequest.extra_body`. The
 
 IM5. `tools`, `tool_choice`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `response_format`, and `user` on the URP request MUST be left as `None`/absent. Monoize MUST NOT inject any `tools` or `tool_choice` values at Image API request mapping time. Users who need specific tool injection (e.g. `image_generation` tool for OpenAI Responses upstream) MUST configure request-phase transforms on the provider or API key.
 
-IM5b. If the selected upstream provider is `provider_type = "responses"`, the Images API compatibility path SHOULD use a request-phase transform that inserts a Responses `image_generation` tool and forces a specific `tool_choice` for that tool. Without a forced tool choice, a text-capable Responses model MAY return only assistant text, which produces no Image API data item under §5.1.
+IM5b. If the selected upstream attempt has effective upstream type `responses`, the Images API compatibility path SHOULD use a request-phase transform that inserts a Responses `image_generation` tool and forces a specific `tool_choice` for that tool. Without a forced tool choice, a text-capable Responses model MAY return only assistant text, which produces no Image API data item under §5.1.
 
 IM5a. If a routed upstream provider only surfaces generated image outputs on the streaming Responses event channel and omits them from the terminal non-streaming response body, Monoize MAY internally execute the sub-request as a streaming upstream request, collect the emitted URP stream events into a final `UrpResponse`, and continue response extraction from that collected `UrpResponse`.
 
@@ -238,9 +238,9 @@ RT1. Routing uses the `model` field from the Image API request as the logical mo
 
 RT2. The provider type determines which upstream adapter encodes the URP request. The same provider type resolution used for `/v1/responses` applies.
 
-RT3. If an Image API edit sub-request routes to a provider with `provider_type = "openai_image"`, Monoize MUST forward the source image node(s) and mask node, if present, as `multipart/form-data` to upstream `POST /v1/images/edits`. Monoize MUST NOT encode that upstream call as JSON and MUST NOT send it to upstream `POST /v1/images/generations`.
+RT3. If an Image API edit sub-request routes to an attempt with effective upstream type `openai_image`, Monoize MUST forward the source image node(s) and mask node, if present, as `multipart/form-data` to upstream `POST /v1/images/edits`. Monoize MUST NOT encode that upstream call as JSON and MUST NOT send it to upstream `POST /v1/images/generations`.
 
-RT4. If an Image API generation sub-request routes to a provider with `provider_type = "openai_image"`, and the mapped URP request contains no user-role image nodes, Monoize MUST keep the existing JSON upstream encoding and upstream path `POST /v1/images/generations`.
+RT4. If an Image API generation sub-request routes to an attempt with effective upstream type `openai_image`, and the mapped URP request contains no user-role image nodes, Monoize MUST keep the existing JSON upstream encoding and upstream path `POST /v1/images/generations`.
 
 ### 6.3 Billing
 

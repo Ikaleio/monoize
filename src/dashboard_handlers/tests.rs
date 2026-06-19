@@ -15,13 +15,13 @@ use crate::monoize_routing::{
     CreateMonoizeProviderInput, MonoizeChannel, MonoizeModelEntry, MonoizeProvider,
     MonoizeProviderType, MonoizeRoutingStore, UpdateMonoizeProviderInput,
 };
-use crate::providers::ProviderStore;
 use crate::settings::SettingsStore;
 use crate::transforms::{Phase, TransformRuleConfig};
 use crate::users::{
-    CreateApiKeyInput, ModelRedirectRule, RequestLogApiKey, RequestLogBilling, RequestLogChannel,
-    RequestLogError, RequestLogProvider, RequestLogRow, RequestLogTiming, RequestLogTokens,
-    RequestLogUser, UpdateApiKeyInput, User, UserRole, UserStore,
+    CreateApiKeyInput, ModelRedirectRule, RequestLogAffinity, RequestLogApiKey,
+    RequestLogBilling, RequestLogChannel, RequestLogError, RequestLogProvider, RequestLogRow,
+    RequestLogTiming, RequestLogTokens, RequestLogUser, UpdateApiKeyInput, User, UserRole,
+    UserStore,
 };
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::MigratorTrait;
@@ -110,7 +110,6 @@ fn provider_has_billable_pricing_strips_reasoning_suffix_before_lookup() {
 fn dashboard_create_provider_groups_default_to_public() {
     let body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
-        "provider_type": "responses",
         "models": {
             "gpt-5": {
                 "redirect": null,
@@ -120,13 +119,17 @@ fn dashboard_create_provider_groups_default_to_public() {
         "channels": [
             {
                 "name": "public",
+                "provider_type": "responses",
                 "base_url": "https://example.com/public",
-                "api_key": "secret"
+                "api_key": "secret",
+                "supported_models": ["gpt-5"]
             },
             {
                 "name": "restricted",
+                "provider_type": "responses",
                 "base_url": "https://example.com/restricted",
-                "api_key": "secret"
+                "api_key": "secret",
+                "supported_models": ["gpt-5"]
             }
         ]
     }))
@@ -142,6 +145,7 @@ fn dashboard_update_provider_groups_are_partial() {
             {
                 "id": "mono_ch_existing",
                 "name": "existing",
+                "provider_type": "responses",
                 "base_url": "https://example.com/existing"
             }
         ]
@@ -156,6 +160,7 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
     let channel = MonoizeChannel {
         id: "mono_ch_123".to_string(),
         name: "primary".to_string(),
+        provider_type: MonoizeProviderType::Responses,
         base_url: "https://example.com".to_string(),
         api_key: "secret".to_string(),
         weight: 1,
@@ -164,6 +169,11 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         passive_cooldown_seconds_override: None,
         passive_window_seconds_override: None,
         passive_rate_limit_cooldown_seconds_override: None,
+        supported_models: vec!["gpt-5".to_string()],
+        active_probe_enabled_override: None,
+        active_probe_interval_seconds_override: None,
+        active_probe_success_threshold_override: None,
+        active_probe_model_override: None,
         _healthy: None,
         _last_success_at: None,
         _health_status: None,
@@ -172,7 +182,6 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
     let provider = MonoizeProvider {
         id: "mono_provider_123".to_string(),
         name: "provider".to_string(),
-        provider_type: MonoizeProviderType::Responses,
         models: HashMap::new(),
         channels: vec![channel],
         max_retries: -1,
@@ -223,7 +232,6 @@ async fn dashboard_provider_groups_round_trip_through_store_and_update_preserves
 
     let create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
-        "provider_type": "responses",
         "groups": [" Beta ", "alpha", "ALPHA", ""],
         "models": {
             "gpt-5": {
@@ -234,8 +242,10 @@ async fn dashboard_provider_groups_round_trip_through_store_and_update_preserves
         "channels": [
             {
                 "name": "primary",
+                "provider_type": "responses",
                 "base_url": "https://example.com",
-                "api_key": "secret"
+                "api_key": "secret",
+                "supported_models": ["gpt-5"]
             }
         ]
     }))
@@ -258,8 +268,10 @@ async fn dashboard_provider_groups_round_trip_through_store_and_update_preserves
             {
                 "id": channel_id,
                 "name": "primary",
+                "provider_type": "responses",
                 "base_url": "https://example.com",
-                "api_key": ""
+                "api_key": "",
+                "supported_models": ["gpt-5"]
             }
         ]
     }))
@@ -906,6 +918,7 @@ fn request_log_timing_serializes_compatibility_aliases() {
         is_stream: true,
         model: "gpt-5".to_string(),
         upstream_model: Some("gpt-5-upstream".to_string()),
+        effective_provider_type: Some("responses".to_string()),
         request_kind: None,
         reasoning_effort: None,
         request_ip: None,
@@ -918,6 +931,11 @@ fn request_log_timing_serializes_compatibility_aliases() {
         channel: RequestLogChannel {
             id: Some("channel-1".to_string()),
             name: Some("Channel".to_string()),
+        },
+        affinity: RequestLogAffinity {
+            hit: Some(false),
+            key_hash: Some("abc123".to_string()),
+            target: Some("provider-1/channel-1".to_string()),
         },
         user: RequestLogUser {
             id: "user-1".to_string(),
@@ -973,48 +991,6 @@ fn request_log_timing_serializes_compatibility_aliases() {
     assert_eq!(timing.get("ttfbMs"), Some(&json!(150)));
     assert_eq!(timing.get("first_token_ms"), Some(&json!(150)));
     assert_eq!(timing.get("firstTokenMs"), Some(&json!(150)));
-}
-
-#[tokio::test]
-async fn provider_store_rejects_invalid_groups_json() {
-    let db = DbPool::connect("sqlite::memory:")
-        .await
-        .expect("db connects");
-    {
-        let write = db.write().await;
-        Migrator::up(&*write, None).await.expect("migrates");
-    }
-
-    db.write()
-        .await
-        .execute(db.stmt(
-            r#"INSERT INTO providers
-               (id, name, provider_type, base_url, auth_type, auth_value, auth_header_name,
-                auth_query_name, capabilities_json, strategy_json, enabled, priority, weight,
-                tag, groups_json, balance, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, NULL, NULL, NULL, NULL, $5, NULL, 1, 0, 1, NULL, $6, '0', $7, $8)"#,
-            vec![
-                "prov_bad_groups".into(),
-                "Broken Provider".into(),
-                "responses".into(),
-                "https://example.com".into(),
-                "[]".into(),
-                "{not-json}".into(),
-                "2026-03-07T00:00:00Z".into(),
-                "2026-03-07T00:00:00Z".into(),
-            ],
-        ))
-        .await
-        .expect("insert provider");
-
-    let store = ProviderStore::new(db).await.expect("store creates");
-    let err = store
-        .get_provider("prov_bad_groups")
-        .await
-        .expect_err("invalid groups json should fail");
-
-    assert!(err.contains("invalid groups_json"));
-    assert!(err.contains("prov_bad_groups"));
 }
 
 #[tokio::test]

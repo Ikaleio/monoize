@@ -3,8 +3,8 @@ use crate::urp::decode::{
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ReasoningConfig, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
+    ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -557,6 +557,24 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
     }
     if let Some(file) = parse_file_part_from_obj(obj) {
         out.push(file);
+    }
+
+    if out.is_empty() {
+        out.push(Part::ProviderItem {
+            id: obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
+            origin_protocol: ProviderProtocol::Gemini,
+            item_type: obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            body: Value::Object(obj.clone()),
+            extra_body: HashMap::new(),
+        });
     }
 
     out

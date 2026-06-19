@@ -60,6 +60,8 @@ ENC-5. Model rewrite MUST apply provider `models[requested].redirect` when prese
 
 ENC-6. Logical downstream envelope reconstruction belongs only to the encoder. A decoder or transform MUST NOT reintroduce canonical grouped-message storage under different terminology.
 
+ENC-7. ProviderItem replay is same-protocol only. An encoder MUST replay `ProviderItem.body` only when `ProviderItem.origin_protocol` exactly equals the target provider protocol. On mismatch, the encoder MUST omit the ProviderItem and MUST NOT convert it to text or prompt content.
+
 ### 2.1 Cross-family nested passthrough stripping
 
 XSTRIP-1. Protocol family names and cross-family hop semantics are defined by `spec/urp-v2-flat-structure.spec.md`.
@@ -86,6 +88,8 @@ XSTRIP-8. Resolution semantics for XSTRIP-7 are exact:
 1. provider override `Some(true)` means strip on every cross-family hop for that provider attempt;
 2. provider override `Some(false)` means never strip for that provider attempt; and
 3. provider override `None` means inherit the global setting.
+
+XSTRIP-9. ProviderItem filtering is independent of cross-family nested passthrough stripping. For every upstream attempt, before provider request-phase transforms run, the runtime MUST remove from `UrpRequestV2.input` every `ProviderItem` whose `origin_protocol` differs from the selected upstream provider protocol. This filtering runs even when XSTRIP-7 disables cross-family nested passthrough stripping.
 
 ## 3. Canonical streaming representation for transforms
 
@@ -649,20 +653,21 @@ PIPE-1. Non-stream and stream requests MUST execute in this order:
 2. resolve model suffix;
 3. route to provider and channel using waterfall plus fail-forward;
 4. set `request.model` to the selected upstream model name;
-5. if required, perform cross-family nested passthrough stripping under XSTRIP-3 through XSTRIP-8;
-6. unwrap any `mz2.` reasoning envelopes in `request.input` against the selected upstream provider type and upstream model under §7.2 of `spec/unified_responses_proxy.spec.md` (PR4c.6, PR4c.7, PR4c.8);
-7. apply provider request-phase transforms;
-8. apply global request-phase transforms configured in system settings;
-9. apply API-key request-phase transforms;
-10. encode URP v2 to the upstream wire payload using the selected upstream model name;
-11. decode the upstream response or stream into URP v2;
-12. wrap newly produced opaque encrypted reasoning payloads in `mz2.` envelopes under PR4c.3 through PR4c.5b of `spec/unified_responses_proxy.spec.md` when the API key has `reasoning_envelope_enabled = true`;
-13. apply provider response-phase transforms;
-14. apply global response-phase transforms configured in system settings;
-15. apply API-key response-phase transforms; and
-16. encode URP v2 to the downstream wire response using the original requested logical model name.
+5. remove ProviderItems whose `origin_protocol` does not equal the selected upstream provider protocol under XSTRIP-9;
+6. if required, perform cross-family nested passthrough stripping under XSTRIP-3 through XSTRIP-8;
+7. unwrap any `mz2.` reasoning envelopes in `request.input` against the selected upstream provider type and upstream model under §7.2 of `spec/unified_responses_proxy.spec.md` (PR4c.6, PR4c.7, PR4c.8);
+8. apply provider request-phase transforms;
+9. apply global request-phase transforms configured in system settings;
+10. apply API-key request-phase transforms;
+11. encode URP v2 to the upstream wire payload using the selected upstream model name;
+12. decode the upstream response or stream into URP v2;
+13. wrap newly produced opaque encrypted reasoning payloads in `mz2.` envelopes under PR4c.3 through PR4c.5b of `spec/unified_responses_proxy.spec.md` when the API key has `reasoning_envelope_enabled = true`;
+14. apply provider response-phase transforms;
+15. apply global response-phase transforms configured in system settings;
+16. apply API-key response-phase transforms; and
+17. encode URP v2 to the downstream wire response using the original requested logical model name.
 
-PIPE-1d. Step 6 of PIPE-1 MUST run before any request-phase transform observes `request.input`. Step 12 of PIPE-1 MUST run before any response-phase transform observes `response.output` or canonical URP v2 stream events. The runtime MUST NOT expose unwrapped raw encrypted reasoning payloads to request-phase transforms, and MUST NOT expose un-enveloped encrypted reasoning payloads to response-phase transforms.
+PIPE-1d. Step 7 of PIPE-1 MUST run before any request-phase transform observes `request.input`. Step 13 of PIPE-1 MUST run before any response-phase transform observes `response.output` or canonical URP v2 stream events. The runtime MUST NOT expose unwrapped raw encrypted reasoning payloads to request-phase transforms, and MUST NOT expose un-enveloped encrypted reasoning payloads to response-phase transforms.
 
 PIPE-1a. For streaming requests that satisfy STR-9, the runtime MAY call the upstream non-stream endpoint for that attempt, decode to `UrpResponseV2`, apply response transforms, and emit synthesized downstream stream events. The postcondition is that transformed content remains visible on the stream path even when upstream native streaming is bypassed.
 

@@ -41,6 +41,10 @@ A request log row has:
 - `request_ip: string?` (client IP address extracted from `x-forwarded-for` header or socket peer)
 - `tried_providers_json: object[]?` (array of `{ provider_id, channel_id, error }` objects recording providers/channels that were attempted and failed before the final result; persisted as JSON text in DB; null when no fallback occurred)
 - `request_kind: string?` (classification of log source; null for normal client requests. `"active_probe_connectivity"` for active health-probe connectivity tests)
+- `effective_provider_type: string?` (effective upstream type used for the selected attempt; null when no attempt was selected)
+- `affinity_hit: boolean?` (true when request routing used an eligible affinity binding; false when affinity was evaluated but no binding was used; null when affinity did not run)
+- `affinity_key_hash: string?` (short hash of the affinity cache key; raw affinity key material MUST NOT be stored)
+- `affinity_target: string?` (`provider_id/channel_id` for the affinity target when present)
 - `created_at: RFC3339 string`
 
 ### 1.2 Enriched fields (computed at query time, not stored)
@@ -63,6 +67,8 @@ RL1a-1. The server MUST broadcast an in-memory request-log snapshot with `status
 RL1a-2. When provider/channel metadata for an in-flight request becomes known, the server SHOULD broadcast an updated in-memory `pending` snapshot for the same `request_id`. When the terminal `success` or `error` row is later broadcast, clients MUST treat it as replacing any earlier `pending` snapshot with the same `request_id`.
 
 RL1a-3. The server MUST maintain an in-memory map of current SSE-only `pending` snapshots keyed by `request_id`. Creating or updating a `pending` snapshot MUST upsert that key before broadcasting the snapshot. Enqueuing a terminal `success` or `error` row with the same `request_id` MUST remove that key from the map before broadcasting the terminal row. The map is process-local and starts empty after process startup.
+
+RL1a-4. Pending and terminal snapshots MUST include `effective_provider_type`, `affinity_hit`, `affinity_key_hash`, and `affinity_target` when those values are known.
 
 RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal status:
 

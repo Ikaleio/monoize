@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Download, Globe, Layers, Plus, Radio, Settings2, Trash2, Weight, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Globe, Layers, Plus, Radio, Settings2, Trash2, Weight, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -202,57 +202,6 @@ export function ProviderBasicsSection({
 						onFormChange(prev => ({ ...prev, name: e.target.value }))
 					}
 				/>
-			</div>
-			<div className='space-y-2'>
-				<Label>{t('providers.type')}</Label>
-				<Select
-					value={form.provider_type}
-					onValueChange={value =>
-						onFormChange(prev => ({
-							...prev,
-							provider_type: value as ProviderForm['provider_type']
-						}))
-					}
-				>
-					<SelectTrigger>
-						<SelectValue>
-							{(() => {
-								const cfg = PROVIDER_TYPE_CONFIG[form.provider_type]
-								const Icon = cfg.icon
-								return (
-									<span className='flex items-center gap-2'>
-										<Icon className='h-4 w-4 text-muted-foreground' />
-										{cfg.label}
-										<span className='text-muted-foreground text-xs'>
-											{cfg.path}
-										</span>
-									</span>
-								)
-							})()}
-						</SelectValue>
-					</SelectTrigger>
-					<SelectContent>
-						{(
-							Object.entries(PROVIDER_TYPE_CONFIG) as [
-								ProviderForm['provider_type'],
-								(typeof PROVIDER_TYPE_CONFIG)[ProviderForm['provider_type']]
-							][]
-						).map(([value, cfg]) => {
-							const Icon = cfg.icon
-							return (
-								<SelectItem key={value} value={value}>
-									<span className='flex items-center gap-2'>
-										<Icon className='h-4 w-4' />
-										{cfg.label}
-										<span className='opacity-60 text-xs'>
-											{cfg.path}
-										</span>
-									</span>
-								</SelectItem>
-							)
-						})}
-					</SelectContent>
-				</Select>
 			</div>
 			{isEdit && (
 				<div className='space-y-2'>
@@ -667,7 +616,6 @@ interface ModelsSectionProps {
 	pricedModelIdSet: Set<string>
 	reasoningSuffixMap: Record<string, string>
 	t: Translator
-	onFetchModels: () => void
 	onAddModel: () => void
 	onEditModel: (index: number) => void
 	onDeleteModel: (index: number) => void
@@ -680,11 +628,14 @@ export function ModelsSection({
 	pricedModelIdSet,
 	reasoningSuffixMap,
 	t,
-	onFetchModels,
 	onAddModel,
 	onEditModel,
 	onDeleteModel
 }: ModelsSectionProps) {
+	const unsupportedModels = form.models
+		.map(row => row.model.trim())
+		.filter(model => model && !form.channels.some(channel => channel.supported_models.includes(model)))
+
 	return (
 		<div className='space-y-3'>
 			<div className='flex items-center justify-between'>
@@ -693,10 +644,6 @@ export function ModelsSection({
 					<h3 className='text-base font-semibold'>{t('providers.modelsSection')}</h3>
 				</div>
 				<div className='flex items-center gap-2'>
-					<Button type='button' variant='outline' size='sm' onClick={onFetchModels}>
-						<Download className='h-4 w-4 mr-2' />
-						{t('providers.fetchModels')}
-					</Button>
 					<Button type='button' variant='outline' size='sm' onClick={onAddModel}>
 						<Plus className='h-4 w-4 mr-2' />
 						{t('providers.addModel')}
@@ -747,6 +694,11 @@ export function ModelsSection({
 					</div>
 				}
 			</div>
+			{unsupportedModels.length > 0 && (
+				<p className='text-xs text-amber-600 dark:text-amber-400'>
+					{t('providers.unsupportedProviderModels')} {unsupportedModels.join(', ')}
+				</p>
+			)}
 		</div>
 	)
 }
@@ -841,6 +793,8 @@ function ChannelListRow({
 	onToggleEnabled,
 	onDelete
 }: ChannelListRowProps) {
+	const cfg = PROVIDER_TYPE_CONFIG[row.provider_type]
+	const Icon = cfg.icon
 	return (
 		<div
 			className={cn(
@@ -854,6 +808,12 @@ function ChannelListRow({
 					<span className='truncate text-sm font-medium'>
 						{row.name || t('providers.addChannel')}
 					</span>
+					<Badge variant='outline' className='text-[10px]'>
+						<span className='flex items-center gap-1'>
+							<Icon className='h-3 w-3' />
+							{cfg.label}
+						</span>
+					</Badge>
 					{!row.enabled && (
 						<Badge variant='secondary' className='text-[10px]'>
 							{t('common.disabled')}
@@ -868,6 +828,9 @@ function ChannelListRow({
 					<span className='flex items-center gap-1 shrink-0'>
 						<Weight className='h-3 w-3' />
 						{row.weight}
+					</span>
+					<span className='shrink-0'>
+						{t('providers.supportedModels')}: {row.supported_models.length}
 					</span>
 				</div>
 			</div>
