@@ -795,24 +795,24 @@ export function UsersPage() {
                 return (
                   <>
                     <VirtualTableCell className="whitespace-nowrap">
-                      <div className="flex min-w-max items-center gap-2">
-                        <Avatar className="h-8 w-8 shrink-0">
+                      <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+                        <Avatar className="size-8 shrink-0">
                           {user.email && <AvatarImage src={getGravatarUrl(user.email, 64) ?? undefined} alt={user.username} />}
                           <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
                         </Avatar>
-                        <div className="flex min-w-max flex-col gap-1">
-                          <span className="font-medium">{user.username}</span>
+                        <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+                          <span className="min-w-0 truncate font-medium">{user.username}</span>
                           {user.allowed_groups.length > 0 && (
-                            <GroupsBadge groups={user.allowed_groups} className="whitespace-nowrap" />
+                            <GroupsBadge groups={user.allowed_groups} className="shrink-0 whitespace-nowrap" />
                           )}
                         </div>
                       </div>
                     </VirtualTableCell>
-                    <VirtualTableCell>
-                      <div className="max-h-8 overflow-x-auto overflow-y-hidden">
+                    <VirtualTableCell className="w-[8.5rem] whitespace-nowrap">
+                      <div className="flex h-8 max-w-full items-center overflow-x-auto overflow-y-hidden whitespace-nowrap">
                         <Badge
                           variant={roleVariants[user.role]}
-                          className="inline-flex h-7 min-w-max flex-nowrap items-center gap-1 whitespace-nowrap"
+                          className="h-7 min-w-max shrink-0 flex-nowrap gap-1 whitespace-nowrap"
                         >
                           <RoleIcon className="h-3 w-3 shrink-0" />
                           {t(`roles.${user.role}`)}

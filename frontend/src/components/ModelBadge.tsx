@@ -139,7 +139,7 @@ export function ModelBadge({
 		<Badge
 			variant='secondary'
 			className={cn(
-				'h-7 max-w-full gap-1.5 overflow-hidden border px-2 py-1 font-mono text-xs whitespace-nowrap transition-all',
+				'h-7 max-w-full shrink-0 flex-nowrap gap-1.5 overflow-hidden border px-2 py-1 font-mono text-xs whitespace-nowrap transition-all',
 				highlightUnpriced ?
 					'border-warning-border bg-warning-soft text-warning-foreground hover:bg-warning-soft/80'
 				:	'bg-sidebar-accent/40 hover:bg-sidebar-accent text-foreground border-transparent hover:border-sidebar-border',

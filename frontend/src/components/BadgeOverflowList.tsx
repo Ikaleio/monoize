@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { Layers } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
 	Popover,
@@ -46,8 +45,8 @@ export function BadgeOverflowList({
 }: BadgeOverflowListProps) {
 	const [open, setOpen] = React.useState(false)
 	const pinnedOpenRef = React.useRef(false)
-	const didNotifyOpenRef = React.useRef(false)
-	const openRef = React.useRef(false)
+	const didMountRef = React.useRef(false)
+	const onOpenChangeRef = React.useRef(onOpenChange)
 	const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 	const safeVisibleCount = Math.max(1, visibleCount)
 	const visibleItems = items.slice(0, safeVisibleCount)
@@ -86,27 +85,29 @@ export function BadgeOverflowList({
 	}, [clearCloseTimer, open, popoverEnabled, setPinnedOpen])
 
 	React.useEffect(() => {
-		openRef.current = open
-		if (didNotifyOpenRef.current) {
-			onOpenChange?.(open)
+		onOpenChangeRef.current = onOpenChange
+	}, [onOpenChange])
+
+	React.useEffect(() => {
+		if (!didMountRef.current) {
+			didMountRef.current = true
 			return
 		}
-		didNotifyOpenRef.current = true
-	}, [onOpenChange, open])
+		onOpenChangeRef.current?.(open)
+	}, [open])
 
 	React.useEffect(() => {
 		return () => {
 			clearCloseTimer()
-			if (openRef.current) onOpenChange?.(false)
 		}
-	}, [clearCloseTimer, onOpenChange])
+	}, [clearCloseTimer])
 
 	if (items.length === 0) return null
 
 	const preview = (
 		<span
 			className={cn(
-				'inline-flex min-w-0 max-w-full items-center gap-1 overflow-hidden whitespace-nowrap align-middle',
+				'inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1 overflow-hidden whitespace-nowrap align-middle',
 				className,
 				triggerClassName
 			)}
@@ -114,7 +115,7 @@ export function BadgeOverflowList({
 			{visibleItems.map(item => (
 				<span
 					key={item.key}
-					className='inline-flex min-w-0 max-w-full shrink overflow-hidden'
+					className='inline-flex min-w-0 max-w-full shrink overflow-hidden whitespace-nowrap'
 				>
 					{item.collapsed}
 				</span>
@@ -122,9 +123,11 @@ export function BadgeOverflowList({
 			{hiddenCount > 0 && (
 				<Badge
 					variant='secondary'
-					className={cn('shrink-0 gap-1 px-2 font-mono text-xs', countClassName)}
+					className={cn(
+						'h-6 shrink-0 flex-nowrap rounded-full border border-border/60 bg-secondary/80 px-2 font-mono text-xs backdrop-blur-sm',
+						countClassName
+					)}
 				>
-					<Layers className='h-3 w-3 shrink-0' />
 					+{hiddenCount}
 				</Badge>
 			)}
@@ -135,12 +138,15 @@ export function BadgeOverflowList({
 		return (
 			<span
 				className={cn(
-					'inline-flex min-w-0 max-w-full items-center gap-1 overflow-hidden whitespace-nowrap align-middle',
+					'inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1 overflow-hidden whitespace-nowrap align-middle',
 					className
 				)}
 			>
 				{items.map(item => (
-					<span key={item.key} className='inline-flex min-w-0 max-w-full shrink'>
+					<span
+						key={item.key}
+						className='inline-flex min-w-0 max-w-full shrink overflow-hidden whitespace-nowrap'
+					>
 						{item.direct ?? item.full ?? item.collapsed}
 					</span>
 				))}
@@ -161,7 +167,7 @@ export function BadgeOverflowList({
 					role='button'
 					tabIndex={0}
 					aria-label={ariaLabel}
-					className='inline-flex min-w-0 max-w-full cursor-default'
+					className='inline-flex min-w-0 max-w-full cursor-default flex-nowrap whitespace-nowrap align-middle'
 					onPointerEnter={openPopover}
 					onPointerLeave={scheduleClose}
 					onClick={event => {
@@ -189,7 +195,7 @@ export function BadgeOverflowList({
 				side={side}
 				align={align}
 				className={cn(
-					'w-auto max-w-[min(28rem,calc(100vw-2rem))] p-2',
+					'w-auto max-w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-border/70 bg-popover/70 p-1.5 shadow-2xl backdrop-blur-xl supports-[backdrop-filter]:bg-popover/65',
 					contentClassName
 				)}
 				onOpenAutoFocus={event => event.preventDefault()}
@@ -199,12 +205,17 @@ export function BadgeOverflowList({
 			>
 				<div
 					className={cn(
-						'flex max-h-[18rem] max-w-full flex-col items-start gap-1 overflow-auto',
+						'flex max-h-[18rem] max-w-full flex-col items-start gap-1 overflow-auto overscroll-contain p-0.5 [scrollbar-width:thin]',
 						listClassName
 					)}
+					role='list'
 				>
 					{items.map(item => (
-						<div key={item.key} className='max-w-none shrink-0'>
+						<div
+							key={item.key}
+							className='min-w-max max-w-none shrink-0 rounded-md px-0.5 py-0.5 transition-colors hover:bg-accent/50'
+							role='listitem'
+						>
 							{item.full ?? item.collapsed}
 						</div>
 					))}

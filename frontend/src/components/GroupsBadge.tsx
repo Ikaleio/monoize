@@ -23,17 +23,17 @@ export function GroupsBadge({
 			<Badge
 				variant={variant}
 				className={cn(
-					'max-w-[10rem] overflow-hidden font-mono text-xs',
+					'max-w-[10rem] shrink-0 flex-nowrap overflow-hidden font-mono text-xs',
 					className
 				)}
 			>
-				<span className='truncate'>{group}</span>
+				<span className='min-w-0 truncate'>{group}</span>
 			</Badge>
 		),
 		full: (
 			<Badge
 				variant={variant}
-				className={cn('max-w-none font-mono text-xs', className)}
+				className={cn('max-w-none shrink-0 flex-nowrap font-mono text-xs', className)}
 			>
 				<span className='whitespace-nowrap'>{group}</span>
 			</Badge>

@@ -367,6 +367,11 @@ UP4. The users table body in `/dashboard/users` MUST use virtualized rendering v
 - Table body rows MUST be rendered via `itemContent` callback.
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 
+UP5. In the `/dashboard/users` list table, the username text and allowed-group badge collection MUST render in a single non-wrapping inline row inside the user cell.
+
+- If horizontal space is insufficient, the username text MAY truncate.
+- The allowed-group badge collection MUST remain single-line and MUST NOT move below the username.
+
 ## 7. Token Management Page (UI)
 
 AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized rendering via `react-virtuoso` (`TableVirtuoso`) instead of rendering all rows as plain DOM rows.

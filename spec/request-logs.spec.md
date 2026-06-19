@@ -255,16 +255,18 @@ FL2a. The `created_at` value displayed for a request row MUST remain stable acro
 
 FL3. The model column MUST use the `ModelBadge` component (same as Provider page).
 
-FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a single cell as a collapsed badge collection.
+FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a single cell as a non-collapsed inline badge row.
 
-- The preview MUST render the duration badge when `duration_ms` is present.
-- The preview MUST render at most 1 timing badge before a `+N` overflow badge.
-- The full popover list MUST include the duration badge when present, the TTFB badge when present, and exactly one stream-mode badge (`流` or `非流`).
+- The row MUST render the duration badge when `duration_ms` is present.
+- The row MUST render the TTFB badge when `ttfb_ms` is present.
+- The row MUST render exactly one stream-mode badge (`流` or `非流`).
+- The row MUST NOT render a `+N` overflow badge for timing values.
 - Timing badges MUST NOT wrap.
+- The timing cell MAY use horizontal overflow when viewport space is insufficient; it MUST NOT hide badges behind a collapsed popover.
 
 FL4b. The frontend MUST treat request-log timing values as numeric-compatible inputs. For badge rendering and tooltip math, it MUST accept canonical fields `duration_ms` and `ttfb_ms`, and it MUST also accept the compatibility aliases `durationMs`, `elapsed_ms`, or `latency_ms` (total duration) and `ttfbMs`, `first_token_ms`, or `firstTokenMs` (TTFB) when those aliases are present. String values that parse to finite numbers MUST be rendered identically to numeric values.
 FL4c. Backend request-log API responses MUST include compatibility aliases for timing fields (`durationMs`, `elapsed_ms`, `latency_ms`, `ttfbMs`, `first_token_ms`, `firstTokenMs`) with values equal to canonical `duration_ms` / `ttfb_ms`, so updated frontend builds do not rely on client-side fallback only.
-FL4a. Opening the timing badge popover MUST show a duration detail row containing the total duration, and an "Average TPS" (tokens per second) metric when `duration_ms > 0` and `output_tokens > 0`. The TPS denominator MUST be computed as follows:
+FL4a. Hovering or focusing the timing badge row MUST show a tooltip containing a duration detail row with the total duration, and an "Average TPS" (tokens per second) metric when `duration_ms > 0` and `output_tokens > 0`. The TPS denominator MUST be computed as follows:
 
 - If `ttfb_ms` is present and `duration_ms > ttfb_ms`: denominator = `duration_ms - ttfb_ms` (generation window only).
 - Otherwise (ttfb_ms is null, or ttfb_ms >= duration_ms, i.e. no visible streaming output such as pure reasoning then tool_call): denominator = `duration_ms` (total request time).
@@ -315,7 +317,7 @@ FL15. The table MUST use compact column spacing:
 
 FL16. Token-count columns (`input_tokens` / `output_tokens`) MUST keep compact widths suitable for short integer values (commonly up to 7 digits), and should avoid consuming excess horizontal space from adjacent columns.
 
-FL17. The `duration/ttfb/stream` merged column MUST use compact collapsed-badge spacing and width so that token-count columns remain visually closer to it (reduced horizontal gap).
+FL17. The `duration/ttfb/stream` merged column MUST use compact inline-badge spacing and width so that token-count columns remain visually closer to it (reduced horizontal gap).
 
 FL18. Left-side leading columns (`created_at`, `request_id`) MUST use compact widths and reduced horizontal padding.
 
@@ -325,7 +327,7 @@ FL20. The status indicator MUST be rendered directly adjacent to the request ID 
 
 FL21. The `api_key_name` (Token) column MUST use a narrow width and truncated text display to avoid occupying excessive horizontal space.
 
-FL22. The merged `duration/ttfb/stream` column MUST remain narrowly sized with minimal horizontal cell padding and a compact collapsed badge collection, and MUST NOT reserve excess blank width when values are short.
+FL22. The merged `duration/ttfb/stream` column MUST remain narrowly sized with minimal horizontal cell padding and a compact inline badge row, and MUST NOT reserve excess blank width when values are short.
 
 FL23. The admin `channel` column MUST use a narrow width with aggressive truncation for long channel names, to minimize horizontal space usage.
 

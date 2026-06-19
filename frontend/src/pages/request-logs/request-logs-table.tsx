@@ -62,7 +62,7 @@ function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isA
 					{t('requestLogs.channel')}
 				</th>
 			)}
-			<th className='w-[8rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+			<th className='w-[10rem] text-left font-medium text-muted-foreground px-1 py-1.5 whitespace-nowrap'>
 				{t('requestLogs.duration')} / {t('requestLogs.ttfb')}
 			</th>
 			<th className='w-[3.25rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>

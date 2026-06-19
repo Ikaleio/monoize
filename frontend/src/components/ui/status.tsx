@@ -36,7 +36,7 @@ function StatusBadge({ className, variant, ...props }: StatusBadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex min-w-0 max-w-full items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium",
+        "inline-flex min-w-0 max-w-full shrink-0 flex-nowrap items-center truncate rounded-full border px-2.5 py-0.5 text-xs font-medium",
         statusClasses[variant].badge,
         className
       )}

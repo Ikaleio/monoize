@@ -185,6 +185,9 @@ DS40d. Hovering, focusing, or clicking a collapsed badge collection MUST open a 
 - The popover list MUST contain every badge represented by the collection.
 - Badge entries in the popover MUST NOT wrap.
 - If the complete list exceeds the popover bounds, the popover content MUST scroll instead of wrapping badge text.
+- The popover surface MUST use a translucent `popover` token background with backdrop blur and MUST remain portal-backed.
+
+DS40d-1. A collapsed badge collection MUST call its `onOpenChange` callback only when the collection popover open state changes. Parent rerenders that do not change the popover open state MUST NOT emit an open-change callback.
 
 DS40e. Editable chip inputs and selectable option lists MAY render all badges directly when hiding entries would remove direct edit, delete, or selection controls.
 

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { Badge } from '@/components/ui/badge'
 import {
 	Tooltip,
@@ -268,56 +267,28 @@ export function LogRowCells({
 		>
 			{t('requestLogs.nonStreamBadge')}
 		</Badge>
-	const timingBadgeItems = [
-		...(durationBadge ?
-			[
-				{
-					key: 'duration',
-					collapsed: durationBadge,
-					full: (
-						<div className='flex flex-col items-start gap-1'>
-							{durationBadge}
-							<div className='min-w-[140px] space-y-0.5 text-[11px] text-muted-foreground'>
-								<div className='flex items-center justify-between gap-3'>
-									<span>{t('requestLogs.duration')}</span>
-									<span className='font-mono'>{duration}</span>
-								</div>
-								{durationTps != null && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.avgTps')}</span>
-										<span className='font-mono'>
-											{durationTps.toFixed(2)} t/s
-										</span>
-									</div>
-								)}
-							</div>
-						</div>
-					)
-				}
-			]
-		:	[]),
-		...(ttfbBadge ?
-			[
-				{
-					key: 'ttfb',
-					collapsed: ttfbBadge,
-					full: (
-						<div className='flex flex-col items-start gap-1'>
-							{ttfbBadge}
-							<div className='flex min-w-[140px] items-center justify-between gap-3 text-[11px] text-muted-foreground'>
-								<span>{t('requestLogs.ttfb')}</span>
-								<span className='font-mono'>{ttfb}</span>
-							</div>
-						</div>
-					)
-				}
-			]
-		:	[]),
-		{
-			key: 'stream',
-			collapsed: streamBadge
-		}
-	]
+	const timingTooltipContent = (
+		<div className='min-w-[150px] space-y-0.5 text-xs'>
+			{duration && (
+				<div className='flex items-center justify-between gap-3'>
+					<span className='text-muted-foreground'>{t('requestLogs.duration')}</span>
+					<span className='font-mono'>{duration}</span>
+				</div>
+			)}
+			{durationTps != null && (
+				<div className='flex items-center justify-between gap-3'>
+					<span className='text-muted-foreground'>{t('requestLogs.avgTps')}</span>
+					<span className='font-mono'>{durationTps.toFixed(2)} t/s</span>
+				</div>
+			)}
+			{ttfb && (
+				<div className='flex items-center justify-between gap-3'>
+					<span className='text-muted-foreground'>{t('requestLogs.ttfb')}</span>
+					<span className='font-mono'>{ttfb}</span>
+				</div>
+			)}
+		</div>
+	)
 
 	const inputUncachedCostDetail = formatRateTimesUsage(
 		readTokenCount(billingInput, 'billed_uncached_tokens'),
@@ -545,14 +516,19 @@ export function LogRowCells({
 				</td>
 			)}
 
-			<td className='px-2 py-1 whitespace-nowrap align-middle'>
-				<BadgeOverflowList
-					items={timingBadgeItems}
-					visibleCount={1}
-					ariaLabel={t('requestLogs.duration')}
-					contentClassName='max-w-[min(18rem,calc(100vw-2rem))]'
-					onOpenChange={durationTooltipOpenChange}
-				/>
+			<td className='px-1 py-1 whitespace-nowrap align-middle'>
+				<TooltipProvider delayDuration={200}>
+					<Tooltip onOpenChange={durationTooltipOpenChange}>
+						<TooltipTrigger asChild>
+							<span className='inline-flex max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden whitespace-nowrap align-middle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+								{durationBadge}
+								{ttfbBadge}
+								{streamBadge}
+							</span>
+						</TooltipTrigger>
+						<TooltipContent>{timingTooltipContent}</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
 			</td>
 
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
