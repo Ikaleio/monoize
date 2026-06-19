@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, ArrowRightLeft, X } from "lucide-react";
+import { BadgeOverflowList } from "@/components/BadgeOverflowList";
 import { GroupsBadge } from "@/components/GroupsBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,12 +32,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { TableVirtuoso } from "react-virtuoso";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import {
   useApiKeys,
   createApiKeyOptimistic,
@@ -81,6 +76,124 @@ function dedupeAllowedGroups(values: string[]): string[] {
 
 function requestCaptureBadgeVariant(mode: RequestCaptureMode): "secondary" | "outline" {
   return mode === "capture-only-abnormal" ? "secondary" : "outline";
+}
+
+function ApiKeyRestrictionBadges({
+  apiKey,
+  t,
+}: {
+  apiKey: ApiKey;
+  t: (key: string) => string;
+}) {
+  const captureLabel =
+    apiKey.request_capture_mode === "capture-only-abnormal"
+      ? t("apiKeys.captureBadgeAbnormal")
+      : t("apiKeys.captureBadgeAll");
+  const captureHelp =
+    apiKey.request_capture_mode === "capture-only-abnormal"
+      ? t("apiKeys.requestCaptureModeAbnormalHelp")
+      : t("apiKeys.requestCaptureModeAllHelp");
+  const items = [
+    ...(apiKey.model_limits_enabled && apiKey.model_limits.length > 0
+      ? [
+          {
+            key: "model-limits",
+            collapsed: (
+              <Badge variant="outline" className="gap-1 px-1.5 text-xs">
+                <Layers className="h-3 w-3 shrink-0" />
+                {apiKey.model_limits.length}
+              </Badge>
+            ),
+            full: (
+              <Badge variant="outline" className="max-w-none gap-1 px-1.5 text-xs">
+                <Layers className="h-3 w-3 shrink-0" />
+                <span className="whitespace-nowrap">
+                  {t("apiKeys.modelLimits")}: {apiKey.model_limits.join(", ")}
+                </span>
+              </Badge>
+            ),
+          },
+        ]
+      : []),
+    ...(apiKey.ip_whitelist.length > 0
+      ? [
+          {
+            key: "ip-whitelist",
+            collapsed: (
+              <Badge variant="outline" className="gap-1 px-1.5 text-xs">
+                <Globe className="h-3 w-3 shrink-0" />
+                {apiKey.ip_whitelist.length}
+              </Badge>
+            ),
+            full: (
+              <Badge variant="outline" className="max-w-none gap-1 px-1.5 text-xs">
+                <Globe className="h-3 w-3 shrink-0" />
+                <span className="whitespace-nowrap">
+                  {t("apiKeys.ipWhitelist")}: {apiKey.ip_whitelist.join(", ")}
+                </span>
+              </Badge>
+            ),
+          },
+        ]
+      : []),
+    ...(apiKey.max_multiplier != null
+      ? [
+          {
+            key: "max-multiplier",
+            collapsed: (
+              <Badge variant="outline" className="px-1.5 text-xs">
+                ≤{apiKey.max_multiplier}x
+              </Badge>
+            ),
+            full: (
+              <Badge variant="outline" className="max-w-none px-1.5 text-xs">
+                <span className="whitespace-nowrap">
+                  {t("apiKeys.maxMultiplier")}: {apiKey.max_multiplier}x
+                </span>
+              </Badge>
+            ),
+          },
+        ]
+      : []),
+    ...(apiKey.request_capture_mode !== "off"
+      ? [
+          {
+            key: "request-capture",
+            collapsed: (
+              <Badge
+                variant={requestCaptureBadgeVariant(apiKey.request_capture_mode)}
+                className="px-1.5 text-xs"
+              >
+                {captureLabel}
+              </Badge>
+            ),
+            full: (
+              <Badge
+                variant={requestCaptureBadgeVariant(apiKey.request_capture_mode)}
+                className="max-w-none px-1.5 text-xs"
+              >
+                <span className="whitespace-nowrap">
+                  {captureLabel}: {captureHelp}
+                </span>
+              </Badge>
+            ),
+          },
+        ]
+      : []),
+  ];
+
+  if (items.length === 0) {
+    return <span className="text-muted-foreground">-</span>;
+  }
+
+  return (
+    <BadgeOverflowList
+      items={items}
+      visibleCount={2}
+      ariaLabel={t("apiKeys.restrictions")}
+      contentClassName="max-w-[min(34rem,calc(100vw-2rem))]"
+    />
+  );
 }
 
 interface AllowedGroupsInputProps {
@@ -187,14 +300,14 @@ function AllowedGroupsInput({
             <Badge
               key={groupKey(group)}
               variant="secondary"
-              className="flex items-center gap-1 font-mono"
+              className="flex max-w-full items-center gap-1 font-mono"
             >
-              <span>{group}</span>
+              <span className="min-w-0 truncate">{group}</span>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-4 w-4"
+                className="h-4 w-4 shrink-0"
                 onClick={() => removeGroup(group)}
               >
                 <X className="h-3 w-3" />
@@ -231,17 +344,7 @@ function AllowedGroupsInput({
             <p className="text-xs text-muted-foreground">
               {t("apiKeys.allowedGroupsCurrentUserHint")}
             </p>
-            <div className="flex flex-wrap gap-2">
-              {currentUserGroups.map((group) => (
-                <Badge
-                  key={`hint-${groupKey(group)}`}
-                  variant="outline"
-                  className="font-mono text-xs"
-                >
-                  {group}
-                </Badge>
-              ))}
-            </div>
+            <GroupsBadge groups={currentUserGroups} />
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -903,63 +1006,7 @@ export function ApiKeysPage() {
                       )}
                     </VirtualTableCell>
                     <VirtualTableCell className="whitespace-nowrap">
-                      <TooltipProvider>
-                        <div className="flex min-w-max gap-1">
-                          {key.model_limits_enabled && key.model_limits.length > 0 && (
-                            <Tooltip>
-                              <TooltipTrigger>
-                                <Layers className="h-4 w-4 text-muted-foreground" />
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>{t("apiKeys.modelLimits")}: {key.model_limits.join(", ")}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                          {key.ip_whitelist.length > 0 && (
-                            <Tooltip>
-                              <TooltipTrigger>
-                                <Globe className="h-4 w-4 text-muted-foreground" />
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>{t("apiKeys.ipWhitelist")}: {key.ip_whitelist.join(", ")}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                          {key.max_multiplier != null && (
-                            <Tooltip>
-                              <TooltipTrigger>
-                                <Badge variant="outline" className="px-1.5 text-xs whitespace-nowrap">
-                                  ≤{key.max_multiplier}x
-                                </Badge>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>{t("apiKeys.maxMultiplier")}: {key.max_multiplier}x</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                          {key.request_capture_mode !== "off" && (
-                            <Tooltip>
-                              <TooltipTrigger>
-                                <Badge variant={requestCaptureBadgeVariant(key.request_capture_mode)} className="px-1.5 text-xs whitespace-nowrap">
-                                  {key.request_capture_mode === "capture-only-abnormal"
-                                    ? t("apiKeys.captureBadgeAbnormal")
-                                    : t("apiKeys.captureBadgeAll")}
-                                </Badge>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>
-                                  {key.request_capture_mode === "capture-only-abnormal"
-                                    ? t("apiKeys.requestCaptureModeAbnormalHelp")
-                                    : t("apiKeys.requestCaptureModeAllHelp")}
-                                </p>
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                          {!key.model_limits_enabled && key.ip_whitelist.length === 0 && key.max_multiplier == null && key.request_capture_mode === "off" && (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </div>
-                      </TooltipProvider>
+                      <ApiKeyRestrictionBadges apiKey={key} t={t} />
                     </VirtualTableCell>
                     <VirtualTableCell className="whitespace-nowrap">
                       {key.expires_at ? formatDate(key.expires_at) : t("common.never")}

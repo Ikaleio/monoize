@@ -59,6 +59,8 @@ PL4. Provider detail/editor MUST display:
 - channel table: name, default type, base URL, weight, enabled, supported model count
 - channel runtime health indicator: healthy/probing/unhealthy
 
+PL4.1. Provider detail/editor MUST place the provider `enabled` switch in the top title row, right-aligned from the provider editor title.
+
 PL5. API keys/secrets for channels MUST never be shown after save (write-only behavior).
 
 PL6. Provider detail/editor MUST include an upstream transform editor bound to provider `transforms`.
@@ -105,12 +107,19 @@ PL12. Provider list card header MUST place provider metadata and controls in a c
 - provider enable switch MUST be colocated in the header action zone;
 - edit/delete/reorder controls MUST remain available without expanding card height.
 
+PL12a. Provider list card header metadata badges MUST render through a collapsed badge collection when the number of metadata badges is greater than 3.
+
+- The header badge preview MUST render no more than 3 badges before a `+N` overflow badge.
+- The preview row MUST NOT wrap.
+- The complete popover list MUST include channel type, enabled state, unpriced warning, and each provider group badge represented by the provider.
+
 PL13. Provider editor Channel dialog MUST include an explicit "Fetch Models" action that opens a model-diff selection dialog before insertion.
 
 - Dialog MUST fetch upstream model list from `POST /api/dashboard/fetch-channel-models` with the current Channel `provider_type` and `base_url`.
 - If the current Channel is an existing saved Channel and the API key input is empty, Dialog MUST pass `provider_id` and `channel_id` instead of requiring API key entry.
 - If the current Channel is new or has no saved `channel_id`, Dialog MUST require a non-empty API key before opening the picker.
 - If the API key input is non-empty, Dialog MUST pass that value so unsaved key edits are used for the fetch request.
+- Dialog MUST place the "Fetch Models" action in the Supported Models action row immediately before "Select All".
 - Dialog MUST split entries into `new` and `existing` tabs.
 - Dialog MUST initialize selection from the current Channel `supported_models`.
 - Dialog MUST allow selecting fetched models for the current Channel.
@@ -159,13 +168,18 @@ PL18. In expanded provider card overview, channel runtime list row spacing MUST 
 - Virtual list container height MUST be computed as `min(channel_count * 40, 190)`.
 - The row height constant used by the virtual list and the row element style MUST be the same value to prevent visible trailing blank space.
 
-PL19. Model lists on the Providers page MUST use virtualized rendering (`react-virtuoso`) with embedded scrolling.
+PL19. Model badge lists on the Providers page MUST use a collapsed badge collection.
 
-- Expanded provider-card model list MUST render through `Virtuoso`.
-- Provider edit dialog model list MUST render through `Virtuoso`.
-- Both containers MUST have bounded height and provide an internal vertical scrollbar.
-- Virtualized model list presentation MUST remain compact stacked badges (multiple model badges per rendered row when width allows), not a forced single-column one-badge-per-row list.
-- In both provider overview and provider edit dialog, model list container MUST keep symmetric top/bottom inner spacing so badge block appears visually centered and not top- or bottom-heavy.
+- Expanded provider-card model lists MUST render no more than 3 preview model badges before a `+N` overflow badge.
+- Provider edit dialog model lists MUST render direct clickable model tags when the model count is at most 3.
+- Provider edit dialog model lists MUST render a collapsed badge collection when the model count is greater than 3.
+- The collapsed preview row MUST NOT wrap.
+- Long model badge text in the collapsed preview MUST truncate with an ellipsis.
+- Hovering, focusing, or clicking the collapsed preview MUST open a small popover containing the complete model badge list.
+- Complete model badges in the popover MUST expose the same unpriced highlighting as the preview badges.
+- Complete model badges in the provider edit dialog popover MUST keep edit and delete controls available for each model row.
+- Complete model badge popovers SHOULD use a width up to `min(44rem, viewport width minus 2rem)` before horizontal scrolling is required.
+- The provider overview and provider edit dialog model list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
 
 PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-virtuoso`) with embedded scrolling.
 
@@ -268,6 +282,12 @@ AK8. The `request_capture_mode` control MUST expose exactly these three options:
 - `"capture-only-abnormal"`
 
 AK9. The `"capture-only-abnormal"` option help text MUST explain that abnormal means upstream error, missing usage information, or usage total equal to zero.
+
+AK10. API key restriction indicators in `/dashboard/tokens` MUST render through a collapsed badge collection when more than 2 restriction badges are present.
+
+- The restriction preview MUST render no more than 2 badges before a `+N` overflow badge.
+- Restriction badges MUST NOT wrap.
+- The complete popover list MUST include model-limit, IP whitelist, max-multiplier, and request-capture badges when those restrictions are active.
 
 ## 5. Dashboard Home Page
 

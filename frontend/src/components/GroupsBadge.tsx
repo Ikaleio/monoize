@@ -1,12 +1,6 @@
-import { Layers } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { Badge } from '@/components/ui/badge'
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger
-} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 interface GroupsBadgeProps {
@@ -23,38 +17,35 @@ export function GroupsBadge({
 	const { t } = useTranslation()
 	if (groups.length === 0) return null
 
-	if (groups.length === 1) {
-		return (
-			<Badge variant={variant} className={cn('w-fit whitespace-nowrap font-mono text-xs', className)}>
-				{groups[0]}
+	const items = groups.map((group, index) => ({
+		key: `${group}-${index}`,
+		collapsed: (
+			<Badge
+				variant={variant}
+				className={cn(
+					'max-w-[10rem] overflow-hidden font-mono text-xs',
+					className
+				)}
+			>
+				<span className='truncate'>{group}</span>
+			</Badge>
+		),
+		full: (
+			<Badge
+				variant={variant}
+				className={cn('max-w-none font-mono text-xs', className)}
+			>
+				<span className='whitespace-nowrap'>{group}</span>
 			</Badge>
 		)
-	}
+	}))
 
 	return (
-		<TooltipProvider>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className='inline-flex w-fit whitespace-nowrap'>
-						<Badge
-							variant={variant}
-							className={cn('w-fit gap-1 whitespace-nowrap font-mono text-xs', className)}
-						>
-							<Layers className='h-3 w-3' />
-							{t('groupsBadge.groupsCount', { count: groups.length })}
-						</Badge>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent>
-					<div className='flex flex-col gap-1'>
-						{groups.map(group => (
-							<span key={group} className='font-mono text-xs'>
-								{group}
-							</span>
-						))}
-					</div>
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
+		<BadgeOverflowList
+			items={items}
+			visibleCount={1}
+			popoverOnSingle
+			ariaLabel={t('groupsBadge.groupsCount', { count: groups.length })}
+		/>
 	)
 }

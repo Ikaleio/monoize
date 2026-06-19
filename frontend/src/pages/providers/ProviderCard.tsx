@@ -17,8 +17,8 @@ import {
 import { AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import { mutate } from 'swr'
-import { GroupsBadge } from '@/components/GroupsBadge'
 import { ModelBadge } from '@/components/ModelBadge'
+import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -121,13 +121,78 @@ export function ProviderCard({
 
 	const unpricedCount = provider.unpriced_model_count ?? 0
 
-	const channelTypeLabels = useMemo(() => {
+	const channelTypeLabelEntries = useMemo(() => {
 		const types = Array.from(new Set(provider.channels.map(channel => channel.provider_type)))
 		return types
-			.map(type => PROVIDER_TYPE_CONFIG[type]?.label ?? type)
+			.map(type => ({
+				key: type,
+				label: PROVIDER_TYPE_CONFIG[type]?.label ?? type
+			}))
+			.sort((a, b) => a.label.localeCompare(b.label))
+	}, [provider.channels])
+
+	const headerBadgeItems = useMemo(() => {
+		const channelTypeLabel = channelTypeLabelEntries
+			.map(entry => entry.label)
 			.sort()
 			.join(' / ')
-	}, [provider.channels])
+		const items = []
+
+		if (channelTypeLabel) {
+			items.push({
+				key: 'channel-types',
+				collapsed: (
+					<Badge variant='outline' className='max-w-[10rem] text-xs'>
+						<span className='truncate'>{channelTypeLabel}</span>
+					</Badge>
+				),
+				full: (
+					<Badge variant='outline' className='max-w-none text-xs'>
+						<span className='whitespace-nowrap'>{channelTypeLabel}</span>
+					</Badge>
+				)
+			})
+		}
+
+		items.push({
+			key: 'enabled-state',
+			collapsed: (
+				<StatusBadge variant={provider.enabled ? 'success' : 'info'}>
+					{provider.enabled ? t('common.enabled') : t('common.disabled')}
+				</StatusBadge>
+			)
+		})
+
+		if (unpricedCount > 0) {
+			items.push({
+				key: 'unpriced',
+				collapsed: (
+					<StatusBadge variant='warning'>
+						<AlertTriangle className='h-3 w-3 mr-1 shrink-0' />
+						{t('providers.unpricedModels', { count: unpricedCount })}
+					</StatusBadge>
+				)
+			})
+		}
+
+		for (const group of provider.groups) {
+			items.push({
+				key: `group-${group}`,
+				collapsed: (
+					<Badge variant='outline' className='max-w-[10rem] font-mono text-xs'>
+						<span className='truncate'>{group}</span>
+					</Badge>
+				),
+				full: (
+					<Badge variant='outline' className='max-w-none font-mono text-xs'>
+						<span className='whitespace-nowrap'>{group}</span>
+					</Badge>
+				)
+			})
+		}
+
+		return items
+	}, [channelTypeLabelEntries, provider.enabled, provider.groups, t, unpricedCount])
 
 	const handleQuickTest = async (channelId: string) => {
 		setQuickTestingChannelId(channelId)
@@ -210,23 +275,12 @@ export function ProviderCard({
 								<CardTitle className='text-base leading-normal -translate-y-px'>
 									{provider.name}
 								</CardTitle>
-								{channelTypeLabels && (
-									<Badge variant='outline' className='text-xs'>
-										{channelTypeLabels}
-									</Badge>
-								)}
-								<StatusBadge variant={provider.enabled ? 'success' : 'info'}>
-									{provider.enabled ?
-										t('common.enabled')
-									: 	t('common.disabled')}
-								</StatusBadge>
-								{unpricedCount > 0 && (
-									<StatusBadge variant='warning'>
-										<AlertTriangle className='h-3 w-3 mr-1' />
-										{t('providers.unpricedModels', { count: unpricedCount })}
-									</StatusBadge>
-								)}
-								{provider.groups.length > 0 && <GroupsBadge groups={provider.groups} />}
+								<BadgeOverflowList
+									items={headerBadgeItems}
+									visibleCount={3}
+									ariaLabel={`${provider.name}: ${t('common.status')}`}
+									contentClassName='max-w-[min(28rem,calc(100vw-2rem))]'
+								/>
 								<span className='hidden lg:inline text-xs text-muted-foreground whitespace-nowrap'>
 									[{t('providers.priority')}: {provider.priority} ·{' '}
 									{t('providers.maxRetriesLabel')}: {provider.max_retries}]
@@ -347,29 +401,45 @@ export function ProviderCard({
 										</Badge>
 									</div>
 									<div className='mt-1 rounded-lg border overflow-hidden px-3 py-2'>
-										<div className='flex flex-wrap content-start gap-1.5 max-h-[220px] overflow-y-auto'>
-											{modelEntries.map(([model, modelEntry]) => {
+										<BadgeOverflowList
+											items={modelEntries.map(([model, modelEntry]) => {
 												const meta = modelMetadataById.get(model)
-												return (
-													<div key={model} className='min-w-0 max-w-full shrink-0'>
+												const highlightUnpriced = !hasBillablePricingModelId(
+													pricedModelIdSet,
+													model,
+													modelEntry.redirect,
+													reasoningSuffixMap
+												)
+
+												return {
+													key: model,
+													collapsed: (
 														<ModelBadge
 															model={model}
 															provider={meta?.models_dev_provider}
 															multiplier={modelEntry.multiplier}
 															redirect={modelEntry.redirect}
-															highlightUnpriced={
-																!hasBillablePricingModelId(
-																	pricedModelIdSet,
-																	model,
-																	modelEntry.redirect,
-																	reasoningSuffixMap
-																)
-															}
+															highlightUnpriced={highlightUnpriced}
 														/>
-													</div>
-												)
+													),
+													full: (
+														<ModelBadge
+															model={model}
+															provider={meta?.models_dev_provider}
+															multiplier={modelEntry.multiplier}
+															redirect={modelEntry.redirect}
+															highlightUnpriced={highlightUnpriced}
+															truncateModelText={false}
+															className='max-w-none'
+														/>
+													)
+												}
 											})}
-										</div>
+											visibleCount={3}
+											popoverOnSingle
+											ariaLabel={`${t('providers.modelsSection')}: ${modelEntries.length}`}
+											contentClassName='max-w-[min(44rem,calc(100vw-2rem))]'
+										/>
 									</div>
 								</div>
 

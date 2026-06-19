@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { BadgeOverflowList } from '@/components/BadgeOverflowList'
 import { ModelBadge } from '@/components/ModelBadge'
 import { TransformChainEditor } from '@/components/transforms/transform-chain-editor'
 import { cn } from '@/lib/utils'
@@ -136,14 +137,14 @@ export function ChannelGroupsInput({
 						<Badge
 							key={groupKey(group)}
 							variant='secondary'
-							className='flex items-center gap-1 font-mono'
+							className='flex max-w-full items-center gap-1 font-mono'
 						>
-							<span>{group}</span>
+							<span className='min-w-0 truncate'>{group}</span>
 							<Button
 								type='button'
 								variant='ghost'
 								size='icon'
-								className='h-4 w-4'
+								className='h-4 w-4 shrink-0'
 								onClick={() => removeGroup(group)}
 							>
 								<X className='h-3 w-3' />
@@ -475,15 +476,6 @@ export function TimeoutEnabledSection({
 					{t('providers.stripCrossProtocolNestedExtraDescription')}
 				</p>
 			</div>
-			<div className='flex items-center gap-2 pt-7'>
-				<Switch
-					checked={form.enabled}
-					onCheckedChange={checked =>
-						onFormChange(prev => ({ ...prev, enabled: checked }))
-					}
-				/>
-				<Label>{t('providers.enabled')}</Label>
-			</div>
 		</>
 	)
 }
@@ -655,43 +647,94 @@ export function ModelsSection({
 					<div className='text-sm text-muted-foreground py-5'>
 						{t('providers.validationAtLeastOneModel')}
 					</div>
-				: 	<div className='flex flex-wrap content-start gap-2 max-h-[220px] overflow-y-auto'>
-						{form.models.map((row, idx) => (
-							<div
-								key={`model-${row.model || idx}`}
-								className='group relative min-w-0 max-w-full shrink-0'
-							>
-								<button type='button' onClick={() => onEditModel(idx)} className='text-left'>
+				: 	<BadgeOverflowList
+						items={form.models.map((row, idx) => {
+							const highlightUnpriced = !hasBillablePricingModelId(
+								pricedModelIdSet,
+								row.model,
+								row.redirect,
+								reasoningSuffixMap
+							)
+							const badgeClassName = cn(
+								'pr-6 cursor-pointer',
+								editingModelIndex === idx && 'ring-1 ring-primary'
+							)
+
+							return {
+								key: `model-${row.model || idx}`,
+								collapsed: (
 									<ModelBadge
 										model={row.model || '-'}
 										provider={modelProviderMap.get(row.model.trim())}
 										multiplier={row.multiplier || 1}
 										detailTarget={row.redirect.trim() || row.model || '-'}
-										highlightUnpriced={!hasBillablePricingModelId(
-											pricedModelIdSet,
-											row.model,
-											row.redirect,
-											reasoningSuffixMap
-										)}
-										className={cn(
-											'pr-6 cursor-pointer',
-											editingModelIndex === idx && 'ring-1 ring-primary'
-										)}
+										highlightUnpriced={highlightUnpriced}
+										className={badgeClassName}
 									/>
-								</button>
-								<button
-									type='button'
-									className='absolute right-1 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full flex items-center justify-center opacity-40 hover:opacity-100 hover:bg-destructive/15 hover:text-destructive transition-all'
-									onClick={e => {
-										e.stopPropagation()
-										onDeleteModel(idx)
-									}}
-								>
-									<X className='h-3 w-3' />
-								</button>
-							</div>
-						))}
-					</div>
+								),
+								direct: (
+									<div className='group relative min-w-0 max-w-full shrink-0'>
+										<button
+											type='button'
+											onClick={() => onEditModel(idx)}
+											className='text-left'
+										>
+											<ModelBadge
+												model={row.model || '-'}
+												provider={modelProviderMap.get(row.model.trim())}
+												multiplier={row.multiplier || 1}
+												detailTarget={row.redirect.trim() || row.model || '-'}
+												highlightUnpriced={highlightUnpriced}
+												className={badgeClassName}
+											/>
+										</button>
+										<button
+											type='button'
+											className='absolute right-1 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full opacity-40 transition-all hover:bg-destructive/15 hover:text-destructive hover:opacity-100'
+											onClick={e => {
+												e.stopPropagation()
+												onDeleteModel(idx)
+											}}
+										>
+											<X className='h-3 w-3' />
+										</button>
+									</div>
+								),
+								full: (
+									<div className='group relative min-w-0 max-w-full shrink-0'>
+										<button
+											type='button'
+											onClick={() => onEditModel(idx)}
+											className='text-left'
+										>
+											<ModelBadge
+												model={row.model || '-'}
+												provider={modelProviderMap.get(row.model.trim())}
+												multiplier={row.multiplier || 1}
+												detailTarget={row.redirect.trim() || row.model || '-'}
+												highlightUnpriced={highlightUnpriced}
+												truncateModelText={false}
+												className={cn('max-w-none', badgeClassName)}
+											/>
+										</button>
+										<button
+											type='button'
+											className='absolute right-1 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full opacity-40 transition-all hover:bg-destructive/15 hover:text-destructive hover:opacity-100'
+											onClick={e => {
+												e.stopPropagation()
+												onDeleteModel(idx)
+											}}
+										>
+											<X className='h-3 w-3' />
+										</button>
+									</div>
+								)
+							}
+						})}
+						visibleCount={3}
+						ariaLabel={`${t('providers.modelsSection')}: ${form.models.length}`}
+						contentClassName='max-w-[min(44rem,calc(100vw-2rem))]'
+					/>
 				}
 			</div>
 			{unsupportedModels.length > 0 && (

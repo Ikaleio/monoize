@@ -56,14 +56,14 @@ export function ModelsGlobInput({ value, onChange, disabled }: ModelsGlobInputPr
       {patterns.length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {patterns.map((pattern) => (
-            <Badge key={pattern} variant="secondary" className="flex items-center gap-1 font-mono">
-              <span>{pattern}</span>
+            <Badge key={pattern} variant="secondary" className="flex max-w-full items-center gap-1 font-mono">
+              <span className="min-w-0 truncate">{pattern}</span>
               {!disabled && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-4 w-4"
+                  className="h-4 w-4 shrink-0"
                   onClick={() => removePattern(pattern)}
                 >
                   <X className="h-3 w-3" />

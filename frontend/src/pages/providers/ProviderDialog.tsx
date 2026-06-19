@@ -11,7 +11,9 @@ import {
 	DialogHeader,
 	DialogTitle
 } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import type {
@@ -853,14 +855,29 @@ export function ProviderDialog({
 					}}
 				>
 					<div className='flex min-h-0 flex-col p-6'>
-					<DialogHeader className='shrink-0'>
-						<DialogTitle>
-							{isEdit ? t('providers.editProvider') : t('providers.createProvider')}
-						</DialogTitle>
-						<DialogDescription>
-							{t('providers.createProviderDesc')}
-						</DialogDescription>
-					</DialogHeader>
+						<DialogHeader className='shrink-0 space-y-2'>
+							<div className='flex items-start justify-between gap-4'>
+								<div className='min-w-0 space-y-1'>
+									<DialogTitle>
+										{isEdit ?
+											t('providers.editProvider')
+										:	t('providers.createProvider')}
+									</DialogTitle>
+									<DialogDescription>
+										{t('providers.createProviderDesc')}
+									</DialogDescription>
+								</div>
+								<div className='flex shrink-0 items-center gap-2 pt-1'>
+									<Switch
+										checked={form.enabled}
+										onCheckedChange={checked =>
+											applyFormUpdate(prev => ({ ...prev, enabled: checked }))
+										}
+									/>
+									<Label>{t('providers.enabled')}</Label>
+								</div>
+							</div>
+						</DialogHeader>
 
 					<div className='min-h-0 flex-1 overflow-y-auto py-2 pr-1'>
 					{isHydratingForm ?

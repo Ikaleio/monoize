@@ -139,24 +139,36 @@ export function ModelBadge({
 		<Badge
 			variant='secondary'
 			className={cn(
-				'font-mono text-xs border transition-all gap-1.5 py-1 px-2 h-7',
+				'h-7 max-w-full gap-1.5 overflow-hidden border px-2 py-1 font-mono text-xs whitespace-nowrap transition-all',
 				highlightUnpriced ?
 					'border-warning-border bg-warning-soft text-warning-foreground hover:bg-warning-soft/80'
 				:	'bg-sidebar-accent/40 hover:bg-sidebar-accent text-foreground border-transparent hover:border-sidebar-border',
 				className
 			)}
 		>
-			<Icon className='h-3.5 w-3.5 flex-shrink-0' />
+			<Icon className='h-3.5 w-3.5 shrink-0' />
 			<span
 				className={cn(
-					truncateModelText ? 'truncate max-w-[220px]' : 'whitespace-nowrap'
+					'min-w-0',
+					truncateModelText ? 'max-w-[220px] truncate' : 'whitespace-nowrap'
 				)}
 				title={model}
 			>
 				{model}
 			</span>
 			{shouldRenderDetails && (
-				<span className='opacity-60 text-[11px]'>
+				<span
+					className={cn(
+						'min-w-0 text-[11px] opacity-60',
+						truncateModelText ? 'max-w-[160px] truncate' : 'whitespace-nowrap'
+					)}
+					title={`[${[
+						hasCustomMultiplier ? `${multiplier}x` : null,
+						hasRedirectTarget ? resolvedTarget : null
+					]
+						.filter(Boolean)
+						.join(', ')}]`}
+				>
 					[
 					{hasCustomMultiplier && (
 						<span className='opacity-80'>{multiplier}x</span>

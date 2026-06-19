@@ -332,18 +332,6 @@ export function ChannelEditorDialog({
 							/>
 						</div>
 
-						<div className='flex justify-end'>
-							<Button
-								type='button'
-								variant='outline'
-								size='sm'
-								onClick={onFetchModels}
-							>
-								<Download className='h-4 w-4 mr-2' />
-								{t('providers.fetchModels')}
-							</Button>
-						</div>
-
 						<div className='space-y-2'>
 							<Label>{t('providers.weight')}</Label>
 							<Input
@@ -357,9 +345,18 @@ export function ChannelEditorDialog({
 						<Separator />
 
 						<div className='space-y-2'>
-							<div className='flex items-center justify-between gap-2'>
+							<div className='flex items-start justify-between gap-2'>
 								<Label>{t('providers.supportedModels')}</Label>
-								<div className='flex items-center gap-2'>
+								<div className='flex flex-wrap items-center justify-end gap-2'>
+									<Button
+										type='button'
+										variant='outline'
+										size='sm'
+										onClick={onFetchModels}
+									>
+										<Download className='h-4 w-4 mr-2' />
+										{t('providers.fetchModels')}
+									</Button>
 									<Button
 										type='button'
 										variant='outline'

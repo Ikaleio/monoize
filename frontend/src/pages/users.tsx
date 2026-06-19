@@ -221,14 +221,14 @@ function AllowedGroupsInput({
             <Badge
               key={groupKey(group)}
               variant="secondary"
-              className="flex items-center gap-1 font-mono"
+              className="flex max-w-full items-center gap-1 font-mono"
             >
-              <span>{group}</span>
+              <span className="min-w-0 truncate">{group}</span>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-4 w-4"
+                className="h-4 w-4 shrink-0"
                 onClick={() => removeGroup(group)}
               >
                 <X className="h-3 w-3" />

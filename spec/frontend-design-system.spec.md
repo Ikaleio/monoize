@@ -170,6 +170,24 @@ DS39. Base dashboard card titles SHOULD render as `text-base font-semibold leadi
 
 DS40. Badge text SHOULD use `font-medium` by default.
 
+DS40a. Base badge elements MUST render as a single line. Badge text and icon content MUST NOT wrap inside the badge.
+
+DS40b. A read-only collection containing more badges than its configured preview count MUST render as a collapsed badge collection by default.
+
+- The preview MUST render no more than the configured preview count.
+- The preview MUST render a `+N` badge when hidden badges exist.
+- The preview row MUST NOT wrap.
+
+DS40c. In a collapsed badge collection preview, badge text that exceeds the available preview width MUST be truncated with an ellipsis.
+
+DS40d. Hovering, focusing, or clicking a collapsed badge collection MUST open a small portal-backed popover that contains the complete badge list.
+
+- The popover list MUST contain every badge represented by the collection.
+- Badge entries in the popover MUST NOT wrap.
+- If the complete list exceeds the popover bounds, the popover content MUST scroll instead of wrapping badge text.
+
+DS40e. Editable chip inputs and selectable option lists MAY render all badges directly when hiding entries would remove direct edit, delete, or selection controls.
+
 ## 12. Sidebar and Navigation
 
 DS41. Sidebar active navigation items SHOULD use a low-emphasis surface (`accent` or `muted`) rather than a solid primary background.
