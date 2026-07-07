@@ -91,17 +91,16 @@ BE3. Before upstream forwarding, billing eligibility MUST be checked as follows:
 
 BE4. The legacy `ensure_quota_before_forward` per-call quota check MUST NOT exist. Sub-account billing replaces it entirely (see `api-key-sub-account-billing.spec.md`).
 
-BE5. For authenticated users with role `admin` or `super_admin`, Monoize MUST determine whether the selected candidate attempts have billable pricing before enforcing the pre-forward balance gate:
-
-- if at least one candidate attempt has billable pricing under C1.2, Monoize MUST run the normal balance eligibility check from BE3;
-- if every candidate attempt lacks billable pricing under C1.2, Monoize MUST skip the balance eligibility check and allow the request to proceed without requiring a positive balance.
+BE5. Monoize MUST determine whether selected candidate attempts have billable pricing before enforcing the pre-forward balance gate. If no candidate attempt has billable pricing under C1.2, Monoize MUST reject the request with HTTP `403` and code `model_pricing_required` before the balance gate. This rule applies to all roles, including `admin` and `super_admin`.
 
 ## 5. Charge calculation
 
 C1. Charge requires both:
 
-- upstream response usage (`input_tokens`, `output_tokens`), and
-- model metadata pricing resolved under C1.2, with non-null `input_cost_per_token_nano` and `output_cost_per_token_nano`.
+- normalized upstream response usage, and
+- a complete applicable `billing_rate_records` matrix resolved under C1.2.
+
+C1a. `model_metadata_records` MAY store legacy token prices and model limits. Metadata writes and Models.dev sync MUST mirror present token prices into `billing_rate_records`, but billing computation MUST read `billing_rate_records`.
 
 C1.1. Served upstream model resolution for request execution and billing metadata:
 
@@ -112,20 +111,19 @@ C1.2. Pricing model resolution for billing:
 
 - Before each pricing lookup candidate in this section, Monoize MUST normalize that candidate to a `pricing_model_key` by removing at most one recognized reasoning-tier suffix from the end of the model ID. If no recognized suffix matches, `pricing_model_key` MUST equal the original candidate.
 - Recognized reasoning-tier suffixes MUST use the same suffix set and longest-suffix-first matching rule as `reasoning_suffix_map` plus the built-in effort suffixes defined in `model-metadata-dashboard.spec.md` § 8.
-- Monoize MUST first look up pricing for the normalized `upstream_model` key derived from C1.1.
-- If `upstream_model` came from a non-empty `redirect` and that normalized lookup does not yield complete pricing, Monoize MUST retry pricing lookup with the normalized requested logical model key.
+- For each candidate key, Monoize MUST select the pricing profile via ordered `pricing_profile_model_patterns` from `metered-billing.spec.md` § 2.
+- Monoize MUST first look up eligible rate rows for the normalized `upstream_model` key derived from C1.1.
+- If `upstream_model` came from a non-empty `redirect` and that normalized lookup does not yield complete rates, Monoize MUST retry rate lookup with the normalized requested logical model key.
 - If the normalized requested logical model key equals the normalized `upstream_model` key, Monoize MUST NOT perform a second lookup.
-- If neither lookup yields complete pricing, the request has no billable pricing.
+- If neither lookup yields complete rates, the request has no billable pricing.
 
 C2. Base charge formula (nano-dollar):
 
 ```
-input_charge = input_tokens * input_cost_per_token_nano
-output_charge = output_tokens * output_cost_per_token_nano
-base_charge = input_charge + output_charge + cache_creation_charge
+base_charge = sum(token_line_items.charge_nano) + sum(meter_line_items.charge_nano)
 ```
 
-(where `cache_creation_charge` defaults to `0` when not applicable).
+Token line items and meter line items are defined by `metered-billing.spec.md`.
 
 C3. `usage.input_tokens` on the internal `Usage` model MUST be interpreted as an aggregate/inclusive prompt total. That is, `input_tokens` MUST be the sum of base-rate prompt tokens, cache-read prompt tokens, and cache-creation prompt tokens. Cache-class counters (`cache_read_tokens`, `cache_creation_tokens`) are refinements of that total, not disjoint additive buckets.
 
@@ -135,38 +133,39 @@ C3-ii. Upstream providers whose native usage field excludes cache buckets (for e
 
 C3-iii. With C3-i and C3-ii in effect, all billing and logging code paths MUST treat `Usage.input_tokens` uniformly as aggregate/inclusive. Provider-type branching on the interpretation of `input_tokens` MUST NOT exist in billing computation, usage-breakdown construction, or request-log projection.
 
-C3-iv. If `usage.input_details.cache_read_tokens` is present and metadata provides `cache_read_input_cost_per_token_nano`, input charge MUST be:
+C3-iv. If `usage.input_details.cache_read_tokens` is present and a matching `cache_read` rate exists, input charge MUST be:
 
 ```
 input_charge =
-  (input_tokens - cache_read_tokens) * input_cost_per_token_nano
-  + cache_read_tokens * cache_read_input_cost_per_token_nano
+  (input_tokens - cache_read_tokens) * input_uncached_rate
+  + cache_read_tokens * cache_read_rate
 ```
 
-C3a. If `usage.input_details.cache_creation_tokens` is present and metadata provides `cache_creation_input_cost_per_token_nano`, an additional charge MUST be added:
+C3a. If `usage.input_details.cache_creation_tokens` is present, billing MUST handle cache-write tokens according to `metered-billing.spec.md` § 4:
 
 ```
-cache_creation_charge = cache_creation_tokens * cache_creation_input_cost_per_token_nano
+cache_creation_tokens = cache_creation_5m_tokens + cache_creation_1h_tokens
 ```
 
-When C3a applies, the input charge computed in C2/C3 MUST first exclude `cache_creation_tokens` from the base-rate input bucket before adding `cache_creation_charge`. Formally:
+When cache-write billing applies, the input charge computed in C2/C3 MUST first exclude `cache_creation_tokens` from the base-rate input bucket before adding cache-write line items. Formally:
 
 ``` 
 base_rate_input_tokens = input_tokens - cache_read_tokens - cache_creation_tokens
 input_charge =
   base_rate_input_tokens * input_cost_per_token_nano
   + cache_read_tokens * cache_read_input_cost_per_token_nano
-  + cache_creation_tokens * cache_creation_input_cost_per_token_nano
+  + cache_creation_5m_tokens * cache_write_5m_rate
+  + cache_creation_1h_tokens * cache_write_1h_rate
 ```
 
-The implementation MUST clamp each billable bucket at zero after subtraction. Monoize MUST NOT charge the same input token once at the base input rate and again at the cache-creation rate. The single aggregate/inclusive formula above applies uniformly to all provider types, because all upstream usage is normalized per C3-ii before billing.
+The implementation MUST clamp each billable bucket at zero after subtraction. Monoize MUST NOT charge the same input token once at the base input rate and again at a cache-write rate. If a rate matrix requires both 5-minute and 1-hour cache-write classes and upstream usage provides only aggregate cache creation, Monoize MUST reject billing with HTTP `403` and code `model_pricing_required`.
 
-C4. If `usage.output_details.reasoning_tokens` is present and metadata provides `output_cost_per_reasoning_token_nano`, output charge MUST be:
+C4. If `usage.output_details.reasoning_tokens` is present and a matching `reasoning_output` rate exists, output charge MUST be:
 
 ```
 output_charge =
-  (output_tokens - reasoning_tokens) * output_cost_per_token_nano
-  + reasoning_tokens * output_cost_per_reasoning_token_nano
+  (output_tokens - reasoning_tokens) * output_rate
+  + reasoning_tokens * reasoning_output_rate
 ```
 
 `output_tokens` in C4 MUST likewise be treated according to provider semantics. If a provider defines reasoning tokens as a subtype of the reported output total, Monoize MUST subtract them before applying the base output rate and then add the reasoning-rate subtotal. Monoize MUST NOT bill the same output token once at the base output rate and again at the reasoning rate.
@@ -177,18 +176,13 @@ C5. Final charge MUST multiply by provider model multiplier and truncate toward 
 final_charge_nano = trunc(base_charge * provider_multiplier)
 ```
 
-C6. If C1.2 yields no billable pricing, Monoize MUST reject the request with HTTP `403` and code `model_pricing_required`.
+C6. If C1.2 yields no billable rates, Monoize MUST reject the request with HTTP `403` and code `model_pricing_required`.
 
 C6.1. `build_monoize_attempts()` SHOULD prevent C6 from being reached by filtering unbillable attempts before upstream forwarding.
 
 C6.2. If C6 is reached during post-response billing, Monoize MUST NOT write any charge ledger row for that request.
 
-C6.3. Exception for authenticated users with role `admin` or `super_admin`: when C1.2 yields no billable pricing for the served attempt, Monoize MUST treat the request as a zero-charge exemption instead of returning `403`. In this case Monoize MUST NOT write any balance deduction or ledger row, and the billing breakdown snapshot persisted to request logs MUST include:
-
-- `exempted = true`
-- `exemption_reason = "admin_unpriced_model"`
-- `base_charge_nano = "0"`
-- `final_charge_nano = "0"`
+C6.3. Missing pricing or missing meter rates MUST NOT be bypassed by `admin` or `super_admin`.
 
 C7. For embeddings responses, billing MUST treat usage as:
 

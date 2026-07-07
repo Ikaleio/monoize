@@ -356,6 +356,78 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
+                    .table(BillingRateRecords::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(BillingRateRecords::Id)
+                            .text()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::Source).text().not_null())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::PricingProfile)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::ModelPattern).text())
+                    .col(ColumnDef::new(BillingRateRecords::ProviderType).text())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::RateKind)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::UsageClass)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::Unit).text().not_null())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::UnitPriceNanoUsd)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(BillingRateRecords::ContextTier).text())
+                    .col(ColumnDef::new(BillingRateRecords::ServiceTier).text())
+                    .col(ColumnDef::new(BillingRateRecords::Modality).text())
+                    .col(ColumnDef::new(BillingRateRecords::CacheTtl).text())
+                    .col(
+                        ColumnDef::new(BillingRateRecords::MatchJson)
+                            .text()
+                            .not_null()
+                            .default("{}"),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::Priority)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::Enabled)
+                            .integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::RawJson)
+                            .text()
+                            .not_null()
+                            .default("{}"),
+                    )
+                    .col(
+                        ColumnDef::new(BillingRateRecords::UpdatedAt)
+                            .text()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
                     .table(MonoizeProviders::Table)
                     .if_not_exists()
                     .col(
@@ -827,6 +899,14 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(
                 Table::drop()
+                    .table(BillingRateRecords::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
                     .table(ModelMetadataRecords::Table)
                     .if_exists()
                     .to_owned(),
@@ -1024,6 +1104,29 @@ enum ModelMetadataRecords {
     MaxTokens,
     RawJson,
     Source,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum BillingRateRecords {
+    Table,
+    Id,
+    Source,
+    PricingProfile,
+    ModelPattern,
+    ProviderType,
+    RateKind,
+    UsageClass,
+    Unit,
+    UnitPriceNanoUsd,
+    ContextTier,
+    ServiceTier,
+    Modality,
+    CacheTtl,
+    MatchJson,
+    Priority,
+    Enabled,
+    RawJson,
     UpdatedAt,
 }
 

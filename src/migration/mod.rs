@@ -24,6 +24,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260509_000016_api_key_request_capture_mode::Migration),
             Box::new(m20260618_000017_channel_model_affinity_schema::Migration),
             Box::new(m20260619_000018_request_log_visible_tps::Migration),
+            Box::new(m20260619_000019_billing_rate_records::Migration),
+            Box::new(m20260619_000020_default_pricing_profile::Migration),
+            Box::new(m20260620_000021_pricing_profile_pattern_defaults::Migration),
         ]
     }
 }
@@ -46,3 +49,6 @@ mod m20260501_000015_api_key_request_capture_switch;
 mod m20260509_000016_api_key_request_capture_mode;
 mod m20260618_000017_channel_model_affinity_schema;
 mod m20260619_000018_request_log_visible_tps;
+mod m20260619_000019_billing_rate_records;
+mod m20260619_000020_default_pricing_profile;
+mod m20260620_000021_pricing_profile_pattern_defaults;

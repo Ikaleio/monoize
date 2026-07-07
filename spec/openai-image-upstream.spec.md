@@ -87,6 +87,8 @@ OIU-D5. The decoded `UrpResponse` MUST have:
 
 OIU-D6. If the upstream response contains a top-level `usage` object, Monoize MUST parse it into URP `Usage` using the same field mapping as the existing image API response handler.
 
+OIU-D7. For `gpt-image-2`, decoded usage MUST preserve text input tokens, image input tokens, cached input tokens, and image output tokens as structured URP usage fields when upstream provides them.
+
 ## 5. Downstream Rendering
 
 ### 5.1 Responses API downstream (`/v1/responses`)
@@ -130,6 +132,26 @@ OIU-RT3. Channel test (probe) for `openai_image` providers is not meaningful for
 OIU-UI1. The provider type selector in the dashboard MUST include `openai_image` with label `OpenAI Image` and path `/v1/images/generations`.
 
 OIU-UI2. The provider type MUST use the OpenAI icon in the UI.
+
+## 8a. Billing Integration
+
+OIU-B1. `gpt-image-2` billing MUST use `billing_rate_records` as defined in `metered-billing.spec.md`.
+
+OIU-B2. By default, `gpt-image-2` MUST charge only upstream usage quantities:
+
+- text/image input tokens;
+- cached input tokens;
+- image output tokens.
+
+OIU-B2a. If OpenAI image usage provides `input_tokens_details.cached_tokens`, Monoize MUST normalize it to `Usage.input_details.cache_read_tokens`.
+
+OIU-B2b. If OpenAI image usage provides `cached_tokens_details`, `cache_read_tokens_details`, or `cached_input_tokens_details` with `text_tokens` or `image_tokens`, Monoize MUST normalize it to `Usage.input_details.cache_read_modality_breakdown`.
+
+OIU-B2c. If `gpt-image-2` cached-input rates are modality-specific and upstream usage omits a cached-input modality split, Monoize MUST reject billing rather than allocate cached tokens across text/image buckets.
+
+OIU-B3. Monoize MUST NOT add a fixed per-output-image fee unless an enabled `billing_rate_records` meter row explicitly configures that fee.
+
+OIU-B4. Monoize MUST NOT infer image duration, render time, or output count from local runtime timing for billing.
 
 ## 9. Constraints
 

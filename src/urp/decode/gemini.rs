@@ -88,7 +88,10 @@ impl From<GeminiUsage> for Usage {
             Some(InputDetails {
                 standard_tokens: 0,
                 cache_read_tokens: value.cached_content_token_count,
+                cache_read_modality_breakdown: None,
                 cache_creation_tokens: value.cache_creation_tokens,
+                cache_creation_5m_tokens: 0,
+                cache_creation_1h_tokens: 0,
                 tool_prompt_tokens: value.tool_prompt_tokens,
                 modality_breakdown: None,
             })

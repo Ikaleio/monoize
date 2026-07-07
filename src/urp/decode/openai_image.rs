@@ -90,6 +90,12 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
                 .get("input_tokens_details")
                 .and_then(|v| v.as_object())
             {
+                details.cache_read_tokens = id
+                    .get("cached_tokens")
+                    .or_else(|| id.get("cache_read_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                details.cache_read_modality_breakdown = parse_cache_read_modality_breakdown(id);
                 if let Some(mb) = parse_modality_breakdown(id) {
                     details.modality_breakdown = Some(mb);
                 }
@@ -130,6 +136,43 @@ pub fn decode_response(value: &Value, model: &str) -> Result<UrpResponse, String
     })
 }
 
+fn parse_cache_read_modality_breakdown(
+    obj: &serde_json::Map<String, Value>,
+) -> Option<ModalityBreakdown> {
+    for key in [
+        "cache_read_tokens_details",
+        "cached_tokens_details",
+        "cached_input_tokens_details",
+    ] {
+        if let Some(nested) = obj.get(key).and_then(|v| v.as_object())
+            && let Some(breakdown) = parse_modality_breakdown(nested)
+        {
+            return Some(breakdown);
+        }
+    }
+    let text = obj
+        .get("cache_read_text_tokens")
+        .or_else(|| obj.get("cached_text_tokens"))
+        .or_else(|| obj.get("cached_input_text_tokens"))
+        .and_then(|v| v.as_u64());
+    let image = obj
+        .get("cache_read_image_tokens")
+        .or_else(|| obj.get("cached_image_tokens"))
+        .or_else(|| obj.get("cached_input_image_tokens"))
+        .and_then(|v| v.as_u64());
+    if text.is_some() || image.is_some() {
+        Some(ModalityBreakdown {
+            text_tokens: text,
+            image_tokens: image,
+            audio_tokens: None,
+            video_tokens: None,
+            document_tokens: None,
+        })
+    } else {
+        None
+    }
+}
+
 fn parse_modality_breakdown(obj: &serde_json::Map<String, Value>) -> Option<ModalityBreakdown> {
     let text = obj.get("text_tokens").and_then(|v| v.as_u64());
     let image = obj.get("image_tokens").and_then(|v| v.as_u64());
@@ -167,10 +210,16 @@ mod tests {
                     }
                 ],
                 "usage": {
-                    "input_tokens": 12,
+                    "input_tokens": 18,
                     "output_tokens": 34,
                     "input_tokens_details": {
-                        "text_tokens": 12
+                        "text_tokens": 12,
+                        "image_tokens": 6,
+                        "cached_tokens": 4,
+                        "cached_tokens_details": {
+                            "text_tokens": 3,
+                            "image_tokens": 1
+                        }
                     },
                     "output_tokens_details": {
                         "image_tokens": 34
@@ -210,8 +259,28 @@ mod tests {
         ));
 
         let usage = resp.usage.expect("usage should be present");
-        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.input_tokens, 18);
         assert_eq!(usage.output_tokens, 34);
+        assert_eq!(
+            usage.input_details.as_ref().map(|d| d.cache_read_tokens),
+            Some(4)
+        );
+        assert_eq!(
+            usage
+                .input_details
+                .as_ref()
+                .and_then(|d| d.cache_read_modality_breakdown.as_ref())
+                .and_then(|m| m.text_tokens),
+            Some(3)
+        );
+        assert_eq!(
+            usage
+                .input_details
+                .as_ref()
+                .and_then(|d| d.cache_read_modality_breakdown.as_ref())
+                .and_then(|m| m.image_tokens),
+            Some(1)
+        );
         assert_eq!(
             usage
                 .input_details

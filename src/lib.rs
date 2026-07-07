@@ -1,5 +1,6 @@
 pub mod app;
 pub mod auth;
+pub mod billing_rate_store;
 pub mod config;
 pub mod dashboard_handlers;
 pub mod db;

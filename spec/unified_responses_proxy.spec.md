@@ -859,6 +859,17 @@ PM7. Messages `tool_choice` normalization:
 
 PM8. When calling a `type=messages` upstream, Monoize MUST send HTTP header `anthropic-version` with value `2023-06-01`.
 
+PM8a. When decoding Anthropic Messages usage, Monoize MUST map cache usage as follows:
+
+- wire `cache_read_input_tokens` -> `Usage.input_details.cache_read_tokens`;
+- wire `cache_creation_input_tokens` -> `Usage.input_details.cache_creation_tokens`;
+- wire `usage.cache_creation.ephemeral_5m_input_tokens` -> `Usage.input_details.cache_creation_5m_tokens`;
+- wire `usage.cache_creation.ephemeral_1h_input_tokens` -> `Usage.input_details.cache_creation_1h_tokens`.
+
+PM8b. If Anthropic usage contains aggregate `cache_creation_input_tokens` but omits the structured `usage.cache_creation` 5-minute and 1-hour split, Monoize MUST preserve the aggregate in `cache_creation_tokens` and MUST NOT infer the split.
+
+PM8c. When decoding any provider usage object, Monoize MUST map an authoritative cached-input modality split to `Usage.input_details.cache_read_modality_breakdown` if the provider supplies one. Monoize MUST NOT infer this split from aggregate cached tokens or from total input modality counts.
+
 PM9. For downstream `POST /v1/messages` streaming responses synthesized or translated by Monoize, Monoize MUST emit Anthropic-compatible message envelope events in this order:
 
 1. `message_start`
@@ -975,6 +986,8 @@ XF5d. Monoize usage extension field registry:
 - The following extension field names are reserved for Monoize usage encoding:
   - Messages or Anthropic usage object extensions:
     - `tool_prompt_input_tokens`
+    - `cache_creation_5m_input_tokens`
+    - `cache_creation_1h_input_tokens`
     - `reasoning_output_tokens`
     - `accepted_prediction_output_tokens`
     - `rejected_prediction_output_tokens`

@@ -68,6 +68,24 @@ UrpResponse {
 }
 ```
 
+RTYPE-4E. The Rust core layer MUST define `Usage.input_details` with at least these token counters:
+
+```text
+InputDetails {
+  cache_read_tokens: u64,
+  cache_read_modality_breakdown: Option<ModalityBreakdown>,
+  cache_creation_tokens: u64,
+  cache_creation_5m_tokens: u64,
+  cache_creation_1h_tokens: u64,
+  tool_prompt_tokens: u64,
+  modality_breakdown: Option<ModalityBreakdown>
+}
+```
+
+RTYPE-4F. `cache_creation_tokens` is the aggregate cache-write count. `cache_creation_5m_tokens` and `cache_creation_1h_tokens` are authoritative split counters when an upstream provider supplies them. The Rust core MUST NOT derive a 5-minute or 1-hour split from the aggregate field.
+
+RTYPE-4G. `cache_read_modality_breakdown` is the authoritative modality split for `cache_read_tokens` when an upstream provider supplies it. The Rust core MUST NOT derive this split from aggregate `cache_read_tokens` or from total input modality counts.
+
 RTYPE-4A. The Rust core layer MUST define exactly one canonical request tool-definition shape:
 
 ```text

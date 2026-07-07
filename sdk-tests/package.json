@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "openai-smoke": "bun run openai-smoke.ts",
-    "openai-agent-tool-smoke": "bun run openai-agent-tool-smoke.ts"
+    "openai-agent-tool-smoke": "bun run openai-agent-tool-smoke.ts",
+    "live-protocol-suite": "bun run live-protocol-suite.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

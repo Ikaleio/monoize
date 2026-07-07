@@ -3,11 +3,12 @@ use super::api_keys::{
     canonicalize_dashboard_api_key_allowed_groups,
 };
 use super::providers::{
-    build_models_list_url, provider_has_billable_pricing, provider_pricing_model,
+    build_models_list_url, provider_dashboard_rate_matrix_is_complete, provider_pricing_model,
 };
 use super::users::{
     CreateUserRequest, UpdateUserRequest, canonicalize_dashboard_user_allowed_groups,
 };
+use crate::billing_rate_store::DbBillingRateRecord;
 use crate::dashboard_handlers::auth::UserResponse;
 use crate::db::DbPool;
 use crate::migration::Migrator;
@@ -71,38 +72,49 @@ fn provider_pricing_model_falls_back_to_logical_when_redirect_blank() {
     );
 }
 
-#[test]
-fn provider_has_billable_pricing_accepts_logical_fallback_when_redirect_target_is_unpriced() {
-    let entry = MonoizeModelEntry {
-        redirect: Some("gpt-5-target".to_string()),
-        multiplier: 1.0,
-    };
-    let priced_ids = std::collections::HashSet::from(["gpt-5-logical".to_string()]);
-    let reasoning_suffix_map = HashMap::new();
-
-    assert!(provider_has_billable_pricing(
-        "gpt-5-logical",
-        &entry,
-        &priced_ids,
-        &reasoning_suffix_map,
-    ));
+fn dashboard_rate(id: &str, usage_class: &str, context_tier: Option<&str>) -> DbBillingRateRecord {
+    DbBillingRateRecord {
+        id: id.to_string(),
+        source: "manual".to_string(),
+        pricing_profile: "openai".to_string(),
+        model_pattern: Some("gpt-test".to_string()),
+        provider_type: Some("responses".to_string()),
+        rate_kind: "token".to_string(),
+        usage_class: usage_class.to_string(),
+        unit: "token".to_string(),
+        unit_price_nano_usd: "1".to_string(),
+        context_tier: context_tier.map(str::to_string),
+        service_tier: None,
+        modality: None,
+        cache_ttl: None,
+        match_json: serde_json::json!({}),
+        priority: 0,
+        enabled: true,
+        raw_json: serde_json::json!({}),
+        updated_at: chrono::Utc::now(),
+    }
 }
 
 #[test]
-fn provider_has_billable_pricing_strips_reasoning_suffix_before_lookup() {
-    let entry = MonoizeModelEntry {
-        redirect: None,
-        multiplier: 1.0,
-    };
-    let priced_ids = std::collections::HashSet::from(["gpt-5-mini".to_string()]);
-    let reasoning_suffix_map = HashMap::from([("-thinking".to_string(), "high".to_string())]);
+fn provider_dashboard_rate_matrix_requires_complete_tiered_billing_rates() {
+    assert!(provider_dashboard_rate_matrix_is_complete(&[
+        dashboard_rate("input", "input_uncached", None),
+        dashboard_rate("output", "output", None),
+    ]));
 
-    assert!(provider_has_billable_pricing(
-        "gpt-5-mini-thinking",
-        &entry,
-        &priced_ids,
-        &reasoning_suffix_map,
-    ));
+    let mut tiered = vec![
+        dashboard_rate("short-input", "input_uncached", Some("short")),
+        dashboard_rate("short-output", "output", Some("short")),
+        dashboard_rate("long-input", "input_uncached", Some("long")),
+        dashboard_rate("long-output", "output", Some("long")),
+    ];
+    assert!(!provider_dashboard_rate_matrix_is_complete(&tiered));
+    for rate in &mut tiered {
+        rate.match_json = serde_json::json!({ "context_threshold_tokens": 128000 });
+    }
+    assert!(provider_dashboard_rate_matrix_is_complete(&tiered));
+    tiered.retain(|rate| rate.id != "long-output");
+    assert!(!provider_dashboard_rate_matrix_is_complete(&tiered));
 }
 
 #[test]

@@ -127,6 +127,7 @@ export interface SystemSettings {
   monoize_strip_cross_protocol_nested_extra: boolean;
   monoize_request_capture_enabled: boolean;
   monoize_request_capture_retention_days: number;
+  pricing_profile_model_patterns: PricingProfilePattern[];
   updated_at: string;
 }
 
@@ -230,6 +231,7 @@ export interface Provider {
   created_at: string;
   updated_at: string;
   unpriced_model_count?: number;
+  unpriced_model_ids?: string[];
 }
 
 export interface CreateMonoizeChannelInput {
@@ -332,6 +334,63 @@ export interface ModelMetadataSyncResult {
   upserted: number;
   skipped: number;
   fetched_at: string;
+}
+
+export interface BillingRateRecord {
+  id: string;
+  source: string;
+  pricing_profile: string;
+  model_pattern?: string | null;
+  provider_type?: string | null;
+  rate_kind: string;
+  usage_class: string;
+  unit: string;
+  unit_price_nano_usd: string;
+  context_tier?: string | null;
+  service_tier?: string | null;
+  modality?: string | null;
+  cache_ttl?: string | null;
+  match_json: Record<string, unknown>;
+  priority: number;
+  enabled: boolean;
+  raw_json: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface UpsertBillingRateInput {
+  source?: string;
+  pricing_profile?: string;
+  model_pattern?: string | null;
+  provider_type?: string | null;
+  rate_kind?: string;
+  usage_class?: string;
+  unit?: string;
+  unit_price_nano_usd?: string;
+  context_tier?: string | null;
+  service_tier?: string | null;
+  modality?: string | null;
+  cache_ttl?: string | null;
+  match_json?: Record<string, unknown>;
+  priority?: number;
+  enabled?: boolean;
+  raw_json?: Record<string, unknown>;
+}
+
+export interface BillingRateSyncResult {
+  success: boolean;
+  upserted: number;
+  skipped: number;
+  deleted: number;
+  fetched_at: string;
+}
+
+export interface PricingProfilePattern {
+  pattern: string;
+  pricing_profile: string;
+}
+
+export interface PricingProfilePatternsResponse {
+  patterns: PricingProfilePattern[];
 }
 
 export interface RequestLogProvider {
@@ -729,6 +788,45 @@ class ApiClient {
   async syncModelMetadataFromModelsDev(): Promise<ModelMetadataSyncResult> {
     return this.request("/model-metadata/sync/models-dev", {
       method: "POST",
+    });
+  }
+
+  async listBillingRates(): Promise<BillingRateRecord[]> {
+    return this.request("/billing-rates");
+  }
+
+  async upsertBillingRate(
+    id: string,
+    input: UpsertBillingRateInput
+  ): Promise<BillingRateRecord> {
+    return this.request(`/billing-rates/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteBillingRate(id: string): Promise<{ success: boolean }> {
+    return this.request(`/billing-rates/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async syncBillingRatesCatalog(): Promise<BillingRateSyncResult> {
+    return this.request("/billing-rates/sync/catalog", {
+      method: "POST",
+    });
+  }
+
+  async getPricingProfilePatterns(): Promise<PricingProfilePatternsResponse> {
+    return this.request("/pricing-profile-patterns");
+  }
+
+  async updatePricingProfilePatterns(
+    patterns: PricingProfilePattern[]
+  ): Promise<PricingProfilePatternsResponse> {
+    return this.request("/pricing-profile-patterns", {
+      method: "PUT",
+      body: JSON.stringify({ patterns }),
     });
   }
 

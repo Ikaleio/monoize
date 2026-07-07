@@ -419,6 +419,7 @@ pub(super) fn build_routing_stub(req: &urp::UrpRequest, max_multiplier: Option<f
     UrpRequest {
         model: req.model.clone(),
         max_multiplier,
+        server_tool_usage_classes: server_tool_usage_classes(req.tools.as_deref()),
         affinity_explicit: stable_affinity_field(req),
         affinity_prefix_hash: affinity_prefix_hash(req),
     }
@@ -431,8 +432,36 @@ pub(super) fn build_embeddings_routing_stub(
     UrpRequest {
         model: model.to_string(),
         max_multiplier,
+        server_tool_usage_classes: Vec::new(),
         affinity_explicit: None,
         affinity_prefix_hash: short_xxh3_hex(model),
+    }
+}
+
+pub(super) fn server_tool_usage_classes(tools: Option<&[urp::ToolDefinition]>) -> Vec<String> {
+    let Some(tools) = tools else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for tool in tools {
+        let Some(class) = server_tool_usage_class(tool.tool_type.as_str()) else {
+            continue;
+        };
+        if !out.iter().any(|existing| existing == class) {
+            out.push(class.to_string());
+        }
+    }
+    out
+}
+
+fn server_tool_usage_class(tool_type: &str) -> Option<&'static str> {
+    match tool_type {
+        "web_search" | "web_search_preview" | "web_fetch" => Some("web_search"),
+        "file_search" | "collections_search" | "attachment_search" => Some("file_search_tool_call"),
+        "x_search" => Some("x_search"),
+        "code_interpreter" => Some("code_interpreter_duration"),
+        "code_execution" => Some("code_execution_duration"),
+        _ => None,
     }
 }
 

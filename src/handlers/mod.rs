@@ -15,7 +15,6 @@ mod tests;
 use crate::app::AppState;
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType};
 use crate::error::{AppError, AppResult};
-use crate::model_registry_store::ModelPricing;
 use crate::request_capture::RequestCaptureSession;
 use crate::settings::normalize_pricing_model_key;
 use crate::transforms::{self, Phase, TransformRuleConfig};
@@ -630,6 +629,7 @@ const URP_KNOWN_MESSAGES_FIELDS: [&str; 8] = [
 pub(crate) struct UrpRequest {
     pub(crate) model: String,
     pub(crate) max_multiplier: Option<f64>,
+    pub(crate) server_tool_usage_classes: Vec<String>,
     pub(crate) affinity_explicit: Option<String>,
     pub(crate) affinity_prefix_hash: String,
 }
@@ -644,6 +644,7 @@ struct MonoizeAttempt {
     logical_model: String,
     upstream_model: String,
     model_multiplier: f64,
+    server_tool_usage_classes: Vec<String>,
     provider_transforms: Vec<TransformRuleConfig>,
     passive_failure_count_threshold: u32,
     passive_cooldown_seconds: u64,
@@ -686,17 +687,6 @@ async fn maybe_sleep_before_channel_retry(attempt: &MonoizeAttempt) {
     .await;
 }
 
-async fn get_model_pricing_or_internal_error(
-    state: &AppState,
-    model_id: &str,
-) -> AppResult<Option<ModelPricing>> {
-    state
-        .model_registry_store
-        .get_model_pricing(model_id)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))
-}
-
 async fn normalized_pricing_model_key(state: &AppState, model_id: &str) -> String {
     let reasoning_suffix_map = state
         .settings_store
@@ -704,24 +694,6 @@ async fn normalized_pricing_model_key(state: &AppState, model_id: &str) -> Strin
         .await
         .unwrap_or_default();
     normalize_pricing_model_key(model_id, &reasoning_suffix_map)
-}
-
-async fn resolve_billable_pricing(
-    state: &AppState,
-    upstream_model: &str,
-    logical_model: &str,
-) -> AppResult<Option<ModelPricing>> {
-    let normalized_upstream_model = normalized_pricing_model_key(state, upstream_model).await;
-    if let Some(pricing) =
-        get_model_pricing_or_internal_error(state, &normalized_upstream_model).await?
-    {
-        return Ok(Some(pricing));
-    }
-    let normalized_logical_model = normalized_pricing_model_key(state, logical_model).await;
-    if normalized_logical_model == normalized_upstream_model {
-        return Ok(None);
-    }
-    get_model_pricing_or_internal_error(state, &normalized_logical_model).await
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -1041,5 +1013,6 @@ fn parse_urp_request(known: &Value, extra: Map<String, Value>) -> AppResult<UrpR
         affinity_prefix_hash: crate::handlers::helpers::short_xxh3_hex(&model),
         model,
         max_multiplier,
+        server_tool_usage_classes: Vec::new(),
     })
 }

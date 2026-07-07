@@ -1,6 +1,7 @@
 mod analytics_request_logs;
 mod api_keys;
 mod auth;
+mod billing_rates;
 mod groups;
 mod model_registry;
 mod providers;
@@ -24,6 +25,11 @@ pub use api_keys::{
 pub use auth::{
     AuthResponse, LoginRequest, RegisterRequest, UpdateMeRequest, UserResponse, get_me, login,
     logout, register, update_me,
+};
+pub use billing_rates::{
+    PricingProfilePatternsResponse, UpdatePricingProfilePatternsRequest, delete_billing_rate,
+    get_pricing_profile_patterns, list_billing_rates, sync_billing_rates_catalog,
+    update_pricing_profile_patterns, upsert_billing_rate,
 };
 pub use groups::{DashboardGroupsResponse, list_dashboard_groups};
 pub use model_registry::{

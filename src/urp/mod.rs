@@ -642,8 +642,14 @@ pub struct InputDetails {
     pub standard_tokens: u64,
     #[serde(default)]
     pub cache_read_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_modality_breakdown: Option<ModalityBreakdown>,
     #[serde(default)]
     pub cache_creation_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_5m_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_1h_tokens: u64,
     #[serde(default)]
     pub tool_prompt_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

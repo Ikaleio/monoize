@@ -215,15 +215,72 @@ fn parse_modality_breakdown_from_detail_object(
     }
 }
 
+fn parse_cache_read_modality_breakdown_from_detail_object(
+    detail: Option<&Map<String, Value>>,
+) -> Option<urp::ModalityBreakdown> {
+    let detail = detail?;
+    for key in [
+        "cache_read_tokens_details",
+        "cached_tokens_details",
+        "cached_input_tokens_details",
+    ] {
+        if let Some(breakdown) =
+            parse_modality_breakdown_from_detail_object(detail.get(key).and_then(|v| v.as_object()))
+        {
+            return Some(breakdown);
+        }
+    }
+
+    let breakdown = urp::ModalityBreakdown {
+        text_tokens: detail
+            .get("cache_read_text_tokens")
+            .or_else(|| detail.get("cached_text_tokens"))
+            .or_else(|| detail.get("cached_input_text_tokens"))
+            .and_then(|v| v.as_u64()),
+        image_tokens: detail
+            .get("cache_read_image_tokens")
+            .or_else(|| detail.get("cached_image_tokens"))
+            .or_else(|| detail.get("cached_input_image_tokens"))
+            .and_then(|v| v.as_u64()),
+        audio_tokens: detail
+            .get("cache_read_audio_tokens")
+            .or_else(|| detail.get("cached_audio_tokens"))
+            .or_else(|| detail.get("cached_input_audio_tokens"))
+            .and_then(|v| v.as_u64()),
+        video_tokens: detail
+            .get("cache_read_video_tokens")
+            .or_else(|| detail.get("cached_video_tokens"))
+            .or_else(|| detail.get("cached_input_video_tokens"))
+            .and_then(|v| v.as_u64()),
+        document_tokens: detail
+            .get("cache_read_document_tokens")
+            .or_else(|| detail.get("cached_document_tokens"))
+            .or_else(|| detail.get("cached_input_document_tokens"))
+            .and_then(|v| v.as_u64()),
+    };
+    if breakdown.text_tokens.is_some()
+        || breakdown.image_tokens.is_some()
+        || breakdown.audio_tokens.is_some()
+        || breakdown.video_tokens.is_some()
+        || breakdown.document_tokens.is_some()
+    {
+        Some(breakdown)
+    } else {
+        None
+    }
+}
+
 fn make_input_details(
     standard_tokens: u64,
     cache_read_tokens: u64,
+    cache_read_modality_breakdown: Option<urp::ModalityBreakdown>,
     cache_creation_tokens: u64,
     tool_prompt_tokens: u64,
     modality_breakdown: Option<urp::ModalityBreakdown>,
 ) -> Option<urp::InputDetails> {
     if standard_tokens > 0
         || cache_read_tokens > 0
+        || cache_read_modality_breakdown.is_some()
         || cache_creation_tokens > 0
         || tool_prompt_tokens > 0
         || modality_breakdown.is_some()
@@ -231,7 +288,10 @@ fn make_input_details(
         Some(urp::InputDetails {
             standard_tokens,
             cache_read_tokens,
+            cache_read_modality_breakdown,
             cache_creation_tokens,
+            cache_creation_5m_tokens: 0,
+            cache_creation_1h_tokens: 0,
             tool_prompt_tokens,
             modality_breakdown,
         })
@@ -368,6 +428,7 @@ pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
         input_details: make_input_details(
             0,
             cached_tokens,
+            parse_cache_read_modality_breakdown_from_detail_object(prompt_details),
             cache_creation_tokens,
             tool_prompt_tokens,
             parse_modality_breakdown_from_detail_object(prompt_details),
@@ -478,6 +539,7 @@ pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
         input_details: make_input_details(
             0,
             cached_tokens,
+            parse_cache_read_modality_breakdown_from_detail_object(input_details_obj),
             cache_creation_tokens,
             tool_prompt_tokens,
             parse_modality_breakdown_from_detail_object(input_details_obj),
@@ -540,6 +602,7 @@ pub(crate) fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage
         input_details: make_input_details(
             0,
             cache_read_tokens,
+            None,
             cache_creation_tokens,
             tool_prompt_tokens,
             None,
@@ -620,6 +683,7 @@ pub(crate) fn parse_usage_from_gemini_object(obj: &Value) -> Option<urp::Usage> 
         input_details: make_input_details(
             0,
             cache_read_tokens,
+            None,
             cache_creation_tokens,
             tool_prompt_tokens,
             None,

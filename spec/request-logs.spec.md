@@ -157,6 +157,8 @@ RL14. For failed requests (`status = "error"`):
 
 RL15. For successful requests where usage exists, `usage_breakdown_json` MUST persist a request-time snapshot of usage details. The snapshot MUST include `input.total_tokens` and `output.total_tokens`, and SHOULD include subtype token counts when present (for example: cached, cache creation/read, reasoning, audio, image, text).
 
+RL15b. If normalized usage contains an authoritative cached-input modality split, `usage_breakdown_json.input` SHOULD include the corresponding `cached_text_tokens`, `cached_image_tokens`, `cached_audio_tokens`, `cached_video_tokens`, or `cached_document_tokens` fields when present.
+
 RL15a. `usage_breakdown_json.input.total_tokens` MUST be the aggregate/inclusive prompt token total as defined in `user-billing-and-model-metadata.spec.md` § 5 C3 — i.e. it MUST include cache-read tokens and cache-creation tokens. `usage_breakdown_json.input.uncached_tokens` MUST equal `input.total_tokens - cached_tokens - cache_creation_tokens` clamped at zero (the base-rate billable bucket). These fields MUST be computed uniformly across all upstream provider types, because upstream usage is normalized at decode time per C3-ii of the billing spec. Provider-type branching in usage-breakdown construction MUST NOT exist.
 
 RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the request-time pricing snapshot used for billing. The snapshot MUST include at least:
@@ -164,8 +166,23 @@ RL16. For successful requests where billing is executed, `billing_breakdown_json
 - unit prices used for each billed token class,
 - token quantities used in each billed class,
 - per-class subtotal charges,
+- meter quantities and subtotals for non-token billed classes,
+- selected context tier and service tier,
 - provider multiplier,
 - base charge and final charge.
+
+RL16a. For metered billing snapshots, `billing_breakdown_json.version` MUST equal `2` and the snapshot MUST include:
+
+- `token_line_items: array`
+- `meter_line_items: array`
+- `tier.context_tier: string | null`
+- `tier.service_tier: string | null`
+- `base_charge_nano: string`
+- `final_charge_nano: string`
+
+RL16b. Each token line item MUST include `usage_class`, `unit`, `unit_price_nano`, `quantity`, `charge_nano`, and any selected dimension fields among `context_tier`, `service_tier`, `modality`, and `cache_ttl`.
+
+RL16c. Each meter line item MUST include `usage_class`, `unit`, `unit_price_nano`, `quantity`, `charge_nano`, and whether the quantity was authoritative when that can be represented.
 
 RL17. When a request triggers waterfall fail-forward (one or more provider/channel attempts fail with retryable errors before a final result), `tried_providers_json` MUST record each failed attempt as `{ provider_id, channel_id, error }`. The array MUST be ordered chronologically (first attempt first). When no fallback occurred, the field MUST be null.
 
@@ -359,15 +376,15 @@ FL25. The `charge_nano_usd` (Cost) column displayed value MUST use regular USD c
 
 FL25a. The Cost column MUST NOT truncate visible cell text. The table layout MUST allow this column to expand with content when needed (while preserving horizontal overflow/scroll behavior for narrow viewports).
 
-FL26. Hovering the `charge_nano_usd` (Cost) cell MUST show billing breakdown details sourced from `billing_breakdown_json`, including per-class expression `unit_price × token_count` and subtotal, plus multiplier and base charge. The "final cost" line MUST NOT be rendered; the total cost line at the bottom already displays the definitive charge.
+FL26. Hovering the `charge_nano_usd` (Cost) cell MUST show billing breakdown details sourced from `billing_breakdown_json`, including per-class expression `unit_price × quantity` and subtotal for token and meter line items, plus multiplier and base charge. The tooltip MUST show context tier and service tier when present, and MUST include cache TTL and modality labels on line items when present. The "final cost" line MUST NOT be rendered; the total cost line at the bottom already displays the definitive charge.
 
-FL26a. In the cost breakdown tooltip, any per-class line item whose computed charge is zero (i.e. `charge_nano = "0"` or token count is `0`) MUST be hidden from the rendered tooltip. The backend MUST continue to include all fields in `billing_breakdown_json` regardless of value; this is a frontend-only rendering filter.
+FL26a. In the cost breakdown tooltip, any per-class line item whose computed charge is zero (i.e. `charge_nano = "0"` or quantity is `0`) MUST be hidden from the rendered tooltip. The backend MUST continue to include all fields in `billing_breakdown_json` regardless of value; this is a frontend-only rendering filter.
 
 FL26b. *(Removed — "final cost" line is unconditionally removed from the tooltip. See FL26.)*
 
 FL26c. If the cost breakdown tooltip would contain no visible line items (all per-class charges are zero per FL26a, no base charge, no multiplier, and billing snapshot is present), the Cost cell MUST render as plain text without a tooltip wrapper. The displayed cost value remains unchanged.
 
-FL26d. Exception to FL26c: if `billing_breakdown_json.exemption_reason = "admin_unpriced_model"`, the Cost cell MUST still render a tooltip. That tooltip MUST include a localized note stating that an admin-used unpriced model was exempted from billing, so a visible `$0.000000` charge is not mistaken for missing data.
+FL26d. Legacy snapshot exception to FL26c: if an existing historical `billing_breakdown_json.exemption_reason = "admin_unpriced_model"`, the Cost cell MUST still render a tooltip. That tooltip MUST include a localized note stating that an admin-used unpriced model was exempted from billing, so a visible `$0.000000` charge is not mistaken for missing data. New metered-billing requests MUST NOT create this exemption.
 
 FL27. Hovering the `input_tokens` (Input) and `output_tokens` (Output) cells MUST show usage breakdown details sourced from `usage_breakdown_json`, including subtype token counts when available (for example: text, cached, cache creation/read, image, audio, reasoning).
 

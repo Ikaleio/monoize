@@ -19,6 +19,9 @@ import type {
   RequestLogsFilter,
   ModelMetadataRecord,
   UpsertModelMetadataInput,
+  BillingRateRecord,
+  UpsertBillingRateInput,
+  PricingProfilePattern,
 } from "./api";
 
 // SWR fetcher functions
@@ -34,6 +37,8 @@ const fetchers = {
   dashboardGroups: async () => (await api.listDashboardGroups()).groups,
   transformRegistry: () => api.getTransformRegistry(),
   modelMetadata: () => api.listModelMetadata(),
+  billingRates: () => api.listBillingRates(),
+  pricingProfilePatterns: async () => (await api.getPricingProfilePatterns()).patterns,
   marketplaceModels: () => api.listMarketplaceModels(),
 };
 
@@ -50,6 +55,8 @@ export const SWR_KEYS = {
   DASHBOARD_GROUPS: "/dashboard/groups",
   TRANSFORM_REGISTRY: "/dashboard/transforms/registry",
   MODEL_METADATA: "/dashboard/model-metadata",
+  BILLING_RATES: "/dashboard/billing-rates",
+  PRICING_PROFILE_PATTERNS: "/dashboard/pricing-profile-patterns",
   MARKETPLACE_MODELS: "/dashboard/marketplace/models",
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
@@ -158,6 +165,22 @@ export function useModelMetadata(config?: SWRConfiguration) {
   return useSWR<ModelMetadataRecord[]>(
     SWR_KEYS.MODEL_METADATA,
     fetchers.modelMetadata,
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function useBillingRates(config?: SWRConfiguration) {
+  return useSWR<BillingRateRecord[]>(
+    SWR_KEYS.BILLING_RATES,
+    fetchers.billingRates,
+    { ...defaultConfig, ...config }
+  );
+}
+
+export function usePricingProfilePatterns(config?: SWRConfiguration) {
+  return useSWR<PricingProfilePattern[]>(
+    SWR_KEYS.PRICING_PROFILE_PATTERNS,
+    fetchers.pricingProfilePatterns,
     { ...defaultConfig, ...config }
   );
 }
@@ -589,6 +612,110 @@ export async function syncModelMetadata(
   }
 }
 
+export async function upsertBillingRateOptimistic(
+  id: string,
+  input: UpsertBillingRateInput,
+  currentRecords: BillingRateRecord[],
+  onError?: (error: Error) => void
+) {
+  const tempRecord: BillingRateRecord = {
+    id,
+    source: input.source ?? "manual",
+    pricing_profile: input.pricing_profile ?? "",
+    model_pattern: input.model_pattern ?? null,
+    provider_type: input.provider_type ?? null,
+    rate_kind: input.rate_kind ?? "token",
+    usage_class: input.usage_class ?? "",
+    unit: input.unit ?? "token",
+    unit_price_nano_usd: input.unit_price_nano_usd ?? "0",
+    context_tier: input.context_tier ?? null,
+    service_tier: input.service_tier ?? null,
+    modality: input.modality ?? null,
+    cache_ttl: input.cache_ttl ?? null,
+    match_json: input.match_json ?? {},
+    priority: input.priority ?? 0,
+    enabled: input.enabled ?? true,
+    raw_json: input.raw_json ?? {},
+    updated_at: new Date().toISOString(),
+  };
+  const exists = currentRecords.some((r) => r.id === id);
+  const optimistic = exists
+    ? currentRecords.map((r) => (r.id === id ? { ...r, ...tempRecord } : r))
+    : [...currentRecords, tempRecord];
+  mutate(SWR_KEYS.BILLING_RATES, optimistic, false);
+
+  try {
+    const result = await api.upsertBillingRate(id, input);
+    mutate(SWR_KEYS.BILLING_RATES);
+    return result;
+  } catch (error) {
+    mutate(SWR_KEYS.BILLING_RATES, currentRecords, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function deleteBillingRateOptimistic(
+  id: string,
+  currentRecords: BillingRateRecord[],
+  onError?: (error: Error) => void
+) {
+  mutate(
+    SWR_KEYS.BILLING_RATES,
+    currentRecords.filter((r) => r.id !== id),
+    false
+  );
+
+  try {
+    await api.deleteBillingRate(id);
+    mutate(SWR_KEYS.BILLING_RATES);
+  } catch (error) {
+    mutate(SWR_KEYS.BILLING_RATES, currentRecords, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function syncBillingRatesCatalog(
+  onError?: (error: Error) => void
+) {
+  try {
+    const result = await api.syncBillingRatesCatalog();
+    mutate(SWR_KEYS.BILLING_RATES);
+    return result;
+  } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function updatePricingProfilePatternsOptimistic(
+  patterns: PricingProfilePattern[],
+  currentPatterns: PricingProfilePattern[],
+  onError?: (error: Error) => void
+) {
+  mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, patterns, false);
+
+  try {
+    const result = await api.updatePricingProfilePatterns(patterns);
+    mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, result.patterns, false);
+    mutate(SWR_KEYS.SETTINGS);
+    return result.patterns;
+  } catch (error) {
+    mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, currentPatterns, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
 // Global revalidation helpers
 export function revalidateAll() {
   mutate(SWR_KEYS.ME);
@@ -599,6 +726,9 @@ export function revalidateAll() {
   mutate(SWR_KEYS.SETTINGS);
   mutate(SWR_KEYS.DASHBOARD_GROUPS);
   mutate(SWR_KEYS.TRANSFORM_REGISTRY);
+  mutate(SWR_KEYS.MODEL_METADATA);
+  mutate(SWR_KEYS.BILLING_RATES);
+  mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS);
 }
 
 export function clearCache() {
@@ -610,4 +740,7 @@ export function clearCache() {
   mutate(SWR_KEYS.SETTINGS, undefined, false);
   mutate(SWR_KEYS.DASHBOARD_GROUPS, undefined, false);
   mutate(SWR_KEYS.TRANSFORM_REGISTRY, undefined, false);
+  mutate(SWR_KEYS.MODEL_METADATA, undefined, false);
+  mutate(SWR_KEYS.BILLING_RATES, undefined, false);
+  mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, undefined, false);
 }

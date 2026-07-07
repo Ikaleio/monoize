@@ -87,7 +87,34 @@ export function LogRowCells({
 	const billingSnapshot = asObject(log.billing.breakdown)
 	const billingInput = asObject(billingSnapshot?.input)
 	const billingOutput = asObject(billingSnapshot?.output)
+	const billingTier = asObject(billingSnapshot?.tier)
 	const multiplier = readNumber(billingSnapshot?.provider_multiplier)
+	const tokenLineItems = Array.isArray(billingSnapshot?.token_line_items) ?
+		billingSnapshot.token_line_items.map(asObject).filter(Boolean)
+	:	[]
+	const meterLineItems = Array.isArray(billingSnapshot?.meter_line_items) ?
+		billingSnapshot.meter_line_items.map(asObject).filter(Boolean)
+	:	[]
+	const visibleTokenLineItems = tokenLineItems.filter((item) => {
+		const charge = readNanoString(item, 'charge_nano')
+		const quantity = readNumber(item.quantity)
+		return charge !== '0' && quantity !== 0
+	})
+	const visibleMeterLineItems = meterLineItems.filter((item) => {
+		const charge = readNanoString(item, 'charge_nano')
+		const quantity = readNumber(item.quantity)
+		return charge !== '0' && quantity !== 0
+	})
+	const hasMatrixLineItems =
+		visibleTokenLineItems.length > 0 || visibleMeterLineItems.length > 0
+	const contextTier =
+		typeof billingTier?.context_tier === 'string' && billingTier.context_tier ?
+			billingTier.context_tier
+		:	null
+	const serviceTier =
+		typeof billingTier?.service_tier === 'string' && billingTier.service_tier ?
+			billingTier.service_tier
+		:	null
 	const isEstimatedBilling = billingSnapshot?.estimated === true
 	const billingExemptionReason =
 		typeof billingSnapshot?.exemption_reason === 'string' ?
@@ -106,6 +133,12 @@ export function LogRowCells({
 			maximumFractionDigits: 6
 		})}/1M`
 	}
+	const formatUnitRate = (nanoPerUnit: string | null, unit: unknown) => {
+		const unitLabel = typeof unit === 'string' && unit ? unit : 'unit'
+		return unitLabel === 'token' ?
+				formatRatePerMillion(nanoPerUnit)
+			:	`${formatCost(nanoPerUnit)}/${unitLabel}`
+	}
 	const formatRateTimesUsage = (
 		tokens: number | null,
 		rateNano: string | null,
@@ -115,6 +148,26 @@ export function LogRowCells({
 			return null
 		}
 		return `${formatTokenCount(tokens)} × ${formatRatePerMillion(rateNano)} = ${formatCost(chargeNano)}`
+	}
+	const formatLineItemDetail = (item: Record<string, unknown>) => {
+		const quantity = readNumber(item.quantity)
+		const unitPrice = readNanoString(item, 'unit_price_nano')
+		const charge = readNanoString(item, 'charge_nano')
+		if (quantity == null || !unitPrice || !charge || Number(charge) === 0) {
+			return null
+		}
+		return `${formatTokenCount(quantity)} × ${formatUnitRate(unitPrice, item.unit)} = ${formatCost(charge)}`
+	}
+	const lineItemLabel = (item: Record<string, unknown>) => {
+		const parts = [
+			item.usage_class,
+			item.modality,
+			item.cache_ttl,
+			item.context_tier,
+			item.service_tier
+		]
+			.filter((value): value is string => typeof value === 'string' && value.length > 0)
+		return parts.join(' / ')
 	}
 
 	const inputDetailRows: Array<[string, string]> = []
@@ -355,6 +408,9 @@ export function LogRowCells({
 		: 'bg-zinc-400'
 	const baseCharge = readNanoString(billingSnapshot, 'base_charge_nano')
 	const hasBreakdownContent = !!(
+		hasMatrixLineItems ||
+		contextTier ||
+		serviceTier ||
 		inputUncachedCostDetail ||
 		inputCachedCostDetail ||
 		inputCacheCreationCostDetail ||
@@ -640,7 +696,45 @@ export function LogRowCells({
 							</TooltipTrigger>
 							<TooltipContent>
 								<div className='text-xs space-y-0.5 min-w-[300px]'>
-									{inputUncachedCostDetail && (
+									{contextTier && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.contextTier')}</span>
+											<span className='font-mono'>{contextTier}</span>
+										</div>
+									)}
+									{serviceTier && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.serviceTier')}</span>
+											<span className='font-mono'>{serviceTier}</span>
+										</div>
+									)}
+									{visibleTokenLineItems.map((item, index) => {
+										const detail = formatLineItemDetail(item)
+										if (!detail) return null
+										return (
+											<div
+												key={`token-${index}`}
+												className='flex items-center justify-between gap-3'
+											>
+												<span>{lineItemLabel(item)}</span>
+												<span className='font-mono'>{detail}</span>
+											</div>
+										)
+									})}
+									{visibleMeterLineItems.map((item, index) => {
+										const detail = formatLineItemDetail(item)
+										if (!detail) return null
+										return (
+											<div
+												key={`meter-${index}`}
+												className='flex items-center justify-between gap-3'
+											>
+												<span>{lineItemLabel(item)}</span>
+												<span className='font-mono'>{detail}</span>
+											</div>
+										)
+									})}
+									{!hasMatrixLineItems && inputUncachedCostDetail && (
 										<div className='flex items-center justify-between gap-3'>
 											<span>
 												{t('requestLogs.input')}
@@ -651,7 +745,7 @@ export function LogRowCells({
 											<span className='font-mono'>{inputUncachedCostDetail}</span>
 										</div>
 									)}
-									{inputCachedCostDetail && (
+									{!hasMatrixLineItems && inputCachedCostDetail && (
 										<div className='flex items-center justify-between gap-3'>
 											<span>
 												{t('requestLogs.input')} ({t('requestLogs.cachedTokens')})
@@ -659,7 +753,7 @@ export function LogRowCells({
 											<span className='font-mono'>{inputCachedCostDetail}</span>
 										</div>
 									)}
-									{inputCacheCreationCostDetail && (
+									{!hasMatrixLineItems && inputCacheCreationCostDetail && (
 										<div className='flex items-center justify-between gap-3'>
 											<span>
 												{t('requestLogs.input')} ({t('requestLogs.cacheCreationTokens')})
@@ -669,7 +763,7 @@ export function LogRowCells({
 											</span>
 										</div>
 									)}
-									{outputTextCostDetail && (
+									{!hasMatrixLineItems && outputTextCostDetail && (
 										<div className='flex items-center justify-between gap-3'>
 											<span>
 												{t('requestLogs.output')}
@@ -680,7 +774,7 @@ export function LogRowCells({
 											<span className='font-mono'>{outputTextCostDetail}</span>
 										</div>
 									)}
-									{outputReasoningCostDetail && (
+									{!hasMatrixLineItems && outputReasoningCostDetail && (
 										<div className='flex items-center justify-between gap-3'>
 											<span>
 												{t('requestLogs.output')} ({t('requestLogs.reasoningTokens')})

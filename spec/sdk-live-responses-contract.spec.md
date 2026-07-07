@@ -2,8 +2,8 @@
 
 ## 0. Status
 
-- **Purpose:** Define the supported local SDK verification scripts under `sdk-tests/`.
-- **Scope:** Applies to `sdk-tests/openai-smoke.ts` and `sdk-tests/openai-agent-tool-smoke.ts`.
+- **Purpose:** Define the supported SDK verification scripts under `sdk-tests/`.
+- **Scope:** Applies to `sdk-tests/openai-smoke.ts`, `sdk-tests/openai-agent-tool-smoke.ts`, and `sdk-tests/live-protocol-suite.ts`.
 
 ## 1. Runtime environment
 
@@ -131,3 +131,80 @@ SDK39. If a runner started a mock child process under SDK10, it MUST terminate t
 SDK40. On process completion, each runner MUST attempt to delete the SQLite database file selected by SDK4.
 
 SDK41. Failure to delete the temporary database file in SDK40 MAY be ignored.
+
+## 7. Live AI SDK protocol suite
+
+SDK42. `sdk-tests/live-protocol-suite.ts` MUST be a Bun CLI.
+
+SDK43. `sdk-tests/live-protocol-suite.ts` MUST accept exactly three positional arguments:
+
+- `baseURL`
+- `apiKey`
+- `model`
+
+SDK44. The command form MUST be:
+
+```bash
+bun run live-protocol-suite.ts <baseURL> <apiKey> <model>
+```
+
+SDK45. If the argument count is not exactly three, or if `--help` is present, `sdk-tests/live-protocol-suite.ts` MUST print usage text and exit non-zero except for `--help`, which MUST exit zero.
+
+SDK46. `sdk-tests/live-protocol-suite.ts` MUST NOT print the API key or write the API key to a file.
+
+SDK47. `sdk-tests/live-protocol-suite.ts` MUST normalize `baseURL` to an API base URL ending in `/v1`.
+
+SDK48. The normalization in SDK47 MUST accept all of the following inputs:
+
+- `https://example.invalid/v1`
+- `https://example.invalid/v1/responses`
+- `https://example.invalid/v1/chat/completions`
+- `https://example.invalid/v1/messages`
+
+SDK49. `sdk-tests/live-protocol-suite.ts` MUST derive the Responses endpoint as `{normalized_base_url}/responses`.
+
+SDK50. For Chat Completions, `sdk-tests/live-protocol-suite.ts` MUST use `createOpenAICompatible` from `@ai-sdk/openai-compatible` and MUST create the model with `chatModel(model)`.
+
+SDK51. For Responses, `sdk-tests/live-protocol-suite.ts` MUST use `createOpenResponses` from `@ai-sdk/open-responses` and MUST pass the endpoint from SDK49 as the provider `url`.
+
+SDK52. For Messages, `sdk-tests/live-protocol-suite.ts` MUST use `createAnthropic` from `@ai-sdk/anthropic` and MUST create the model with `messages(model)`.
+
+SDK53. `sdk-tests/live-protocol-suite.ts` MUST run one non-streaming text generation check for each protocol in SDK50-SDK52.
+
+SDK54. Each non-streaming text generation check MUST call `generateText` and MUST require the final text to contain the check-specific sentinel string.
+
+SDK55. `sdk-tests/live-protocol-suite.ts` MUST run one streaming text generation check for each protocol in SDK50-SDK52.
+
+SDK56. Each streaming text generation check MUST call `streamText`, MUST consume `fullStream`, MUST require at least one text delta event, MUST require one finish event, and MUST require the aggregated text to contain the check-specific sentinel string.
+
+SDK57. `sdk-tests/live-protocol-suite.ts` MUST run one tool-loop check for each protocol in SDK50-SDK52.
+
+SDK58. Each tool-loop check MUST call `generateText` with a deterministic tool named `lookupWeather`.
+
+SDK59. The `lookupWeather` tool MUST accept an object containing `city: string` and MUST return a deterministic payload containing the city string and the check-specific sentinel string.
+
+SDK60. Each tool-loop check MUST use `stopWhen = stepCountIs(n)` for some integer `n >= 3`.
+
+SDK61. Each tool-loop check MUST require `result.steps` to contain at least one tool call and at least one tool result.
+
+SDK62. Each tool-loop check MUST require the final generated text to contain the deterministic tool payload from SDK59.
+
+SDK63. The Responses non-streaming text generation check MUST require the provider response body to contain an `output` array.
+
+SDK64. The Responses non-streaming tool-loop check MUST require the provider response body from at least one step to contain a `function_call` item in its `output` array.
+
+SDK65. Each check MUST write exactly one stdout line beginning with `PASS {check_name}` when it succeeds.
+
+SDK66. Each failed check MUST write one stderr line beginning with `FAIL {check_name}` and MUST include the failure message without including the API key.
+
+SDK67. If any check fails, `sdk-tests/live-protocol-suite.ts` MUST print a final failed summary and exit non-zero.
+
+SDK68. If all checks pass, `sdk-tests/live-protocol-suite.ts` MUST print a final passed summary and exit zero.
+
+SDK69. `sdk-tests/live-protocol-suite.ts` MUST run one streaming tool-loop check for each protocol in SDK50-SDK52.
+
+SDK70. Each streaming tool-loop check MUST call `streamText` with the same deterministic `lookupWeather` contract as SDK58-SDK60.
+
+SDK71. Each streaming tool-loop check MUST consume `fullStream`, MUST require at least one `tool-call` event, MUST require at least one `tool-result` event, MUST require one finish event, and MUST require the aggregated text to contain the deterministic tool payload from SDK59.
+
+SDK72. The Responses streaming tool-loop check MUST enable raw chunk inclusion and MUST require at least one raw Responses event whose item type is `function_call`.

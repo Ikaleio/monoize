@@ -3027,12 +3027,23 @@ async fn create_test_provider(
 
 async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&str]) {
     for model_id in model_ids {
+        let pricing_profile = if model_id.starts_with("gpt-") || model_id.starts_with('o') {
+            "openai"
+        } else if model_id.starts_with("claude-") {
+            "anthropic"
+        } else if model_id.starts_with("grok-") {
+            "xai"
+        } else if model_id.starts_with("gemini-") {
+            "default"
+        } else {
+            "default"
+        };
         state
             .model_registry_store
             .upsert_model_metadata(
                 model_id,
                 monoize::model_registry_store::UpsertModelMetadataInput {
-                    models_dev_provider: Some("test".to_string()),
+                    models_dev_provider: Some(pricing_profile.to_string()),
                     mode: Some("chat".to_string()),
                     input_cost_per_token_nano: Some("1000".to_string()),
                     output_cost_per_token_nano: Some("1000".to_string()),

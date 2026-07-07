@@ -9,6 +9,9 @@ mod routing_models;
 #[path = "api/billing_request_logs.rs"]
 mod billing_request_logs;
 
+#[path = "api/billing_rates_dashboard.rs"]
+mod billing_rates_dashboard;
+
 #[path = "api/adapters_nonstream.rs"]
 mod adapters_nonstream;
 

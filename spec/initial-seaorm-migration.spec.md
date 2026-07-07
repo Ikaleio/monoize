@@ -193,6 +193,27 @@ ISM4.8. `model_metadata_records` columns:
 - `source` TEXT NOT NULL
 - `updated_at` TEXT NOT NULL
 
+ISM4.8a. `billing_rate_records` columns:
+
+- `id` TEXT PK
+- `source` TEXT NOT NULL
+- `pricing_profile` TEXT NOT NULL
+- `model_pattern` TEXT NULL
+- `provider_type` TEXT NULL
+- `rate_kind` TEXT NOT NULL
+- `usage_class` TEXT NOT NULL
+- `unit` TEXT NOT NULL
+- `unit_price_nano_usd` TEXT NOT NULL
+- `context_tier` TEXT NULL
+- `service_tier` TEXT NULL
+- `modality` TEXT NULL
+- `cache_ttl` TEXT NULL
+- `match_json` TEXT NOT NULL
+- `priority` INTEGER NOT NULL DEFAULT 0
+- `enabled` INTEGER NOT NULL DEFAULT 1
+- `raw_json` TEXT NOT NULL
+- `updated_at` TEXT NOT NULL
+
 ISM4.9. `monoize_providers` columns:
 
 - `id` TEXT PK

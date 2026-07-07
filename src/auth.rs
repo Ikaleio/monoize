@@ -23,12 +23,6 @@ pub struct AuthResult {
     pub request_capture_mode: RequestCaptureMode,
 }
 
-impl AuthResult {
-    pub fn can_bypass_unpriced_models(&self) -> bool {
-        self.user_role.can_manage_users()
-    }
-}
-
 #[derive(Clone)]
 pub struct AuthState;
 

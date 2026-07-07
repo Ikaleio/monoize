@@ -955,6 +955,13 @@ fn assemble_image_response(
                     agg.input_tokens += usage.input_tokens;
                     agg.output_tokens += usage.output_tokens;
                     if let Some(details) = &usage.input_details {
+                        agg.input_cached_tokens += details.cache_read_tokens;
+                        if let Some(cached_modality) = &details.cache_read_modality_breakdown {
+                            agg.input_cached_text_tokens +=
+                                cached_modality.text_tokens.unwrap_or(0);
+                            agg.input_cached_image_tokens +=
+                                cached_modality.image_tokens.unwrap_or(0);
+                        }
                         if let Some(modality) = &details.modality_breakdown {
                             agg.input_text_tokens += modality.text_tokens.unwrap_or(0);
                             agg.input_image_tokens += modality.image_tokens.unwrap_or(0);
@@ -1000,6 +1007,11 @@ fn assemble_image_response(
                 "input_tokens_details": {
                     "text_tokens": usage.input_text_tokens,
                     "image_tokens": usage.input_image_tokens,
+                    "cached_tokens": usage.input_cached_tokens,
+                    "cached_tokens_details": {
+                        "text_tokens": usage.input_cached_text_tokens,
+                        "image_tokens": usage.input_cached_image_tokens,
+                    },
                 },
                 "output_tokens_details": {
                     "text_tokens": usage.output_text_tokens,
@@ -1018,6 +1030,9 @@ struct AggregatedUsage {
     output_tokens: u64,
     input_text_tokens: u64,
     input_image_tokens: u64,
+    input_cached_tokens: u64,
+    input_cached_text_tokens: u64,
+    input_cached_image_tokens: u64,
     output_text_tokens: u64,
     output_image_tokens: u64,
 }

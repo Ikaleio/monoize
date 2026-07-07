@@ -1115,7 +1115,10 @@ mod tests {
                 input_details: Some(InputDetails {
                     standard_tokens: 0,
                     cache_read_tokens: 1,
+                    cache_read_modality_breakdown: None,
                     cache_creation_tokens: 2,
+                    cache_creation_5m_tokens: 0,
+                    cache_creation_1h_tokens: 0,
                     tool_prompt_tokens: 3,
                     modality_breakdown: None,
                 }),

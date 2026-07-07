@@ -1,4 +1,5 @@
 use crate::auth::AuthState;
+use crate::billing_rate_store::BillingRateStore;
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
@@ -48,6 +49,7 @@ pub struct AppState {
     pub channel_health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
     pub channel_affinity: Arc<Mutex<HashMap<String, ChannelAffinityBinding>>>,
     pub model_registry_store: ModelRegistryStore,
+    pub billing_rate_store: BillingRateStore,
     pub transform_registry: Arc<TransformRegistry>,
     pub auth_rate_limiter: RateLimiter,
     pub log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
@@ -170,10 +172,17 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             err,
         )
     })?;
-    let model_registry_store = ModelRegistryStore::new(db).await.map_err(|err| {
+    let model_registry_store = ModelRegistryStore::new(db.clone()).await.map_err(|err| {
         AppError::new(
             axum::http::StatusCode::BAD_REQUEST,
             "model_registry_store_init_failed",
+            err,
+        )
+    })?;
+    let billing_rate_store = BillingRateStore::new(db).await.map_err(|err| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "billing_rate_store_init_failed",
             err,
         )
     })?;
@@ -480,6 +489,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         channel_health,
         channel_affinity,
         model_registry_store,
+        billing_rate_store,
         transform_registry,
         auth_rate_limiter: RateLimiter::new(10, std::time::Duration::from_secs(60)),
         log_broadcast,
@@ -1079,6 +1089,24 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/model-metadata/sync/models-dev",
             post(crate::dashboard_handlers::sync_model_metadata_models_dev),
+        )
+        .route(
+            "/dashboard/billing-rates",
+            get(crate::dashboard_handlers::list_billing_rates),
+        )
+        .route(
+            "/dashboard/billing-rates/sync/catalog",
+            post(crate::dashboard_handlers::sync_billing_rates_catalog),
+        )
+        .route(
+            "/dashboard/billing-rates/{*id}",
+            put(crate::dashboard_handlers::upsert_billing_rate)
+                .delete(crate::dashboard_handlers::delete_billing_rate),
+        )
+        .route(
+            "/dashboard/pricing-profile-patterns",
+            get(crate::dashboard_handlers::get_pricing_profile_patterns)
+                .put(crate::dashboard_handlers::update_pricing_profile_patterns),
         )
         .route(
             "/dashboard/model-metadata/{*model_id}",

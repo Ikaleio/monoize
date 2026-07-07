@@ -1352,7 +1352,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
         .upsert_model_metadata(
             "alias-route-model",
             monoize::model_registry_store::UpsertModelMetadataInput {
-                models_dev_provider: Some("test".to_string()),
+                models_dev_provider: Some("default".to_string()),
                 mode: Some("chat".to_string()),
                 input_cost_per_token_nano: Some("999999".to_string()),
                 output_cost_per_token_nano: Some("999999".to_string()),
@@ -1497,7 +1497,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         .upsert_model_metadata(
             "alias-fallback-model",
             monoize::model_registry_store::UpsertModelMetadataInput {
-                models_dev_provider: Some("test".to_string()),
+                models_dev_provider: Some("default".to_string()),
                 mode: Some("chat".to_string()),
                 input_cost_per_token_nano: Some("2000".to_string()),
                 output_cost_per_token_nano: Some("3000".to_string()),

@@ -163,32 +163,78 @@ pub(super) async fn build_monoize_attempts(
         return Ok(attempts);
     }
 
-    let mut pricing_cache: std::collections::HashMap<(String, String), bool> =
-        std::collections::HashMap::new();
+    let mut pricing_cache: std::collections::HashMap<
+        (String, String, String),
+        Result<bool, String>,
+    > = std::collections::HashMap::new();
     let mut blocked_models: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut blocked_meter_errors: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     let mut allowed_attempts = Vec::with_capacity(attempts.len());
-    let allow_unpriced_models = auth.can_bypass_unpriced_models();
 
     for mut attempt in attempts {
-        let cache_key = (attempt.upstream_model.clone(), urp.model.clone());
+        let tools_key = urp.server_tool_usage_classes.join(",");
+        let cache_key = (
+            attempt.upstream_model.clone(),
+            urp.model.clone(),
+            format!(
+                "{}:{tools_key}",
+                reasoning_envelope_provider_type(attempt.provider_type)
+            ),
+        );
         let has_pricing = if let Some(cached) = pricing_cache.get(&cache_key) {
-            *cached
+            cached.clone()
         } else {
-            let priced = resolve_billable_pricing(state, &attempt.upstream_model, &urp.model)
-                .await?
-                .is_some();
-            pricing_cache.insert(cache_key, priced);
+            let priced = match resolve_billing_rate_matrix(
+                state,
+                &attempt.upstream_model,
+                &urp.model,
+                attempt.provider_type,
+            )
+            .await?
+            {
+                Some(resolution) => {
+                    billing_rate_matrix_allows_request(&resolution, &urp.server_tool_usage_classes)
+                }
+                None => {
+                    if urp.server_tool_usage_classes.is_empty() {
+                        Ok(false)
+                    } else {
+                        Err(format!(
+                            "meter rate required for server-native tool usage class: {}",
+                            urp.server_tool_usage_classes.join(", ")
+                        ))
+                    }
+                }
+            };
+            pricing_cache.insert(cache_key, priced.clone());
             priced
         };
 
-        if has_pricing {
-            attempt.billable_pricing_available = true;
-            allowed_attempts.push(attempt);
-        } else if allow_unpriced_models {
-            allowed_attempts.push(attempt);
-        } else {
-            blocked_models.insert(attempt.upstream_model);
+        match has_pricing {
+            Err(err) => {
+                blocked_meter_errors.insert(err);
+            }
+            Ok(true) => {
+                attempt.billable_pricing_available = true;
+                allowed_attempts.push(attempt);
+            }
+            Ok(false) => {
+                blocked_models.insert(attempt.upstream_model);
+            }
         }
+    }
+
+    if !blocked_meter_errors.is_empty() {
+        let blocked_list = blocked_meter_errors
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "model_pricing_required",
+            blocked_list,
+        ));
     }
 
     if allowed_attempts.is_empty() && !blocked_models.is_empty() {
@@ -388,6 +434,7 @@ pub(super) async fn collect_provider_attempts(
             logical_model: urp.model.clone(),
             upstream_model: upstream_model.clone(),
             model_multiplier: model_entry.multiplier,
+            server_tool_usage_classes: urp.server_tool_usage_classes.clone(),
             provider_transforms: provider.transforms.clone(),
             passive_failure_count_threshold,
             passive_cooldown_seconds,

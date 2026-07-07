@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::billing_rate_store::DbBillingRateRecord;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::health_key;
@@ -13,6 +14,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 
 fn apply_channel_runtime(channel: &mut MonoizeChannel, health: &ChannelHealthState) {
     let now = chrono::Utc::now().timestamp();
@@ -91,19 +93,160 @@ pub(super) fn provider_pricing_model<'a>(
         .unwrap_or(logical_model)
 }
 
-pub(super) fn provider_has_billable_pricing(
+fn parse_u64_value(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|v| u64::try_from(v).ok()))
+        .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()))
+}
+
+pub(super) fn provider_dashboard_rate_matrix_is_complete(rates: &[DbBillingRateRecord]) -> bool {
+    let has_input = rates
+        .iter()
+        .any(|r| r.rate_kind == "token" && r.usage_class == "input_uncached");
+    let has_output = rates
+        .iter()
+        .any(|r| r.rate_kind == "token" && r.usage_class == "output");
+    if !has_input || !has_output {
+        return false;
+    }
+
+    let context_tiers: HashSet<&str> = rates
+        .iter()
+        .filter_map(|r| r.context_tier.as_deref())
+        .filter(|tier| *tier != "default")
+        .collect();
+    if context_tiers.is_empty() {
+        return true;
+    }
+
+    let has_threshold = rates
+        .iter()
+        .filter_map(|r| r.match_json.get("context_threshold_tokens"))
+        .any(|value| parse_u64_value(value).is_some());
+    if !has_threshold {
+        return false;
+    }
+
+    context_tiers.iter().all(|tier| {
+        ["input_uncached", "output"].iter().all(|usage_class| {
+            rates.iter().any(|r| {
+                r.rate_kind == "token"
+                    && r.usage_class == *usage_class
+                    && r.context_tier.as_deref() == Some(*tier)
+            })
+        })
+    })
+}
+
+async fn dashboard_billing_matrix_available_for_model(
+    state: &AppState,
+    pricing_patterns: &[crate::settings::PricingProfilePattern],
+    cache: &mut HashMap<(String, String), bool>,
+    model: &str,
+    provider_type: &str,
+) -> Result<bool, String> {
+    let key = (model.to_string(), provider_type.to_string());
+    if let Some(cached) = cache.get(&key) {
+        return Ok(*cached);
+    }
+    let mut candidate_profiles = Vec::new();
+    if let Some(pricing_profile) =
+        crate::billing_rate_store::select_pricing_profile(pricing_patterns, model)
+    {
+        candidate_profiles.push(pricing_profile.to_string());
+    }
+    if let Some(metadata_profile) =
+        dashboard_metadata_pricing_profile_for_model(state, model).await?
+        && !candidate_profiles
+            .iter()
+            .any(|candidate| candidate == &metadata_profile)
+    {
+        candidate_profiles.push(metadata_profile);
+    }
+
+    for pricing_profile in candidate_profiles {
+        let rates = state
+            .billing_rate_store
+            .list_matching_rates(&pricing_profile, Some(provider_type), model)
+            .await?;
+        if provider_dashboard_rate_matrix_is_complete(&rates) {
+            cache.insert(key, true);
+            return Ok(true);
+        }
+    }
+    cache.insert(key, false);
+    Ok(false)
+}
+
+async fn dashboard_metadata_pricing_profile_for_model(
+    state: &AppState,
+    model: &str,
+) -> Result<Option<String>, String> {
+    Ok(state
+        .model_registry_store
+        .get_model_metadata(model)
+        .await?
+        .and_then(|record| record.models_dev_provider)
+        .map(|profile| profile.trim().to_string())
+        .filter(|profile| !profile.is_empty()))
+}
+
+async fn provider_model_has_billable_rate_matrix(
+    state: &AppState,
+    pricing_patterns: &[crate::settings::PricingProfilePattern],
+    cache: &mut HashMap<(String, String), bool>,
+    provider: &MonoizeProvider,
     logical_model: &str,
     model_entry: &crate::monoize_routing::MonoizeModelEntry,
-    priced_ids: &std::collections::HashSet<String>,
-    reasoning_suffix_map: &std::collections::HashMap<String, String>,
-) -> bool {
+    reasoning_suffix_map: &HashMap<String, String>,
+) -> Result<bool, String> {
     let upstream_model = provider_pricing_model(logical_model, model_entry);
     let normalized_upstream_model =
         normalize_pricing_model_key(upstream_model, reasoning_suffix_map);
     let normalized_logical_model = normalize_pricing_model_key(logical_model, reasoning_suffix_map);
-    priced_ids.contains(&normalized_upstream_model)
-        || (normalized_upstream_model != normalized_logical_model
-            && priced_ids.contains(&normalized_logical_model))
+    let mut provider_types = HashSet::new();
+    for channel in provider.channels.iter().filter(|channel| {
+        channel
+            .supported_models
+            .iter()
+            .any(|supported| supported == logical_model)
+    }) {
+        let effective_type = crate::monoize_routing::resolve_effective_api_type(
+            &provider.api_type_overrides,
+            channel.provider_type,
+            logical_model,
+        );
+        provider_types.insert(effective_type.as_str());
+    }
+
+    for provider_type in provider_types {
+        if dashboard_billing_matrix_available_for_model(
+            state,
+            pricing_patterns,
+            cache,
+            &normalized_upstream_model,
+            provider_type,
+        )
+        .await?
+        {
+            return Ok(true);
+        }
+        if normalized_upstream_model != normalized_logical_model
+            && dashboard_billing_matrix_available_for_model(
+                state,
+                pricing_patterns,
+                cache,
+                &normalized_logical_model,
+                provider_type,
+            )
+            .await?
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 pub async fn list_providers(
@@ -118,37 +261,49 @@ pub async fn list_providers(
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
-    let priced_ids = state
-        .model_registry_store
-        .list_priced_model_ids()
-        .await
-        .unwrap_or_default();
     let reasoning_suffix_map = state
         .settings_store
         .get_reasoning_suffix_map()
         .await
         .unwrap_or_default();
+    let pricing_patterns = state
+        .settings_store
+        .get_pricing_profile_model_patterns()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let mut rate_matrix_cache: HashMap<(String, String), bool> = HashMap::new();
 
     let mut out = Vec::with_capacity(providers.len());
     for provider in providers {
-        let unpriced_count = provider
-            .models
-            .iter()
-            .filter(|(logical_model, model_entry)| {
-                !provider_has_billable_pricing(
-                    logical_model,
-                    model_entry,
-                    &priced_ids,
-                    &reasoning_suffix_map,
-                )
-            })
-            .count();
+        let mut unpriced_model_ids = Vec::new();
+        for (logical_model, model_entry) in &provider.models {
+            let has_pricing = provider_model_has_billable_rate_matrix(
+                &state,
+                &pricing_patterns,
+                &mut rate_matrix_cache,
+                &provider,
+                logical_model,
+                model_entry,
+                &reasoning_suffix_map,
+            )
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+            if !has_pricing {
+                unpriced_model_ids.push(logical_model.clone());
+            }
+        }
+        unpriced_model_ids.sort();
+        let unpriced_count = unpriced_model_ids.len();
         let p = provider_with_runtime(&state, provider).await;
         let val = serde_json::to_value(&p).unwrap_or_default();
         if let Value::Object(mut obj) = val {
             obj.insert(
                 "unpriced_model_count".to_string(),
                 Value::Number(serde_json::Number::from(unpriced_count)),
+            );
+            obj.insert(
+                "unpriced_model_ids".to_string(),
+                Value::Array(unpriced_model_ids.into_iter().map(Value::String).collect()),
             );
             out.push(Value::Object(obj));
         } else {

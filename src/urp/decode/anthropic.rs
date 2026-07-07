@@ -98,6 +98,8 @@ struct AnthropicUsage {
         alias = "cache_write_tokens"
     )]
     cache_creation_input_tokens: u64,
+    #[serde(default)]
+    cache_creation: AnthropicCacheCreationUsage,
     #[serde(
         default,
         deserialize_with = "deserialize_u64ish_default",
@@ -126,6 +128,14 @@ struct AnthropicUsage {
     extra: HashMap<String, Value>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct AnthropicCacheCreationUsage {
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    ephemeral_5m_input_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
+    ephemeral_1h_input_tokens: u64,
+}
+
 impl From<AnthropicUsage> for Usage {
     fn from(value: AnthropicUsage) -> Self {
         let input_details = if value.cache_read_input_tokens > 0
@@ -135,7 +145,10 @@ impl From<AnthropicUsage> for Usage {
             Some(InputDetails {
                 standard_tokens: 0,
                 cache_read_tokens: value.cache_read_input_tokens,
+                cache_read_modality_breakdown: None,
                 cache_creation_tokens: value.cache_creation_input_tokens,
+                cache_creation_5m_tokens: value.cache_creation.ephemeral_5m_input_tokens,
+                cache_creation_1h_tokens: value.cache_creation.ephemeral_1h_input_tokens,
                 tool_prompt_tokens: value.tool_prompt_tokens,
                 modality_breakdown: None,
             })
@@ -760,5 +773,42 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
                 content.push(ToolResultContent::Text { text });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn decodes_cache_creation_ttl_split_from_usage() {
+        let resp = decode_response(&json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-20250514",
+            "content": [{ "type": "text", "text": "ok" }],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 30,
+                "cache_creation_input_tokens": 70,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 40,
+                    "ephemeral_1h_input_tokens": 30
+                }
+            }
+        }))
+        .expect("anthropic response decodes");
+
+        let usage = resp.usage.expect("usage exists");
+        assert_eq!(usage.input_tokens, 200);
+        let details = usage.input_details.expect("input details exist");
+        assert_eq!(details.cache_read_tokens, 30);
+        assert_eq!(details.cache_creation_tokens, 70);
+        assert_eq!(details.cache_creation_5m_tokens, 40);
+        assert_eq!(details.cache_creation_1h_tokens, 30);
     }
 }

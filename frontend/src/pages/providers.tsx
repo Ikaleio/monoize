@@ -185,7 +185,6 @@ export function ProvidersPage() {
 						onDragStart={setDraggingProviderId}
 						onDrop={handleDrop}
 						modelMetadata={modelMetadata}
-						reasoningSuffixMap={reasoningSuffixMap}
 					/>
 				))}
 			</div>

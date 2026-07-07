@@ -1,7 +1,7 @@
 use crate::db::DbPool;
 use crate::model_registry::{ModelCapabilities, ModelRecord};
 use chrono::{DateTime, Utc};
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, DatabaseTransaction, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -530,9 +530,12 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        self.get_model_metadata(model_id)
+        let record = self
+            .get_model_metadata(model_id)
             .await?
-            .ok_or_else(|| "upsert succeeded but record not found".to_string())
+            .ok_or_else(|| "upsert succeeded but record not found".to_string())?;
+        upsert_model_metadata_billing_rates(&self.db, &record).await?;
+        Ok(record)
     }
 
     pub async fn delete_model_metadata(&self, model_id: &str) -> Result<bool, String> {
@@ -641,6 +644,12 @@ impl ModelRegistryStore {
             .await
             .map_err(|e| e.to_string())?;
         let deleted = del_result.rows_affected();
+        txn.execute(self.db.stmt(
+            "DELETE FROM billing_rate_records WHERE source = 'models_dev'",
+            vec![],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
 
         let mut upserted = 0usize;
         let mut skipped = 0usize;
@@ -720,6 +729,8 @@ impl ModelRegistryStore {
             ))
             .await
             .map_err(|e| e.to_string())?;
+            upsert_models_dev_billing_rates(&self.db, &txn, model_name, winner, &fetched_at)
+                .await?;
             upserted += 1;
         }
 
@@ -818,6 +829,136 @@ struct SyncProviderVariant {
     max_output_tokens: Option<i64>,
     max_tokens: Option<i64>,
     raw: Value,
+}
+
+async fn upsert_models_dev_billing_rates(
+    db: &DbPool,
+    txn: &DatabaseTransaction,
+    model_name: &str,
+    variant: &SyncProviderVariant,
+    updated_at: &str,
+) -> Result<(), String> {
+    for (usage_class, price) in [
+        ("input_uncached", variant.input_cost_nano.as_ref()),
+        ("output", variant.output_cost_nano.as_ref()),
+        ("cache_read", variant.cache_read_nano.as_ref()),
+        ("cache_write_5m", variant.cache_write_nano.as_ref()),
+        ("reasoning_output", variant.reasoning_nano.as_ref()),
+    ] {
+        let Some(price) = price else {
+            continue;
+        };
+        let id = format!(
+            "models_dev:{}:{}:{usage_class}",
+            variant.provider_id, model_name
+        );
+        txn.execute(db.stmt(
+            "INSERT INTO billing_rate_records
+             (id, source, pricing_profile, model_pattern, provider_type, rate_kind, usage_class,
+              unit, unit_price_nano_usd, match_json, priority, enabled, raw_json, updated_at)
+             VALUES ($1, 'models_dev', $2, $3, NULL, 'token', $4, 'token', $5, '{}', 0, 1, $6, $7)
+             ON CONFLICT(id) DO UPDATE SET
+               source = excluded.source,
+               pricing_profile = excluded.pricing_profile,
+               model_pattern = excluded.model_pattern,
+               rate_kind = excluded.rate_kind,
+               usage_class = excluded.usage_class,
+               unit = excluded.unit,
+               unit_price_nano_usd = excluded.unit_price_nano_usd,
+               match_json = excluded.match_json,
+               priority = excluded.priority,
+               enabled = excluded.enabled,
+               raw_json = excluded.raw_json,
+               updated_at = excluded.updated_at",
+            vec![
+                id.into(),
+                variant.provider_id.clone().into(),
+                model_name.to_string().into(),
+                usage_class.into(),
+                price.clone().into(),
+                serde_json::json!({
+                    "source": "models.dev",
+                    "models_dev_provider": variant.provider_id
+                })
+                .to_string()
+                .into(),
+                updated_at.to_string().into(),
+            ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+async fn upsert_model_metadata_billing_rates(
+    db: &DbPool,
+    record: &DbModelMetadataRecord,
+) -> Result<(), String> {
+    let _write_guard = db.write().await;
+    _write_guard
+        .execute(db.stmt(
+            "DELETE FROM billing_rate_records WHERE id LIKE $1",
+            vec![format!("model_metadata:{}:%", record.model_id).into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let pricing_profile = record
+        .models_dev_provider
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+    for (usage_class, price) in [
+        ("input_uncached", record.input_cost_per_token_nano.as_ref()),
+        ("output", record.output_cost_per_token_nano.as_ref()),
+        (
+            "cache_read",
+            record.cache_read_input_cost_per_token_nano.as_ref(),
+        ),
+        (
+            "cache_write_5m",
+            record.cache_creation_input_cost_per_token_nano.as_ref(),
+        ),
+        (
+            "reasoning_output",
+            record.output_cost_per_reasoning_token_nano.as_ref(),
+        ),
+    ] {
+        let Some(price) = price else {
+            continue;
+        };
+        let id = format!("model_metadata:{}:{usage_class}", record.model_id);
+        _write_guard
+            .execute(db.stmt(
+                "INSERT INTO billing_rate_records
+                 (id, source, pricing_profile, model_pattern, provider_type, rate_kind, usage_class,
+                  unit, unit_price_nano_usd, match_json, priority, enabled, raw_json, updated_at)
+                 VALUES ($1, $2, $3, $4, NULL, 'token', $5, 'token', $6, '{}', 0, 1, $7, $8)
+                 ON CONFLICT(id) DO UPDATE SET
+                   source = excluded.source,
+                   pricing_profile = excluded.pricing_profile,
+                   model_pattern = excluded.model_pattern,
+                   usage_class = excluded.usage_class,
+                   unit_price_nano_usd = excluded.unit_price_nano_usd,
+                   raw_json = excluded.raw_json,
+                   updated_at = excluded.updated_at",
+                vec![
+                    id.into(),
+                    record.source.clone().into(),
+                    pricing_profile.clone().into(),
+                    record.model_id.clone().into(),
+                    usage_class.into(),
+                    price.clone().into(),
+                    serde_json::json!({ "source": "model_metadata_records" })
+                        .to_string()
+                        .into(),
+                    record.updated_at.to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Maps a canonical (bare, lowercase) model ID to its official provider ID on models.dev.

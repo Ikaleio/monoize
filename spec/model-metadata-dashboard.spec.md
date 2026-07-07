@@ -5,12 +5,14 @@
 - Product name: Monoize.
 - Scope:
   - dashboard UI page `/dashboard/models` for viewing/editing model metadata;
+  - dashboard UI tabs for billing-rate records and pricing-profile patterns;
   - CRUD REST endpoints for `model_metadata_records`;
+  - CRUD REST endpoints for `billing_rate_records`;
   - sync-vs-manual priority semantics.
 
 ## 1. Data Model
 
-MD1. This spec operates on the existing `model_metadata_records` table (defined in `user-billing-and-model-metadata.spec.md` § 7).
+MD1. This spec operates on `model_metadata_records` (defined in `user-billing-and-model-metadata.spec.md` § 7) and `billing_rate_records` (defined in `metered-billing.spec.md` § 1).
 
 MD2. `model_id` (PK) is the **bare model API name** (e.g. `gpt-4o`, `claude-sonnet-4-20250514`), not prefixed with provider.
 
@@ -26,6 +28,10 @@ MD4. All pricing fields are nano-dollar integer strings (same precision as billi
 MD5. `raw_json` stores all provider variants from models.dev as `{ "providers": { "openai": {...}, "azure": {...}, ... } }`. This enables the edit UI to let the user switch pricing source.
 
 MD6. `models_dev_provider` indicates which models.dev provider's pricing is currently applied.
+
+MD7. Billing computation MUST NOT read model pricing directly from `model_metadata_records`. Billing computation MUST read `billing_rate_records`.
+
+MD8. When a model metadata row is created, updated, or synced with token prices, the server MUST mirror the present token prices into `billing_rate_records` rows whose `source` identifies the metadata origin.
 
 ## 2. Sync Priority & Merge
 
@@ -100,6 +106,42 @@ SP8. Admin MAY explicitly reset a manual record back to sync-managed by updating
 - Response: `200 OK` with `{ "success": true }`.
 - Errors: `404 not_found` if record does not exist.
 
+### 3.5 Billing-rate CRUD
+
+- Method/Path: `GET /api/dashboard/billing-rates`
+- Auth: admin required.
+- Response: `BillingRateRecord[]`.
+
+- Method/Path: `PUT /api/dashboard/billing-rates/{id}`
+- Auth: admin required.
+- Body: any mutable fields from `billing_rate_records` except `id` and `updated_at`.
+- Response: full updated `BillingRateRecord`.
+- Errors: `400 invalid_request` if required fields are absent for a new row or `unit_price_nano_usd` is not an integer string.
+
+- Method/Path: `DELETE /api/dashboard/billing-rates/{id}`
+- Auth: admin required.
+- Response: `{ "success": true }`.
+- Errors: `404 not_found` if row does not exist.
+
+### 3.6 Billing-rate catalog sync
+
+- Method/Path: `POST /api/dashboard/billing-rates/sync/catalog`
+- Auth: admin required.
+- Behavior: sync the bundled catalog as defined in `metered-billing.spec.md` MB-A4.
+- Response: `{ "success": true, "upserted": number, "skipped": number, "deleted": number, "fetched_at": string }`.
+
+### 3.7 Pricing-profile patterns
+
+- Method/Path: `GET /api/dashboard/pricing-profile-patterns`
+- Auth: admin required.
+- Response: `{ "patterns": [{ "pattern": string, "pricing_profile": string }] }`.
+
+- Method/Path: `PUT /api/dashboard/pricing-profile-patterns`
+- Auth: admin required.
+- Body: `{ "patterns": [{ "pattern": string, "pricing_profile": string }] }`.
+- Behavior: replace the ordered pattern list.
+- Errors: `400 invalid_request` if any `pattern` or `pricing_profile` is empty after trim.
+
 ## 4. Dashboard UI
 
 ### 4.1 Page location
@@ -114,7 +156,15 @@ UI3. Page MUST follow standard dashboard layout: `PageWrapper`, `text-3xl` headi
 
 UI4. Page heading: "Model Database" (en) / "模型数据库" (zh).
 
-### 4.3 Default view: Compact virtualized list
+UI4a. The page MUST contain three tabs in this order:
+
+1. `Model Database`
+2. `Billing Rates`
+3. `Pricing Profiles`
+
+UI4b. Each tab MUST use SWR for data loading, skeleton fallback while loading, and optimistic updates for user-triggered mutations.
+
+### 4.3 Model Database tab: compact virtualized list
 
 UI5. Default display MUST be a compact virtualized table (`TableVirtuoso`) with columns:
 
@@ -159,9 +209,48 @@ UI14. After any mutation, the model list MUST revalidate via SWR.
 
 UI15. Skeleton placeholders while loading.
 
+### 4.8 Billing Rates tab
+
+UI17. The Billing Rates tab MUST list `billing_rate_records` in a table with at least these visible columns:
+
+- `id`
+- `source`
+- `pricing_profile`
+- `model_pattern`
+- `provider_type`
+- `rate_kind`
+- `usage_class`
+- `unit`
+- `unit_price_nano_usd`
+- `context_tier`
+- `modality`
+- `cache_ttl`
+- `priority`
+- `enabled`
+
+UI18. The Billing Rates tab MUST provide a search input filtering by `id`, `pricing_profile`, `model_pattern`, `usage_class`, `modality`, and `cache_ttl`.
+
+UI19. The Billing Rates tab MUST provide:
+
+- a catalog sync button that calls `POST /api/dashboard/billing-rates/sync/catalog`;
+- an add button that opens a rate edit dialog;
+- row edit and delete actions.
+
+UI20. The rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
+
+### 4.9 Pricing Profiles tab
+
+UI21. The Pricing Profiles tab MUST display the ordered `pricing_profile_model_patterns` list.
+
+UI22. The Pricing Profiles tab MUST allow adding, editing, deleting, and reordering patterns.
+
+UI23. Saving the Pricing Profiles tab MUST send the entire ordered array to `PUT /api/dashboard/pricing-profile-patterns`.
+
+UI24. Empty `pattern` or `pricing_profile` values MUST be blocked before submitting.
+
 ### 4.8 Billing integration note
 
-UI16. Billing queries `model_metadata_records` by the normalized pricing key of `upstream_model` first. Pricing-key normalization MUST strip at most one recognized reasoning-tier suffix using the suffix rules in § 8 before metadata lookup. If a redirected normalized `upstream_model` key has no complete pricing, billing MUST retry the lookup with the normalized logical-model key. PK is bare model name, so both lookups address the same table.
+UI16. Billing resolves a normalized pricing key for `upstream_model` first. Pricing-key normalization MUST strip at most one recognized reasoning-tier suffix using the suffix rules in § 8. If a redirected normalized `upstream_model` key has no complete rates, billing MUST retry the lookup with the normalized logical-model key. Both lookups query `billing_rate_records` through the selected pricing profile.
 
 ## 5. Invariants
 
@@ -175,18 +264,19 @@ INV4. Price fields are nullable. Billing **blocks** a request only when neither 
 
 ## 6. Billing Enforcement
 
-BE1. `build_monoize_attempts()` MUST filter out an attempt only when both of the following are true:
+BE1. `build_monoize_attempts()` MUST filter out an attempt when both of the following are true:
 
-- the normalized pricing key of `upstream_model` has no pricing data in `model_metadata_records` (i.e. row does not exist, or `input_cost_per_token_nano` is null, or `output_cost_per_token_nano` is null), and
-- the normalized pricing key of the request logical model also has no pricing data in `model_metadata_records`.
+- the normalized pricing key of `upstream_model` has no complete eligible rate matrix in `billing_rate_records`, and
+- the normalized pricing key of the request logical model also has no complete eligible rate matrix in `billing_rate_records`.
 
 BE2. If ALL attempts for a request are filtered out due to missing pricing, the system MUST return HTTP 403 with error code `model_pricing_required` and a message listing the blocked model name(s).
 
 BE3. `maybe_charge_response()` MUST return an error (HTTP 403 `model_pricing_required`) only if both the normalized `upstream_model` pricing-key lookup and the normalized logical-model fallback lookup fail. This is a defense-in-depth check — BE1 should already prevent this path from being reached.
 
-BE4. The Provider dashboard page MUST display a visible warning badge on any `ProviderCard` whose models include entries not present (or not fully priced) in `model_metadata_records`. The badge MUST show the count of unpriced models.
+BE4. The Provider dashboard page MUST display a visible warning badge on any `ProviderCard` whose models include entries with no complete eligible rate matrix in `billing_rate_records`. The badge MUST show the count of unpriced models.
 
-- For a redirected entry, the card MUST treat the model as priced when either the normalized pricing key of the `redirect` model or the normalized pricing key of the logical model has complete pricing. It MUST count the entry as unpriced only when both are missing/incomplete.
+- `GET /api/dashboard/providers` MUST include `unpriced_model_count` and `unpriced_model_ids` for each provider. `unpriced_model_ids` MUST contain exactly the logical model ids counted by `unpriced_model_count`, sorted ascending.
+- For a redirected entry, the card MUST treat the model as priced when either the normalized pricing key of the `redirect` model or the normalized pricing key of the logical model has complete rates. It MUST count the entry as unpriced only when both are missing/incomplete.
 
 BE5. The billing enforcement check uses a per-request cache to avoid redundant pricing lookups. Because redirect fallback and suffix normalization depend on both `upstream_model` and logical model after pricing-key normalization, the cache key MUST include both values or an equivalent composite identity.
 

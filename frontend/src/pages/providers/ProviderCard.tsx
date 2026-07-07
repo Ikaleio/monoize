@@ -39,8 +39,6 @@ import { Virtuoso } from 'react-virtuoso'
 import type { ChannelTestResult, ModelMetadataRecord, Provider } from '@/lib/api'
 import { ChannelTestDialog } from './ChannelTestDialog'
 import {
-	buildPricedModelIdSet,
-	hasBillablePricingModelId,
 	PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT,
 	PROVIDER_TYPE_CONFIG,
 	statusBadge
@@ -57,7 +55,6 @@ type ProviderCardProps = {
 	onDragStart: (providerId: string) => void
 	onDrop: (targetProviderId: string) => void
 	modelMetadata: ModelMetadataRecord[]
-	reasoningSuffixMap: Record<string, string>
 }
 
 const providerActionButtonClass = 'size-11 touch-manipulation sm:size-8'
@@ -88,8 +85,7 @@ export function ProviderCard({
 	onToggle,
 	onDragStart,
 	onDrop,
-	modelMetadata,
-	reasoningSuffixMap
+	modelMetadata
 }: ProviderCardProps) {
 	const { t } = useTranslation()
 	const [expanded, setExpanded] = useState(false)
@@ -114,12 +110,11 @@ export function ProviderCard({
 		}
 		return map
 	}, [modelMetadata])
-	const pricedModelIdSet = useMemo(
-		() => buildPricedModelIdSet(modelMetadata),
-		[modelMetadata]
-	)
-
 	const unpricedCount = provider.unpriced_model_count ?? 0
+	const unpricedModelIdSet = useMemo(
+		() => new Set(provider.unpriced_model_ids ?? []),
+		[provider.unpriced_model_ids]
+	)
 
 	const channelTypeLabelEntries = useMemo(() => {
 		const types = Array.from(new Set(provider.channels.map(channel => channel.provider_type)))
@@ -404,12 +399,7 @@ export function ProviderCard({
 										<BadgeOverflowList
 											items={modelEntries.map(([model, modelEntry]) => {
 												const meta = modelMetadataById.get(model)
-												const highlightUnpriced = !hasBillablePricingModelId(
-													pricedModelIdSet,
-													model,
-													modelEntry.redirect,
-													reasoningSuffixMap
-												)
+												const highlightUnpriced = unpricedModelIdSet.has(model)
 
 												return {
 													key: model,

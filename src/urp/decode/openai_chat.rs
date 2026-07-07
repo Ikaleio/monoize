@@ -91,7 +91,10 @@ impl From<OpenAiChatUsage> for Usage {
                 Some(InputDetails {
                     standard_tokens: 0,
                     cache_read_tokens: details.cached_tokens,
+                    cache_read_modality_breakdown: None,
                     cache_creation_tokens,
+                    cache_creation_5m_tokens: 0,
+                    cache_creation_1h_tokens: 0,
                     tool_prompt_tokens: details.tool_prompt_tokens,
                     modality_breakdown: None,
                 })
