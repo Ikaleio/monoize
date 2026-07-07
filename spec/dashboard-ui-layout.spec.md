@@ -179,6 +179,8 @@ PL19. Model badge lists on the Providers page MUST use a collapsed badge collect
 - Complete model badges in the popover MUST expose the same unpriced highlighting as the preview badges.
 - Complete model badges in the provider edit dialog popover MUST keep edit and delete controls available for each model row.
 - Complete model badge popovers SHOULD use a width up to `min(44rem, viewport width minus 2rem)` before horizontal scrolling is required.
+- If a complete model badge popover contains more than 8 items, it MUST show at most 8 items per page and render previous/next page controls.
+- Page controls MUST clamp at the first and last page and MUST NOT close the popover when clicked.
 - The provider overview and provider edit dialog model list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
 
 PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-virtuoso`) with embedded scrolling.

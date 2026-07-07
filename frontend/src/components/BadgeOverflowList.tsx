@@ -5,7 +5,11 @@ import {
 	PopoverContent,
 	PopoverTrigger
 } from '@/components/ui/popover'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+
+const DEFAULT_PAGE_SIZE = 8
 
 export interface BadgeOverflowListItem {
 	key: React.Key
@@ -24,6 +28,7 @@ interface BadgeOverflowListProps {
 	contentClassName?: string
 	listClassName?: string
 	countClassName?: string
+	pageSize?: number
 	align?: React.ComponentProps<typeof PopoverContent>['align']
 	side?: React.ComponentProps<typeof PopoverContent>['side']
 	onOpenChange?: (open: boolean) => void
@@ -39,11 +44,13 @@ export function BadgeOverflowList({
 	contentClassName,
 	listClassName,
 	countClassName,
+	pageSize = DEFAULT_PAGE_SIZE,
 	align = 'start',
 	side = 'bottom',
 	onOpenChange
 }: BadgeOverflowListProps) {
 	const [open, setOpen] = React.useState(false)
+	const [page, setPage] = React.useState(0)
 	const pinnedOpenRef = React.useRef(false)
 	const didMountRef = React.useRef(false)
 	const onOpenChangeRef = React.useRef(onOpenChange)
@@ -51,10 +58,18 @@ export function BadgeOverflowList({
 	const suppressPointerFocusOpenRef = React.useRef(false)
 	const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 	const safeVisibleCount = Math.max(1, visibleCount)
+	const safePageSize = Math.max(1, pageSize)
 	const visibleItems = items.slice(0, safeVisibleCount)
 	const hiddenCount = Math.max(0, items.length - safeVisibleCount)
 	const popoverEnabled =
 		items.length > safeVisibleCount || (popoverOnSingle && items.length > 0)
+	const pageCount = Math.max(1, Math.ceil(items.length / safePageSize))
+	const hasPages = pageCount > 1
+	const activePage = Math.min(page, pageCount - 1)
+	const popoverItems =
+		hasPages ?
+			items.slice(activePage * safePageSize, (activePage + 1) * safePageSize)
+		:	items
 
 	const clearCloseTimer = React.useCallback(() => {
 		if (closeTimerRef.current) {
@@ -131,6 +146,14 @@ export function BadgeOverflowList({
 			clearCloseTimer()
 		}
 	}, [clearCloseTimer])
+
+	React.useEffect(() => {
+		setPage(current => Math.min(current, pageCount - 1))
+	}, [pageCount])
+
+	React.useEffect(() => {
+		if (!open) setPage(0)
+	}, [open])
 
 	if (items.length === 0) return null
 
@@ -255,7 +278,7 @@ export function BadgeOverflowList({
 					)}
 					role='list'
 				>
-					{items.map(item => (
+					{popoverItems.map(item => (
 						<div
 							key={item.key}
 							className='min-w-max max-w-none shrink-0 rounded-md px-0.5 py-0.5 transition-colors hover:bg-accent/50'
@@ -265,6 +288,38 @@ export function BadgeOverflowList({
 						</div>
 					))}
 				</div>
+				{hasPages && (
+					<div
+						className='mt-1 flex h-9 items-center justify-between gap-3 border-t border-border/60 px-1 pt-1'
+						onClick={event => event.stopPropagation()}
+					>
+						<Button
+							type='button'
+							variant='ghost'
+							size='icon'
+							className='h-7 w-7 rounded-md'
+							aria-label='Previous page'
+							disabled={activePage === 0}
+							onClick={() => setPage(current => Math.max(0, current - 1))}
+						>
+							<ChevronLeft data-icon='inline-start' />
+						</Button>
+						<span className='min-w-12 text-center font-mono text-xs text-muted-foreground'>
+							{activePage + 1}/{pageCount}
+						</span>
+						<Button
+							type='button'
+							variant='ghost'
+							size='icon'
+							className='h-7 w-7 rounded-md'
+							aria-label='Next page'
+							disabled={activePage >= pageCount - 1}
+							onClick={() => setPage(current => Math.min(pageCount - 1, current + 1))}
+						>
+							<ChevronRight data-icon='inline-end' />
+						</Button>
+					</div>
+				)}
 			</PopoverContent>
 		</Popover>
 	)
