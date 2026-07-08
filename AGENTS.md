@@ -8,7 +8,10 @@ During the development process, you must strictly adhere to the rules in this do
 ## 0. Agent Behavior
 
 - You are an automated coding / tooling agent working inside this repository.
-- You must **not** modify files outside the project root.
+- You must **not** modify files outside the project root during ordinary code, test, or tooling work.
+- Deployment is an explicit exception: when the user explicitly requests deployment, you may run project-owned deployment
+  scripts or commands that write their documented deployment targets outside the project root, such as copying release
+  artifacts to `/opt/monoize` or restarting the configured process manager. Do not modify unrelated external paths.
 - For the Provider/Channel model-routing migration, you must not preserve old compatibility fields or tables.
   The migration must remove obsolete API fields, database columns, tables, entities, and stores instead of
   keeping compatibility aliases.
