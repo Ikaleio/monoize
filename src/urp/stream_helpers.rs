@@ -444,11 +444,22 @@ pub(crate) fn sanitize_responses_completed_for_frame_limit(
 }
 
 pub(crate) fn extract_reasoning_parts(item: &Value) -> (String, String, String) {
-    let text = item
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let content_text = item
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("reasoning_text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    let text = if content_text.is_empty() {
+        item.get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        content_text
+    };
     let mut summary_text = String::new();
     if let Some(summary) = item.get("summary").and_then(|v| v.as_array()) {
         let mut parts = Vec::new();

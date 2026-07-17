@@ -27,6 +27,8 @@ struct StreamedNodeState {
     name: Option<String>,
     reasoning_summary_part_added_sent: bool,
     message_start_emitted: bool,
+    output_item_start_emitted: bool,
+    output_item_start: Option<Value>,
     header: Option<urp::NodeHeader>,
     node_extra_body: HashMap<String, Value>,
     completed_item: Option<Value>,

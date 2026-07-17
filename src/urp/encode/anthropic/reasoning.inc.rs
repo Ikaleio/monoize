@@ -203,19 +203,24 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         );
     }
     if let Some(reasoning) = &req.reasoning {
-        if let Some(effort) = &reasoning.effort {
-            if model_supports_adaptive(upstream_model) {
-                obj.insert("thinking".to_string(), json!({ "type": "adaptive" }));
+        if model_supports_adaptive(upstream_model) {
+            obj.insert(
+                "thinking".to_string(),
+                json!({ "type": "adaptive", "display": "summarized" }),
+            );
+            if let Some(effort) = &reasoning.effort {
                 obj.insert("output_config".to_string(), json!({ "effort": effort }));
-            } else {
-                obj.insert(
-                    "thinking".to_string(),
-                    json!({
-                        "type": "enabled",
-                        "budget_tokens": effort_to_budget(effort)
-                    }),
-                );
             }
+        } else {
+            let effort = reasoning.effort.as_deref().unwrap_or("medium");
+            obj.insert(
+                "thinking".to_string(),
+                json!({
+                    "type": "enabled",
+                    "budget_tokens": effort_to_budget(effort),
+                    "display": "summarized"
+                }),
+            );
         }
     }
     merge_extra(obj, &req.extra_body);

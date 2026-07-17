@@ -106,6 +106,40 @@ pub(crate) async fn encode_urp_stream_as_responses(
         Ok(())
     }
 
+    async fn ensure_reasoning_output_start_emitted(
+        tx: &mpsc::Sender<Event>,
+        seq: &mut u64,
+        node_state: &mut StreamedNodeState,
+        next_output_index: &mut usize,
+        streamed_output_indices: &mut HashSet<usize>,
+        stream_elapsed_secs: u64,
+    ) -> AppResult<()> {
+        if node_state.zone != ResponsesOutputZone::Reasoning
+            || node_state.output_item_start_emitted
+        {
+            return Ok(());
+        }
+        let Some(item) = node_state.output_item_start.take() else {
+            return Ok(());
+        };
+        node_state.output_index = *next_output_index;
+        *next_output_index += 1;
+        let item = maybe_reasoning_added_item_with_duration(item, stream_elapsed_secs);
+        send_responses_event(
+            tx,
+            seq,
+            "response.output_item.added",
+            json!({
+                "output_index": node_state.output_index,
+                "item": item,
+            }),
+        )
+        .await?;
+        streamed_output_indices.insert(node_state.output_index);
+        node_state.output_item_start_emitted = true;
+        Ok(())
+    }
+
     while let Some(event) = rx.recv().await {
         if error_terminal_sent {
             continue;
@@ -182,8 +216,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     });
                     next_output_index += 1;
                 } else if zone != ResponsesOutputZone::Message {
-                    let output_index = next_output_index;
-                    next_output_index += 1;
                     let mut item = stream_output_item_start_stub_from_node_header(
                         zone,
                         &header,
@@ -195,22 +227,31 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         stream_started_at.elapsed().as_secs(),
                     );
                     pending_envelope_extra.clear();
-                    send_responses_event(
-                        &tx,
-                        &mut seq,
-                        "response.output_item.added",
-                        json!({
-                            "output_index": output_index,
-                            "item": item.clone(),
-                        }),
-                    )
-                    .await?;
-                    streamed_output_indices.insert(output_index);
                     let item_id = item
                         .get("id")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
+                    let defer_reasoning_start = zone == ResponsesOutputZone::Reasoning
+                        && !stream_reasoning_item_has_meaningful_payload(&item);
+                    let output_index = if defer_reasoning_start {
+                        usize::MAX
+                    } else {
+                        let output_index = next_output_index;
+                        next_output_index += 1;
+                        send_responses_event(
+                            &tx,
+                            &mut seq,
+                            "response.output_item.added",
+                            json!({
+                                "output_index": output_index,
+                                "item": item.clone(),
+                            }),
+                        )
+                        .await?;
+                        streamed_output_indices.insert(output_index);
+                        output_index
+                    };
                     node_states.insert(
                         node_index,
                         StreamedNodeState {
@@ -223,6 +264,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             name: node_header_name(&header),
                             reasoning_summary_part_added_sent: false,
                             message_start_emitted: true,
+                            output_item_start_emitted: !defer_reasoning_start,
+                            output_item_start: defer_reasoning_start.then_some(item.clone()),
                             header: Some(header.clone()),
                             node_extra_body: extra_body.clone(),
                             completed_item: Some(complete_stream_output_item(item)),
@@ -255,6 +298,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         name: node_header_name(&header),
                         reasoning_summary_part_added_sent: false,
                         message_start_emitted,
+                        output_item_start_emitted: false,
+                        output_item_start: None,
                         header: Some(header.clone()),
                         node_extra_body: extra_body.clone(),
                         completed_item,
@@ -314,6 +359,17 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let Some(node_state) = node_states.get_mut(&node_index) else {
                     continue;
                 };
+                if stream_reasoning_delta_has_meaningful_payload(&delta) {
+                    ensure_reasoning_output_start_emitted(
+                        &tx,
+                        &mut seq,
+                        node_state,
+                        &mut next_output_index,
+                        &mut streamed_output_indices,
+                        stream_started_at.elapsed().as_secs(),
+                    )
+                    .await?;
+                }
                 if node_state.zone == ResponsesOutputZone::Message {
                     ensure_node_message_start_emitted(
                         &tx,
@@ -504,6 +560,22 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let Some(mut node_state) = node_states.remove(&node_index) else {
                     continue;
                 };
+                if stream_reasoning_node_has_meaningful_payload(&node) {
+                    ensure_reasoning_output_start_emitted(
+                        &tx,
+                        &mut seq,
+                        &mut node_state,
+                        &mut next_output_index,
+                        &mut streamed_output_indices,
+                        stream_started_at.elapsed().as_secs(),
+                    )
+                    .await?;
+                }
+                if node_state.zone == ResponsesOutputZone::Reasoning
+                    && !node_state.output_item_start_emitted
+                {
+                    continue;
+                }
                 if node_state.zone == ResponsesOutputZone::Message {
                     ensure_node_message_start_emitted(
                         &tx,
@@ -741,6 +813,22 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     } else {
                         continue;
                     };
+                    if stream_reasoning_node_has_meaningful_payload(&node) {
+                        ensure_reasoning_output_start_emitted(
+                            &tx,
+                            &mut seq,
+                            &mut node_state,
+                            &mut next_output_index,
+                            &mut streamed_output_indices,
+                            stream_started_at.elapsed().as_secs(),
+                        )
+                        .await?;
+                    }
+                    if node_state.zone == ResponsesOutputZone::Reasoning
+                        && !node_state.output_item_start_emitted
+                    {
+                        continue;
+                    }
                     if node_state.zone == ResponsesOutputZone::Message {
                         ensure_node_message_start_emitted(
                             &tx,
@@ -1378,6 +1466,8 @@ fn stream_output_item_start_stub_from_node_header(
         ResponsesOutputZone::Reasoning => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("reasoning"));
+            obj.insert("content".to_string(), json!([]));
+            obj.insert("summary".to_string(), json!([]));
             let id = node_header_id(header)
                 .or_else(|| {
                     extra_body
@@ -1643,7 +1733,12 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
                 );
             }
             if let Some(text) = content.as_ref().filter(|text| !text.is_empty()) {
-                obj.insert("text".to_string(), json!(text));
+                obj.insert(
+                    "content".to_string(),
+                    json!([{ "type": "reasoning_text", "text": text }]),
+                );
+            } else {
+                obj.insert("content".to_string(), json!([]));
             }
             if let Some(encrypted) = encrypted.as_ref().filter(|encrypted| !encrypted.is_null()) {
                 obj.insert("encrypted_content".to_string(), encrypted.clone());
@@ -1840,6 +1935,24 @@ fn append_string_field(item: &mut Value, field_name: &str, delta: &str) {
     obj.insert(field_name.to_string(), json!(format!("{current}{delta}")));
 }
 
+fn reasoning_text_from_item(item: &Value) -> Option<String> {
+    let content = item
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("reasoning_text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    if !content.is_empty() {
+        return Some(content);
+    }
+    item.get("text")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
 fn append_reasoning_summary_field(item: &mut Value, delta: &str) {
     let Some(obj) = item.as_object_mut() else {
         return;
@@ -1885,7 +1998,12 @@ fn append_node_delta_to_completed_item(
             },
         ) => {
             if let Some(content) = content.as_deref().filter(|content| !content.is_empty()) {
-                append_string_field(&mut item, "text", content);
+                append_string_field_to_message_content(
+                    &mut item,
+                    "reasoning_text",
+                    "text",
+                    content,
+                );
             }
             if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
                 append_reasoning_summary_field(&mut item, summary);
@@ -2192,6 +2310,61 @@ fn maybe_reasoning_added_item_with_duration(item: Value, duration_secs: u64) -> 
     }
 }
 
+fn stream_reasoning_item_has_meaningful_payload(item: &Value) -> bool {
+    item.get("summary")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| parts.iter().any(summary_part_has_text))
+        || item
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|parts| parts.iter().any(content_part_has_text))
+        || item
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+        || item
+            .get("encrypted_content")
+            .is_some_and(stream_reasoning_json_value_is_non_empty)
+}
+
+fn stream_reasoning_delta_has_meaningful_payload(delta: &urp::NodeDelta) -> bool {
+    matches!(
+        delta,
+        urp::NodeDelta::Reasoning {
+            content,
+            encrypted,
+            summary,
+            ..
+        } if content.as_ref().is_some_and(|value| !value.is_empty())
+            || summary.as_ref().is_some_and(|value| !value.is_empty())
+            || encrypted.as_ref().is_some_and(stream_reasoning_json_value_is_non_empty)
+    )
+}
+
+fn stream_reasoning_node_has_meaningful_payload(node: &urp::Node) -> bool {
+    matches!(
+        node,
+        urp::Node::Reasoning {
+            content,
+            encrypted,
+            summary,
+            ..
+        } if content.as_ref().is_some_and(|value| !value.is_empty())
+            || summary.as_ref().is_some_and(|value| !value.is_empty())
+            || encrypted.as_ref().is_some_and(stream_reasoning_json_value_is_non_empty)
+    )
+}
+
+fn stream_reasoning_json_value_is_non_empty(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
 fn summary_part_has_text(part: &Value) -> bool {
     part.get("text")
         .and_then(Value::as_str)
@@ -2334,9 +2507,10 @@ fn responses_message_text_signature(item: &Value) -> Vec<String> {
 }
 
 fn responses_reasoning_items_semantically_match(left: &Value, right: &Value) -> bool {
-    ["text", "encrypted_content", "source"]
+    ["encrypted_content", "source"]
         .iter()
         .all(|field| left.get(*field) == right.get(*field))
+        && reasoning_text_from_item(left) == reasoning_text_from_item(right)
         && left.get("summary") == right.get("summary")
 }
 
@@ -2370,7 +2544,13 @@ fn merge_terminal_output_item(existing_item: &mut Value, terminal_item: &Value) 
             }
         }
         Some("reasoning") => {
-            for key in ["text", "summary", "encrypted_content", "source", "status"] {
+            for key in [
+                "content",
+                "summary",
+                "encrypted_content",
+                "source",
+                "status",
+            ] {
                 if let Some(value) = terminal_obj.get(key).cloned() {
                     existing_obj.insert(key.to_string(), value);
                 }
@@ -2652,9 +2832,7 @@ async fn emit_missing_terminal_sub_lifecycles(
                         .await?;
                     }
                 }
-                if let Some(text) = item.get("text").and_then(Value::as_str)
-                    && !text.is_empty()
-                {
+                if let Some(text) = reasoning_text_from_item(item) {
                     if reasoning_delta_indices.insert(*output_index) {
                         send_responses_delta_string(
                             tx,
@@ -2669,7 +2847,7 @@ async fn emit_missing_terminal_sub_lifecycles(
                                 source,
                             ),
                             "delta",
-                            text,
+                            &text,
                             sse_max_frame_length,
                         )
                         .await?;

@@ -642,7 +642,14 @@ fn decode_reasoning_node(
 ) -> Option<Node> {
     let shared_extra = split_extra(
         item_obj,
-        &["type", "encrypted_content", "summary", "text", "source"],
+        &[
+            "type",
+            "content",
+            "encrypted_content",
+            "summary",
+            "text",
+            "source",
+        ],
     );
     let encrypted = item_obj.get("encrypted_content").map(|value| match value {
         Value::String(text) => Value::String(text.clone()),
@@ -652,10 +659,13 @@ fn decode_reasoning_node(
         .get("summary")
         .and_then(|value| value.as_array())
         .and_then(|_| summary_to_text(item_obj));
-    let text = item_obj
-        .get("text")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let text = reasoning_content_to_text(item_obj).or_else(|| {
+        item_obj
+            .get("text")
+            .and_then(|v| v.as_str())
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    });
     let source = item_obj
         .get("source")
         .and_then(|v| v.as_str())
@@ -674,6 +684,18 @@ fn decode_reasoning_node(
             extra_body: shared_extra,
         }
     })
+}
+
+fn reasoning_content_to_text(item_obj: &Map<String, Value>) -> Option<String> {
+    let text = item_obj
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("reasoning_text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    (!text.is_empty()).then_some(text)
 }
 
 fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
@@ -976,7 +998,10 @@ mod tests {
             "model": "gpt-5.4",
             "status": "completed",
             "output": [
-                { "type": "reasoning", "text": "hmm" },
+                {
+                    "type": "reasoning",
+                    "content": [{ "type": "reasoning_text", "text": "hmm" }]
+                },
                 {
                     "type": "message",
                     "role": "assistant",

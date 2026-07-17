@@ -16,6 +16,11 @@ fn encode_reasoning_item_inner(part: &Part, require_stable_id_for_encrypted: boo
             source,
             extra_body,
         } => {
+            if !require_stable_id_for_encrypted
+                && !reasoning_payload_is_meaningful(content, summary, encrypted)
+            {
+                return None;
+            }
             let mut obj = Map::new();
             let stable_id = id.clone().or_else(|| {
                 extra_body
@@ -47,7 +52,15 @@ fn encode_reasoning_item_inner(part: &Part, require_stable_id_for_encrypted: boo
             };
             obj.insert("summary".to_string(), Value::Array(summary_arr));
             if let Some(content) = content {
-                obj.insert("text".to_string(), Value::String(content.clone()));
+                obj.insert(
+                    "content".to_string(),
+                    Value::Array(vec![json!({
+                        "type": "reasoning_text",
+                        "text": content
+                    })]),
+                );
+            } else {
+                obj.insert("content".to_string(), Value::Array(Vec::new()));
             }
             if let Some(encrypted) = encrypted {
                 let enc_str = match encrypted {
@@ -66,6 +79,26 @@ fn encode_reasoning_item_inner(part: &Part, require_stable_id_for_encrypted: boo
     }
 }
 
+fn reasoning_payload_is_meaningful(
+    content: &Option<String>,
+    summary: &Option<String>,
+    encrypted: &Option<Value>,
+) -> bool {
+    content.as_ref().is_some_and(|value| !value.is_empty())
+        || summary.as_ref().is_some_and(|value| !value.is_empty())
+        || encrypted.as_ref().is_some_and(non_empty_json_value)
+}
+
+fn non_empty_json_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
 fn sanitize_reasoning_request_item(item: &mut Value) {
     let Some(obj) = item.as_object_mut() else {
         return;
@@ -77,7 +110,21 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
         .get("summary")
         .and_then(Value::as_array)
         .is_some_and(|arr| !arr.is_empty());
-    let text_value = obj.remove("text");
+    let content_value = obj.remove("content");
+    let text_value = obj.remove("text").or_else(|| {
+        content_value.and_then(|content| {
+            let text = content
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|part| {
+                    part.get("type").and_then(Value::as_str) == Some("reasoning_text")
+                })
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<String>();
+            (!text.is_empty()).then_some(Value::String(text))
+        })
+    });
     obj.remove("source");
     obj.remove("started_at");
     obj.remove("status");

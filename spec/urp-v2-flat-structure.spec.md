@@ -449,9 +449,10 @@ RESP-8. The Responses encoder MUST preserve externally visible addressing and li
 RESP-9. Responses external reasoning behavior remains stable:
 
 1. summary text remains distinct from full reasoning text;
-2. opaque reasoning payload remains typed reasoning data rather than plain text;
-3. `source` is preserved when present upstream; and
-4. `source` is omitted when upstream omitted it.
+2. full reasoning text encodes in `reasoning.content[]` entries with `type = "reasoning_text"`, not in a top-level reasoning-item `text` field;
+3. opaque reasoning payload remains typed reasoning data rather than plain text;
+4. `source` is preserved when present upstream; and
+5. `source` is omitted when upstream omitted it.
 
 RESP-10. Downstream `/v1/responses` streaming MUST NOT introduce a custom `response.reasoning_signature.delta` event. Opaque reasoning state is surfaced only through canonical reasoning item events and terminal response state.
 

@@ -420,7 +420,9 @@ fn part_extra_body_from_value(part: &Value) -> HashMap<String, Value> {
         part.clone(),
         &[
             "type",
+            "content",
             "text",
+            "summary",
             "refusal",
             "call_id",
             "name",

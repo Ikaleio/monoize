@@ -140,7 +140,11 @@ async fn responses_streaming_completed_snapshot_merges_reasoning_slot_once() {
         .filter(|item| item["type"].as_str() == Some("reasoning"))
         .collect::<Vec<_>>();
     assert_eq!(reasoning_items.len(), 1, "completed output: {output:?}");
-    assert_eq!(reasoning_items[0]["text"].as_str(), Some("mock_reasoning"));
+    assert!(reasoning_items[0].get("text").is_none());
+    assert_eq!(
+        reasoning_items[0]["content"],
+        json!([{ "type": "reasoning_text", "text": "mock_reasoning" }])
+    );
     assert_eq!(
         reasoning_items[0]["summary"],
         json!([{ "type": "summary_text", "text": "mock_summary" }])

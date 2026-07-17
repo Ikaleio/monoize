@@ -34,9 +34,9 @@ fn decode_anthropic_thinking_block(bobj: &Map<String, Value>) -> Option<Node> {
     };
     Some(Node::Reasoning {
         id,
-        content: thinking,
+        content: None,
         encrypted,
-        summary: None,
+        summary: thinking,
         source: None,
         extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
     })

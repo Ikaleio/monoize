@@ -406,7 +406,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             .data(json!({
                                 "type": "response.output_item.added",
                                 "output_index": 0,
-                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "" }], "text": "", "encrypted_content": "mock_sig" }
+                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "" }], "content": [], "encrypted_content": "mock_sig" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.reasoning_summary_part.added")
@@ -449,7 +449,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             .data(json!({
                                 "type": "response.output_item.done",
                                 "output_index": 0,
-                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "mock_summary" }], "text": "mock_reasoning", "encrypted_content": "mock_sig" }
+                                "item": { "type": "reasoning", "id": "rs_mock", "summary": [{ "type": "summary_text", "text": "mock_summary" }], "content": [{ "type": "reasoning_text", "text": "mock_reasoning" }], "encrypted_content": "mock_sig" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
                             .event("response.output_item.added")
@@ -823,6 +823,158 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     return Sse::new(stream).into_response();
                 }
                 if body.get("stream_mode").and_then(|v| v.as_str())
+                    == Some("multiple_encrypted_reasoning_then_message")
+                    || collect_responses_text(body.get("input"))
+                        == "multiple_encrypted_reasoning_then_message"
+                    || body.get("instructions").and_then(Value::as_str)
+                        == Some("multiple_encrypted_reasoning_then_message")
+                {
+                    let mut events = Vec::new();
+                    for output_index in 0..3 {
+                        let id = format!("rs_encrypted_{output_index}");
+                        let encrypted = format!("encrypted_payload_{output_index}");
+                        events.push(Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": output_index,
+                                    "item": {
+                                        "type": "reasoning",
+                                        "id": id,
+                                        "status": "in_progress",
+                                        "summary": [],
+                                        "content": [],
+                                        "encrypted_content": encrypted
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ));
+                        events.push(Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.done").data(
+                                json!({
+                                    "type": "response.output_item.done",
+                                    "output_index": output_index,
+                                    "item": {
+                                        "type": "reasoning",
+                                        "id": id,
+                                        "status": "completed",
+                                        "summary": [],
+                                        "content": [],
+                                        "encrypted_content": encrypted
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ));
+                    }
+                    events.extend([
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.added").data(
+                                json!({
+                                    "type": "response.output_item.added",
+                                    "output_index": 3,
+                                    "item": {
+                                        "type": "message",
+                                        "id": "msg_after_encrypted_reasoning",
+                                        "role": "assistant",
+                                        "status": "in_progress",
+                                        "content": []
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.content_part.added").data(
+                                json!({
+                                    "type": "response.content_part.added",
+                                    "output_index": 3,
+                                    "content_index": 0,
+                                    "item_id": "msg_after_encrypted_reasoning",
+                                    "part": { "type": "output_text", "text": "", "annotations": [] }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_text.delta").data(
+                                json!({
+                                    "type": "response.output_text.delta",
+                                    "output_index": 3,
+                                    "content_index": 0,
+                                    "item_id": "msg_after_encrypted_reasoning",
+                                    "delta": "answer"
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.output_item.done").data(
+                                json!({
+                                    "type": "response.output_item.done",
+                                    "output_index": 3,
+                                    "item": {
+                                        "type": "message",
+                                        "id": "msg_after_encrypted_reasoning",
+                                        "role": "assistant",
+                                        "status": "completed",
+                                        "content": [{ "type": "output_text", "text": "answer" }]
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(
+                            Event::default().event("response.completed").data(
+                                json!({
+                                    "type": "response.completed",
+                                    "response": {
+                                        "id": "resp_mock",
+                                        "object": "response",
+                                        "created_at": 0,
+                                        "model": model,
+                                        "status": "completed",
+                                        "output": [
+                                            {
+                                                "type": "reasoning",
+                                                "id": "rs_encrypted_0",
+                                                "summary": [],
+                                                "content": [],
+                                                "encrypted_content": "encrypted_payload_0"
+                                            },
+                                            {
+                                                "type": "reasoning",
+                                                "id": "rs_encrypted_1",
+                                                "summary": [],
+                                                "content": [],
+                                                "encrypted_content": "encrypted_payload_1"
+                                            },
+                                            {
+                                                "type": "reasoning",
+                                                "id": "rs_encrypted_2",
+                                                "summary": [],
+                                                "content": [],
+                                                "encrypted_content": "encrypted_payload_2"
+                                            },
+                                            {
+                                                "type": "message",
+                                                "id": "msg_after_encrypted_reasoning",
+                                                "role": "assistant",
+                                                "status": "completed",
+                                                "content": [{ "type": "output_text", "text": "answer" }]
+                                            }
+                                        ]
+                                    }
+                                })
+                                .to_string(),
+                            ),
+                        ),
+                        Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                    ]);
+                    return Sse::new(futures_util::stream::iter(events)).into_response();
+                }
+                if body.get("stream_mode").and_then(|v| v.as_str())
                     == Some("reasoning_message_then_tool_completed")
                 {
                     let stream = futures_util::stream::iter(vec![
@@ -1052,7 +1204,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                                                 "type": "reasoning",
                                                 "id": "rs_mock",
                                                 "summary": [{ "type": "summary_text", "text": "mock_summary" }],
-                                                "text": "mock_reasoning",
+                                                "content": [{ "type": "reasoning_text", "text": "mock_reasoning" }],
                                                 "encrypted_content": "mock_sig"
                                             },
                                             {
@@ -1170,7 +1322,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                                 "type": "reasoning",
                                 "id": "rs_mock",
                                 "summary": [{ "type": "summary_text", "text": "mock_summary" }],
-                                "text": "mock_reasoning",
+                                "content": [{ "type": "reasoning_text", "text": "mock_reasoning" }],
                                 "encrypted_content": "mock_sig"
                             }
                         })
@@ -1492,7 +1644,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 ]
             };
             let mut output = vec![
-                json!({ "type": "reasoning", "id": "rs_mock", "text": "mock_reasoning", "encrypted_content": "mock_sig" }),
+                json!({ "type": "reasoning", "id": "rs_mock", "content": [{ "type": "reasoning_text", "text": "mock_reasoning" }], "encrypted_content": "mock_sig" }),
             ];
             output.extend(calls);
             let mut response = json!({

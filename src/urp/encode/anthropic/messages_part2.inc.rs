@@ -167,46 +167,64 @@ fn encode_anthropic_file(source: &FileSource) -> Value {
     }
 }
 
-/// Claude models with adaptive-thinking support use `thinking: {type: "adaptive"}`
-/// + `output_config: {effort}`. Older models require the deprecated
-/// `thinking: {type: "enabled", budget_tokens: N}` shape.
-///
-/// A model supports adaptive thinking iff its identifier contains an
-/// `opus-<major>[.-]<minor>` or `sonnet-<major>[.-]<minor>` family segment whose
-/// (major, minor) version is >= (4, 6). This covers Opus/Sonnet 4.6, 4.7, 4.8
-/// and any 5.x+ release without per-minor-version maintenance.
+/// Claude identifiers default to adaptive thinking. The bounded legacy
+/// exceptions are Opus <= 4.6, Sonnet <= 4.6, and Haiku <= 4.5.
 fn model_supports_adaptive(model: &str) -> bool {
     let m = model.to_lowercase();
-    for family in ["opus-", "sonnet-"] {
-        let Some(pos) = m.find(family) else { continue };
-        let after = &m[pos + family.len()..];
-        let major_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if major_str.is_empty() {
-            continue;
-        }
-        let Ok(major) = major_str.parse::<u32>() else {
-            continue;
-        };
-        if major >= 5 {
-            return true;
-        }
-        if major < 4 {
-            continue;
-        }
-        // major == 4: require minor >= 6. Accept `-` or `.` as the minor separator.
-        let rest = &after[major_str.len()..];
-        let rest = rest
-            .strip_prefix('-')
-            .or_else(|| rest.strip_prefix('.'))
-            .unwrap_or(rest);
-        let minor_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(minor) = minor_str.parse::<u32>() {
-            if minor >= 6 {
-                return true;
-            }
+    let denotes_claude = m.contains("claude")
+        || ["opus-", "sonnet-", "haiku-"]
+            .iter()
+            .any(|prefix| m.starts_with(prefix));
+    if !denotes_claude {
+        return false;
+    }
+
+    for (family, last_non_adaptive) in [
+        ("opus", (4, 6)),
+        ("sonnet", (4, 6)),
+        ("haiku", (4, 5)),
+    ] {
+        if let Some(version) = claude_family_version(&m, family) {
+            return version > last_non_adaptive;
         }
     }
-    false
+
+    true
+}
+
+fn claude_family_version(model: &str, family: &str) -> Option<(u32, u32)> {
+    let family_pos = model.find(family)?;
+    if let Some(version) = parse_model_version_prefix(&model[family_pos + family.len()..]) {
+        return Some(version);
+    }
+
+    let claude_pos = model.find("claude")?;
+    if claude_pos < family_pos {
+        return parse_model_version_prefix(&model[claude_pos + "claude".len()..]);
+    }
+    None
+}
+
+fn parse_model_version_prefix(value: &str) -> Option<(u32, u32)> {
+    let value = value.trim_start_matches(['-', '.']);
+    let major_len = value.chars().take_while(|c| c.is_ascii_digit()).count();
+    if major_len == 0 {
+        return None;
+    }
+    let major = value[..major_len].parse::<u32>().ok()?;
+    let rest = value[major_len..]
+        .strip_prefix('-')
+        .or_else(|| value[major_len..].strip_prefix('.'));
+    let minor = rest
+        .map(|rest| {
+            rest.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+        })
+        .filter(|minor| !minor.is_empty())
+        .and_then(|minor| minor.parse::<u32>().ok())
+        .unwrap_or(0);
+    Some((major, minor))
 }
 
 fn effort_to_budget(effort: &str) -> u32 {
@@ -230,4 +248,3 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
         _ => "end_turn",
     }
 }
-

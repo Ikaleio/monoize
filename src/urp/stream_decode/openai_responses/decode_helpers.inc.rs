@@ -1006,7 +1006,10 @@ mod tests {
     fn decode_reasoning_part_preserves_summary_separately_from_text() {
         let part = decode_part_from_value(&json!({
             "type": "reasoning",
-            "text": "full reasoning",
+            "content": [
+                { "type": "reasoning_text", "text": "full " },
+                { "type": "reasoning_text", "text": "reasoning" }
+            ],
             "summary": [{ "type": "summary_text", "text": "brief summary" }],
             "encrypted_content": "sig_1"
         }));

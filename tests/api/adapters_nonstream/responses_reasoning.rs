@@ -76,6 +76,38 @@ async fn responses_upstream_request_preserves_explicit_reasoning_summary_auto_wi
 }
 
 #[tokio::test]
+async fn responses_nonstream_maps_messages_thinking_to_reasoning_summary() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "input": "show summarized thinking",
+            "reasoning": { "effort": "high" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let response: Value = serde_json::from_str(&body).unwrap();
+    let reasoning = response["output"]
+        .as_array()
+        .and_then(|output| {
+            output
+                .iter()
+                .find(|item| item["type"].as_str() == Some("reasoning"))
+        })
+        .unwrap_or_else(|| panic!("missing reasoning item: {response}"));
+
+    assert_eq!(
+        reasoning["summary"],
+        json!([{ "type": "summary_text", "text": "mock_reasoning" }])
+    );
+    assert_eq!(reasoning["content"], json!([]));
+    assert!(reasoning.get("text").is_none());
+}
+
+#[tokio::test]
 async fn responses_reasoning_input_roundtrips_to_responses_upstream() {
     let ctx = setup().await;
     let (status, body) = json_post(

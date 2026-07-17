@@ -253,10 +253,10 @@ fn decode_part_from_value(part: &Value) -> Part {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .or_else(|| Some(crate::urp::synthetic_reasoning_id())),
-            content: part
-                .get("text")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+            content: {
+                let (content, _, _) = extract_reasoning_parts(part);
+                (!content.is_empty()).then_some(content)
+            },
             encrypted: part.get("encrypted_content").cloned(),
             summary: part
                 .get("summary")

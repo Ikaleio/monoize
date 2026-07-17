@@ -472,11 +472,7 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
     }
 }
 
-fn apply_emitted_node_delta_to_block(
-    payload: &mut AnthropicBlockPayload,
-    delta: &NodeDelta,
-    stream_summary_as_thinking: bool,
-) {
+fn apply_emitted_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
     match (payload, delta) {
         (AnthropicBlockPayload::Text { content }, NodeDelta::Text { content: delta })
         | (AnthropicBlockPayload::Text { content }, NodeDelta::Refusal { content: delta }) => {
@@ -497,9 +493,7 @@ fn apply_emitted_node_delta_to_block(
         ) => {
             if let Some(delta) = content.as_deref().filter(|content| !content.is_empty()) {
                 thinking.push_str(delta);
-            } else if stream_summary_as_thinking
-                && let Some(delta) = summary.as_deref().filter(|summary| !summary.is_empty())
-            {
+            } else if let Some(delta) = summary.as_deref().filter(|summary| !summary.is_empty()) {
                 thinking.push_str(delta);
             }
             if let Some(signature_delta) = encrypted
@@ -528,6 +522,17 @@ fn apply_emitted_node_delta_to_block(
         }
         _ => {}
     }
+}
+
+fn summary_delta_is_messages_thinking(extra_body: &HashMap<String, Value>) -> bool {
+    extra_body
+        .get("_monoize_summary_from_messages_thinking")
+        .and_then(Value::as_bool)
+        == Some(true)
+        || extra_body
+            .get("_monoize_summary_from_plaintext_reasoning")
+            .and_then(Value::as_bool)
+            == Some(true)
 }
 
 fn maybe_override_reasoning_item_id(
@@ -636,19 +641,12 @@ async fn emit_live_block_start(
     Ok(())
 }
 
-fn summary_delta_is_plaintext_reasoning(extra_body: &HashMap<String, Value>) -> bool {
-    extra_body
-        .get("_monoize_summary_from_plaintext_reasoning")
-        .and_then(Value::as_bool)
-        == Some(true)
-}
-
 async fn emit_live_delta_for_node_delta(
     tx: &mpsc::Sender<Event>,
     block_index: u32,
     payload: &AnthropicBlockPayload,
     delta: &NodeDelta,
-    extra_body: &HashMap<String, Value>,
+    _extra_body: &HashMap<String, Value>,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     match (payload, delta) {
@@ -685,7 +683,7 @@ async fn emit_live_delta_for_node_delta(
                 .as_deref()
                 .filter(|content| !content.is_empty())
                 .or_else(|| {
-                    summary_delta_is_plaintext_reasoning(extra_body)
+                    summary_delta_is_messages_thinking(_extra_body)
                         .then(|| summary.as_deref().filter(|summary| !summary.is_empty()))
                         .flatten()
                 });
@@ -1243,8 +1241,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 };
                 maybe_override_reasoning_item_id(&mut block_state.payload, &extra_body);
                 if let Some(block_index) = block_state.block_index {
-                    let stream_summary_as_thinking =
-                        summary_delta_is_plaintext_reasoning(&extra_body);
                     emit_live_delta_for_node_delta(
                         &tx,
                         block_index,
@@ -1254,11 +1250,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         sse_max_frame_length,
                     )
                     .await?;
-                    apply_emitted_node_delta_to_block(
-                        &mut block_state.payload,
-                        &delta,
-                        stream_summary_as_thinking,
-                    );
+                    apply_emitted_node_delta_to_block(&mut block_state.payload, &delta);
                 } else {
                     apply_node_delta_to_block(&mut block_state.payload, &delta);
                 }

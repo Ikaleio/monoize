@@ -832,6 +832,11 @@ mod tests {
             .and_then(|items| items.first())
             .expect("reasoning output item");
         assert!(reasoning_item.get("status").is_none());
+        assert!(reasoning_item.get("text").is_none());
+        assert_eq!(
+            reasoning_item["content"],
+            json!([{ "type": "reasoning_text", "text": "full reasoning" }])
+        );
         assert_eq!(reasoning_item["encrypted_content"].as_str(), Some("sig_1"));
 
         let decoded = decode_responses::decode_response(&encoded).expect("decode response");
@@ -884,6 +889,11 @@ mod tests {
             reasoning_item["summary"].as_array().map(|a| a.len()),
             Some(0)
         );
+        assert!(reasoning_item.get("text").is_none());
+        assert_eq!(
+            reasoning_item["content"],
+            json!([{ "type": "reasoning_text", "text": "plain reasoning" }])
+        );
 
         let decoded = decode_responses::decode_response(&encoded).expect("decode response");
         let decoded_outputs = nodes_to_items(&decoded.output);
@@ -899,6 +909,43 @@ mod tests {
                 ..
             } if content == "plain reasoning"
         ));
+    }
+
+    #[test]
+    fn responses_response_omits_reasoning_without_meaningful_payload() {
+        let response = UrpResponse {
+            id: "resp_empty_reasoning".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            created_at: None,
+            output: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::Assistant,
+                parts: vec![
+                    Part::Reasoning {
+                        id: Some("rs_empty".to_string()),
+                        content: Some(String::new()),
+                        encrypted: None,
+                        summary: Some(String::new()),
+                        source: None,
+                        extra_body: empty_map(),
+                    },
+                    Part::Text {
+                        content: "answer".to_string(),
+                        extra_body: empty_map(),
+                    },
+                ],
+                extra_body: empty_map(),
+            }]),
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.6-sol");
+        let output = encoded["output"].as_array().expect("response output");
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0]["type"], json!("message"));
+        assert_eq!(output[0]["content"][0]["text"], json!("answer"));
     }
 
     #[test]

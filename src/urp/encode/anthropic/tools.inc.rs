@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_response_round_trip_preserves_combined_thinking_block_shape() {
+    fn anthropic_response_round_trip_normalizes_thinking_text_as_summary() {
         let response = UrpResponse {
             id: "msg_roundtrip_reasoning".to_string(),
             model: "claude".to_string(),
@@ -528,11 +528,11 @@ mod tests {
         assert!(matches!(
             &parts[0],
             Part::Reasoning {
-                content: Some(content),
+                content: None,
                 encrypted: Some(Value::String(sig)),
-                summary: None,
+                summary: Some(summary),
                 ..
-            } if content == "full reasoning" && sig == "sig_1"
+            } if summary == "full reasoning" && sig == "sig_1"
         ));
     }
 
@@ -634,19 +634,21 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_model_detection_covers_4_6_through_5_and_beyond() {
+    fn adaptive_model_detection_defaults_new_claude_families_to_adaptive() {
         for m in [
-            "claude-opus-4-6",
-            "claude-opus-4.6",
-            "claude-sonnet-4-6-20250101",
             "claude-opus-4-7-20260101",
             "claude-opus-4.7",
             "claude-sonnet-4-7",
+            "claude-haiku-4-6",
             "claude-opus-4-8",
             "claude-opus-5-0",
             "claude-sonnet-6-0",
+            "claude-fable-5",
+            "claude-mythos-5-max",
+            "claude-future-family",
             "opus-4-7",
             "sonnet-4.7",
+            "haiku-4-6",
         ] {
             assert!(
                 model_supports_adaptive(m),
@@ -654,12 +656,20 @@ mod tests {
             );
         }
         for m in [
+            "claude-opus-4-6",
+            "claude-opus-4.6",
             "claude-opus-4-5",
             "claude-opus-4.5",
+            "claude-sonnet-4-6-20250101",
             "claude-sonnet-4-0",
             "claude-sonnet-3-7",
-            "claude-haiku-4-6",
+            "claude-haiku-4-5",
+            "claude-haiku-3-5",
             "claude-3-5-sonnet",
+            "opus-4-6",
+            "sonnet-4.6",
+            "haiku-4.5",
+            "gpt-5-mini-msg",
         ] {
             assert!(
                 !model_supports_adaptive(m),
@@ -669,13 +679,16 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_encoder_passes_xhigh_and_max_through_distinctly() {
+    fn adaptive_fable_encoder_passes_xhigh_and_max_through_distinctly() {
         for effort in ["xhigh", "max"] {
             let encoded = encode_request(
-                &req_with_effort("claude-opus-4-7", effort),
-                "claude-opus-4-7",
+                &req_with_effort("claude-fable-5", effort),
+                "claude-fable-5",
             );
-            assert_eq!(encoded["thinking"], json!({ "type": "adaptive" }));
+            assert_eq!(
+                encoded["thinking"],
+                json!({ "type": "adaptive", "display": "summarized" })
+            );
             assert_eq!(
                 encoded["output_config"]["effort"],
                 json!(effort),
@@ -688,12 +701,16 @@ mod tests {
     fn non_adaptive_encoder_uses_32000_for_both_xhigh_and_max() {
         for effort in ["xhigh", "max"] {
             let encoded = encode_request(
-                &req_with_effort("claude-sonnet-4-5", effort),
-                "claude-sonnet-4-5",
+                &req_with_effort("claude-sonnet-4-6", effort),
+                "claude-sonnet-4-6",
             );
             assert_eq!(
                 encoded["thinking"],
-                json!({ "type": "enabled", "budget_tokens": 32000 }),
+                json!({
+                    "type": "enabled",
+                    "budget_tokens": 32000,
+                    "display": "summarized"
+                }),
                 "non-adaptive {effort} must emit budget_tokens=32000"
             );
             assert!(
@@ -719,5 +736,47 @@ mod tests {
                 "effort_to_budget({effort}) regressed"
             );
         }
+    }
+
+    #[test]
+    fn messages_upstream_forces_summarized_thinking_display() {
+        let mut req = req_with_effort("claude-sonnet-5", "high");
+        req.reasoning
+            .as_mut()
+            .expect("reasoning config")
+            .extra_body
+            .insert("display".to_string(), json!("omitted"));
+
+        let encoded = encode_request(&req, "claude-sonnet-5");
+        assert_eq!(encoded["thinking"]["display"], json!("summarized"));
+    }
+
+    #[test]
+    fn adaptive_messages_upstream_keeps_thinking_without_explicit_effort() {
+        let mut req = req_with_effort("claude-sonnet-5", "high");
+        req.reasoning.as_mut().expect("reasoning config").effort = None;
+
+        let encoded = encode_request(&req, "claude-sonnet-5");
+        assert_eq!(
+            encoded["thinking"],
+            json!({ "type": "adaptive", "display": "summarized" })
+        );
+        assert!(encoded.get("output_config").is_none());
+    }
+
+    #[test]
+    fn non_adaptive_messages_upstream_defaults_missing_effort_to_medium_budget() {
+        let mut req = req_with_effort("claude-sonnet-4-5", "high");
+        req.reasoning.as_mut().expect("reasoning config").effort = None;
+
+        let encoded = encode_request(&req, "claude-sonnet-4-5");
+        assert_eq!(
+            encoded["thinking"],
+            json!({
+                "type": "enabled",
+                "budget_tokens": 4096,
+                "display": "summarized"
+            })
+        );
     }
 }

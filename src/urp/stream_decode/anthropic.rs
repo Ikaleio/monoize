@@ -36,7 +36,7 @@ enum ActiveNodeKind {
         phase: Option<String>,
     },
     Reasoning {
-        content: String,
+        summary: String,
         encrypted: String,
     },
     ToolCall {
@@ -252,7 +252,7 @@ fn handle_content_block_delta(
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let delta_extra = object_without_keys(
+    let mut delta_extra = object_without_keys(
         &delta_value,
         &["type", "text", "thinking", "signature", "partial_json"],
     );
@@ -270,18 +270,22 @@ fn handle_content_block_delta(
                 content: text.to_string(),
             }
         }
-        (ActiveNodeKind::Reasoning { content, .. }, "thinking_delta") => {
+        (ActiveNodeKind::Reasoning { summary, .. }, "thinking_delta") => {
             let Some(text) = delta_value.get("thinking").and_then(|v| v.as_str()) else {
                 return Vec::new();
             };
             if text.is_empty() {
                 return Vec::new();
             }
-            content.push_str(text);
+            summary.push_str(text);
+            delta_extra.insert(
+                "_monoize_summary_from_messages_thinking".to_string(),
+                Value::Bool(true),
+            );
             NodeDelta::Reasoning {
-                content: Some(text.to_string()),
+                content: None,
                 encrypted: None,
-                summary: None,
+                summary: Some(text.to_string()),
                 source: None,
             }
         }
@@ -387,7 +391,7 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
             let extra_body = object_without_keys(content_block, &["type", "thinking", "signature"]);
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Reasoning {
-                    content: content_block
+                    summary: content_block
                         .get("thinking")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
@@ -409,7 +413,7 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
             );
             Some(ActiveNodeState {
                 kind: ActiveNodeKind::Reasoning {
-                    content: String::new(),
+                    summary: String::new(),
                     encrypted: content_block
                         .get("data")
                         .and_then(|v| v.as_str())
@@ -460,7 +464,7 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             phase: phase.clone(),
             extra_body: active_node.extra_body.clone(),
         },
-        ActiveNodeKind::Reasoning { content, encrypted } => {
+        ActiveNodeKind::Reasoning { summary, encrypted } => {
             let extra_body = active_node.extra_body.clone();
             let (id, encrypted_value) = if encrypted.is_empty() {
                 (None, None)
@@ -472,9 +476,9 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             };
             Node::Reasoning {
                 id,
-                content: (!content.is_empty()).then(|| content.clone()),
+                content: None,
                 encrypted: encrypted_value,
-                summary: None,
+                summary: (!summary.is_empty()).then(|| summary.clone()),
                 source: None,
                 extra_body,
             }
@@ -720,9 +724,9 @@ mod tests {
             &thinking_delta_events[0],
             UrpStreamEvent::NodeDelta {
                 node_index,
-                delta: NodeDelta::Reasoning { content: Some(content), encrypted: None, .. },
+                delta: NodeDelta::Reasoning { content: None, encrypted: None, summary: Some(summary), .. },
                 ..
-            } if *node_index == 0 && content == "mock_reasoning"
+            } if *node_index == 0 && summary == "mock_reasoning"
         ));
         let signature_delta_events = handle_content_block_delta(
             0,
@@ -748,12 +752,13 @@ mod tests {
             UrpStreamEvent::NodeDone {
                 node_index,
                 node: Node::Reasoning {
-                    content: Some(content),
+                    content: None,
                     encrypted: Some(Value::String(signature)),
+                    summary: Some(summary),
                     ..
                 },
                 ..
-            } if *node_index == 0 && content == "mock_reasoning" && signature == "mock_sig"
+            } if *node_index == 0 && summary == "mock_reasoning" && signature == "mock_sig"
         ));
     }
 

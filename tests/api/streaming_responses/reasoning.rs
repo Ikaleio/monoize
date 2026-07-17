@@ -1,7 +1,6 @@
 
 #[tokio::test]
-async fn responses_streaming_response_done_does_not_reindex_terminal_tool_outputs_from_node_positions()
- {
+async fn responses_streaming_omits_empty_reasoning_and_compacts_output_indices() {
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -51,19 +50,160 @@ async fn responses_streaming_response_done_does_not_reindex_terminal_tool_output
         .collect();
     assert!(
         output_item_done.iter().any(|payload| {
-            payload["output_index"].as_u64() == Some(2)
+            payload["output_index"].as_u64() == Some(1)
                 && payload["item"]["type"].as_str() == Some("function_call")
                 && payload["item"]["id"].as_str() == Some("fc_mock")
         }),
-        "terminal function_call done must preserve the streamed tool output index and id: {text}"
+        "terminal function_call must follow the visible message without an empty-index gap: {text}"
     );
     assert!(
-        !output_item_done.iter().any(|payload| {
+        output_item_done.iter().any(|payload| {
             payload["output_index"].as_u64() == Some(0)
                 && payload["item"]["type"].as_str() == Some("message")
         }),
-        "reasoning output_index must not be reused for a terminal message during response.done recovery: {text}"
+        "the first visible message must use output_index 0: {text}"
     );
+    assert!(
+        !output_item_done
+            .iter()
+            .any(|payload| payload["item"]["type"].as_str() == Some("reasoning")),
+        "empty reasoning must not emit a terminal lifecycle: {text}"
+    );
+}
+
+#[tokio::test]
+async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_transform() {
+    let ctx = setup().await;
+    let (upstream_addr, _, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+    let model = "gpt-5.6-sol";
+
+    seed_test_model_pricing(&ctx.state, &[model]).await;
+
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-empty-reasoning-filter".to_string(),
+            models: HashMap::from([(
+                model.to_string(),
+                monoize::monoize_routing::MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
+            api_type_overrides: Vec::new(),
+            groups: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-empty-reasoning-filter-ch1".to_string()),
+                name: "mono-empty-reasoning-filter-ch1".to_string(),
+                provider_type: monoize::monoize_routing::MonoizeProviderType::Responses,
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+                supported_models: vec![model.to_string()],
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
+            }],
+            max_retries: -1,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            transforms: vec![monoize::transforms::TransformRuleConfig {
+                transform: "strip_encrypted_reasoning".to_string(),
+                enabled: true,
+                models: None,
+                phase: monoize::transforms::Phase::Response,
+                config: json!({}),
+            }],
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": model,
+                "input": "multiple_encrypted_reasoning_then_message",
+                "reasoning": { "effort": "high" },
+                "tools": [{
+                    "type": "function",
+                    "name": "unused",
+                    "parameters": { "type": "object", "additionalProperties": false }
+                }],
+                "stream": true,
+                "stream_mode": "multiple_encrypted_reasoning_then_message"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(
+        !frames.iter().any(|(event, payload)| {
+            matches!(
+                event.as_str(),
+                "response.output_item.added" | "response.output_item.done"
+            ) && payload["item"]["type"].as_str() == Some("reasoning")
+        }),
+        "empty reasoning lifecycles must be absent: {text}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|(event, _)| event.starts_with("response.reasoning_")),
+        "empty reasoning child lifecycles must be absent: {text}"
+    );
+    assert!(
+        !text.contains("encrypted_payload_"),
+        "response transform must remove encrypted payloads: {text}"
+    );
+
+    let message_added = frames
+        .iter()
+        .find(|(event, payload)| {
+            event == "response.output_item.added"
+                && payload["item"]["type"].as_str() == Some("message")
+        })
+        .map(|(_, payload)| payload)
+        .unwrap_or_else(|| panic!("missing message output item: {text}"));
+    assert_eq!(message_added["output_index"], json!(0));
+
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .unwrap_or_else(|| panic!("missing response.completed: {text}"));
+    let output = completed["response"]["output"]
+        .as_array()
+        .expect("completed output array");
+    assert_eq!(output.len(), 1, "{text}");
+    assert_eq!(output[0]["type"], json!("message"));
+    assert_eq!(output[0]["content"][0]["text"], json!("answer"));
 }
 
 #[tokio::test]
@@ -348,4 +488,56 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         }
     }
     assert_eq!(reconstructed, "abcdefghij".repeat(80));
+}
+
+#[tokio::test]
+async fn responses_streaming_maps_messages_thinking_to_reasoning_summary() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini-msg",
+                "input": "show summarized thinking",
+                "reasoning": { "effort": "high" },
+                "stream": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let summary_deltas = frames
+        .iter()
+        .filter(|(event, _)| event == "response.reasoning_summary_text.delta")
+        .filter_map(|(_, payload)| payload["delta"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(summary_deltas, vec!["mock_reasoning"], "{text}");
+    assert!(
+        !frames
+            .iter()
+            .any(|(event, _)| event == "response.reasoning_text.delta"),
+        "Messages thinking is a summary, not raw reasoning content: {text}"
+    );
+
+    let reasoning = frames
+        .iter()
+        .find(|(event, payload)| {
+            event == "response.output_item.done"
+                && payload["item"]["type"].as_str() == Some("reasoning")
+        })
+        .map(|(_, payload)| &payload["item"])
+        .unwrap_or_else(|| panic!("missing completed reasoning item: {text}"));
+    assert_eq!(
+        reasoning["summary"],
+        json!([{ "type": "summary_text", "text": "mock_reasoning" }])
+    );
+    assert_eq!(reasoning["content"], json!([]));
 }

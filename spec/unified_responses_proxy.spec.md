@@ -395,14 +395,23 @@ RC4. When the selected upstream provider type is:
 - `chat_completion`: If effort is `none`, Monoize MUST omit the `reasoning_effort` field entirely. For any other effort value, Monoize MUST send normalized effort as `reasoning_effort`.
 - `responses`: If effort is `none`, Monoize MUST omit the `effort` key from the `reasoning` object. The object MAY still contain other keys such as `summary`. For any other effort value, Monoize MUST send normalized effort as `reasoning: { "effort": <level> }`.
 - `messages`: Monoize MUST select the encoding based on the upstream model:
-  - For models that support adaptive thinking, Monoize MUST send `thinking: { "type": "adaptive" }` combined with `output_config: { "effort": <level> }`, transmitting the normalized effort string as-is (including `"xhigh"` and `"max"` as distinct values). A model supports adaptive thinking iff its identifier contains a `claude-opus-` or `claude-sonnet-` (or bare `opus-` / `sonnet-`) family segment whose (major, minor) version is >= (4, 6). This covers Claude Opus/Sonnet 4.6, 4.7, 4.8, and any 5.x or later release without requiring per-minor-version maintenance.
-  - For all other Anthropic models, Monoize MUST send `thinking: { "type": "enabled", "budget_tokens": N }`, where:
+  - For models that support adaptive thinking, Monoize MUST send `thinking: { "type": "adaptive", "display": <display> }`. If normalized reasoning effort is present, Monoize MUST also send `output_config: { "effort": <level> }`, transmitting the normalized effort string as-is (including `"xhigh"` and `"max"` as distinct values). If normalized reasoning effort is absent, Monoize MUST omit `output_config`.
+  - A model identifier denotes a Claude model when either (a) the lowercased identifier contains the token `claude`, or (b) the lowercased identifier begins with the legacy bare family prefix `opus-`, `sonnet-`, or `haiku-`.
+  - A Claude model is non-adaptive only when its identifier provides a parseable family version that satisfies one of these inclusive upper bounds: Opus version <= 4.6; Sonnet version <= 4.6; Haiku version <= 4.5. Version parsing MUST accept both family-first identifiers such as `claude-opus-4-6`, `claude-sonnet-4.7`, and `claude-haiku-4-5`, and version-first legacy identifiers such as `claude-3-5-sonnet`.
+  - Every other Claude model MUST be treated as adaptive. This includes Claude identifiers for families other than Opus, Sonnet, and Haiku; Claude identifiers whose family version is absent or unparseable; Opus and Sonnet versions greater than 4.6; and Haiku versions greater than 4.5.
+  - Every identifier that does not denote a Claude model MUST be treated as non-adaptive by the Messages encoder.
+  - For non-adaptive models, Monoize MUST send `thinking: { "type": "enabled", "budget_tokens": N }`, where:
     - `minimum -> N=1024`
     - `low -> N=1024`
     - `medium -> N=4096`
     - `high -> N=16384`
     - `xhigh -> N=32000`
     - `max -> N=32000` (identical budget to `xhigh` on non-adaptive models; the distinction between `xhigh` and `max` is only observable on adaptive-thinking models)
+    - absent effort -> N=4096
+
+RC4b. For every upstream `messages` request with reasoning enabled, Monoize MUST set `thinking.display = "summarized"`. This rule applies to both adaptive and budget-based thinking.
+
+RC4c. Monoize MUST NOT forward downstream `thinking.display = "omitted"` to an upstream `messages` request. This prevents provider defaults or downstream passthrough state from suppressing visible `thinking` blocks.
 
 RC4a. For upstream provider type `responses`, Monoize MUST include top-level `reasoning.summary = "detailed"` on the encoded upstream request unless the typed downstream request already carries an explicit `reasoning.summary` value.
 
@@ -440,7 +449,7 @@ DER13. If the upstream protocol does not provide a reasoning source value, Monoi
 
 ENC1. The Responses encoder MUST reconstruct native Responses output items from flat URP v2 nodes.
 
-ENC2. Each `Reasoning` node MUST encode as one top-level Responses `reasoning` item.
+ENC2. Each `Reasoning` node that carries a meaningful reasoning payload under PR2g MUST encode as one top-level Responses `reasoning` item. A `Reasoning` node that does not carry a meaningful reasoning payload MUST be omitted under PR2g.
 
 ENC3. Each `ToolCall` node MUST encode as one top-level Responses `function_call` item.
 
@@ -473,6 +482,18 @@ PR2b. When a non-streaming upstream Responses `output[]` item has `type = "image
 - Monoize MUST preserve unknown fields from that item in node-local `extra_body`, excluding adapter-consumed keys `type`, `result`, and `output_format`.
 
 PR2c. When decoding Responses `input[]` or `output[]`, Monoize MUST decode every unknown top-level item type as `ProviderItem(origin_protocol = "responses")`, except that `type = "item_reference"` in `input[]` remains rejected under S4. This includes `type = "compaction"`.
+
+PR2e. When decoding a Responses reasoning item, Monoize MUST decode every `content[]` entry with `type = "reasoning_text"` and string field `text` as plaintext `Reasoning.content`. If several such entries exist, Monoize MUST concatenate their `text` values in source order without an inserted separator. Monoize MAY also accept the legacy non-standard top-level reasoning-item field `text` as a decode-only compatibility input. If both official `content[]` reasoning text and legacy top-level `text` are present, official `content[]` is authoritative.
+
+PR2f. When encoding a downstream Responses reasoning item with non-empty `Reasoning.content`, Monoize MUST encode the plaintext as `content: [{ "type": "reasoning_text", "text": <content> }]`. It MUST NOT encode plaintext reasoning in a top-level `text` field. When `Reasoning.content` is absent or empty, the encoder MUST emit `content: []`.
+
+PR2g. A downstream Responses reasoning item carries a meaningful reasoning payload iff at least one of these conditions is true after all response-phase transforms have run:
+
+- `Reasoning.content` is a non-empty string;
+- `Reasoning.summary` is a non-empty string; or
+- `Reasoning.encrypted` is non-null and is not an empty string, array, or object.
+
+For non-streaming downstream Responses output, Monoize MUST omit every `Reasoning` node that does not carry a meaningful reasoning payload. For streaming downstream Responses output, Monoize MUST defer `response.output_item.added` for a reasoning node until a meaningful payload is observed. If the node completes without a meaningful payload, Monoize MUST emit no output-item lifecycle and no reasoning child lifecycle for that node, MUST omit the node from `response.completed.response.output`, and MUST NOT consume a downstream `output_index`. Therefore later emitted output items MUST retain contiguous zero-based downstream output indices. A response transform that removes the only encrypted payload from a reasoning node can cause that node to become empty under this rule.
 
 PR2d. When encoding URP v2 to a Responses request or response, Monoize MUST replay a `ProviderItem` as one native Responses `input[]` or `output[]` item only when `origin_protocol = "responses"`. It MUST omit all other ProviderItems.
 
@@ -522,7 +543,8 @@ PR4c.1. When decoding downstream Responses `input[]`, Monoize MUST decode an ite
 - `id` maps to `Reasoning.id`;
 - `encrypted_content` maps to `Reasoning.encrypted`;
 - `summary[]` maps to `Reasoning.summary`;
-- `text`, when present, maps to `Reasoning.content`.
+- `content[]` entries with `type = "reasoning_text"` map to `Reasoning.content` under PR2e;
+- legacy top-level `text`, when present without official reasoning text content, maps to `Reasoning.content`.
 
 If the downstream `input[]` reasoning item omits `id`, Monoize MUST leave `Reasoning.id` absent. Monoize MUST NOT synthesize an id while decoding request-side replay items.
 
@@ -568,6 +590,8 @@ PR5. When parsing upstream Responses SSE, Monoize MUST support canonical Respons
 - text deltas are carried in `delta` for `response.output_text.delta`;
 - tool-call items are nested under `item` for `response.output_item.added` and `response.output_item.done`;
 - argument deltas identify the call via `output_index`, not necessarily `call_id`, for `response.function_call_arguments.delta`.
+
+PR5d. For a streamed Responses reasoning item, `response.reasoning_text.delta` and `response.reasoning_text.done` MUST update the same canonical `Reasoning.content` represented by terminal item `content[]` entries with `type = "reasoning_text"`. A terminal `response.output_item.done.item` or `response.completed.response.output[]` snapshot that carries reasoning text only in official `content[]` form MUST preserve that text in `NodeDone.node` and `ResponseDone.output`.
 
 PR5c. When parsing upstream Responses SSE, Monoize MAY receive official image-generation tool events outside the `response.*` namespace.
 
@@ -802,13 +826,14 @@ PM4.4. When encoding a request to an upstream `type=messages` provider, Monoize 
 
 PM5. Reasoning:
 
-- When the upstream Messages output contains a `thinking` block, Monoize MUST convert it into one URP `Reasoning` node.
+- When the upstream Messages output contains a `thinking` block, Monoize MUST convert it into one URP `Reasoning` node. The block's non-empty `thinking` string is provider-supplied summarized thinking and MUST map to `Reasoning.summary`; `Reasoning.content` MUST remain absent. The block's non-empty `signature` string MUST map to `Reasoning.encrypted` under PM5b.
+- When an upstream Messages stream contains a non-empty `thinking_delta.thinking` fragment, Monoize MUST emit `NodeDelta::Reasoning` with that fragment in `summary` and with `content` absent. The same delta event MUST carry `extra_body["_monoize_summary_from_messages_thinking"] = true`. The terminal `Reasoning.summary` MUST equal the ordered concatenation of those fragments.
 - When the upstream Messages output contains a `redacted_thinking` block, Monoize MUST convert it into one URP `Reasoning` node with:
   - `content` absent,
   - `encrypted` set to the block's `data` value (preserved verbatim, as a JSON string when the wire value is a string),
   - `extra_body["_monoize_reasoning_kind"]` set to the string `"redacted_thinking"` so that a later encode step targeting Messages can reconstruct the original block type.
 
-PM5a. For downstream `POST /v1/messages` request parsing, Monoize MUST accept assistant content blocks of type `thinking` and `redacted_thinking` inside `messages[].content[]` and decode them into URP `Reasoning` nodes using the same field mapping as PM5. An input `thinking` block whose `thinking` string is empty and whose `signature` is present MUST still be decoded into a `Reasoning` node with `content` absent and `encrypted` set from `signature`.
+PM5a. For downstream `POST /v1/messages` request parsing, Monoize MUST accept assistant content blocks of type `thinking` and `redacted_thinking` inside `messages[].content[]` and decode them into URP `Reasoning` nodes using the same field mapping as PM5. An input `thinking` block whose `thinking` string is empty and whose `signature` is present MUST still be decoded into a `Reasoning` node with `content` and `summary` absent and `encrypted` set from `signature`.
 
 PM5b. Reasoning identifier transport through Anthropic Messages uses a **signature sigil** rather than a custom content-block field. The sigil wraps the opaque payload the upstream attached to a `thinking` or `redacted_thinking` block.
 
@@ -1118,7 +1143,7 @@ DM5.3. Invariants for Anthropic Messages thinking block encoding, covering both 
 4. Monoize MUST NOT emit extension field `encrypted_thinking` on any Anthropic content block. The field is not part of the Anthropic wire contract.
 5. Anthropic streaming reasoning lifecycles are only opened for a URP `Reasoning` node that would be emitted under DM5.1 case 1 or case 2. A node that falls into DM5.1 case 3 MUST NOT trigger `content_block_start` for a `thinking` block.
 
-DM5a. For downstream `POST /v1/messages` streaming responses, one URP `Reasoning` node MUST be rendered as one Anthropic `thinking` block lifecycle. If both plaintext reasoning and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index. Monoize MUST preserve upstream delta granularity for reasoning text and signatures when the upstream decoder emitted incremental `NodeDelta` events for that reasoning node. If a response transform rewrites an incremental plaintext reasoning delta into `NodeDelta.delta.summary` and marks the event under `spec/urp-transform-system.spec.md` PRTS-9, the Messages encoder MUST treat that summary delta as the original reasoning text for downstream `thinking_delta` emission and delta-granularity preservation. Monoize MUST NOT artificially merge multiple upstream reasoning deltas into one larger synthetic delta. It MAY split one upstream delta only when required by the configured SSE maximum frame length.
+DM5a. For downstream `POST /v1/messages` streaming responses, one URP `Reasoning` node MUST be rendered as one Anthropic `thinking` block lifecycle. For each incremental `NodeDelta::Reasoning`, Monoize MUST emit non-empty `content` as `thinking_delta.thinking`. If `content` is absent or empty, Monoize MUST emit non-empty `summary` as `thinking_delta.thinking` only when the delta carries either `_monoize_summary_from_messages_thinking = true` under PM5 or `_monoize_summary_from_plaintext_reasoning = true` under `spec/urp-transform-system.spec.md` PRTS-9. An unmarked summary delta MUST NOT be replayed into a Messages thinking lifecycle because the same reasoning node MAY also carry authoritative raw content. If plaintext reasoning and signature are present, Monoize MUST emit `thinking_delta` first, then `signature_delta`, then `content_block_stop` for the same block index. Monoize MUST preserve upstream delta granularity for emitted reasoning text, emitted summary text, and signatures. Monoize MUST NOT artificially merge multiple upstream reasoning deltas into one larger synthetic delta. It MAY split one upstream delta only when required by the configured SSE maximum frame length.
 
 DM5b. For downstream `POST /v1/messages` streaming responses, when a reasoning node carries a non-empty signature, Monoize MUST NOT emit `content_block_start.content_block.signature = ""`. The start payload and any later `signature_delta` MUST preserve the actual non-empty signature payload.
 

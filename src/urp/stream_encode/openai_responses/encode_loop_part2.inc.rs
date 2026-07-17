@@ -124,6 +124,8 @@ mod tests {
             name: None,
             reasoning_summary_part_added_sent: false,
             message_start_emitted: true,
+            output_item_start_emitted: true,
+            output_item_start: None,
             header: None,
             node_extra_body: HashMap::new(),
             completed_item: None,
