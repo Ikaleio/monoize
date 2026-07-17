@@ -415,6 +415,14 @@ mod tests {
     fn anthropic_usage_round_trips_extension_fields_without_leaking_nested_aliases() {
         let mut usage_extra = HashMap::new();
         usage_extra.insert("native_counter".to_string(), json!(7));
+        usage_extra.insert("input_tokens".to_string(), json!(999));
+        usage_extra.insert("reasoning_output_tokens".to_string(), json!(999));
+        usage_extra.insert(
+            "output_tokens_details".to_string(),
+            json!({ "thinking_tokens": 999, "native_detail": 9 }),
+        );
+        usage_extra.insert("cache_creation".to_string(), json!({ "stale": true }));
+        usage_extra.insert("_monoize_usage_snapshot".to_string(), json!("internal"));
         let response = UrpResponse {
             id: "msg_usage".to_string(),
             model: "claude".to_string(),
@@ -429,8 +437,8 @@ mod tests {
                     cache_read_tokens: 2,
                     cache_read_modality_breakdown: None,
                     cache_creation_tokens: 3,
-                    cache_creation_5m_tokens: 0,
-                    cache_creation_1h_tokens: 0,
+                    cache_creation_5m_tokens: 1,
+                    cache_creation_1h_tokens: 2,
                     tool_prompt_tokens: 4,
                     modality_breakdown: None,
                 }),
@@ -449,7 +457,9 @@ mod tests {
         let encoded = encode_response(&response, "claude");
         let usage = encoded["usage"].as_object().expect("usage object");
         assert_eq!(usage.get("tool_prompt_input_tokens"), Some(&json!(4)));
-        assert_eq!(usage.get("reasoning_output_tokens"), Some(&json!(6)));
+        assert!(usage.get("reasoning_output_tokens").is_none());
+        assert_eq!(usage["output_tokens_details"]["thinking_tokens"], json!(6));
+        assert_eq!(usage["output_tokens_details"]["native_detail"], json!(9));
         assert_eq!(
             usage.get("accepted_prediction_output_tokens"),
             Some(&json!(7))
@@ -459,6 +469,11 @@ mod tests {
             Some(&json!(8))
         );
         assert_eq!(usage.get("native_counter"), Some(&json!(7)));
+        assert_eq!(usage.get("input_tokens"), Some(&json!(6)));
+        assert!(usage.get("reasoning_output_tokens").is_none());
+        assert_eq!(usage["cache_creation"]["ephemeral_5m_input_tokens"], json!(1));
+        assert_eq!(usage["cache_creation"]["ephemeral_1h_input_tokens"], json!(2));
+        assert!(usage.get("_monoize_usage_snapshot").is_none());
 
         let decoded = decode_anthropic::decode_response(&encoded).expect("decode response");
         let decoded_usage = decoded.usage.expect("usage should decode");
@@ -482,6 +497,10 @@ mod tests {
             !decoded_usage
                 .extra_body
                 .contains_key("reasoning_output_tokens")
+        );
+        assert_eq!(
+            decoded_usage.extra_body.get("output_tokens_details"),
+            Some(&json!({ "native_detail": 9 }))
         );
         assert_eq!(
             decoded_usage.extra_body.get("native_counter"),
@@ -572,6 +591,7 @@ mod tests {
                     is_error: false,
                     content: vec![ToolResultContent::Text {
                         text: "file1.txt".to_string(),
+                        extra_body: empty_map(),
                     }],
                     extra_body: empty_map(),
                 },
@@ -636,8 +656,11 @@ mod tests {
     #[test]
     fn adaptive_model_detection_defaults_new_claude_families_to_adaptive() {
         for m in [
+            "claude-opus-4-6",
+            "claude-opus-4.6",
             "claude-opus-4-7-20260101",
             "claude-opus-4.7",
+            "claude-sonnet-4-6-20250101",
             "claude-sonnet-4-7",
             "claude-haiku-4-6",
             "claude-opus-4-8",
@@ -647,7 +670,9 @@ mod tests {
             "claude-mythos-5-max",
             "claude-future-family",
             "opus-4-7",
+            "opus-4-6",
             "sonnet-4.7",
+            "sonnet-4.6",
             "haiku-4-6",
         ] {
             assert!(
@@ -656,18 +681,19 @@ mod tests {
             );
         }
         for m in [
-            "claude-opus-4-6",
-            "claude-opus-4.6",
             "claude-opus-4-5",
             "claude-opus-4.5",
-            "claude-sonnet-4-6-20250101",
+            "claude-opus-4-20250514",
             "claude-sonnet-4-0",
+            "claude-sonnet-4-20250514",
             "claude-sonnet-3-7",
+            "claude-3-7-sonnet-20250219",
             "claude-haiku-4-5",
             "claude-haiku-3-5",
+            "claude-3-5-haiku-20241022",
             "claude-3-5-sonnet",
-            "opus-4-6",
-            "sonnet-4.6",
+            "opus-4-5",
+            "sonnet-4.5",
             "haiku-4.5",
             "gpt-5-mini-msg",
         ] {
@@ -681,14 +707,9 @@ mod tests {
     #[test]
     fn adaptive_fable_encoder_passes_xhigh_and_max_through_distinctly() {
         for effort in ["xhigh", "max"] {
-            let encoded = encode_request(
-                &req_with_effort("claude-fable-5", effort),
-                "claude-fable-5",
-            );
-            assert_eq!(
-                encoded["thinking"],
-                json!({ "type": "adaptive", "display": "summarized" })
-            );
+            let encoded =
+                encode_request(&req_with_effort("claude-fable-5", effort), "claude-fable-5");
+            assert_eq!(encoded["thinking"], json!({ "type": "adaptive" }));
             assert_eq!(
                 encoded["output_config"]["effort"],
                 json!(effort),
@@ -701,15 +722,14 @@ mod tests {
     fn non_adaptive_encoder_uses_32000_for_both_xhigh_and_max() {
         for effort in ["xhigh", "max"] {
             let encoded = encode_request(
-                &req_with_effort("claude-sonnet-4-6", effort),
-                "claude-sonnet-4-6",
+                &req_with_effort("claude-sonnet-4-5", effort),
+                "claude-sonnet-4-5",
             );
             assert_eq!(
                 encoded["thinking"],
                 json!({
                     "type": "enabled",
-                    "budget_tokens": 32000,
-                    "display": "summarized"
+                    "budget_tokens": 32000
                 }),
                 "non-adaptive {effort} must emit budget_tokens=32000"
             );
@@ -739,16 +759,35 @@ mod tests {
     }
 
     #[test]
-    fn messages_upstream_forces_summarized_thinking_display() {
+    fn explicit_messages_reasoning_controls_override_generation() {
         let mut req = req_with_effort("claude-sonnet-5", "high");
-        req.reasoning
-            .as_mut()
-            .expect("reasoning config")
-            .extra_body
-            .insert("display".to_string(), json!("omitted"));
+        let thinking = json!({
+            "type": "disabled",
+            "display": "omitted",
+            "budget_tokens": 777,
+            "vendor_flag": true
+        });
+        let output_config = json!({
+            "effort": "max",
+            "format": {
+                "type": "json_schema",
+                "schema": { "type": "object" }
+            },
+            "vendor_flag": "preserve"
+        });
+        let reasoning = req.reasoning.as_mut().expect("reasoning config");
+        reasoning.extra_body.insert(
+            MESSAGES_THINKING_CONFIG_EXTRA_KEY.to_string(),
+            thinking.clone(),
+        );
+        reasoning.extra_body.insert(
+            MESSAGES_OUTPUT_CONFIG_EXTRA_KEY.to_string(),
+            output_config.clone(),
+        );
 
         let encoded = encode_request(&req, "claude-sonnet-5");
-        assert_eq!(encoded["thinking"]["display"], json!("summarized"));
+        assert_eq!(encoded["thinking"], thinking);
+        assert_eq!(encoded["output_config"], output_config);
     }
 
     #[test]
@@ -757,10 +796,7 @@ mod tests {
         req.reasoning.as_mut().expect("reasoning config").effort = None;
 
         let encoded = encode_request(&req, "claude-sonnet-5");
-        assert_eq!(
-            encoded["thinking"],
-            json!({ "type": "adaptive", "display": "summarized" })
-        );
+        assert_eq!(encoded["thinking"], json!({ "type": "adaptive" }));
         assert!(encoded.get("output_config").is_none());
     }
 
@@ -774,8 +810,7 @@ mod tests {
             encoded["thinking"],
             json!({
                 "type": "enabled",
-                "budget_tokens": 4096,
-                "display": "summarized"
+                "budget_tokens": 4096
             })
         );
     }

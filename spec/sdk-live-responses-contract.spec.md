@@ -69,7 +69,25 @@ SDK20. The runner MUST fail if any request in SDK14-SDK19 returns a non-success 
 
 SDK21. Each runner MUST seed pricing metadata for `gpt-4o-mini` by sending `PUT /api/dashboard/model-metadata/gpt-4o-mini` with non-empty input and output token price fields before issuing any forwarded SDK request.
 
-SDK22. The runner MUST fail if the pricing-metadata request in SDK21 returns a non-success HTTP status.
+SDK21a. After SDK21, each runner MUST create exactly two manual billing-rate rows by sending authenticated `PUT` requests to:
+
+- `/api/dashboard/billing-rates/sdk-gpt-4o-mini-input`
+- `/api/dashboard/billing-rates/sdk-gpt-4o-mini-output`
+
+Each request body MUST contain:
+
+- `source = "manual"`
+- `pricing_profile = "openai"`
+- `model_pattern = "gpt-4o-mini"`
+- `rate_kind = "token"`
+- `unit = "token"`
+- `unit_price_nano_usd = "1"`
+- `priority = 100`
+- `enabled = true`
+
+The input row MUST contain `usage_class = "input_uncached"`. The output row MUST contain `usage_class = "output"`. Both rows MUST omit `provider_type`, `context_tier`, `service_tier`, `modality`, and `cache_ttl` so the rows apply to both SDK19a and SDK19b.
+
+SDK22. The runner MUST fail if the pricing-metadata request in SDK21 or either billing-rate request in SDK21a returns a non-success HTTP status.
 
 ## 4. OpenAI SDK smoke assertion
 

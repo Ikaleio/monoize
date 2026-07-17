@@ -169,15 +169,16 @@ async function bootstrapMonoizeRouting() {
     },
     body: JSON.stringify({
       name: "sdk-mock-provider",
-      provider_type: "chat_completion",
       models: {
         "gpt-4o-mini": { multiplier: 1.0 },
       },
       channels: [
         {
           name: "sdk-mock-channel",
+          provider_type: "chat_completion",
           base_url: mockBase,
           api_key: env.MOCK_API_KEY,
+          supported_models: ["gpt-4o-mini"],
         },
       ],
     }),
@@ -201,6 +202,37 @@ async function bootstrapMonoizeRouting() {
   });
   if (!pricingResp.ok) {
     throw new Error(`Failed to seed model pricing metadata: ${await pricingResp.text()}`);
+  }
+
+  const billingRates = [
+    { id: "sdk-gpt-4o-mini-input", usage_class: "input_uncached" },
+    { id: "sdk-gpt-4o-mini-output", usage_class: "output" },
+  ];
+  for (const rate of billingRates) {
+    const billingRateResp = await fetch(
+      `${monoizeBase}/api/dashboard/billing-rates/${rate.id}`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          source: "manual",
+          pricing_profile: "openai",
+          model_pattern: "gpt-4o-mini",
+          rate_kind: "token",
+          usage_class: rate.usage_class,
+          unit: "token",
+          unit_price_nano_usd: "1",
+          priority: 100,
+          enabled: true,
+        }),
+      },
+    );
+    if (!billingRateResp.ok) {
+      throw new Error(`Failed to seed billing rate ${rate.id}: ${await billingRateResp.text()}`);
+    }
   }
 
   return forwardApiKey;

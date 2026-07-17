@@ -184,6 +184,7 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
                 is_error: false,
                 content: vec![urp::ToolResultContent::Text {
                     text: "ok".to_string(),
+                    extra_body: HashMap::new(),
                 }],
                 extra_body: HashMap::new(),
             },
@@ -193,6 +194,7 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
                 is_error: false,
                 content: vec![urp::ToolResultContent::Text {
                     text: "orphan".to_string(),
+                    extra_body: HashMap::new(),
                 }],
                 extra_body: HashMap::new(),
             },
@@ -246,8 +248,8 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
 }
 
 #[test]
-fn strip_plaintext_reasoning_from_responses_tool_replay_keeps_only_encrypted_reasoning() {
-    let mut req = urp::UrpRequest {
+fn responses_tool_replay_preserves_plaintext_raw_cot_reasoning() {
+    let req = urp::UrpRequest {
         model: "gpt-5.5".to_string(),
         input: vec![
             urp::Node::Reasoning {
@@ -271,6 +273,7 @@ fn strip_plaintext_reasoning_from_responses_tool_replay_keeps_only_encrypted_rea
                 is_error: false,
                 content: vec![urp::ToolResultContent::Text {
                     text: "ok".to_string(),
+                    extra_body: HashMap::new(),
                 }],
                 extra_body: HashMap::new(),
             },
@@ -296,18 +299,24 @@ fn strip_plaintext_reasoning_from_responses_tool_replay_keeps_only_encrypted_rea
         extra_body: HashMap::new(),
     };
 
-    super::nonstream::strip_plaintext_reasoning_from_responses_tool_replay(&mut req);
-
-    let reasoning_ids: Vec<&str> = req
-        .input
+    let encoded = urp::encode::openai_responses::encode_request(&req, "gpt-5.5");
+    let input = encoded["input"].as_array().expect("Responses input array");
+    let plaintext = input
         .iter()
-        .filter_map(|node| match node {
-            urp::Node::Reasoning { id: Some(id), .. } => Some(id.as_str()),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(reasoning_ids, vec!["rs_encrypted"]);
+        .find(|item| item.get("id") == Some(&serde_json::json!("rs_plain")))
+        .expect("plaintext RawCoT reasoning item");
+    assert_eq!(
+        plaintext["content"],
+        serde_json::json!([{
+            "type": "reasoning_text",
+            "text": "plain summary"
+        }])
+    );
+    assert!(
+        input
+            .iter()
+            .any(|item| item.get("id") == Some(&serde_json::json!("rs_encrypted")))
+    );
 }
 
 async fn seed_group_routing_provider(
@@ -1390,6 +1399,37 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
         )
         .await
         .expect("logical pricing seeded");
+
+    state
+        .model_registry_store
+        .upsert_model_metadata(
+            "gpt-fallback-dest",
+            crate::model_registry_store::UpsertModelMetadataInput {
+                models_dev_provider: Some("openai".to_string()),
+                mode: Some("chat".to_string()),
+                input_cost_per_token_nano: Some("500".to_string()),
+                output_cost_per_token_nano: None,
+                cache_read_input_cost_per_token_nano: None,
+                cache_creation_input_cost_per_token_nano: None,
+                output_cost_per_reasoning_token_nano: None,
+                max_input_tokens: None,
+                max_output_tokens: None,
+                max_tokens: None,
+            },
+        )
+        .await
+        .expect("partial upstream pricing seeded");
+
+    let resolution = resolve_billing_rate_matrix(
+        &state,
+        "gpt-fallback-dest",
+        "gpt-fallback-src",
+        ProviderType::Responses,
+    )
+    .await
+    .expect("pricing lookup")
+    .expect("logical fallback pricing");
+    assert_eq!(resolution.pricing_model, "gpt-fallback-src");
 
     let req = build_test_routing_request("gpt-fallback-src");
     let auth = build_test_auth(None);

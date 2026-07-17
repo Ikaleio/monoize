@@ -1,15 +1,18 @@
 use crate::error::AppResult;
-use crate::urp::encode::anthropic::anthropic_native_input_tokens;
+use crate::urp::encode::anthropic::anthropic_native_usage_json;
+use crate::urp::encode::sanitize_provider_item_wire_body;
 use crate::urp::stream_helpers::*;
 use crate::urp::{
-    self, FinishReason, Node, NodeDelta, NodeHeader, REASONING_ENVELOPE_PREFIX,
-    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING, UrpStreamEvent, Usage,
-    wrap_reasoning_signature_with_item_id,
+    self, FinishReason, MESSAGES_STREAM_START_USAGE_EXTRA_KEY, Node, NodeDelta, NodeHeader,
+    REASONING_ENVELOPE_PREFIX, REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
+    UrpStreamEvent, Usage, wrap_reasoning_signature_with_item_id,
 };
 use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
+
+const CHAT_REASONING_DETAIL_TYPE_KEY: &str = "_monoize_messages_chat_reasoning_detail_type";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MessagesSurfaceKind {
@@ -79,7 +82,8 @@ impl PendingAnthropicBlock {
                 } else {
                     json!({
                         "type": "thinking",
-                        "thinking": ""
+                        "thinking": "",
+                        "signature": ""
                     })
                 }
             }
@@ -197,6 +201,87 @@ struct LiveNodeBlockState {
     block_index: Option<u32>,
 }
 
+fn can_absorb_signature_only_reasoning(
+    current: &AnthropicBlockPayload,
+    following: &AnthropicBlockPayload,
+) -> bool {
+    let AnthropicBlockPayload::Thinking {
+        thinking: current_thinking,
+        signature: current_signature,
+        extra: current_extra,
+        ..
+    } = current
+    else {
+        return false;
+    };
+    let AnthropicBlockPayload::Thinking {
+        thinking: following_thinking,
+        signature: following_signature,
+        extra: following_extra,
+        ..
+    } = following
+    else {
+        return false;
+    };
+
+    !current_thinking.is_empty()
+        && current_extra
+            .get(CHAT_REASONING_DETAIL_TYPE_KEY)
+            .and_then(Value::as_str)
+            == Some("reasoning.text")
+        && current_signature
+            .as_deref()
+            .is_none_or(|signature| signature.is_empty())
+        && following_thinking.is_empty()
+        && following_extra
+            .get(CHAT_REASONING_DETAIL_TYPE_KEY)
+            .and_then(Value::as_str)
+            == Some("reasoning.encrypted")
+        && following_signature
+            .as_deref()
+            .is_some_and(|signature| !signature.is_empty())
+        && !payload_is_redacted(current_extra)
+        && !payload_is_redacted(following_extra)
+}
+
+async fn absorb_signature_only_reasoning(
+    tx: &mpsc::Sender<Event>,
+    current: &LiveNodeBlockState,
+    following: &LiveNodeBlockState,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<bool> {
+    if !can_absorb_signature_only_reasoning(&current.payload, &following.payload) {
+        return Ok(false);
+    }
+    let Some(block_index) = current.block_index else {
+        return Ok(false);
+    };
+    let pending = PendingAnthropicBlock {
+        block_index,
+        payload: following.payload.clone(),
+    };
+    let Some(signature) = pending
+        .effective_signature()
+        .filter(|signature| !signature.is_empty())
+    else {
+        return Ok(false);
+    };
+
+    send_messages_delta_string(
+        tx,
+        json!({
+            "type": "content_block_delta",
+            "index": block_index,
+            "delta": { "type": "signature_delta", "signature": "" }
+        }),
+        messages_delta_path_signature,
+        &signature,
+        sse_max_frame_length,
+    )
+    .await?;
+    Ok(true)
+}
+
 fn reasoning_signature_value(
     encrypted: Option<&Value>,
     extra_body: &HashMap<String, Value>,
@@ -233,6 +318,18 @@ fn reasoning_kind_marker(extra_body: &HashMap<String, Value>) -> HashMap<String,
             Value::String(REASONING_KIND_REDACTED_THINKING.to_string()),
         );
     }
+    if let Some(detail_type) = extra_body
+        .get(urp::CHAT_REASONING_DETAIL_EXTRA_KEY)
+        .and_then(Value::as_object)
+        .and_then(|detail| detail.get("type"))
+        .and_then(Value::as_str)
+        .filter(|detail_type| !detail_type.is_empty())
+    {
+        extra.insert(
+            CHAT_REASONING_DETAIL_TYPE_KEY.to_string(),
+            Value::String(detail_type.to_string()),
+        );
+    }
     extra
 }
 
@@ -256,8 +353,9 @@ fn messages_provider_block_from_node(node: &Node) -> Option<Value> {
     else {
         return None;
     };
-    let mut obj = match body {
-        Value::Object(obj) => obj.clone(),
+    let sanitized_body = sanitize_provider_item_wire_body(body);
+    let mut obj = match sanitized_body {
+        Value::Object(obj) => obj,
         _ => return None,
     };
     obj.entry("type".to_string())
@@ -289,7 +387,7 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
                 .to_string();
             let raw_signature = reasoning_signature_value(encrypted.as_ref(), extra_body);
             let is_redacted = reasoning_is_redacted_extra(extra_body);
-            if thinking.is_empty() && !is_redacted {
+            if thinking.is_empty() && !is_redacted && raw_signature.is_none() {
                 return None;
             }
             if is_redacted && raw_signature.is_none() {
@@ -357,7 +455,7 @@ fn anthropic_block_from_node_header(
 
 fn merge_json_extra_preserving_typed(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
     for (key, value) in extra {
-        if !obj.contains_key(key) {
+        if !key.starts_with("_monoize_") && !obj.contains_key(key) {
             obj.insert(key.clone(), value.clone());
         }
     }
@@ -368,14 +466,15 @@ fn merge_hashmap_extra_preserving_typed(
     extra: &HashMap<String, Value>,
 ) {
     for (key, value) in extra {
-        if !dst.contains_key(key) {
+        if !key.starts_with("_monoize_") && !dst.contains_key(key) {
             dst.insert(key.clone(), value.clone());
         }
     }
 }
 
 fn merge_provider_delta_body(body: &mut Value, data: &Value) {
-    match (body.as_object_mut(), data) {
+    let sanitized_data = sanitize_provider_item_wire_body(data);
+    match (body.as_object_mut(), &sanitized_data) {
         (Some(obj), Value::Object(delta_obj)) => {
             for (key, value) in delta_obj {
                 obj.insert(key.clone(), value.clone());
@@ -392,8 +491,7 @@ fn merge_provider_delta_body(body: &mut Value, data: &Value) {
 fn message_start_payload(
     message_id: &str,
     logical_model: &str,
-    input_tokens: u64,
-    output_tokens: u64,
+    usage: &Usage,
     extra_body: &HashMap<String, Value>,
 ) -> Value {
     let mut message = Map::new();
@@ -404,18 +502,35 @@ fn message_start_payload(
     message.insert("content".to_string(), json!([]));
     message.insert("stop_reason".to_string(), Value::Null);
     message.insert("stop_sequence".to_string(), Value::Null);
-    message.insert(
-        "usage".to_string(),
-        json!({
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens
-        }),
-    );
+    message.insert("usage".to_string(), anthropic_native_usage_json(usage));
     merge_json_extra_preserving_typed(&mut message, extra_body);
     json!({
         "type": "message_start",
         "message": Value::Object(message)
     })
+}
+
+fn messages_stop_reason<'a>(
+    extra_body: &'a HashMap<String, Value>,
+    finish_reason: Option<FinishReason>,
+    saw_tool_use: bool,
+) -> &'a str {
+    if let Some(stop_reason) = extra_body
+        .get("stop_reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty())
+    {
+        return stop_reason;
+    }
+    if saw_tool_use {
+        return "tool_use";
+    }
+    match finish_reason {
+        Some(FinishReason::Length) => "max_tokens",
+        Some(FinishReason::ToolCalls) => "tool_use",
+        Some(FinishReason::ContentFilter) => "refusal",
+        Some(FinishReason::Stop | FinishReason::Other) | None => "end_turn",
+    }
 }
 
 fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
@@ -1062,13 +1177,7 @@ pub(crate) async fn emit_synthetic_messages_stream(
         }
         break;
     }
-    let start = message_start_payload(
-        &message_id,
-        logical_model,
-        anthropic_native_input_tokens(&usage),
-        usage.output_tokens,
-        &pending_envelope_extra,
-    );
+    let start = message_start_payload(&message_id, logical_model, &usage, &pending_envelope_extra);
     send_named_messages_event(&tx, start).await?;
 
     let mut index = 0u32;
@@ -1102,16 +1211,14 @@ pub(crate) async fn emit_synthetic_messages_stream(
         }
     }
 
+    let stop_reason = messages_stop_reason(&resp.extra_body, resp.finish_reason, saw_tool_use);
     let message_delta = json!({
         "type": "message_delta",
         "delta": {
-            "stop_reason": if saw_tool_use { "tool_use" } else { "end_turn" },
+            "stop_reason": stop_reason,
             "stop_sequence": Value::Null
         },
-        "usage": {
-            "input_tokens": anthropic_native_input_tokens(&usage),
-            "output_tokens": usage.output_tokens
-        }
+        "usage": anthropic_native_usage_json(&usage)
     });
     send_named_messages_event(&tx, message_delta).await?;
     send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
@@ -1137,8 +1244,8 @@ pub(crate) async fn encode_urp_stream_as_messages(
     let mut message_start_sent = false;
     let mut pending_envelope_extra: HashMap<String, Value> = HashMap::new();
     let mut should_emit_terminal_message = false;
-    let terminal_message_emitted = false;
     let mut open_node_index: Option<u32> = None;
+    let mut absorbed_signature_node_indices: HashSet<u32> = HashSet::new();
 
     async fn ensure_message_start(
         tx: &mpsc::Sender<Event>,
@@ -1160,13 +1267,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
         });
         send_named_messages_event(
             tx,
-            message_start_payload(
-                response_id,
-                logical_model,
-                anthropic_native_input_tokens(&usage),
-                usage.output_tokens,
-                pending_envelope_extra,
-            ),
+            message_start_payload(response_id, logical_model, &usage, pending_envelope_extra),
         )
         .await?;
         *message_start_sent = true;
@@ -1177,6 +1278,12 @@ pub(crate) async fn encode_urp_stream_as_messages(
         match event {
             UrpStreamEvent::ResponseStart { id, extra_body, .. } => {
                 response_id = Some(id);
+                if let Some(usage) = extra_body
+                    .get(MESSAGES_STREAM_START_USAGE_EXTRA_KEY)
+                    .and_then(|value| serde_json::from_value::<Usage>(value.clone()).ok())
+                {
+                    response_usage = Some(usage);
+                }
                 merge_hashmap_extra_preserving_typed(&mut pending_envelope_extra, &extra_body);
             }
             UrpStreamEvent::NodeStart {
@@ -1264,6 +1371,10 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 if let Some(usage) = usage {
                     response_usage = Some(usage);
                 }
+                if absorbed_signature_node_indices.remove(&node_index) {
+                    live_node_blocks.remove(&node_index);
+                    continue;
+                }
                 if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
                     mark_node_without_messages_block(
                         &tx,
@@ -1293,11 +1404,35 @@ pub(crate) async fn encode_urp_stream_as_messages(
                         sse_max_frame_length,
                     )
                     .await?;
+                    let following_node_index = node_index.saturating_add(1);
+                    let absorbed_following_signature =
+                        if let Some(following) = live_node_blocks.get(&following_node_index) {
+                            absorb_signature_only_reasoning(
+                                &tx,
+                                &block_state,
+                                following,
+                                sse_max_frame_length,
+                            )
+                            .await?
+                        } else {
+                            false
+                        };
+                    if absorbed_following_signature {
+                        // OpenRouter represents plaintext and encrypted reasoning as adjacent
+                        // detail entries. Anthropic requires their thinking and signature deltas
+                        // to share one content block, while URP keeps the source entries distinct.
+                        live_node_blocks.remove(&following_node_index);
+                        absorbed_signature_node_indices.insert(following_node_index);
+                    }
                     emit_live_block_stop(&tx, &block_state).await?;
                     if open_node_index == Some(node_index) {
                         open_node_index = None;
                     }
                     if node_index == next_flush_node_index {
+                        next_flush_node_index += 1;
+                    }
+                    if absorbed_following_signature && following_node_index == next_flush_node_index
+                    {
                         next_flush_node_index += 1;
                     }
                     if matches!(
@@ -1395,7 +1530,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 finish_reason,
                 usage,
                 output,
-                ..
+                extra_body,
             } => {
                 if let Some(usage) = &usage {
                     response_usage = Some(usage.clone());
@@ -1486,27 +1621,14 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     output_details: None,
                     extra_body: HashMap::new(),
                 });
-                let stop_reason = if saw_tool_use {
-                    "tool_use"
-                } else {
-                    match finish_reason {
-                        Some(FinishReason::Length) => "max_tokens",
-                        Some(FinishReason::ToolCalls) => "tool_use",
-                        Some(FinishReason::Stop)
-                        | Some(FinishReason::Other | FinishReason::ContentFilter)
-                        | None => "end_turn",
-                    }
-                };
+                let stop_reason = messages_stop_reason(&extra_body, finish_reason, saw_tool_use);
                 let message_delta = json!({
                     "type": "message_delta",
                     "delta": {
                         "stop_reason": stop_reason,
                         "stop_sequence": Value::Null
                     },
-                    "usage": {
-                        "input_tokens": anthropic_native_input_tokens(&usage),
-                        "output_tokens": usage.output_tokens
-                    }
+                    "usage": anthropic_native_usage_json(&usage)
                 });
                 send_named_messages_event(&tx, message_delta).await?;
                 send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
@@ -1546,38 +1668,6 @@ pub(crate) async fn encode_urp_stream_as_messages(
                 return Ok(());
             }
         }
-    }
-
-    if should_emit_terminal_message && !terminal_message_emitted {
-        ensure_message_start(
-            &tx,
-            response_id.as_deref().unwrap_or("msg_mock"),
-            logical_model,
-            response_usage.as_ref(),
-            &pending_envelope_extra,
-            &mut message_start_sent,
-        )
-        .await?;
-        let usage = response_usage.unwrap_or(Usage {
-            input_tokens: 0,
-            output_tokens: 0,
-            input_details: None,
-            output_details: None,
-            extra_body: HashMap::new(),
-        });
-        let message_delta = json!({
-            "type": "message_delta",
-            "delta": {
-                "stop_reason": if saw_tool_use { "tool_use" } else { "end_turn" },
-                "stop_sequence": Value::Null
-            },
-            "usage": {
-                "input_tokens": anthropic_native_input_tokens(&usage),
-                "output_tokens": usage.output_tokens
-            }
-        });
-        send_named_messages_event(&tx, message_delta).await?;
-        send_named_messages_event(&tx, json!({ "type": "message_stop" })).await?;
     }
 
     Ok(())
@@ -1623,4 +1713,53 @@ async fn send_named_messages_event(tx: &mpsc::Sender<Event>, payload: Value) -> 
             )
         })?;
     send_named_sse_json(tx, &event_name, payload).await
+}
+
+#[cfg(test)]
+mod provider_item_wire_tests {
+    use super::*;
+    use crate::urp::{OrdinaryRole, ProviderProtocol};
+
+    #[test]
+    fn messages_stream_provider_item_filters_nested_internal_metadata() {
+        let native_body = json!({
+            "type": "server_tool_result",
+            "payload": { "keep": 1, "_monoize_nested": "drop" },
+            "_monoize_top": "drop"
+        });
+        let node = Node::ProviderItem {
+            id: None,
+            origin_protocol: ProviderProtocol::Messages,
+            role: OrdinaryRole::Assistant,
+            item_type: "server_tool_result".to_string(),
+            body: native_body.clone(),
+            extra_body: HashMap::new(),
+        };
+
+        let mut wire = messages_provider_block_from_node(&node).expect("Messages provider block");
+        let delta = json!({
+            "vendor_delta": {
+                "keep_delta": true,
+                "_monoize_delta_nested": "drop"
+            },
+            "rows": [{ "keep_row": true, "_monoize_row": "drop" }],
+            "_monoize_delta": "drop"
+        });
+        merge_provider_delta_body(&mut wire, &delta);
+
+        assert_eq!(
+            wire,
+            json!({
+                "type": "server_tool_result",
+                "payload": { "keep": 1 },
+                "vendor_delta": { "keep_delta": true },
+                "rows": [{ "keep_row": true }]
+            })
+        );
+        assert!(matches!(
+            node,
+            Node::ProviderItem { body, .. } if body == native_body
+        ));
+        assert_eq!(delta["_monoize_delta"], json!("drop"));
+    }
 }

@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResponsesOutputZone {
     Message,
+    ImageGenerationCall,
     Reasoning,
     FunctionCall,
     ProviderItem,
@@ -67,12 +68,24 @@ fn terminal_output_node_matches_state(node: &urp::Node, state: &StreamedNodeStat
 
     match node {
         urp::Node::Text { id, .. }
-        | urp::Node::Image { id, .. }
         | urp::Node::Audio { id, .. }
         | urp::Node::File { id, .. }
         | urp::Node::Refusal { id, .. }
         => {
             state.zone == ResponsesOutputZone::Message
+                && ((!state.item_id.is_empty() && id.as_deref() == Some(state.item_id.as_str()))
+                    || (header_family_matches && id.is_none())
+                    || (state.item_id.is_empty() && header_family_matches))
+        }
+        urp::Node::Image { id, extra_body, .. } => {
+            let expected_zone = if extra_body
+                .contains_key(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)
+            {
+                ResponsesOutputZone::ImageGenerationCall
+            } else {
+                ResponsesOutputZone::Message
+            };
+            state.zone == expected_zone
                 && ((!state.item_id.is_empty() && id.as_deref() == Some(state.item_id.as_str()))
                     || (header_family_matches && id.is_none())
                     || (state.item_id.is_empty() && header_family_matches))

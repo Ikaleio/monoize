@@ -142,6 +142,7 @@ fn format_image_markdown(source: &ImageSource, config: &Config) -> String {
         ImageSource::Base64 { media_type, data } => {
             format!("![image](data:{media_type};base64,{data})")
         }
+        ImageSource::FileId { .. } => String::new(),
     };
     let Some(template) = config.template.as_deref() else {
         return default;
@@ -152,6 +153,7 @@ fn format_image_markdown(source: &ImageSource, config: &Config) -> String {
             let src = format!("data:{media_type};base64,{data}");
             apply_template(template, &src, "", media_type, data)
         }
+        ImageSource::FileId { .. } => String::new(),
     }
 }
 

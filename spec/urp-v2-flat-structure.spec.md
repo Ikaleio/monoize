@@ -76,6 +76,7 @@ URPV2-9. `Node` MUST be the discriminated union below.
 Node =
   | Text {
       type: "text",
+      id?: String,
       role: OrdinaryRole,
       content: String,
       phase?: String,
@@ -83,30 +84,35 @@ Node =
     }
   | Image {
       type: "image",
+      id?: String,
       role: OrdinaryRole,
       source: ImageSource,
       ...extra_body
     }
   | Audio {
       type: "audio",
+      id?: String,
       role: OrdinaryRole,
       source: AudioSource,
       ...extra_body
     }
   | File {
       type: "file",
+      id?: String,
       role: OrdinaryRole,
       source: FileSource,
       ...extra_body
     }
   | Refusal {
       type: "refusal",
+      id?: String,
       role: "assistant",
       content: String,
       ...extra_body
     }
   | Reasoning {
       type: "reasoning",
+      id?: String,
       role: "assistant",
       content?: String,
       summary?: String,
@@ -116,6 +122,7 @@ Node =
     }
   | ToolCall {
       type: "tool_call",
+      id?: String,
       role: "assistant",
       call_id: String,
       name: String,
@@ -124,6 +131,7 @@ Node =
     }
   | ProviderItem {
       type: "provider_item",
+      id?: String,
       origin_protocol: ProviderProtocol,
       role: OrdinaryRole,
       item_type: String,
@@ -132,6 +140,7 @@ Node =
     }
   | ToolResult {
       type: "tool_result",
+      id?: String,
       call_id: String,
       is_error?: bool,
       content: Vec<ToolResultContent>,
@@ -154,6 +163,13 @@ ToolResultContent =
   | Text { type: "text", text: String, ...extra_body }
   | Image { type: "image", source: ImageSource, ...extra_body }
   | File { type: "file", source: FileSource, ...extra_body }
+  | ProviderItem {
+      type: "provider_item",
+      origin_protocol: ProviderProtocol,
+      item_type: String,
+      body: JsonValue,
+      ...extra_body
+    }
 ```
 
 URPV2-13. Sources MUST use the exact typed shapes below.
@@ -162,6 +178,7 @@ URPV2-13. Sources MUST use the exact typed shapes below.
 ImageSource =
   | Url { type: "url", url: String, detail?: String }
   | Base64 { type: "base64", media_type: String, data: String }
+  | FileId { type: "file_id", file_id: String, detail?: String }
 
 AudioSource =
   | Url { type: "url", url: String }
@@ -169,6 +186,9 @@ AudioSource =
 
 FileSource =
   | Url { type: "url", url: String }
+  | FileId { type: "file_id", file_id: String }
+  | Text { type: "text", text: String }
+  | Content { type: "content", content: Vec<JsonValue> }
   | Base64 {
       type: "base64",
       filename?: String,
@@ -243,6 +263,8 @@ TR-8. `ToolResultContent.extra_body` stores unknown fields that belong to exactl
 
 TR-9. If a key exists in both a `ToolResultContent` typed field and that entry's `extra_body`, the typed field value MUST win.
 
+TR-10. A tool-result content block with no cross-family semantic mapping, including Anthropic `search_result` and `tool_reference`, MUST decode as `ToolResultContent::ProviderItem`. It MAY replay only when its `origin_protocol` equals the target protocol. Cross-family encoding MUST omit that entry rather than stringify its JSON body as user-visible text.
+
 ### 3.4 Control-node invariants
 
 CTL-1. `NextDownstreamEnvelopeExtra` is the only control node kind in URP v2.
@@ -292,6 +314,8 @@ XTRA-8. The same-family passthrough rules in XTRA-4 through XTRA-7 do not author
 
 XTRA-9. Before request-phase transforms run for one upstream attempt, the runtime MUST remove every downstream-origin `ProviderItem` whose `origin_protocol` differs from the selected upstream provider protocol. Later transforms MAY insert a `ProviderItem` only when they set `origin_protocol` to the intended target provider protocol.
 
+XTRA-10. A key whose name starts with `_monoize_` is internal metadata, not wire passthrough. An envelope reconstruction helper or protocol encoder MUST NOT emit such a key as a provider request field. A same-family encoder MAY consume an internal key to reconstruct the native field represented by its value, then MUST discard the internal key. For Chat `reasoning_details`, the raw detail object stored under `_monoize_chat_reasoning_detail` remains authoritative replay data; only the wrapper key is internal. An opaque same-protocol `ProviderItem.body` MUST be cloned at its wire boundary. The clone MUST recursively remove object members whose keys start with `_monoize_`, including members below arrays, while preserving every other member. This sanitization MUST NOT mutate the canonical URP body and MUST NOT apply to arbitrary typed or user payloads.
+
 ## 5. Canonical flat streaming events
 
 STR-1. The canonical URP v2 streaming representation MUST be:
@@ -324,6 +348,12 @@ UrpStreamEventV2 =
       finish_reason?: FinishReason,
       usage?: Usage,
       output: Vec<Node>,
+      ...extra_body
+    }
+  | ProviderControl {
+      protocol: String,
+      event_name: String,
+      data: JsonValue,
       ...extra_body
     }
   | Error {
@@ -384,6 +414,10 @@ STR-10. Stream decoders MUST emit flat nodes directly. They MUST NOT pre-group s
 
 STR-11. Downstream stream encoders own logical envelope reconstruction from `NodeStart`, `NodeDelta`, `NodeDone`, and `ResponseDone.output`.
 
+STR-12. `ProviderControl` is same-protocol stream passthrough for one valid provider event that has no typed URP event mapping. It MUST NOT create a node, consume a `node_index`, mutate `ResponseDone.output`, or cross a protocol-family boundary.
+
+STR-13. A same-protocol stream encoder MAY replay `ProviderControl.data` only when `ProviderControl.protocol` equals the target protocol and `event_name` identifies the source wire event. A mismatched encoder MUST drop the event without converting it to text or success state.
+
 ### 5.1 Delta accumulation invariants
 
 SACC-1. For `NodeDelta::Text`, terminal `Text.content` is the ordered concatenation of all `content` fragments for that `node_index`.
@@ -420,7 +454,7 @@ RECON-3. A `ToolResult` node is always its own top-level semantic unit. An encod
 
 RECON-4. A `ProviderItem` node is never eligible for generic message-compatible grouping. A family-specific encoder MAY replay it as a native item, block, or part only under ORD-11.
 
-RECON-4. A control node is not itself emitted downstream. Its only effect is to modify the next consumable envelope under CTL-5 through CTL-8.
+RECON-5. A control node is not itself emitted downstream. Its only effect is to modify the next consumable envelope under CTL-5 through CTL-8.
 
 ### 6.1 Responses stability and reconstruction
 
@@ -440,7 +474,7 @@ RESP-7. Responses streaming output MUST preserve canonical event lifecycle seman
 
 1. `response.created` occurs before any output-item lifecycle event;
 2. every emitted `response.output_item.done` has exactly one earlier matching `response.output_item.added` with the same `output_index`;
-3. `response.content_part.added` and `response.content_part.done` are emitted only for Responses `message` items;
+3. `response.content_part.added` and `response.content_part.done` are emitted for each Responses content-bearing item part, including `message` content and `reasoning.content[]` entries of type `reasoning_text`;
 4. `response.completed` reflects the same reconstructed `response.output` ordering used by the terminal item lifecycle; and
 5. the stream terminates with exactly one plain `data: [DONE]` sentinel.
 
@@ -473,7 +507,7 @@ MSG-4. A Messages stream MUST NOT append `[DONE]`.
 
 MSG-5. Content-block lifecycles MUST NOT interleave. At most one content block may be open at a time.
 
-MSG-6. `Reasoning` nodes MUST reconstruct Anthropic `thinking` blocks. If the stream exposes both thinking text and signature state, `thinking_delta` MUST occur before `signature_delta`, and both MUST occur before that block's `content_block_stop`.
+MSG-6. `Reasoning` nodes MUST reconstruct Anthropic `thinking` blocks. If adjacent Chat reasoning-detail nodes contain non-empty plaintext followed by an encrypted-only payload, a Messages encoder MUST render those two semantic surfaces in one thinking block while preserving the two URP nodes for same-Chat replay. If the stream exposes both thinking text and signature state, `thinking_delta` MUST occur before `signature_delta`, and both MUST occur before that block's `content_block_stop`.
 
 MSG-7. `ToolCall` nodes MUST reconstruct Anthropic `tool_use` blocks. Streamed tool input JSON remains block-scoped and index-scoped.
 
@@ -492,8 +526,15 @@ CHAT-3. Structured reasoning in chat responses MUST remain in `reasoning_details
 CHAT-4. Chat `reasoning_details[]` entries MUST preserve the OpenRouter-compatible discriminated union:
 
 1. `{ "type": "reasoning.summary", "summary": ... }`
-2. `{ "type": "reasoning.text", "text": ... }`
+2. `{ "type": "reasoning.text", "text": ..., "signature"?: ... }`
 3. `{ "type": "reasoning.encrypted", "data": ... }`
+4. `{ "type": "reasoning.server_tool_call", "tool_name": ..., "arguments": ..., "result": ..., "tool_call_id"?: ... }`
+
+CHAT-4a. Every `reasoning_details[]` entry MAY carry `id`, `format`, and `index`. It MAY also carry future entry-local fields. A decoder MUST preserve those fields on the owning reasoning node, and a same-Chat encoder MUST replay them on the same entry.
+
+CHAT-4b. Source detail order is canonical. A decoder MUST create one reasoning node per detail entry. An encoder MUST preserve repeated detail types and MUST NOT merge, reorder, or deduplicate entries. Scalar `reasoning` and `reasoning_content` fields are compatibility views and MUST NOT cause bytes already present in `reasoning_details[]` to be emitted twice.
+
+CHAT-4c. Without an explicit response transform, non-empty `Reasoning.content` MUST encode as `reasoning.text` and MUST NOT encode as `reasoning.summary`.
 
 CHAT-5. Opaque encrypted reasoning payloads MUST appear only in `reasoning_details[]` entries with `type = "reasoning.encrypted"` and field `data`.
 
@@ -501,7 +542,7 @@ CHAT-6. Streaming chat output remains data-only SSE and terminates with exactly 
 
 CHAT-7. If streamed chat output emits tool-call deltas, terminal `finish_reason` semantics for that downstream stream remain `tool_calls`.
 
-CHAT-8. Final usage chunk semantics remain externally stable. A terminal usage chunk may occur once before `[DONE]` with empty `choices`.
+CHAT-8. If cumulative usage is available when a successful Chat Completions stream terminates, the encoder MUST emit exactly one usage chunk after the empty-delta finish chunk and immediately before `[DONE]`. The usage chunk MUST use the same `id`, `object`, `created`, and `model` envelope values as the finish chunk, MUST set `choices` to an empty array, and MUST contain the cumulative `usage` object. The finish chunk MUST NOT contain a non-null `usage` object. If cumulative usage is unavailable, the encoder MUST omit the usage chunk.
 
 CHAT-9. SSE comment lines and post-start chunk-shaped error payloads remain representable downstream. The flat URP redesign MUST NOT remove support for those externally visible chat stream forms.
 

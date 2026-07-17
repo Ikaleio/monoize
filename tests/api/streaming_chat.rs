@@ -41,6 +41,10 @@ async fn chat_streaming_preserves_summary_vs_reasoning_in_openrouter_extension()
         "chat stream should preserve reasoning text field: {text}"
     );
     assert!(
+        !text.contains("\"summary\":\"mock_reasoning\""),
+        "chat stream must not reinterpret raw reasoning text as a summary: {text}"
+    );
+    assert!(
         !text.contains("\"delta\":{\"reasoning\":"),
         "chat stream should keep structured reasoning out of delta.reasoning: {text}"
     );
@@ -86,8 +90,201 @@ async fn chat_streaming_preserves_encrypted_reasoning_from_chat_upstream() {
         "chat stream should preserve encrypted reasoning detail from chat upstream: {text}"
     );
     assert!(
-        text.contains("\"data\":\"mz2."),
-        "chat stream should wrap encrypted reasoning payload from chat upstream: {text}"
+        text.contains("\"data\":\"mock_sig\""),
+        "same-Chat streaming should replay the native encrypted detail: {text}"
+    );
+    assert!(
+        !text.contains("\"data\":\"mz2."),
+        "same-Chat streaming must not replace the native detail with an envelope: {text}"
+    );
+}
+
+#[tokio::test]
+async fn chat_streaming_reasoning_details_preserve_raw_entries_and_arrival_order() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini-chat",
+                "messages": [{ "role": "user", "content": "ordered reasoning" }],
+                "stream": true,
+                "stream_mode": "chat_ordered_reasoning_details"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let payloads = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| (data != "[DONE]").then_some(data))
+        .map(|data| serde_json::from_str::<Value>(&data).expect("Chat SSE JSON"))
+        .collect::<Vec<_>>();
+    let mut details = Vec::new();
+    let mut detail_frame_indices = Vec::new();
+    let mut content_frame_index = None;
+    for (frame_index, payload) in payloads.iter().enumerate() {
+        let choice = &payload["choices"][0];
+        if let Some(frame_details) = choice["delta"]["reasoning_details"].as_array() {
+            assert_eq!(
+                frame_details.len(),
+                1,
+                "one detail per Chat delta: {payload}"
+            );
+            assert!(
+                choice["finish_reason"].is_null(),
+                "reasoning detail delta must be non-terminal: {payload}"
+            );
+            detail_frame_indices.push(frame_index);
+            details.push(frame_details[0].clone());
+        }
+        if choice["delta"]["content"].as_str() == Some("answer") {
+            content_frame_index = Some(frame_index);
+        }
+    }
+
+    assert_eq!(
+        details,
+        vec![
+            json!({ "type": "reasoning.summary", "summary": "first", "id": "sum_1", "format": "openrouter", "index": 0, "future": "summary" }),
+            json!({ "type": "reasoning.text", "text": "second", "signature": "native-signature", "id": "txt_1", "format": "openrouter", "index": 1, "future": { "text": true } }),
+            json!({ "type": "reasoning.text", "text": "second", "signature": "native-signature", "id": "txt_1", "format": "openrouter", "index": 1, "future": { "text": true } }),
+            json!({ "type": "reasoning.encrypted", "data": "opaque-a", "id": "enc_1", "format": "openrouter", "index": 2, "future": [1] }),
+            json!({ "type": "reasoning.server_tool_call", "tool_name": "openrouter:fusion", "arguments": "{\"q\":1}", "result": "{\"ok\":true}", "tool_call_id": "call_srv", "id": "srv_1", "format": "openrouter", "index": 3, "future": { "server": true } }),
+            json!({ "type": "reasoning.encrypted", "data": "opaque-a", "id": "enc_2", "format": "openrouter", "index": 4, "future": [2] }),
+        ]
+    );
+    let content_frame_index = content_frame_index.expect("interleaved content frame");
+    assert!(
+        detail_frame_indices[2] < content_frame_index
+            && content_frame_index < detail_frame_indices[3],
+        "detail/content arrival order must survive: {text}"
+    );
+    assert_eq!(count_done_sentinels(&text), 1, "{text}");
+    assert!(!text.contains("mz2."), "no synthetic envelope: {text}");
+}
+
+#[tokio::test]
+async fn chat_streaming_terminal_message_snapshot_emits_only_missing_suffixes_and_native_extras() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini-chat",
+                "messages": [{ "role": "user", "content": "terminal snapshot" }],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "tool_a",
+                        "parameters": { "type": "object", "additionalProperties": true }
+                    }
+                }],
+                "stream": true,
+                "stream_mode": "chat_terminal_message_snapshot"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+
+    let payloads = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| (data != "[DONE]").then_some(data))
+        .map(|data| serde_json::from_str::<Value>(&data).expect("Chat SSE JSON"))
+        .collect::<Vec<_>>();
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut arguments = String::new();
+    let mut native_meta = Vec::new();
+    let mut terminal_positions = Vec::new();
+    let mut last_delta_position = None;
+
+    for (position, payload) in payloads.iter().enumerate() {
+        let choice = &payload["choices"][0];
+        let delta = &choice["delta"];
+        if let Some(value) = delta.get("content").and_then(Value::as_str) {
+            content.push_str(value);
+            last_delta_position = Some(position);
+        }
+        if let Some(value) = delta.get("reasoning_content").and_then(Value::as_str) {
+            reasoning.push_str(value);
+            last_delta_position = Some(position);
+        }
+        if let Some(details) = delta.get("reasoning_details").and_then(Value::as_array) {
+            for detail in details {
+                if let Some(value) = detail.get("text").and_then(Value::as_str) {
+                    reasoning.push_str(value);
+                }
+            }
+            last_delta_position = Some(position);
+        }
+        if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                if let Some(value) = call["function"]["arguments"].as_str() {
+                    arguments.push_str(value);
+                }
+            }
+            last_delta_position = Some(position);
+        }
+        if let Some(value) = delta.get("native_meta") {
+            native_meta.push(value.clone());
+            last_delta_position = Some(position);
+        }
+        if choice
+            .get("finish_reason")
+            .is_some_and(|value| !value.is_null())
+        {
+            terminal_positions.push(position);
+        }
+    }
+
+    assert_eq!(
+        content, "answer",
+        "text snapshot suffix must appear once: {text}"
+    );
+    assert_eq!(
+        reasoning, "thinking",
+        "reasoning snapshot suffix must appear once: {text}"
+    );
+    assert_eq!(
+        arguments, "{\"a\":1}",
+        "tool argument snapshot suffix must appear once: {text}"
+    );
+    assert_eq!(
+        native_meta,
+        vec![
+            json!({ "origin": "incremental" }),
+            json!({ "origin": "terminal" })
+        ],
+        "each native delta/message extension must survive once: {text}"
+    );
+    assert_eq!(terminal_positions.len(), 1, "one terminal chunk: {text}");
+    assert!(
+        last_delta_position.is_some_and(|position| position < terminal_positions[0]),
+        "all reconstructed deltas must precede the terminal chunk: {text}"
+    );
+    assert_eq!(count_done_sentinels(&text), 1, "{text}");
+    assert!(
+        !text.contains("_monoize_"),
+        "internal marker leaked: {text}"
+    );
+    assert!(
+        !text.contains("must-not-leak"),
+        "internal value leaked: {text}"
     );
 }
 
@@ -818,7 +1015,7 @@ async fn chat_streaming_from_responses_includes_terminal_usage() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
 
-    let mut terminal_with_usage: Option<Value> = None;
+    let mut usage_chunks = Vec::new();
     for line in text.lines() {
         let Some(payload) = line.strip_prefix("data: ") else {
             continue;
@@ -829,21 +1026,16 @@ async fn chat_streaming_from_responses_includes_terminal_usage() {
         let Ok(v) = serde_json::from_str::<Value>(payload) else {
             continue;
         };
-        let is_terminal = v
-            .get("choices")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|c| c.get("finish_reason"))
-            .and_then(|v| v.as_str())
-            .is_some();
-        if is_terminal && v.get("usage").is_some() {
-            terminal_with_usage = Some(v);
+        if v.get("usage").is_some() {
+            usage_chunks.push(v);
         }
     }
 
-    let terminal = terminal_with_usage.expect("terminal chat chunk should include usage");
-    assert_eq!(terminal["usage"]["prompt_tokens"].as_u64(), Some(12));
-    assert_eq!(terminal["usage"]["completion_tokens"].as_u64(), Some(8));
+    assert_eq!(usage_chunks.len(), 1, "expected one usage chunk: {text}");
+    let usage_chunk = &usage_chunks[0];
+    assert_eq!(usage_chunk["choices"], json!([]));
+    assert_eq!(usage_chunk["usage"]["prompt_tokens"].as_u64(), Some(12));
+    assert_eq!(usage_chunk["usage"]["completion_tokens"].as_u64(), Some(8));
 }
 
 #[tokio::test]
@@ -869,43 +1061,63 @@ async fn chat_streaming_openrouter_final_usage_chunk_shape() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).to_string();
 
-    let mut usage_chunks = Vec::new();
-    for line in text.lines() {
-        let Some(payload) = line.strip_prefix("data: ") else {
-            continue;
-        };
-        if payload == "[DONE]" {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(payload) else {
-            continue;
-        };
-        if v.get("usage").is_some() {
-            usage_chunks.push(v);
-        }
-    }
+    let payloads = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .collect::<Vec<_>>();
+    let done_index = payloads
+        .iter()
+        .position(|payload| *payload == "[DONE]")
+        .expect("chat stream done sentinel");
+    let chunks = payloads
+        .iter()
+        .enumerate()
+        .filter(|(_, payload)| **payload != "[DONE]")
+        .filter_map(|(index, payload)| {
+            serde_json::from_str::<Value>(payload)
+                .ok()
+                .map(|chunk| (index, chunk))
+        })
+        .collect::<Vec<_>>();
+    let finish_chunks = chunks
+        .iter()
+        .filter(|(_, chunk)| {
+            chunk["choices"]
+                .as_array()
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice["finish_reason"].as_str())
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    let usage_chunks = chunks
+        .iter()
+        .filter(|(_, chunk)| chunk.get("usage").is_some())
+        .collect::<Vec<_>>();
 
     assert_eq!(
         usage_chunks.len(),
         1,
         "chat stream must emit exactly one usage-bearing terminal chunk before [DONE]: {text}"
     );
-    let usage_chunk = &usage_chunks[0];
-    let choice = usage_chunk["choices"]
-        .as_array()
-        .and_then(|choices| choices.first())
-        .expect("usage terminal chunk choice");
     assert_eq!(
-        choice["finish_reason"].as_str(),
-        Some("stop"),
-        "usage-bearing chunk must be the terminal finish chunk: {text}"
+        finish_chunks.len(),
+        1,
+        "chat stream must emit one finish chunk: {text}"
     );
-    assert!(
-        choice["delta"]
-            .as_object()
-            .is_some_and(|delta| delta.is_empty()),
-        "usage-bearing terminal chunk must not carry additional assistant deltas: {text}"
-    );
+    let finish_index = finish_chunks[0].0;
+    let finish_chunk = &finish_chunks[0].1;
+    let usage_index = usage_chunks[0].0;
+    let usage_chunk = &usage_chunks[0].1;
+    assert_eq!(usage_index, finish_index + 1);
+    assert_eq!(done_index, usage_index + 1);
+    assert_eq!(finish_chunk["usage"], Value::Null);
+    assert_eq!(usage_chunk["choices"], json!([]));
+    for field in ["id", "object", "created", "model"] {
+        assert_eq!(
+            usage_chunk[field], finish_chunk[field],
+            "field {field}: {text}"
+        );
+    }
     assert_eq!(usage_chunk["usage"]["prompt_tokens"].as_u64(), Some(12));
     assert_eq!(usage_chunk["usage"]["completion_tokens"].as_u64(), Some(8));
 }
@@ -1303,4 +1515,97 @@ async fn chat_streaming_prestream_upstream_error_returns_error_stream() {
             .contains("mock cybersecurity policy block"),
         "error message should expose upstream detail: {text}"
     );
+}
+
+async fn chat_stream_for_mode(ctx: &TestContext, stream_mode: &str) -> String {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini-chat",
+                "messages": [{ "role": "user", "content": "terminal semantics" }],
+                "stream": true,
+                "stream_mode": stream_mode
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+#[tokio::test]
+async fn chat_streaming_openrouter_error_chunks_are_terminal_and_preserved() {
+    let ctx = setup().await;
+    for (mode, expected_message, expected_code) in [
+        ("chat_top_level_error", "openrouter top-level failure", 503),
+        ("chat_choice_error", "openrouter choice failure", 502),
+    ] {
+        let text = chat_stream_for_mode(&ctx, mode).await;
+        assert_eq!(count_done_sentinels(&text), 1, "{mode}: {text}");
+        assert!(text.contains(expected_message), "{mode}: {text}");
+        assert!(
+            text.contains(&format!("\"code\":{expected_code}")),
+            "{mode}: {text}"
+        );
+        assert!(
+            !text.contains("\"finish_reason\":\"stop\""),
+            "error stream must not synthesize success for {mode}: {text}"
+        );
+        if mode == "chat_choice_error" {
+            assert!(
+                text.contains("\"native_finish_reason\":\"error\"")
+                    && text.contains("\"provider_marker\":\"openrouter\""),
+                "choice-local error fields must survive same-family streaming: {text}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_streaming_invalid_or_premature_end_emits_error_not_stop() {
+    let ctx = setup().await;
+    for mode in [
+        "chat_malformed_json",
+        "chat_done_before_terminal",
+        "chat_eof_before_terminal",
+    ] {
+        let text = chat_stream_for_mode(&ctx, mode).await;
+        assert_eq!(count_done_sentinels(&text), 1, "{mode}: {text}");
+        assert!(
+            text.contains("\"error\":"),
+            "{mode} must emit a canonical Chat error: {text}"
+        );
+        assert!(
+            !text.contains("\"finish_reason\":\"stop\""),
+            "{mode} must not synthesize success: {text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn chat_streaming_deepseek_resource_finish_reason_round_trips() {
+    let ctx = setup().await;
+    let text = chat_stream_for_mode(&ctx, "chat_insufficient_system_resource").await;
+    assert_eq!(count_done_sentinels(&text), 1, "{text}");
+
+    let terminal = parse_sse_frames(&text)
+        .into_iter()
+        .filter(|(_, data)| data != "[DONE]")
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .find(|payload| {
+            payload["choices"][0]["finish_reason"].as_str() == Some("insufficient_system_resource")
+        })
+        .expect("resource-exhausted terminal chunk");
+    assert_eq!(
+        terminal["choices"][0]["native_finish_reason"],
+        json!("insufficient_system_resource")
+    );
+    assert_eq!(terminal["choices"][0]["provider_marker"], json!("deepseek"));
+    assert!(terminal.get("error").is_none(), "{text}");
 }

@@ -45,6 +45,19 @@ pub(crate) async fn record_stream_usage_if_present(
     }
 }
 
+pub(crate) async fn record_cumulative_stream_usage_snapshot(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    usage: Option<urp::Usage>,
+) {
+    let Some(usage) = usage else {
+        return;
+    };
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    runtime_metrics.lock().await.usage = Some(usage);
+}
+
 pub(crate) async fn latest_stream_usage_snapshot(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> Option<urp::Usage> {
@@ -169,7 +182,9 @@ pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
     // Overwrite with full upstream detail objects (e.g. cache_write_tokens)
     if let Some(map) = obj.as_object_mut() {
         for (k, v) in &usage.extra_body {
-            map.insert(k.clone(), v.clone());
+            if !k.starts_with("_monoize_") {
+                map.insert(k.clone(), v.clone());
+            }
         }
     }
     obj
@@ -550,69 +565,6 @@ pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
             accepted_prediction_tokens,
             rejected_prediction_tokens,
             parse_modality_breakdown_from_detail_object(output_details_obj),
-        ),
-        extra_body,
-    })
-}
-
-pub(crate) fn parse_usage_from_messages_object(obj: &Value) -> Option<urp::Usage> {
-    let usage = obj
-        .get("usage")
-        .or_else(|| obj.get("message").and_then(|v| v.get("usage")))?
-        .as_object()?;
-    let input_tokens = usage.get("input_tokens")?.as_u64()?;
-    let output_tokens = usage.get("output_tokens")?.as_u64()?;
-    let cache_read_tokens = usage
-        .get("cache_read_input_tokens")
-        .or_else(|| usage.get("cache_read_tokens"))
-        .or_else(|| usage.get("cached_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_creation_tokens = usage
-        .get("cache_creation_input_tokens")
-        .or_else(|| usage.get("cache_creation_tokens"))
-        .or_else(|| usage.get("cache_write_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let tool_prompt_tokens = usage
-        .get("tool_prompt_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let reasoning_tokens = usage
-        .get("reasoning_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let accepted_prediction_tokens = usage
-        .get("accepted_prediction_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let rejected_prediction_tokens = usage
-        .get("rejected_prediction_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let extra_body = split_usage_extra(usage, &["input_tokens", "output_tokens"]);
-    // Normalize Anthropic's disjoint-bucket usage to internal aggregate/inclusive invariant.
-    // See user-billing-and-model-metadata.spec.md § 5 C3-ii; mirrors urp::decode::anthropic.
-    let normalized_input_tokens = input_tokens
-        .saturating_add(cache_read_tokens)
-        .saturating_add(cache_creation_tokens);
-    Some(urp::Usage {
-        input_tokens: normalized_input_tokens,
-        output_tokens,
-        input_details: make_input_details(
-            0,
-            cache_read_tokens,
-            None,
-            cache_creation_tokens,
-            tool_prompt_tokens,
-            None,
-        ),
-        output_details: make_output_details(
-            0,
-            reasoning_tokens,
-            accepted_prediction_tokens,
-            rejected_prediction_tokens,
-            None,
         ),
         extra_body,
     })

@@ -150,6 +150,9 @@ pub(super) async fn forward_stream_typed(
             let mut req_attempt = original_req.clone();
             if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
                 urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
+                if target_protocol == urp::ProviderProtocol::Responses {
+                    urp::remove_downstream_only_reasoning_for_responses(&mut req_attempt.input);
+                }
             }
             if attempt.strip_cross_protocol_nested_extra
                 && !downstream.is_same_family(attempt.provider_type)

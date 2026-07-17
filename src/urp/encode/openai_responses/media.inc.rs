@@ -4,11 +4,61 @@ mod tests {
     use crate::urp::decode::openai_responses as decode_responses;
     use crate::urp::internal_legacy_bridge::{Item, Part, Role, items_to_nodes, nodes_to_items};
     use crate::urp::{
-        CustomToolDefinition, FunctionDefinition, InputDetails, OutputDetails, Usage,
+        CustomToolDefinition, FunctionDefinition, InputDetails, Node, OrdinaryRole, OutputDetails,
+        Usage,
     };
 
     fn empty_map() -> HashMap<String, Value> {
         HashMap::new()
+    }
+
+    #[test]
+    fn responses_provider_item_filters_nested_internal_metadata_on_wire() {
+        let native_item = json!({
+            "type": "compaction",
+            "vendor_unknown": {
+                "keep": 1,
+                "_monoize_nested": "drop",
+                "rows": [{ "keep_row": true, "_monoize_row": "drop" }]
+            },
+            "_monoize_top": "drop"
+        });
+        let req = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            input: vec![Node::ProviderItem {
+                id: Some("cmp_1".to_string()),
+                origin_protocol: ProviderProtocol::Responses,
+                role: OrdinaryRole::User,
+                item_type: "compaction".to_string(),
+                body: native_item.clone(),
+                extra_body: empty_map(),
+            }],
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "gpt-5.4");
+
+        assert_eq!(
+            encoded["input"][0],
+            json!({
+                "type": "compaction",
+                "vendor_unknown": { "keep": 1, "rows": [{ "keep_row": true }] }
+            })
+        );
+        assert!(matches!(
+            &req.input[0],
+            Node::ProviderItem { body, .. } if body == &native_item
+        ));
     }
 
     #[test]
@@ -369,7 +419,11 @@ mod tests {
                     "role": "assistant",
                     "phase": "commentary",
                     "custom_message_field": true,
-                    "content": [{ "type": "output_text", "text": "one" }]
+                    "content": [{
+                        "type": "output_text",
+                        "text": "one",
+                        "future_part_field": "part-only"
+                    }]
                 },
                 {
                     "type": "function_call",
@@ -393,8 +447,39 @@ mod tests {
         assert_eq!(output.len(), 3);
         assert_eq!(output[0]["phase"], json!("commentary"));
         assert_eq!(output[0]["custom_message_field"], json!(true));
+        assert!(output[0]["content"][0]
+            .get("custom_message_field")
+            .is_none());
+        assert!(output[0].get("future_part_field").is_none());
+        assert_eq!(
+            output[0]["content"][0]["future_part_field"],
+            json!("part-only")
+        );
         assert_eq!(output[1]["type"], json!("function_call"));
         assert_eq!(output[2]["phase"], json!("final_answer"));
+    }
+
+    #[test]
+    fn responses_round_trip_filters_internal_top_level_source_fields() {
+        let source = json!({
+            "id": "resp_internal_filter",
+            "object": "response",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "_monoize_private": "must-not-leak",
+            "public_extension": "preserved",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "ok" }]
+            }]
+        });
+
+        let decoded = decode_responses::decode_response(&source).expect("decode response");
+        let reencoded = encode_response(&decoded, "gpt-5.4");
+
+        assert!(reencoded.get("_monoize_private").is_none());
+        assert_eq!(reencoded["public_extension"], json!("preserved"));
     }
 
     #[test]
@@ -490,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_request_preserves_distinct_plain_reasoning_parts_when_other_parts_are_encrypted() {
+    fn encode_request_preserves_raw_cot_reasoning_during_tool_loop_replay() {
         let req = UrpRequest {
             model: "gpt-5.4".to_string(),
             input: items_to_nodes(vec![Item::Message {
@@ -513,6 +598,13 @@ mod tests {
                         source: None,
                         extra_body: empty_map(),
                     },
+                    Part::ToolCall {
+                        id: Some("fc_1".to_string()),
+                        call_id: "call_1".to_string(),
+                        name: "lookup".to_string(),
+                        arguments: "{}".to_string(),
+                        extra_body: empty_map(),
+                    },
                 ],
                 extra_body: empty_map(),
             }]),
@@ -531,7 +623,7 @@ mod tests {
 
         let encoded = encode_request(&req, "gpt-5.4");
         let input = encoded["input"].as_array().expect("input array");
-        assert_eq!(input.len(), 2);
+        assert_eq!(input.len(), 3);
         assert_eq!(input[0]["type"], json!("reasoning"));
         assert_eq!(input[0]["encrypted_content"], json!("sig_1"));
         assert!(input[0].get("text").is_none());
@@ -541,12 +633,16 @@ mod tests {
         );
         assert!(input[0].get("source").is_none());
         assert_eq!(input[1]["type"], json!("reasoning"));
+        assert!(input[1].get("id").is_none());
         assert!(input[1].get("text").is_none());
+        assert_eq!(input[1]["summary"], json!([]));
         assert_eq!(
-            input[1]["summary"],
-            json!([{ "type": "summary_text", "text": "plain think" }])
+            input[1]["content"],
+            json!([{ "type": "reasoning_text", "text": "plain think" }])
         );
         assert!(input[1].get("source").is_none());
+        assert_eq!(input[2]["type"], json!("function_call"));
+        assert_eq!(input[2]["call_id"], json!("call_1"));
     }
 
     #[test]
@@ -700,7 +796,17 @@ mod tests {
             max_output_tokens: None,
             reasoning: Some(crate::urp::ReasoningConfig {
                 effort: Some("high".to_string()),
-                extra_body: HashMap::from([("summary".to_string(), json!("concise"))]),
+                extra_body: HashMap::from([
+                    ("summary".to_string(), json!("concise")),
+                    (
+                        crate::urp::MESSAGES_THINKING_CONFIG_EXTRA_KEY.to_string(),
+                        json!({ "type": "adaptive" }),
+                    ),
+                    (
+                        crate::urp::CHAT_REASONING_CONFIG_EXTRA_KEY.to_string(),
+                        json!({ "effort": "high" }),
+                    ),
+                ]),
             }),
             tools: None,
             tool_choice: None,
@@ -713,6 +819,16 @@ mod tests {
         let encoded = encode_request(&req, "gpt-5.4");
         assert_eq!(encoded["reasoning"]["effort"], json!("high"));
         assert_eq!(encoded["reasoning"]["summary"], json!("concise"));
+        assert!(
+            encoded["reasoning"]
+                .get(crate::urp::MESSAGES_THINKING_CONFIG_EXTRA_KEY)
+                .is_none()
+        );
+        assert!(
+            encoded["reasoning"]
+                .get(crate::urp::CHAT_REASONING_CONFIG_EXTRA_KEY)
+                .is_none()
+        );
     }
 
     #[test]

@@ -85,16 +85,94 @@ pub(crate) fn anthropic_native_input_tokens(usage: &Usage) -> u64 {
         .saturating_sub(cache_creation)
 }
 
+pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
+    let input_details = usage_input_details(usage);
+    let output_details = usage_output_details(usage);
+    let mut usage_object = Map::new();
+
+    for (key, value) in &usage.extra_body {
+        if !key.starts_with("_monoize_") {
+            usage_object.insert(key.clone(), value.clone());
+        }
+    }
+
+    usage_object.insert(
+        "input_tokens".to_string(),
+        Value::from(anthropic_native_input_tokens(usage)),
+    );
+    usage_object.insert(
+        "output_tokens".to_string(),
+        Value::from(usage.output_tokens),
+    );
+    usage_object.insert(
+        "cache_read_input_tokens".to_string(),
+        Value::from(input_details.cache_read_tokens),
+    );
+    usage_object.insert(
+        "cache_creation_input_tokens".to_string(),
+        Value::from(input_details.cache_creation_tokens),
+    );
+    usage_object.insert(
+        "tool_prompt_input_tokens".to_string(),
+        Value::from(input_details.tool_prompt_tokens),
+    );
+    usage_object.remove("reasoning_output_tokens");
+    let mut native_output_details = usage_object
+        .remove("output_tokens_details")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    native_output_details.retain(|key, _| !key.starts_with("_monoize_"));
+    if usage.output_details.is_some() {
+        native_output_details.insert(
+            "thinking_tokens".to_string(),
+            Value::from(output_details.reasoning_tokens),
+        );
+    }
+    if !native_output_details.is_empty() {
+        usage_object.insert(
+            "output_tokens_details".to_string(),
+            Value::Object(native_output_details),
+        );
+    }
+    usage_object.insert(
+        "accepted_prediction_output_tokens".to_string(),
+        Value::from(output_details.accepted_prediction_tokens),
+    );
+    usage_object.insert(
+        "rejected_prediction_output_tokens".to_string(),
+        Value::from(output_details.rejected_prediction_tokens),
+    );
+
+    usage_object.remove("cache_creation");
+    if input_details.cache_creation_5m_tokens > 0
+        || input_details.cache_creation_1h_tokens > 0
+    {
+        usage_object.insert(
+            "cache_creation".to_string(),
+            json!({
+                "ephemeral_5m_input_tokens": input_details.cache_creation_5m_tokens,
+                "ephemeral_1h_input_tokens": input_details.cache_creation_1h_tokens
+            }),
+        );
+    }
+
+    Value::Object(usage_object)
+}
+
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut system_blocks: Vec<Value> = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
     let request_nodes = &req.input;
     let mut pending_message: Option<AnthropicMessageEnvelope> = None;
+    let mut pending_envelope_extra = HashMap::new();
 
     for node in request_nodes {
         match node {
-            Node::NextDownstreamEnvelopeExtra { .. } => {
+            Node::NextDownstreamEnvelopeExtra { extra_body } => {
                 flush_pending_anthropic_message(&mut pending_message, &mut messages);
+                for (key, value) in extra_body {
+                    pending_envelope_extra.insert(key.clone(), value.clone());
+                }
             }
             Node::ToolResult {
                 id: _,
@@ -106,6 +184,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 append_tool_result_to_pending_anthropic_message(
                     &mut pending_message,
                     &mut messages,
+                    &mut pending_envelope_extra,
                     call_id,
                     content,
                     *is_error,
@@ -142,6 +221,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 append_node_to_pending_anthropic_message(
                     &mut pending_message,
                     &mut messages,
+                    &mut pending_envelope_extra,
                     node,
                     ReasoningSigilMode::StripSigil,
                 );
@@ -203,22 +283,42 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         );
     }
     if let Some(reasoning) = &req.reasoning {
-        if model_supports_adaptive(upstream_model) {
-            obj.insert(
-                "thinking".to_string(),
-                json!({ "type": "adaptive", "display": "summarized" }),
-            );
-            if let Some(effort) = &reasoning.effort {
+        let explicit_thinking = reasoning
+            .extra_body
+            .get(MESSAGES_THINKING_CONFIG_EXTRA_KEY)
+            .and_then(Value::as_object)
+            .cloned();
+        let explicit_output_config = reasoning
+            .extra_body
+            .get(MESSAGES_OUTPUT_CONFIG_EXTRA_KEY)
+            .and_then(Value::as_object)
+            .cloned();
+        let has_explicit_messages_config =
+            explicit_thinking.is_some() || explicit_output_config.is_some();
+
+        if let Some(thinking) = explicit_thinking {
+            obj.insert("thinking".to_string(), Value::Object(thinking));
+        }
+        if let Some(output_config) = explicit_output_config {
+            obj.insert("output_config".to_string(), Value::Object(output_config));
+        }
+
+        if !has_explicit_messages_config && model_supports_adaptive(upstream_model) {
+            obj.insert("thinking".to_string(), json!({ "type": "adaptive" }));
+            if let Some(effort) = reasoning
+                .effort
+                .as_deref()
+                .filter(|effort| !matches!(*effort, "none" | "minimal" | "minimum"))
+            {
                 obj.insert("output_config".to_string(), json!({ "effort": effort }));
             }
-        } else {
+        } else if !has_explicit_messages_config {
             let effort = reasoning.effort.as_deref().unwrap_or("medium");
             obj.insert(
                 "thinking".to_string(),
                 json!({
                     "type": "enabled",
-                    "budget_tokens": effort_to_budget(effort),
-                    "display": "summarized"
+                    "budget_tokens": effort_to_budget(effort)
                 }),
             );
         }

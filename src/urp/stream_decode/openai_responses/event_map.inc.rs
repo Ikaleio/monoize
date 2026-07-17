@@ -198,6 +198,8 @@ fn map_output_item_added(
         output_state.role = Some(role);
         if let Some(id) = item.get("id").and_then(Value::as_str) {
             output_state.item_id = Some(id.to_string());
+        } else if item_type == "message" && output_state.item_id.is_none() {
+            output_state.item_id = Some(crate::urp::synthetic_message_id());
         }
         if output_state.item_extra_body.is_empty() {
             output_state.item_extra_body = item_extra_body.clone();
@@ -296,6 +298,22 @@ fn map_output_item_added(
             });
             output_state_for(index_state, output_index).emitted_any_node = true;
         }
+        "image_generation_call" => {
+            let node_index = index_state.synthetic_node_index_for_output(output_index);
+            emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+            events.push(UrpStreamEvent::NodeStart {
+                node_index,
+                header: NodeHeader::Image {
+                    id: item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    role: OrdinaryRole::Assistant,
+                },
+                extra_body: item_extra_body,
+            });
+            output_state_for(index_state, output_index).emitted_any_node = true;
+        }
         _ => {
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ProviderItem {
                 id: item
@@ -339,20 +357,36 @@ fn map_content_part_added(
         .or_else(|| data_val.get("part_index"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let node_index = index_state.node_index_for_content(output_index, content_index);
+    let is_reasoning_part = part.get("type").and_then(Value::as_str) == Some("reasoning_text")
+        || index_state
+            .output_state_by_index
+            .get(&output_index)
+            .and_then(|state| state.item_type.as_deref())
+            == Some("reasoning");
+    let node_index = if is_reasoning_part {
+        index_state.synthetic_node_index_for_output(output_index)
+    } else {
+        index_state.node_index_for_content(output_index, content_index)
+    };
+    if is_reasoning_part
+        && index_state
+            .output_state_by_index
+            .get(&output_index)
+            .is_some_and(|state| state.emitted_any_node)
+    {
+        return Vec::new();
+    }
     let role = output_state_for(index_state, output_index)
         .role
         .unwrap_or(Role::Assistant);
 
     let mut events = Vec::new();
-    let node = node_from_part_value(
-        part,
-        role,
-        output_state_for(index_state, output_index)
-            .item_id
-            .clone()
-            .or_else(|| Some(crate::urp::synthetic_message_id())),
-    );
+    let item_id = if is_reasoning_part {
+        output_state_for(index_state, output_index).item_id.clone()
+    } else {
+        Some(stable_message_item_id_for_output(index_state, output_index))
+    };
+    let node = node_from_part_value(part, role, item_id);
     emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
     events.push(UrpStreamEvent::NodeStart {
         node_index,
@@ -379,20 +413,31 @@ fn map_content_part_done(
         .or_else(|| data_val.get("part_index"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let node_index = index_state.node_index_for_content(output_index, content_index);
+    let is_reasoning_part = part.get("type").and_then(Value::as_str) == Some("reasoning_text")
+        || index_state
+            .output_state_by_index
+            .get(&output_index)
+            .and_then(|state| state.item_type.as_deref())
+            == Some("reasoning");
+    let node_index = if is_reasoning_part {
+        index_state.synthetic_node_index_for_output(output_index)
+    } else {
+        index_state.node_index_for_content(output_index, content_index)
+    };
     let role = output_state_for(index_state, output_index)
         .role
         .unwrap_or(Role::Assistant);
-    let node = node_from_part_value(
-        part,
-        role,
-        output_state_for(index_state, output_index)
-            .item_id
-            .clone()
-            .or_else(|| Some(crate::urp::synthetic_message_id())),
-    );
+    let item_id = if is_reasoning_part {
+        output_state_for(index_state, output_index).item_id.clone()
+    } else {
+        Some(stable_message_item_id_for_output(index_state, output_index))
+    };
+    let node = node_from_part_value(part, role, item_id);
     if let Some(output_state) = index_state.output_state_by_index.get_mut(&output_index) {
         output_state.part_done_seen = true;
+    }
+    if is_reasoning_part {
+        return Vec::new();
     }
     vec![UrpStreamEvent::NodeDone {
         node_index,

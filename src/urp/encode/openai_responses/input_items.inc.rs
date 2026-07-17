@@ -80,20 +80,35 @@ fn apply_response_format(obj: &mut Map<String, Value>, format: &ResponseFormat) 
             );
         }
         ResponseFormat::JsonSchema { json_schema } => {
-            obj.insert(
-                "text".to_string(),
-                json!({
-                    "format": {
-                        "type": "json_schema",
-                        "name": json_schema.name,
-                        "description": json_schema.description,
-                        "strict": json_schema.strict,
-                        "schema": json_schema.schema
-                    }
-                }),
-            );
+            let mut format = Map::new();
+            format.insert("type".to_string(), json!("json_schema"));
+            format.insert("name".to_string(), json!(json_schema.name));
+            format.insert("schema".to_string(), json_schema.schema.clone());
+            if let Some(description) = &json_schema.description {
+                format.insert("description".to_string(), json!(description));
+            }
+            if let Some(strict) = json_schema.strict {
+                format.insert("strict".to_string(), json!(strict));
+            }
+            merge_extra(&mut format, &json_schema.extra_body);
+            obj.insert("text".to_string(), json!({ "format": format }));
         }
     }
+}
+
+fn merge_responses_text_config(obj: &mut Map<String, Value>, raw_text: Option<&Value>) {
+    let Some(raw_text) = raw_text.and_then(Value::as_object) else {
+        return;
+    };
+    let generated = obj.get("text").and_then(Value::as_object);
+    let mut merged = raw_text.clone();
+    merged.retain(|key, _| !key.starts_with("_monoize_"));
+    if let Some(generated) = generated {
+        for (key, value) in generated {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    obj.insert("text".to_string(), Value::Object(merged));
 }
 
 fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str {
@@ -103,4 +118,3 @@ fn finish_reason_to_status(finish_reason: Option<FinishReason>) -> &'static str 
         _ => "completed",
     }
 }
-

@@ -6,17 +6,10 @@ fn map_image_generation_completed(
         return Vec::new();
     };
     let node_index = index_state.allocate_fresh_node_index();
-    let extra_body = split_known_fields(
-        data_val,
-        &[
-            "type",
-            "id",
-            "b64_json",
-            "result",
-            "output_format",
-            "partial_image_index",
-        ],
-    );
+    let extra_body = match &node {
+        Node::Image { extra_body, .. } => extra_body.clone(),
+        _ => unreachable!(),
+    };
     vec![
         UrpStreamEvent::NodeStart {
             node_index,
@@ -199,6 +192,29 @@ fn map_output_item_done(
                             extra_body: item_extra_body_from_value(item),
                         });
                         output_state_for(index_state, output_index).emitted_any_node = true;
+                        if let Node::Text {
+                            content,
+                            phase,
+                            extra_body,
+                            ..
+                        } = &node
+                            && !content.is_empty()
+                        {
+                            let mut delta_extra_body = extra_body.clone();
+                            if let Some(phase) = phase {
+                                delta_extra_body
+                                    .entry("phase".to_string())
+                                    .or_insert_with(|| json!(phase));
+                            }
+                            events.push(UrpStreamEvent::NodeDelta {
+                                node_index,
+                                delta: NodeDelta::Text {
+                                    content: content.clone(),
+                                },
+                                usage: None,
+                                extra_body: delta_extra_body,
+                            });
+                        }
                         events.push(UrpStreamEvent::NodeDone {
                             node_index,
                             node,

@@ -25,7 +25,7 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
     }
 
     for (k, v) in &req.extra_body {
-        if k != "model" && k != "prompt" && k != "stream" {
+        if !k.starts_with("_monoize_") && k != "model" && k != "prompt" && k != "stream" {
             body.insert(k.clone(), v.clone());
         }
     }
@@ -56,7 +56,7 @@ pub fn multipart_form(req: &UrpRequest, model: &str) -> Result<reqwest::multipar
     }
 
     for (k, v) in &req.extra_body {
-        if k == "model" || k == "prompt" || k == "stream" {
+        if k.starts_with("_monoize_") || k == "model" || k == "prompt" || k == "stream" {
             continue;
         }
         form = form.text(k.clone(), extra_value_to_text(v));
@@ -80,6 +80,9 @@ pub fn multipart_form(req: &UrpRequest, model: &str) -> Result<reqwest::multipar
                 (media_type.clone(), bytes)
             }
             ImageSource::Url { url, .. } => ("text/plain".to_string(), url.as_bytes().to_vec()),
+            ImageSource::FileId { .. } => {
+                return Err("file_id image input is unsupported by the image API".to_string());
+            }
         };
         let field_name = if id.as_deref() == Some("__monoize_image_api_mask") {
             "mask"

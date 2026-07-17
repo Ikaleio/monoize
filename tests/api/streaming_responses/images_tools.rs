@@ -53,6 +53,98 @@ async fn responses_streaming_preserves_image_generation_partial_image_events() {
             .iter()
             .any(|(event, _)| event == "response.image_generation_call.completed")
     );
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .expect("response.completed frame");
+    let output = completed["response"]["output"]
+        .as_array()
+        .expect("completed output array");
+    let image = output
+        .iter()
+        .find(|item| item["type"].as_str() == Some("image_generation_call"))
+        .expect("native image_generation_call output item");
+    assert_eq!(image["id"].as_str(), Some("ig_mock"));
+    assert_eq!(image["output_format"].as_str(), Some("png"));
+    assert!(image["result"].as_str().is_some_and(|data| !data.is_empty()));
+    assert!(!text.contains("output_image"), "{text}");
+}
+
+#[tokio::test]
+async fn responses_streaming_native_image_generation_item_lifecycle_stays_top_level_and_deduped() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":"draw",
+                "tools":[{ "type":"image_generation", "output_format":"webp" }],
+                "stream": true,
+                "stream_mode": "image_generation_item_done_and_completed_snapshot"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+        .to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let added = frames
+        .iter()
+        .find(|(event, payload)| {
+            event == "response.output_item.added"
+                && payload["item"]["type"].as_str() == Some("image_generation_call")
+        })
+        .expect("native image output_item.added");
+    assert_eq!(added.1["item"]["status"].as_str(), Some("in_progress"));
+    assert!(added.1["item"].get("result").is_none());
+
+    let image_done = frames
+        .iter()
+        .filter(|(event, payload)| {
+            event == "response.output_item.done"
+                && payload["item"]["type"].as_str() == Some("image_generation_call")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(image_done.len(), 1, "{text}");
+    assert_eq!(image_done[0].1["item"]["id"].as_str(), Some("ig_mock"));
+    assert_eq!(
+        image_done[0].1["item"]["output_format"].as_str(),
+        Some("webp")
+    );
+    assert!(image_done[0].1["item"]["result"]
+        .as_str()
+        .is_some_and(|data| !data.is_empty()));
+    assert!(!frames.iter().any(|(event, payload)| {
+        event.starts_with("response.content_part")
+            && payload["item_id"].as_str() == Some("ig_mock")
+    }));
+
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .expect("response.completed frame");
+    let output = completed["response"]["output"]
+        .as_array()
+        .expect("completed output array");
+    assert_eq!(
+        output
+            .iter()
+            .filter(|item| item["type"].as_str() == Some("image_generation_call"))
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains("output_image"), "{text}");
 }
 
 #[tokio::test]

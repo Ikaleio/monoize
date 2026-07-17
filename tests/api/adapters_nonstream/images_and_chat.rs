@@ -1,4 +1,3 @@
-
 async fn enable_auto_cache_openai_prompt(ctx: &TestContext) {
     ctx.state.monoize_runtime.write().await.global_transforms =
         vec![monoize::transforms::TransformRuleConfig {
@@ -38,6 +37,68 @@ async fn chat_upstream_auto_cache_openai_prompt_adds_top_level_cache_fields() {
         key.starts_with("mzpc_") && key.len() == "mzpc_".len() + 32,
         "unexpected prompt_cache_key: {key}"
     );
+}
+
+#[tokio::test]
+async fn chat_nonstream_openrouter_errors_do_not_become_successful_completions() {
+    let ctx = setup().await;
+    for (mode, expected_message, expected_code) in [
+        (
+            "chat_top_level_error",
+            "openrouter top-level failure",
+            "503",
+        ),
+        ("chat_choice_error", "openrouter choice failure", "502"),
+    ] {
+        let (status, body) = json_post(
+            &ctx,
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt-5-mini-chat",
+                "messages": [{ "role": "user", "content": "fail" }],
+                "stream_mode": mode
+            }),
+        )
+        .await;
+
+        assert_ne!(status, StatusCode::OK, "{mode}: {body}");
+        assert!(body.contains(expected_message), "{mode}: {body}");
+        assert!(
+            !body.contains("\"finish_reason\":\"stop\""),
+            "{mode} must not be rewritten as a successful completion: {body}"
+        );
+        let error: Value = serde_json::from_str(&body).expect("error response JSON");
+        assert_eq!(error["error"]["code"], json!("upstream_chat_error"));
+        assert_eq!(error["error"]["upstream_code"], json!(expected_code));
+        assert_eq!(error["error"]["upstream_type"], json!("upstream_error"));
+    }
+}
+
+#[tokio::test]
+async fn chat_nonstream_deepseek_resource_finish_reason_round_trips() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": "resource limit" }],
+            "stream_mode": "chat_insufficient_system_resource"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let response: Value = serde_json::from_str(&body).expect("chat response JSON");
+    assert_eq!(
+        response["choices"][0]["finish_reason"],
+        json!("insufficient_system_resource")
+    );
+    assert_eq!(
+        response["choices"][0]["native_finish_reason"],
+        json!("insufficient_system_resource")
+    );
+    assert_eq!(response["choices"][0]["provider_marker"], json!("deepseek"));
 }
 
 #[tokio::test]
@@ -123,10 +184,15 @@ async fn chat_nonstream_reasoning_details_replay_preserves_order() {
                 {
                     "role": "assistant",
                     "content": "",
+                    "reasoning": "derived alias must not replay",
+                    "reasoning_content": "legacy alias must not replay",
                     "reasoning_details": [
-                        { "type": "reasoning.summary", "summary": "first", "format": "openrouter" },
-                        { "type": "reasoning.text", "text": "second", "format": "openrouter" },
-                        { "type": "reasoning.encrypted", "data": "third", "format": "openrouter" }
+                        { "type": "reasoning.summary", "summary": "first", "id": "sum_1", "format": "openai-responses-v1", "index": 0, "future": "s" },
+                        { "type": "reasoning.text", "text": "second-a", "signature": "sig-a", "id": "txt_1", "format": "anthropic-claude-v1", "index": 1 },
+                        { "type": "reasoning.text", "text": "second-b", "signature": null, "id": "txt_2", "format": "anthropic-claude-v1", "index": 2, "future": {"t": true} },
+                        { "type": "reasoning.encrypted", "data": "third-a", "id": "enc_1", "format": "openai-responses-v1", "index": 3 },
+                        { "type": "reasoning.encrypted", "data": "third-a", "id": "enc_2", "format": "openai-responses-v1", "index": 4 },
+                        { "type": "reasoning.server_tool_call", "tool_name": "openrouter:fusion", "arguments": "{\"q\":1}", "result": "{\"ok\":true}", "tool_call_id": "call_srv", "id": "srv_1", "format": "unknown", "index": 5 }
                     ]
                 },
                 { "role": "user", "content": "continue" }
@@ -146,10 +212,23 @@ async fn chat_nonstream_reasoning_details_replay_preserves_order() {
     assert_eq!(
         assistant["reasoning_details"],
         json!([
-            { "type": "reasoning.summary", "summary": "first", "format": "openrouter" },
-            { "type": "reasoning.text", "text": "second", "format": "openrouter" },
-            { "type": "reasoning.encrypted", "data": "third", "format": "openrouter" }
+            { "type": "reasoning.summary", "summary": "first", "id": "sum_1", "format": "openai-responses-v1", "index": 0, "future": "s" },
+            { "type": "reasoning.text", "text": "second-a", "signature": "sig-a", "id": "txt_1", "format": "anthropic-claude-v1", "index": 1 },
+            { "type": "reasoning.text", "text": "second-b", "signature": null, "id": "txt_2", "format": "anthropic-claude-v1", "index": 2, "future": {"t": true} },
+            { "type": "reasoning.encrypted", "data": "third-a", "id": "enc_1", "format": "openai-responses-v1", "index": 3 },
+            { "type": "reasoning.encrypted", "data": "third-a", "id": "enc_2", "format": "openai-responses-v1", "index": 4 },
+            { "type": "reasoning.server_tool_call", "tool_name": "openrouter:fusion", "arguments": "{\"q\":1}", "result": "{\"ok\":true}", "tool_call_id": "call_srv", "id": "srv_1", "format": "unknown", "index": 5 }
         ])
+    );
+    assert!(assistant.get("reasoning").is_none());
+    assert!(assistant.get("reasoning_content").is_none());
+    assert!(
+        assistant
+            .as_object()
+            .expect("assistant object")
+            .keys()
+            .all(|key| !key.starts_with("_monoize_")),
+        "internal reasoning markers must not leak to the upstream Chat message: {assistant}"
     );
 }
 

@@ -165,6 +165,20 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             {
                 let stream = futures_util::stream::iter(vec![
                     Ok::<_, Infallible>(
+                        Event::default().event("response.output_item.added").data(
+                            json!({
+                                "type": "response.output_item.added",
+                                "output_index": 0,
+                                "item": {
+                                    "type": "image_generation_call",
+                                    "id": "ig_mock",
+                                    "status": "in_progress"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
                         Event::default().event("response.output_item.done").data(
                             json!({
                                 "type": "response.output_item.done",
@@ -228,59 +242,83 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 return Sse::new(stream).into_response();
             }
 
-            if body.get("stream_mode").and_then(|v| v.as_str())
-                == Some("image_generation_partial")
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("image_generation_partial")
                 && tool_outputs.is_empty()
                 && image_generation_tool
             {
                 let stream = futures_util::stream::iter(vec![
-                    Ok::<_, Infallible>(Event::default()
-                        .event("response.image_generation_call.in_progress")
-                        .data(json!({
-                            "type": "response.image_generation_call.in_progress",
-                            "output_index": 0,
-                            "item_id": "ig_mock"
-                        }).to_string())),
-                    Ok::<_, Infallible>(Event::default()
-                        .event("response.image_generation_call.partial_image")
-                        .data(json!({
-                            "type": "response.image_generation_call.partial_image",
-                            "output_index": 0,
-                            "item_id": "ig_mock",
-                            "partial_image_index": 0,
-                            "partial_image_b64": "QUJD",
-                            "output_format": "png"
-                        }).to_string())),
-                    Ok::<_, Infallible>(Event::default()
-                        .event("response.image_generation_call.generating")
-                        .data(json!({
-                            "type": "response.image_generation_call.generating",
-                            "output_index": 0,
-                            "item_id": "ig_mock"
-                        }).to_string())),
-                    Ok::<_, Infallible>(Event::default()
-                        .event("response.image_generation_call.completed")
-                        .data(json!({
-                            "type": "response.image_generation_call.completed",
-                            "output_index": 0,
-                            "item_id": "ig_mock"
-                        }).to_string())),
-                    Ok::<_, Infallible>(Event::default().event("response.completed").data(json!({
-                        "type": "response.completed",
-                        "response": {
-                            "id": "resp_mock",
-                            "object": "response",
-                            "created_at": 0,
-                            "model": model,
-                            "status": "completed",
-                            "output": [{
-                                "type": "image_generation_call",
-                                "id": "ig_mock",
-                                "result": image_b64,
-                                "output_format": "png"
-                            }]
-                        }
-                    }).to_string())),
+                    Ok::<_, Infallible>(
+                        Event::default()
+                            .event("response.image_generation_call.in_progress")
+                            .data(
+                                json!({
+                                    "type": "response.image_generation_call.in_progress",
+                                    "output_index": 0,
+                                    "item_id": "ig_mock"
+                                })
+                                .to_string(),
+                            ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default()
+                            .event("response.image_generation_call.partial_image")
+                            .data(
+                                json!({
+                                    "type": "response.image_generation_call.partial_image",
+                                    "output_index": 0,
+                                    "item_id": "ig_mock",
+                                    "partial_image_index": 0,
+                                    "partial_image_b64": "QUJD",
+                                    "output_format": "png"
+                                })
+                                .to_string(),
+                            ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default()
+                            .event("response.image_generation_call.generating")
+                            .data(
+                                json!({
+                                    "type": "response.image_generation_call.generating",
+                                    "output_index": 0,
+                                    "item_id": "ig_mock"
+                                })
+                                .to_string(),
+                            ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default()
+                            .event("response.image_generation_call.completed")
+                            .data(
+                                json!({
+                                    "type": "response.image_generation_call.completed",
+                                    "output_index": 0,
+                                    "item_id": "ig_mock"
+                                })
+                                .to_string(),
+                            ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": [{
+                                        "type": "image_generation_call",
+                                        "id": "ig_mock",
+                                        "result": image_b64,
+                                        "output_format": "png"
+                                    }]
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
                     Ok::<_, Infallible>(Event::default().data("[DONE]")),
                 ]);
                 return Sse::new(stream).into_response();
@@ -445,6 +483,42 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                                 "part": { "type": "summary_text", "text": "mock_summary" }
                             }).to_string())),
                         Ok::<_, Infallible>(Event::default()
+                            .event("response.content_part.added")
+                            .data(json!({
+                                "type": "response.content_part.added",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "rs_mock",
+                                "part": { "type": "reasoning_text", "text": "" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.reasoning_text.delta")
+                            .data(json!({
+                                "type": "response.reasoning_text.delta",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "rs_mock",
+                                "delta": "mock_reasoning"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.reasoning_text.done")
+                            .data(json!({
+                                "type": "response.reasoning_text.done",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "rs_mock",
+                                "text": "mock_reasoning"
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.content_part.done")
+                            .data(json!({
+                                "type": "response.content_part.done",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "item_id": "rs_mock",
+                                "part": { "type": "reasoning_text", "text": "mock_reasoning" }
+                            }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
                             .event("response.output_item.done")
                             .data(json!({
                                 "type": "response.output_item.done",
@@ -540,6 +614,41 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                                 "output_index": 2,
                                 "item": { "type": "function_call", "id": "fc_mock", "call_id": "call_1", "name": "tool_a", "arguments": "{\"a\":1}" }
                             }).to_string())),
+                        Ok::<_, Infallible>(Event::default()
+                            .event("response.completed")
+                            .data(json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": [
+                                        {
+                                            "type": "reasoning",
+                                            "id": "rs_mock",
+                                            "summary": [{ "type": "summary_text", "text": "mock_summary" }],
+                                            "content": [{ "type": "reasoning_text", "text": "mock_reasoning" }],
+                                            "encrypted_content": "mock_sig"
+                                        },
+                                        {
+                                            "type": "message",
+                                            "id": "msg_mock",
+                                            "role": "assistant",
+                                            "phase": "analysis",
+                                            "content": [{ "type": "output_text", "text": "answer" }]
+                                        },
+                                        {
+                                            "type": "function_call",
+                                            "id": "fc_mock",
+                                            "call_id": "call_1",
+                                            "name": "tool_a",
+                                            "arguments": "{\"a\":1}"
+                                        }
+                                    ]
+                                }
+                            }).to_string())),
                         Ok::<_, Infallible>(Event::default().data("[DONE]")),
                     ]);
                     return Sse::new(stream).into_response();
@@ -567,13 +676,16 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                         }
                     });
                     if let Some(service_tier) = service_tier.clone()
-                        && let Some(response) = completed.get_mut("response").and_then(Value::as_object_mut)
+                        && let Some(response) =
+                            completed.get_mut("response").and_then(Value::as_object_mut)
                     {
                         response.insert("service_tier".to_string(), service_tier);
                     }
                     let stream = futures_util::stream::iter(vec![
                         Ok::<_, Infallible>(
-                            Event::default().event("response.completed").data(completed.to_string()),
+                            Event::default()
+                                .event("response.completed")
+                                .data(completed.to_string()),
                         ),
                         Ok::<_, Infallible>(Event::default().data("[DONE]")),
                     ]);
@@ -1250,16 +1362,18 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             ),
                         ),
                         Ok::<_, Infallible>(
-                            Event::default().event("response.reasoning_text.delta").data(
-                                json!({
-                                    "type": "response.reasoning_text.delta",
-                                    "output_index": 0,
-                                    "item_id": "rs_mock",
-                                    "content_index": 0,
-                                    "delta": "streamed_reasoning"
-                                })
-                                .to_string(),
-                            ),
+                            Event::default()
+                                .event("response.reasoning_text.delta")
+                                .data(
+                                    json!({
+                                        "type": "response.reasoning_text.delta",
+                                        "output_index": 0,
+                                        "item_id": "rs_mock",
+                                        "content_index": 0,
+                                        "delta": "streamed_reasoning"
+                                    })
+                                    .to_string(),
+                                ),
                         ),
                         Ok::<_, Infallible>(
                             Event::default().event("response.completed").data(
@@ -1307,11 +1421,17 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     .event("response.reasoning_summary_part.done")
                     .data(json!({ "type": "response.reasoning_summary_part.done", "item_id": "rs_mock", "output_index": 0, "summary_index": 0, "part": { "type": "summary_text", "text": "mock_summary" } }).to_string())));
                 events.push(Ok(Event::default()
+                    .event("response.content_part.added")
+                    .data(json!({ "type": "response.content_part.added", "item_id": "rs_mock", "output_index": 0, "content_index": 0, "part": { "type": "reasoning_text", "text": "" } }).to_string())));
+                events.push(Ok(Event::default()
                     .event("response.reasoning_text.delta")
                     .data(json!({ "type": "response.reasoning_text.delta", "item_id": "rs_mock", "output_index": 0, "content_index": 0, "delta": "mock_reasoning" }).to_string())));
                 events.push(Ok(Event::default()
                     .event("response.reasoning_text.done")
                     .data(json!({ "type": "response.reasoning_text.done", "item_id": "rs_mock", "output_index": 0, "content_index": 0, "text": "mock_reasoning" }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.content_part.done")
+                    .data(json!({ "type": "response.content_part.done", "item_id": "rs_mock", "output_index": 0, "content_index": 0, "part": { "type": "reasoning_text", "text": "mock_reasoning" } }).to_string())));
                 events.push(Ok(Event::default()
                     .event("response.output_item.done")
                     .data(
@@ -1329,6 +1449,70 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                         .to_string(),
                     )));
 
+                events.push(Ok(Event::default()
+                    .event("response.output_item.added")
+                    .data(json!({
+                        "type": "response.output_item.added",
+                        "output_index": 1,
+                        "item": { "type": "message", "id": "msg_mock", "role": "assistant", "content": [] }
+                    }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.content_part.added")
+                    .data(json!({
+                        "type": "response.content_part.added",
+                        "item_id": "msg_mock",
+                        "output_index": 1,
+                        "content_index": 0,
+                        "part": { "type": "output_text", "text": "", "annotations": [], "logprobs": [] }
+                    }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.output_text.delta")
+                    .data(
+                        json!({
+                            "type": "response.output_text.delta",
+                            "item_id": "msg_mock",
+                            "output_index": 1,
+                            "content_index": 0,
+                            "delta": "answer",
+                            "logprobs": []
+                        })
+                        .to_string(),
+                    )));
+                events.push(Ok(Event::default()
+                    .event("response.output_text.done")
+                    .data(
+                        json!({
+                            "type": "response.output_text.done",
+                            "item_id": "msg_mock",
+                            "output_index": 1,
+                            "content_index": 0,
+                            "text": "answer",
+                            "logprobs": []
+                        })
+                        .to_string(),
+                    )));
+                events.push(Ok(Event::default()
+                    .event("response.content_part.done")
+                    .data(json!({
+                        "type": "response.content_part.done",
+                        "item_id": "msg_mock",
+                        "output_index": 1,
+                        "content_index": 0,
+                        "part": { "type": "output_text", "text": "answer", "annotations": [], "logprobs": [] }
+                    }).to_string())));
+                events.push(Ok(Event::default()
+                    .event("response.output_item.done")
+                    .data(json!({
+                        "type": "response.output_item.done",
+                        "output_index": 1,
+                        "item": {
+                            "type": "message",
+                            "id": "msg_mock",
+                            "role": "assistant",
+                            "content": [{ "type": "output_text", "text": "answer", "annotations": [], "logprobs": [] }]
+                        }
+                    }).to_string())));
+
                 let calls = if parallel {
                     vec![
                         ("call_1", "tool_a", "{\"a\":1}"),
@@ -1342,7 +1526,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                         .event("response.output_item.added")
                         .data(json!({
                             "type": "response.output_item.added",
-                            "output_index": idx + 1,
+                            "output_index": idx + 2,
                             "item": { "type": "function_call", "call_id": call_id, "name": name, "arguments": "" }
                         }).to_string())));
                     events.push(Ok(Event::default()
@@ -1350,7 +1534,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                         .data(
                             json!({
                                 "type": "response.function_call_arguments.delta",
-                                "output_index": idx + 1,
+                                "output_index": idx + 2,
                                 "delta": args
                             })
                             .to_string(),
@@ -1360,8 +1544,8 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                         .data(
                             json!({
                                 "type": "response.function_call_arguments.done",
-                                "output_index": idx + 1,
-                                "item_id": format!("fc_{}", idx + 1),
+                                "output_index": idx + 2,
+                                "item_id": format!("fc_{}", idx + 2),
                                 "call_id": call_id,
                                 "name": name,
                                 "arguments": args
@@ -1372,10 +1556,24 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                         .event("response.output_item.done")
                         .data(json!({
                             "type": "response.output_item.done",
-                            "output_index": idx + 1,
-                            "item": { "type": "function_call", "id": format!("fc_{}", idx + 1), "call_id": call_id, "name": name, "arguments": args }
+                            "output_index": idx + 2,
+                            "item": { "type": "function_call", "id": format!("fc_{}", idx + 2), "call_id": call_id, "name": name, "arguments": args }
                         }).to_string())));
                 }
+                events.push(Ok(Event::default().event("response.completed").data(
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_mock",
+                            "object": "response",
+                            "created_at": 0,
+                            "model": model,
+                            "status": "completed",
+                            "output": []
+                        }
+                    })
+                    .to_string(),
+                )));
                 events.push(Ok(Event::default().data("[DONE]")));
                 return Sse::new(futures_util::stream::iter(events)).into_response();
             }
@@ -1416,6 +1614,66 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             .to_string(),
                         ),
                     ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": "resp_mock",
+                                    "object": "response",
+                                    "created_at": 0,
+                                    "model": model,
+                                    "status": "completed",
+                                    "output": []
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("missing_terminal") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.output_text.delta").data(
+                            json!({
+                                "type": "response.output_text.delta",
+                                "item_id": "msg_missing_terminal",
+                                "output_index": 0,
+                                "content_index": 0,
+                                "delta": "partial"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("incomplete_terminal") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("response.incomplete").data(
+                            json!({
+                                "type": "response.incomplete",
+                                "response": {
+                                    "id": "resp_incomplete",
+                                    "object": "response",
+                                    "created_at": 123,
+                                    "model": model,
+                                    "status": "incomplete",
+                                    "output": [],
+                                    "error": null,
+                                    "incomplete_details": { "reason": "max_output_tokens" }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
                     Ok::<_, Infallible>(Event::default().data("[DONE]")),
                 ]);
                 return Sse::new(stream).into_response();
@@ -1428,11 +1686,12 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             json!({
                                 "type": "response.created",
                                 "response": {
-                                    "id": "resp_mock",
+                                    "id": "resp_upstream_identity",
                                     "object": "response",
-                                    "created_at": 0,
+                                    "created_at": 1700000123,
                                     "model": model,
-                                    "status": "in_progress"
+                                    "status": "in_progress",
+                                    "native_start_extra": { "keep": true }
                                 }
                             })
                             .to_string(),
@@ -1469,9 +1728,9 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             json!({
                                 "type": "response.completed",
                                 "response": {
-                                    "id": "resp_mock",
+                                    "id": "resp_upstream_identity",
                                     "object": "response",
-                                    "created_at": 0,
+                                    "created_at": 1700000123,
                                     "model": model,
                                     "status": "completed",
                                     "output": []
@@ -1605,6 +1864,23 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                                     "input_tokens_details": { "cached_tokens": 0 },
                                     "output_tokens_details": { "reasoning_tokens": 0 }
                                 }
+                            }
+                        })
+                        .to_string(),
+                    ),
+                ));
+            } else {
+                events.push(Ok::<_, Infallible>(
+                    Event::default().event("response.completed").data(
+                        json!({
+                            "type": "response.completed",
+                            "response": {
+                                "id": "resp_mock",
+                                "object": "response",
+                                "created_at": 0,
+                                "model": model,
+                                "status": "completed",
+                                "output": []
                             }
                         })
                         .to_string(),
@@ -1759,7 +2035,13 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         let reasoning_enabled = body
             .get("reasoning_effort")
             .and_then(|v| v.as_str())
-            .is_some();
+            .is_some_and(|effort| effort != "none")
+            || body
+                .get("reasoning")
+                .and_then(Value::as_object)
+                .is_some_and(|reasoning| {
+                    reasoning.get("effort").and_then(Value::as_str) != Some("none")
+                });
         let reasoning_source_override = body
             .get("reasoning_source_override")
             .and_then(|v| v.as_str())
@@ -1826,6 +2108,286 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         }
 
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
+            let stream_mode = body.get("stream_mode").and_then(|v| v.as_str());
+            if matches!(
+                stream_mode,
+                Some(
+                    "chat_top_level_error"
+                        | "chat_choice_error"
+                        | "chat_malformed_json"
+                        | "chat_done_before_terminal"
+                        | "chat_eof_before_terminal"
+                        | "chat_insufficient_system_resource"
+                )
+            ) {
+                let initial = json!({
+                    "id": "chatcmpl_mock",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "role": "assistant", "content": "partial" },
+                        "finish_reason": Value::Null
+                    }]
+                });
+                let mut chunks = vec![Ok::<_, Infallible>(
+                    Event::default().data(initial.to_string()),
+                )];
+                match stream_mode {
+                    Some("chat_top_level_error") => {
+                        chunks.push(Ok(Event::default().data(
+                            json!({
+                                "id": "chatcmpl_mock",
+                                "object": "chat.completion.chunk",
+                                "created": 0,
+                                "model": model,
+                                "error": {
+                                    "message": "openrouter top-level failure",
+                                    "code": 503,
+                                    "type": "upstream_error",
+                                    "param": "model"
+                                }
+                            })
+                            .to_string(),
+                        )));
+                    }
+                    Some("chat_choice_error") => {
+                        chunks.push(Ok(Event::default().data(
+                            json!({
+                                "id": "chatcmpl_mock",
+                                "object": "chat.completion.chunk",
+                                "created": 0,
+                                "model": model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": "error",
+                                    "native_finish_reason": "error",
+                                    "provider_marker": "openrouter",
+                                    "error": {
+                                        "message": "openrouter choice failure",
+                                        "code": 502,
+                                        "type": "upstream_error"
+                                    }
+                                }]
+                            })
+                            .to_string(),
+                        )));
+                    }
+                    Some("chat_malformed_json") => {
+                        chunks.push(Ok(Event::default().data("{not-json")));
+                    }
+                    Some("chat_done_before_terminal") => {
+                        chunks.push(Ok(Event::default().data("[DONE]")));
+                    }
+                    Some("chat_eof_before_terminal") => {}
+                    Some("chat_insufficient_system_resource") => {
+                        chunks.push(Ok(Event::default().data(
+                            json!({
+                                "id": "chatcmpl_mock",
+                                "object": "chat.completion.chunk",
+                                "created": 0,
+                                "model": model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": "insufficient_system_resource",
+                                    "native_finish_reason": "insufficient_system_resource",
+                                    "provider_marker": "deepseek"
+                                }]
+                            })
+                            .to_string(),
+                        )));
+                        chunks.push(Ok(Event::default().data("[DONE]")));
+                    }
+                    _ => unreachable!(),
+                }
+                if matches!(
+                    stream_mode,
+                    Some("chat_top_level_error" | "chat_choice_error" | "chat_malformed_json")
+                ) {
+                    chunks.push(Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                        })
+                        .to_string(),
+                    )));
+                    chunks.push(Ok(Event::default().data("[DONE]")));
+                }
+                return Sse::new(futures_util::stream::iter(chunks)).into_response();
+            }
+
+            if stream_mode == Some("chat_ordered_reasoning_details") {
+                let repeated_text = json!({
+                    "type": "reasoning.text",
+                    "text": "second",
+                    "signature": "native-signature",
+                    "id": "txt_1",
+                    "format": "openrouter",
+                    "index": 1,
+                    "future": { "text": true }
+                });
+                let chunks: Vec<Result<Event, Infallible>> = vec![
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": { "role": "assistant" }, "finish_reason": Value::Null }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "reasoning_details": [
+                                        { "type": "reasoning.summary", "summary": "first", "id": "sum_1", "format": "openrouter", "index": 0, "future": "summary" },
+                                        repeated_text.clone(),
+                                        repeated_text
+                                    ]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": { "content": "answer" }, "finish_reason": Value::Null }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "reasoning_details": [
+                                        { "type": "reasoning.encrypted", "data": "opaque-a", "id": "enc_1", "format": "openrouter", "index": 2, "future": [1] },
+                                        { "type": "reasoning.server_tool_call", "tool_name": "openrouter:fusion", "arguments": "{\"q\":1}", "result": "{\"ok\":true}", "tool_call_id": "call_srv", "id": "srv_1", "format": "openrouter", "index": 3, "future": { "server": true } },
+                                        { "type": "reasoning.encrypted", "data": "opaque-a", "id": "enc_2", "format": "openrouter", "index": 4, "future": [2] }
+                                    ]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_mock",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": model,
+                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data("[DONE]")),
+                ];
+                return Sse::new(futures_util::stream::iter(chunks)).into_response();
+            }
+
+            if stream_mode == Some("chat_terminal_message_snapshot") {
+                let chunks: Vec<Result<Event, Infallible>> = vec![
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_snapshot",
+                            "object": "chat.completion.chunk",
+                            "created": 123,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "role": "assistant",
+                                    "content": "ans",
+                                    "reasoning_content": "think",
+                                    "native_meta": { "origin": "incremental" }
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_snapshot",
+                            "object": "chat.completion.chunk",
+                            "created": 123,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "id": "call_snapshot",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "tool_a",
+                                            "arguments": "{\"a\":"
+                                        }
+                                    }]
+                                },
+                                "finish_reason": Value::Null
+                            }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data(
+                        json!({
+                            "id": "chatcmpl_snapshot",
+                            "object": "chat.completion.chunk",
+                            "created": 123,
+                            "model": model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "answer",
+                                    "reasoning_content": "thinking",
+                                    "tool_calls": [{
+                                        "index": 0,
+                                        "id": "call_snapshot",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "tool_a",
+                                            "arguments": "{\"a\":1}"
+                                        }
+                                    }],
+                                    "native_meta": { "origin": "terminal" },
+                                    "_monoize_forbidden": "must-not-leak"
+                                },
+                                "finish_reason": "tool_calls"
+                            }]
+                        })
+                        .to_string(),
+                    )),
+                    Ok(Event::default().data("[DONE]")),
+                ];
+                return Sse::new(futures_util::stream::iter(chunks)).into_response();
+            }
+
             if tools_present && tool_outputs.is_empty() {
                 if body.get("stream_mode").and_then(|v| v.as_str()) == Some("header_only_tool") {
                     let chunks: Vec<Result<Event, Infallible>> = vec![
@@ -2153,16 +2715,22 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     "model": model,
                     "choices": [{ "index": 0, "delta": { "content": format!("tool_ok:{joined}") }, "finish_reason": Value::Null }]
                 });
+                let terminal = json!({
+                    "id": "chatcmpl_mock",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": model,
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                });
                 let stream = futures_util::stream::iter(vec![
                     Ok::<_, Infallible>(Event::default().data(chunk.to_string())),
+                    Ok::<_, Infallible>(Event::default().data(terminal.to_string())),
                     Ok::<_, Infallible>(Event::default().data("[DONE]")),
                 ]);
                 return Sse::new(stream).into_response();
             }
 
-            if body.get("stream_mode").and_then(|v| v.as_str())
-                == Some("delayed_final_usage")
-            {
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("delayed_final_usage") {
                 let chunks = vec![
                     json!({
                         "id": "chatcmpl_mock",
@@ -2189,9 +2757,8 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     .to_string(),
                     "[DONE]".to_string(),
                 ];
-                let stream = futures_util::stream::unfold(
-                    (0usize, chunks),
-                    |(index, chunks)| async move {
+                let stream =
+                    futures_util::stream::unfold((0usize, chunks), |(index, chunks)| async move {
                         let chunk = chunks.get(index)?.clone();
                         if index > 0 {
                             tokio::time::sleep(Duration::from_millis(150)).await;
@@ -2200,8 +2767,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                             Ok::<_, Infallible>(Event::default().data(chunk)),
                             (index + 1, chunks),
                         ))
-                    },
-                );
+                    });
                 return Sse::new(stream).into_response();
             }
 
@@ -2249,6 +2815,58 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             chunks.push(Ok::<_, Infallible>(Event::default().data("[DONE]")));
             let stream = futures_util::stream::iter(chunks);
             return Sse::new(stream).into_response();
+        }
+
+        match body.get("stream_mode").and_then(|v| v.as_str()) {
+            Some("chat_top_level_error") => {
+                return Json(json!({
+                    "error": {
+                        "message": "openrouter top-level failure",
+                        "code": 503,
+                        "type": "upstream_error",
+                        "param": "model"
+                    }
+                }))
+                .into_response();
+            }
+            Some("chat_choice_error") => {
+                return Json(json!({
+                    "id": "chatcmpl_mock",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "" },
+                        "finish_reason": "error",
+                        "native_finish_reason": "error",
+                        "provider_marker": "openrouter",
+                        "error": {
+                            "message": "openrouter choice failure",
+                            "code": 502,
+                            "type": "upstream_error"
+                        }
+                    }]
+                }))
+                .into_response();
+            }
+            Some("chat_insufficient_system_resource") => {
+                return Json(json!({
+                    "id": "chatcmpl_mock",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "partial" },
+                        "finish_reason": "insufficient_system_resource",
+                        "native_finish_reason": "insufficient_system_resource",
+                        "provider_marker": "deepseek"
+                    }]
+                }))
+                .into_response();
+            }
+            _ => {}
         }
 
         if tools_present && tool_outputs.is_empty() {
@@ -2398,7 +3016,14 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                         .filter(|(key, _)| {
                             !matches!(
                                 key.as_str(),
-                                "role" | "content" | "type" | "id" | "model" | "stop_reason" | "stop_sequence" | "usage"
+                                "role"
+                                    | "content"
+                                    | "type"
+                                    | "id"
+                                    | "model"
+                                    | "stop_reason"
+                                    | "stop_sequence"
+                                    | "usage"
                             )
                         })
                         .map(|(key, value)| (key.clone(), value.clone()))
@@ -2410,19 +3035,316 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         if body.get("stream").and_then(|v| v.as_bool()) == Some(true) {
             if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_error") {
                 let stream = futures_util::stream::iter(vec![
-                    Ok::<_, Infallible>(Event::default().data(
-                        json!({
-                            "type": "error",
-                            "error": {
-                                "type": "invalid_request_error",
-                                "message": "mock messages streaming error",
-                                "param": "messages",
-                                "status": 400
-                            }
-                        })
-                        .to_string(),
-                    )),
+                    Ok::<_, Infallible>(
+                        Event::default().data(
+                            json!({
+                                "type": "error",
+                                "error": {
+                                    "type": "invalid_request_error",
+                                    "message": "mock messages streaming error",
+                                    "param": "messages",
+                                    "status": 400
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
                     Ok::<_, Infallible>(Event::default().data("[DONE]")),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("messages_malformed_then_stop")
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("message_start").data(
+                            json!({
+                                "type": "message_start",
+                                "message": {
+                                    "id": "msg_malformed",
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "model": model,
+                                    "content": [],
+                                    "stop_reason": Value::Null,
+                                    "stop_sequence": Value::Null,
+                                    "usage": { "input_tokens": 1, "output_tokens": 0 }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default()
+                            .event("content_block_delta")
+                            .data("{not-json"),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("message_stop").data(
+                            json!({
+                                "type": "message_stop"
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("messages_noncontiguous_indices")
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(Event::default().event("message_start").data(json!({
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_noncontiguous",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": model,
+                            "content": [],
+                            "stop_reason": Value::Null,
+                            "stop_sequence": Value::Null,
+                            "usage": { "input_tokens": 2, "output_tokens": 0 }
+                        }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_start").data(json!({
+                        "type": "content_block_start",
+                        "index": 4,
+                        "content_block": { "type": "text", "text": "" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_delta").data(json!({
+                        "type": "content_block_delta",
+                        "index": 4,
+                        "delta": { "type": "text_delta", "text": "first" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_stop").data(json!({
+                        "type": "content_block_stop",
+                        "index": 4
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_start").data(json!({
+                        "type": "content_block_start",
+                        "index": 9,
+                        "content_block": { "type": "text", "text": "" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_delta").data(json!({
+                        "type": "content_block_delta",
+                        "index": 9,
+                        "delta": { "type": "text_delta", "text": "second" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_stop").data(json!({
+                        "type": "content_block_stop",
+                        "index": 9
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_delta").data(json!({
+                        "type": "message_delta",
+                        "delta": { "stop_reason": "end_turn", "stop_sequence": Value::Null },
+                        "usage": { "output_tokens": 2 }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_stop").data(json!({
+                        "type": "message_stop"
+                    }).to_string())),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_unmarked_eof") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("message_start").data(
+                            json!({
+                                "type": "message_start",
+                                "message": {
+                                    "id": "msg_unmarked_eof",
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "model": model,
+                                    "content": [],
+                                    "stop_reason": Value::Null,
+                                    "stop_sequence": Value::Null,
+                                    "usage": { "input_tokens": 3, "output_tokens": 0 }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("content_block_start").data(
+                            json!({
+                                "type": "content_block_start",
+                                "index": 0,
+                                "content_block": { "type": "text", "text": "" }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("content_block_delta").data(
+                            json!({
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": { "type": "text_delta", "text": "partial" }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_omitted_thinking")
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(Event::default().event("message_start").data(json!({
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_omitted_thinking",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": model,
+                            "content": [],
+                            "stop_reason": Value::Null,
+                            "stop_sequence": Value::Null,
+                            "usage": { "input_tokens": 4, "output_tokens": 0 }
+                        }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_start").data(json!({
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": { "type": "thinking", "thinking": "", "signature": "" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_delta").data(json!({
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": { "type": "signature_delta", "signature": "omitted_thinking_sig" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_stop").data(json!({
+                        "type": "content_block_stop",
+                        "index": 0
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_delta").data(json!({
+                        "type": "message_delta",
+                        "delta": { "stop_reason": "end_turn", "stop_sequence": Value::Null },
+                        "usage": { "output_tokens": 1 }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_stop").data(json!({
+                        "type": "message_stop"
+                    }).to_string())),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_pause_turn") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(Event::default().event("message_start").data(json!({
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_pause_turn",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": model,
+                            "content": [],
+                            "stop_reason": Value::Null,
+                            "stop_sequence": Value::Null,
+                            "usage": { "input_tokens": 4, "output_tokens": 0 }
+                        }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_start").data(json!({
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": { "type": "text", "text": "" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_delta").data(json!({
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": { "type": "text_delta", "text": "paused" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_stop").data(json!({
+                        "type": "content_block_stop",
+                        "index": 0
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_delta").data(json!({
+                        "type": "message_delta",
+                        "delta": { "stop_reason": "pause_turn", "stop_sequence": Value::Null },
+                        "usage": { "output_tokens": 1 }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_stop").data(json!({
+                        "type": "message_stop"
+                    }).to_string())),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_partial_usage") {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(Event::default().event("message_start").data(json!({
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_partial_usage",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": model,
+                            "content": [],
+                            "stop_reason": Value::Null,
+                            "stop_sequence": Value::Null,
+                            "usage": {
+                                "input_tokens": 10,
+                                "output_tokens": 0,
+                                "cache_read_input_tokens": 3,
+                                "cache_creation_input_tokens": 2,
+                                "cache_creation": {
+                                    "ephemeral_5m_input_tokens": 1,
+                                    "ephemeral_1h_input_tokens": 1
+                                },
+                                "tool_prompt_input_tokens": 4,
+                                "accepted_prediction_output_tokens": 6,
+                                "rejected_prediction_output_tokens": 7,
+                                "native_counter": 17,
+                                "server_tool_use": { "web_search_requests": 2 }
+                            }
+                        }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_start").data(json!({
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": { "type": "text", "text": "" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_delta").data(json!({
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": { "type": "text_delta", "text": "partial usage" }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("content_block_stop").data(json!({
+                        "type": "content_block_stop",
+                        "index": 0
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_delta").data(json!({
+                        "type": "message_delta",
+                        "delta": { "stop_reason": "end_turn", "stop_sequence": Value::Null },
+                        "usage": { "output_tokens": 4 }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_delta").data(json!({
+                        "type": "message_delta",
+                        "delta": { "stop_reason": Value::Null, "stop_sequence": Value::Null },
+                        "usage": {
+                            "input_tokens": Value::Null,
+                            "output_tokens": 9,
+                            "cache_read_input_tokens": Value::Null,
+                            "cache_creation_input_tokens": Value::Null,
+                            "tool_prompt_input_tokens": Value::Null,
+                            "output_tokens_details": {
+                                "thinking_tokens": 5
+                            },
+                            "accepted_prediction_output_tokens": Value::Null,
+                            "rejected_prediction_output_tokens": Value::Null,
+                            "native_counter": Value::Null
+                        }
+                    }).to_string())),
+                    Ok::<_, Infallible>(Event::default().event("message_stop").data(json!({
+                        "type": "message_stop"
+                    }).to_string())),
                 ]);
                 return Sse::new(stream).into_response();
             }
@@ -2743,6 +3665,20 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             ));
             let stream = futures_util::stream::iter(events);
             return Sse::new(stream).into_response();
+        }
+
+        if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_pause_turn") {
+            return Json(json!({
+                "id": "msg_pause_turn",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [{ "type": "text", "text": "paused" }],
+                "stop_reason": "pause_turn",
+                "stop_sequence": Value::Null,
+                "usage": { "input_tokens": 4, "output_tokens": 1 }
+            }))
+            .into_response();
         }
 
         if tools_present && tool_results.is_empty() {
@@ -3212,6 +4148,40 @@ async fn seed_test_model_pricing(state: &monoize::app::AppState, model_ids: &[&s
     }
 }
 
+async fn seed_test_server_tool_meter_rates(state: &monoize::app::AppState) {
+    for (usage_class, unit) in [
+        ("web_search", "call"),
+        ("file_search_tool_call", "call"),
+        ("code_interpreter_duration", "billed_minute"),
+    ] {
+        state
+            .billing_rate_store
+            .upsert_billing_rate(
+                &format!("test:openai:meter:{usage_class}"),
+                monoize::billing_rate_store::UpsertBillingRateInput {
+                    source: Some("test".to_string()),
+                    pricing_profile: Some("openai".to_string()),
+                    model_pattern: Some(None),
+                    provider_type: Some(None),
+                    rate_kind: Some("meter".to_string()),
+                    usage_class: Some(usage_class.to_string()),
+                    unit: Some(unit.to_string()),
+                    unit_price_nano_usd: Some("0".to_string()),
+                    context_tier: Some(None),
+                    service_tier: Some(None),
+                    modality: Some(None),
+                    cache_ttl: Some(None),
+                    match_json: Some(json!({})),
+                    priority: Some(100),
+                    enabled: Some(true),
+                    raw_json: Some(json!({ "fixture": true })),
+                },
+            )
+            .await
+            .expect("seed server-tool meter rate");
+    }
+}
+
 async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
     let test_fields = vec![
         "emit_usage".to_string(),
@@ -3340,6 +4310,7 @@ async fn setup_with_unknown_fields() -> TestContext {
         ],
     )
     .await;
+    seed_test_server_tool_meter_rates(&state).await;
 
     let router = monoize::app::build_app(state.clone());
 

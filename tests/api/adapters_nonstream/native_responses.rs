@@ -390,15 +390,10 @@ async fn messages_parallel_false_without_tools_does_not_synthesize_messages_tool
     );
 }
 
-/// Regression test for the `messages.N.content.0.thinking.thinking: Field required` bug.
-///
-/// When a downstream `/v1/messages` request echoes back an assistant history block whose
-/// `thinking` field is empty but that carries a non-empty `signature`, monoize must NOT
-/// re-emit an invalid `{type:"thinking", encrypted_thinking:<sig>}` or an invalid
-/// `{type:"thinking", thinking:"", signature:<sig>}` to the upstream. Per DM5.1 case 3,
-/// the block must be dropped entirely since the marker for `redacted_thinking` is absent.
+/// An empty `thinking` value with a non-empty `signature` is Anthropic omitted thinking.
+/// Same-family request conversion must retain both fields exactly.
 #[tokio::test]
-async fn messages_request_drops_empty_thinking_without_redacted_marker() {
+async fn messages_request_roundtrips_omitted_thinking_block() {
     let ctx = setup().await;
     let (status, _body) = json_post(
         &ctx,
@@ -428,21 +423,16 @@ async fn messages_request_drops_empty_thinking_without_redacted_marker() {
         .iter()
         .find(|m| m.get("role").and_then(|v| v.as_str()) == Some("assistant"))
         .expect("assistant turn forwarded");
-    let blocks = assistant["content"].as_array().cloned().unwrap_or_default();
-    for block in &blocks {
-        assert!(
-            block.get("encrypted_thinking").is_none(),
-            "encrypted_thinking field is not part of the Anthropic wire contract: {block}"
-        );
-        if block.get("type").and_then(|v| v.as_str()) == Some("thinking") {
-            let thinking = block
-                .get("thinking")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            assert!(
-                !thinking.is_empty(),
-                "thinking block must have non-empty `thinking` text: {block}"
-            );
-        }
-    }
+    let omitted = assistant["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|block| block.get("type").and_then(|v| v.as_str()) == Some("thinking"))
+        .expect("omitted thinking block forwarded");
+    assert_eq!(omitted["thinking"].as_str(), Some(""));
+    assert_eq!(omitted["signature"].as_str(), Some("sig_orphan"));
+    assert!(
+        omitted.get("encrypted_thinking").is_none(),
+        "encrypted_thinking is not part of the Anthropic wire contract: {omitted}"
+    );
 }

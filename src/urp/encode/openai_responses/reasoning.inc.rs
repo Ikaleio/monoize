@@ -16,6 +16,14 @@ fn encode_reasoning_item_inner(part: &Part, require_stable_id_for_encrypted: boo
             source,
             extra_body,
         } => {
+            if require_stable_id_for_encrypted
+                && extra_body
+                    .get(REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY)
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            {
+                return None;
+            }
             if !require_stable_id_for_encrypted
                 && !reasoning_payload_is_meaningful(content, summary, encrypted)
             {
@@ -38,20 +46,28 @@ fn encode_reasoning_item_inner(part: &Part, require_stable_id_for_encrypted: boo
             if require_stable_id_for_encrypted && encrypted_len > 0 && stable_id.is_none() {
                 return None;
             }
-            let id = stable_id.unwrap_or_else(|| format!("rs_{}", uuid::Uuid::new_v4().simple()));
-            obj.insert("id".to_string(), Value::String(id));
+            if let Some(id) = stable_id {
+                obj.insert("id".to_string(), Value::String(id));
+            } else if !require_stable_id_for_encrypted {
+                obj.insert(
+                    "id".to_string(),
+                    Value::String(format!("rs_{}", uuid::Uuid::new_v4().simple())),
+                );
+            }
             obj.insert("type".to_string(), Value::String("reasoning".to_string()));
-            obj.insert(
-                "started_at".to_string(),
-                Value::Number(serde_json::Number::from(chrono::Utc::now().timestamp())),
-            );
-            let summary_arr = if let Some(summary) = summary.as_ref() {
-                vec![json!({ "type": "summary_text", "text": summary })]
+            let summary_value = if let Some(raw_summary) =
+                extra_body.get(RESPONSES_REASONING_SUMMARY_EXTRA_KEY)
+            {
+                raw_summary.clone()
+            } else if let Some(summary) = summary.as_ref() {
+                Value::Array(vec![json!({ "type": "summary_text", "text": summary })])
             } else {
-                Vec::new()
+                Value::Array(Vec::new())
             };
-            obj.insert("summary".to_string(), Value::Array(summary_arr));
-            if let Some(content) = content {
+            obj.insert("summary".to_string(), summary_value);
+            if let Some(raw_content) = extra_body.get(RESPONSES_REASONING_CONTENT_EXTRA_KEY) {
+                obj.insert("content".to_string(), raw_content.clone());
+            } else if let Some(content) = content {
                 obj.insert(
                     "content".to_string(),
                     Value::Array(vec![json!({
@@ -59,20 +75,22 @@ fn encode_reasoning_item_inner(part: &Part, require_stable_id_for_encrypted: boo
                         "text": content
                     })]),
                 );
-            } else {
+            } else if !require_stable_id_for_encrypted {
                 obj.insert("content".to_string(), Value::Array(Vec::new()));
             }
             if let Some(encrypted) = encrypted {
-                let enc_str = match encrypted {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                obj.insert("encrypted_content".to_string(), Value::String(enc_str));
+                obj.insert("encrypted_content".to_string(), encrypted.clone());
             }
-            if let Some(source) = source {
+            if !require_stable_id_for_encrypted
+                && let Some(source) = source.as_ref().filter(|source| !source.is_empty())
+            {
                 obj.insert("source".to_string(), Value::String(source.clone()));
             }
-            merge_extra(&mut obj, extra_body);
+            for (key, value) in extra_body {
+                if !key.starts_with("_monoize_") {
+                    obj.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
             Some(Value::Object(obj))
         }
         _ => None,
@@ -106,35 +124,12 @@ fn sanitize_reasoning_request_item(item: &mut Value) {
     if obj.get("type").and_then(Value::as_str) != Some("reasoning") {
         return;
     }
-    let summary_present = obj
-        .get("summary")
-        .and_then(Value::as_array)
-        .is_some_and(|arr| !arr.is_empty());
-    let content_value = obj.remove("content");
-    let text_value = obj.remove("text").or_else(|| {
-        content_value.and_then(|content| {
-            let text = content
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|part| {
-                    part.get("type").and_then(Value::as_str) == Some("reasoning_text")
-                })
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<String>();
-            (!text.is_empty()).then_some(Value::String(text))
-        })
-    });
+    obj.remove("text");
     obj.remove("source");
     obj.remove("started_at");
-    obj.remove("status");
-    if !summary_present {
-        let summary = text_value
-            .and_then(|value| value.as_str().map(|text| text.to_string()))
-            .filter(|text| !text.is_empty())
-            .map(|text| Value::Array(vec![json!({ "type": "summary_text", "text": text })]))
-            .unwrap_or_else(|| Value::Array(Vec::new()));
-        obj.insert("summary".to_string(), summary);
+    obj.retain(|key, _| !key.starts_with("_monoize_"));
+    if !obj.contains_key("summary") {
+        obj.insert("summary".to_string(), Value::Array(Vec::new()));
     }
 }
 

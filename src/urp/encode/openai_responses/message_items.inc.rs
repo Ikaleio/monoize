@@ -151,24 +151,28 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }
-        Part::Image { source, extra_body } => Some(if output_text_type {
-            let mut value = encode_output_image(source, extra_body);
+        Part::Image { source, extra_body } => {
+            let mut value = if output_text_type {
+                encode_output_image(source, extra_body)?
+            } else {
+                encode_input_image(source, extra_body)?
+            };
             if let Some(obj) = value.as_object_mut() {
                 merge_extra(obj, extra_body);
             }
-            value
-        } else {
-            encode_input_image(source, extra_body)
-        }),
-        Part::File { source, extra_body } => Some(if output_text_type {
-            let mut value = encode_output_file(source, extra_body);
+            Some(value)
+        }
+        Part::File { source, extra_body } => {
+            let mut value = if output_text_type {
+                encode_output_file(source, extra_body)?
+            } else {
+                encode_input_file(source, extra_body)?
+            };
             if let Some(obj) = value.as_object_mut() {
                 merge_extra(obj, extra_body);
             }
-            value
-        } else {
-            encode_input_file(source, extra_body)
-        }),
+            Some(value)
+        }
         Part::Refusal {
             content,
             extra_body,
@@ -182,4 +186,3 @@ fn encode_message_content_part(part: &Part, output_text_type: bool) -> Option<Va
         _ => None,
     }
 }
-

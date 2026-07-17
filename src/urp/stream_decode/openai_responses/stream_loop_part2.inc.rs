@@ -42,11 +42,9 @@ fn map_responses_event_to_urp_events_with_state(
                     output_state.item_extra_body = extra.clone();
                 }
                 emit_pending_envelope_control_if_needed(output_index, index_state, &mut events);
+                let item_id = stable_message_item_id_for_output(index_state, output_index);
                 let node = Node::Text {
-                    id: output_state_for(index_state, output_index)
-                        .item_id
-                        .clone()
-                        .or_else(|| Some(crate::urp::synthetic_message_id())),
+                    id: Some(item_id),
                     role: output_state_for(index_state, output_index)
                         .role
                         .unwrap_or(Role::Assistant)
@@ -126,7 +124,12 @@ fn map_responses_event_to_urp_events_with_state(
                 extra_body,
             }]
         }
-        "response.reasoning_text.done" | "response.reasoning_summary_text.done" => Vec::new(),
+        "response.reasoning_text.done"
+        | "response.reasoning_summary_text.done"
+        | "response.reasoning_summary_part.added"
+        | "response.reasoning_summary_part.done"
+        | "response.output_text.done"
+        | "response.function_call_arguments.done" => Vec::new(),
         "response.function_call_arguments.delta" => {
             if let Some(output_index) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                 output_state_for(index_state, output_index).function_arguments_delta_seen = true;
@@ -169,7 +172,10 @@ fn map_responses_event_to_urp_events_with_state(
         }
         "response.content_part.done" => map_content_part_done(data_val, index_state),
         "response.output_item.done" => map_output_item_done(data_val, index_state),
-        "response.completed" => map_response_completed(data_val, index_state),
+        "response.completed"
+        | "response.incomplete"
+        | "response.failed"
+        | "response.cancelled" => map_response_completed(data_val, index_state),
         "error" => vec![UrpStreamEvent::Error {
             code: data_val
                 .get("code")
@@ -182,7 +188,12 @@ fn map_responses_event_to_urp_events_with_state(
                 .to_string(),
             extra_body: split_known_fields(data_val, &["code", "message"]),
         }],
-        _ => Vec::new(),
+        _ => vec![UrpStreamEvent::ProviderControl {
+            protocol: "responses".to_string(),
+            event_name: event_name.to_string(),
+            data: data_val,
+            extra_body: HashMap::new(),
+        }],
     }
 }
 
@@ -327,6 +338,16 @@ fn output_state_for<'a>(
         .output_state_by_index
         .entry(output_index)
         .or_default()
+}
+
+fn stable_message_item_id_for_output(
+    index_state: &mut ResponsesStreamIndexState,
+    output_index: u64,
+) -> String {
+    output_state_for(index_state, output_index)
+        .item_id
+        .get_or_insert_with(crate::urp::synthetic_message_id)
+        .clone()
 }
 
 fn output_role_to_ordinary(role: Role) -> OrdinaryRole {

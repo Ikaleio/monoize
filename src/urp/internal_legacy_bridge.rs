@@ -1,5 +1,6 @@
 use super::{
-    AudioSource, FileSource, ImageSource, Node, OrdinaryRole, ProviderProtocol, ToolResultContent,
+    AudioSource, FileSource, ImageSource, Node, OrdinaryRole, ProviderProtocol,
+    RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, ToolResultContent,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -333,20 +334,18 @@ impl Item {
                 extra_body,
             } => {
                 let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
-                parts
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, p)| {
-                        let mut node = p.into_node(ordinary_role);
-                        if idx == 0 && !extra_body.is_empty() {
-                            node.extra_body_mut().extend(extra_body.clone());
-                        }
-                        if idx == 0 && node.id().is_none() {
-                            node.set_id(id.clone());
-                        }
-                        node
-                    })
-                    .collect()
+                let mut nodes = Vec::new();
+                if !extra_body.is_empty() && !parts.is_empty() {
+                    nodes.push(Node::NextDownstreamEnvelopeExtra { extra_body });
+                }
+                nodes.extend(parts.into_iter().enumerate().map(|(idx, p)| {
+                    let mut node = p.into_node(ordinary_role);
+                    if idx == 0 && node.id().is_none() {
+                        node.set_id(id.clone());
+                    }
+                    node
+                }));
+                nodes
             }
             Item::ToolResult {
                 id,
@@ -406,9 +405,11 @@ pub fn nodes_to_items(nodes: &[Node]) -> Vec<Item> {
                     current_zone = None;
                     current_message_item_id = None;
                 }
-                let mut merged_extra = extra_body.clone();
+                let mut merged_extra = without_internal_markers(extra_body);
                 for (key, value) in std::mem::take(&mut pending_control_extra) {
-                    merged_extra.entry(key).or_insert(value);
+                    if !is_internal_marker(&key) {
+                        merged_extra.entry(key).or_insert(value);
+                    }
                 }
                 items.push(Item::ToolResult {
                     id: id.clone(),
@@ -461,14 +462,12 @@ pub fn nodes_to_items(nodes: &[Node]) -> Vec<Item> {
                 }
                 if current_parts.is_empty() {
                     current_message_item_id = message_group_id(node);
-                    current_extra = extra_body_for_message_boundary(node);
+                    current_extra.clear();
                     for (key, value) in std::mem::take(&mut pending_control_extra) {
-                        current_extra.entry(key).or_insert(value);
+                        if !is_internal_marker(&key) {
+                            current_extra.entry(key).or_insert(value);
+                        }
                     }
-                } else if !current_extra.contains_key("phase")
-                    && let Some(phase) = node_phase.as_ref()
-                {
-                    current_extra.insert("phase".to_string(), Value::String(phase.clone()));
                 }
                 current_role = Some(node_role);
                 current_phase = node_phase;
@@ -498,6 +497,11 @@ enum BridgeZone {
 fn bridge_zone_for_node(node: &Node) -> BridgeZone {
     match node {
         Node::Reasoning { .. } => BridgeZone::Reasoning,
+        Node::Image { extra_body, .. }
+            if extra_body.contains_key(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY) =>
+        {
+            BridgeZone::Action
+        }
         Node::Text { .. }
         | Node::Image { .. }
         | Node::Audio { .. }
@@ -522,12 +526,19 @@ fn node_to_part(node: &Node) -> Part {
     match node {
         Node::Text {
             content,
+            phase,
             extra_body,
             ..
-        } => Part::Text {
-            content: content.clone(),
-            extra_body: extra_body.clone(),
-        },
+        } => {
+            let mut extra_body = extra_body.clone();
+            if let Some(phase) = phase {
+                extra_body.insert("phase".to_string(), Value::String(phase.clone()));
+            }
+            Part::Text {
+                content: content.clone(),
+                extra_body,
+            }
+        }
         Node::Image {
             source, extra_body, ..
         } => Part::Image {
@@ -614,25 +625,69 @@ fn message_group_id(node: &Node) -> Option<String> {
     }
 }
 
-fn extra_body_for_message_boundary(node: &Node) -> HashMap<String, Value> {
-    match node {
-        Node::Text {
-            phase, extra_body, ..
-        } => {
-            let mut out = extra_body.clone();
-            if let Some(phase) = phase {
-                out.insert("phase".to_string(), Value::String(phase.clone()));
-            }
-            out
-        }
-        Node::Image { extra_body, .. }
-        | Node::Audio { extra_body, .. }
-        | Node::File { extra_body, .. }
-        | Node::Refusal { extra_body, .. }
-        | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. }
-        | Node::ProviderItem { extra_body, .. }
-        | Node::ToolResult { extra_body, .. }
-        | Node::NextDownstreamEnvelopeExtra { extra_body } => extra_body.clone(),
+fn is_internal_marker(key: &str) -> bool {
+    key.starts_with("_monoize_")
+}
+
+fn without_internal_markers(extra_body: &HashMap<String, Value>) -> HashMap<String, Value> {
+    extra_body
+        .iter()
+        .filter(|(key, _)| !is_internal_marker(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn message_boundary_filters_internal_markers_but_keeps_reasoning_part_state() {
+        let raw_detail = json!({
+            "type": "reasoning.text",
+            "text": "preserve me",
+            "future": true
+        });
+        let nodes = vec![Node::Reasoning {
+            id: Some("reasoning_1".to_string()),
+            content: Some("preserve me".to_string()),
+            encrypted: None,
+            summary: None,
+            source: Some("openrouter".to_string()),
+            extra_body: HashMap::from([
+                (
+                    "_monoize_chat_reasoning_detail".to_string(),
+                    raw_detail.clone(),
+                ),
+                (
+                    "_monoize_chat_reasoning_surface".to_string(),
+                    json!("reasoning"),
+                ),
+                ("provider_message_field".to_string(), json!(true)),
+            ]),
+        }];
+
+        let items = nodes_to_items(&nodes);
+        let Item::Message {
+            parts, extra_body, ..
+        } = &items[0]
+        else {
+            panic!("expected message item");
+        };
+        assert!(extra_body.is_empty());
+        assert!(extra_body.keys().all(|key| !key.starts_with("_monoize_")));
+        let Part::Reasoning {
+            extra_body: part_extra,
+            ..
+        } = &parts[0]
+        else {
+            panic!("expected reasoning part");
+        };
+        assert_eq!(
+            part_extra.get("_monoize_chat_reasoning_detail"),
+            Some(&raw_detail)
+        );
+        assert_eq!(part_extra.get("provider_message_field"), Some(&json!(true)));
     }
 }

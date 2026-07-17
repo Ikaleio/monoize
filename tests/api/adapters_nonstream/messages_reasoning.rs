@@ -1,4 +1,3 @@
-
 /// When a downstream `/v1/messages` request echoes back an assistant `thinking` block with
 /// plaintext content and signature (the common Claude round-trip case), monoize must forward
 /// both fields verbatim to the upstream Messages provider. Signature integrity is critical
@@ -47,6 +46,70 @@ async fn messages_request_preserves_thinking_and_signature_through_messages_upst
         .expect("thinking block forwarded");
     assert_eq!(thinking_block["thinking"], "prior reasoning text");
     assert_eq!(thinking_block["signature"], "encrypted_reasoning_blob");
+}
+
+#[tokio::test]
+async fn messages_request_preserves_explicit_thinking_and_output_config() {
+    let ctx = setup().await;
+    let thinking = json!({
+        "type": "disabled",
+        "display": "omitted",
+        "budget_tokens": 777,
+        "vendor_control": { "mode": "exact" }
+    });
+    let output_config = json!({
+        "effort": "high",
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": { "answer": { "type": "string" } },
+                "required": ["answer"]
+            }
+        },
+        "vendor_control": ["preserve", "verbatim"]
+    });
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "thinking": thinking.clone(),
+            "output_config": output_config.clone(),
+            "messages": [
+                { "role": "user", "content": [{ "type": "text", "text": "preserve controls" }] }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(upstream["thinking"], thinking);
+    assert_eq!(upstream["output_config"], output_config);
+}
+
+#[tokio::test]
+async fn messages_nonstream_preserves_exact_stop_reason() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "stream_mode": "messages_pause_turn",
+            "messages": [
+                { "role": "user", "content": [{ "type": "text", "text": "pause" }] }
+            ]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).expect("messages response JSON");
+    assert_eq!(body["stop_reason"], json!("pause_turn"));
 }
 
 /// Downstream `/v1/messages` MUST accept `redacted_thinking` content blocks per PM5a and the

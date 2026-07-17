@@ -506,6 +506,9 @@ async fn execute_stream_collected_image_typed(
             let mut req_attempt = original_req.clone();
             if let Some(target_protocol) = super::provider_type_protocol(attempt.provider_type) {
                 urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
+                if target_protocol == urp::ProviderProtocol::Responses {
+                    urp::remove_downstream_only_reasoning_for_responses(&mut req_attempt.input);
+                }
             }
             if attempt.strip_cross_protocol_nested_extra
                 && !super::DownstreamProtocol::Responses.is_same_family(attempt.provider_type)
@@ -636,30 +639,17 @@ async fn execute_stream_collected_image_typed(
                         .await
                     });
 
-                    let mut fallback_output = Vec::new();
                     let mut final_response: Option<urp::UrpResponse> = None;
                     let mut stream_error: Option<AppError> = None;
 
                     while let Some(event) = transformed_rx.recv().await {
                         match event {
-                            crate::urp::UrpStreamEvent::NodeDone { node, .. } => {
-                                if matches!(node, urp::Node::Image { .. }) {
-                                    crate::urp::push_unique_node(&mut fallback_output, node);
-                                }
-                            }
                             crate::urp::UrpStreamEvent::ResponseDone {
                                 finish_reason,
                                 usage,
-                                mut output,
+                                output,
                                 extra_body,
                             } => {
-                                if output.is_empty() && !fallback_output.is_empty() {
-                                    output = fallback_output.clone();
-                                } else {
-                                    for node in fallback_output.iter().cloned() {
-                                        crate::urp::push_unique_node(&mut output, node);
-                                    }
-                                }
                                 final_response = Some(urp::UrpResponse {
                                     id: extra_body
                                         .get("id")
@@ -888,6 +878,7 @@ fn extract_images_from_response(resp: &urp::UrpResponse) -> Vec<ExtractedImage> 
                         revised_prompt: None,
                     });
                 }
+                urp::ImageSource::FileId { .. } => continue,
             },
             urp::Node::Text {
                 role: urp::OrdinaryRole::Assistant,

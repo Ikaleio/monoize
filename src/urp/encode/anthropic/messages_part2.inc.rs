@@ -132,43 +132,57 @@ fn insert_anthropic_disable_parallel(
     }
 }
 
-fn encode_anthropic_image(source: &ImageSource) -> Value {
+fn encode_anthropic_image(source: &ImageSource) -> Option<Value> {
     match source {
-        ImageSource::Url { url, .. } => json!({
+        ImageSource::Url { url, .. } => Some(json!({
             "type": "image",
             "source": { "type": "url", "url": url }
-        }),
-        ImageSource::Base64 { media_type, data } => json!({
+        })),
+        ImageSource::Base64 { media_type, data } => Some(json!({
             "type": "image",
             "source": { "type": "base64", "media_type": media_type, "data": data }
-        }),
+        })),
+        ImageSource::FileId { .. } => None,
     }
 }
 
-fn encode_anthropic_file(source: &FileSource) -> Value {
+fn encode_anthropic_file(source: &FileSource) -> Option<Value> {
     match source {
-        FileSource::Url { url } => json!({
+        FileSource::Url { url } => Some(json!({
             "type": "document",
             "source": { "type": "url", "url": url }
-        }),
+        })),
         FileSource::Base64 {
-            filename,
-            media_type,
-            data,
-        } => json!({
+            media_type, data, ..
+        } => Some(json!({
             "type": "document",
             "source": {
                 "type": "base64",
                 "media_type": media_type,
-                "data": data,
-                "filename": filename
+                "data": data
             }
-        }),
+        })),
+        FileSource::Text { text } => Some(json!({
+            "type": "document",
+            "source": {
+                "type": "text",
+                "media_type": "text/plain",
+                "data": text
+            }
+        })),
+        FileSource::Content { content } => Some(json!({
+            "type": "document",
+            "source": {
+                "type": "content",
+                "content": content
+            }
+        })),
+        FileSource::FileId { .. } => None,
     }
 }
 
 /// Claude identifiers default to adaptive thinking. The bounded legacy
-/// exceptions are Opus <= 4.6, Sonnet <= 4.6, and Haiku <= 4.5.
+/// exceptions are Opus <= 4.5, Sonnet <= 4.5, and Haiku <= 4.5.
 fn model_supports_adaptive(model: &str) -> bool {
     let m = model.to_lowercase();
     let denotes_claude = m.contains("claude")
@@ -179,11 +193,7 @@ fn model_supports_adaptive(model: &str) -> bool {
         return false;
     }
 
-    for (family, last_non_adaptive) in [
-        ("opus", (4, 6)),
-        ("sonnet", (4, 6)),
-        ("haiku", (4, 5)),
-    ] {
+    for (family, last_non_adaptive) in [("opus", (4, 5)), ("sonnet", (4, 5)), ("haiku", (4, 5))] {
         if let Some(version) = claude_family_version(&m, family) {
             return version > last_non_adaptive;
         }
@@ -208,7 +218,7 @@ fn claude_family_version(model: &str, family: &str) -> Option<(u32, u32)> {
 fn parse_model_version_prefix(value: &str) -> Option<(u32, u32)> {
     let value = value.trim_start_matches(['-', '.']);
     let major_len = value.chars().take_while(|c| c.is_ascii_digit()).count();
-    if major_len == 0 {
+    if major_len == 0 || major_len > 2 {
         return None;
     }
     let major = value[..major_len].parse::<u32>().ok()?;
@@ -221,7 +231,7 @@ fn parse_model_version_prefix(value: &str) -> Option<(u32, u32)> {
                 .take_while(|c| c.is_ascii_digit())
                 .collect::<String>()
         })
-        .filter(|minor| !minor.is_empty())
+        .filter(|minor| !minor.is_empty() && minor.len() <= 2)
         .and_then(|minor| minor.parse::<u32>().ok())
         .unwrap_or(0);
     Some((major, minor))
@@ -232,8 +242,7 @@ fn effort_to_budget(effort: &str) -> u32 {
     // share the same budget here; their distinction only surfaces on
     // adaptive-thinking models via `output_config.effort`.
     match effort {
-        "minimum" => 1024,
-        "low" => 1024,
+        "minimum" | "minimal" | "low" => 1024,
         "medium" => 4096,
         "high" => 16384,
         "xhigh" | "max" => 32000,
@@ -245,6 +254,7 @@ fn finish_reason_to_stop_reason(finish_reason: Option<FinishReason>) -> &'static
     match finish_reason {
         Some(FinishReason::Length) => "max_tokens",
         Some(FinishReason::ToolCalls) => "tool_use",
+        Some(FinishReason::ContentFilter) => "refusal",
         _ => "end_turn",
     }
 }

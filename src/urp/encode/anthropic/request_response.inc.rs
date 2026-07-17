@@ -1,74 +1,48 @@
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let response_nodes = &resp.output;
     let mut content = Vec::new();
+    let mut envelope_extra = HashMap::new();
+    let mut envelope_open = false;
     for node in response_nodes {
+        if let Node::NextDownstreamEnvelopeExtra { extra_body } = node {
+            if !envelope_open {
+                for (key, value) in extra_body {
+                    envelope_extra.insert(key.clone(), value.clone());
+                }
+            }
+            continue;
+        }
         if let Some(block) = encode_assistant_response_block(node) {
+            envelope_open = true;
             content.push(block);
         }
     }
 
+    let stop_reason = resp
+        .extra_body
+        .get("stop_reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or_else(|| finish_reason_to_stop_reason(resp.finish_reason));
     let mut body = json!({
         "id": resp.id,
         "type": "message",
         "role": "assistant",
         "model": logical_model,
         "content": content,
-        "stop_reason": finish_reason_to_stop_reason(resp.finish_reason),
+        "stop_reason": stop_reason,
     });
 
-    let mut usage_value = json!({
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "tool_prompt_input_tokens": 0,
-        "reasoning_output_tokens": 0,
-        "accepted_prediction_output_tokens": 0,
-        "rejected_prediction_output_tokens": 0
+    let usage = resp.usage.clone().unwrap_or(Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+        input_details: None,
+        output_details: None,
+        extra_body: HashMap::new(),
     });
-    if let Some(usage) = &resp.usage {
-        if let Some(obj) = usage_value.as_object_mut() {
-            let input_details = usage_input_details(usage);
-            let output_details = usage_output_details(usage);
-            obj.insert(
-                "input_tokens".to_string(),
-                Value::from(anthropic_native_input_tokens(usage)),
-            );
-            obj.insert(
-                "output_tokens".to_string(),
-                Value::from(usage.output_tokens),
-            );
-            obj.insert(
-                "cache_read_input_tokens".to_string(),
-                Value::from(input_details.cache_read_tokens),
-            );
-            obj.insert(
-                "cache_creation_input_tokens".to_string(),
-                Value::from(input_details.cache_creation_tokens),
-            );
-            obj.insert(
-                "tool_prompt_input_tokens".to_string(),
-                Value::from(input_details.tool_prompt_tokens),
-            );
-            obj.insert(
-                "reasoning_output_tokens".to_string(),
-                Value::from(output_details.reasoning_tokens),
-            );
-            obj.insert(
-                "accepted_prediction_output_tokens".to_string(),
-                Value::from(output_details.accepted_prediction_tokens),
-            );
-            obj.insert(
-                "rejected_prediction_output_tokens".to_string(),
-                Value::from(output_details.rejected_prediction_tokens),
-            );
-            for (k, v) in &usage.extra_body {
-                obj.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    body["usage"] = usage_value;
+    body["usage"] = anthropic_native_usage_json(&usage);
     if let Some(obj) = body.as_object_mut() {
+        merge_extra(obj, &envelope_extra);
         merge_extra(obj, &resp.extra_body);
     }
     body
@@ -106,6 +80,7 @@ fn flush_pending_anthropic_message(
 fn append_node_to_pending_anthropic_message(
     pending: &mut Option<AnthropicMessageEnvelope>,
     out: &mut Vec<Value>,
+    pending_envelope_extra: &mut HashMap<String, Value>,
     node: &Node,
     sigil_mode: ReasoningSigilMode,
 ) {
@@ -125,7 +100,7 @@ fn append_node_to_pending_anthropic_message(
     let entry = pending.get_or_insert_with(|| AnthropicMessageEnvelope {
         role,
         content: Vec::new(),
-        extra_body: anthropic_message_extra_from_node(node),
+        extra_body: std::mem::take(pending_envelope_extra),
     });
     entry.content.push(block);
 }
@@ -133,6 +108,7 @@ fn append_node_to_pending_anthropic_message(
 fn append_tool_result_to_pending_anthropic_message(
     pending: &mut Option<AnthropicMessageEnvelope>,
     out: &mut Vec<Value>,
+    pending_envelope_extra: &mut HashMap<String, Value>,
     call_id: &str,
     content: &[ToolResultContent],
     is_error: bool,
@@ -152,19 +128,21 @@ fn append_tool_result_to_pending_anthropic_message(
     let entry = pending.get_or_insert_with(|| AnthropicMessageEnvelope {
         role: OrdinaryRole::User,
         content: Vec::new(),
-        extra_body: HashMap::new(),
+        extra_body: std::mem::take(pending_envelope_extra),
     });
-    entry
-        .content
-        .push(encode_tool_result_block(call_id, content, is_error, extra_body));
+    entry.content.push(encode_tool_result_block(
+        call_id, content, is_error, extra_body,
+    ));
 }
 
 fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
     match node {
-        Node::Text { role, .. } | Node::Image { role, .. } | Node::File { role, .. } => match role {
-            OrdinaryRole::System | OrdinaryRole::Developer => None,
-            OrdinaryRole::User | OrdinaryRole::Assistant => Some(*role),
-        },
+        Node::Text { role, .. } | Node::Image { role, .. } | Node::File { role, .. } => {
+            match role {
+                OrdinaryRole::System | OrdinaryRole::Developer => None,
+                OrdinaryRole::User | OrdinaryRole::Assistant => Some(*role),
+            }
+        }
         Node::ProviderItem {
             role,
             origin_protocol: ProviderProtocol::Messages,
@@ -179,34 +157,6 @@ fn anthropic_message_role_for_node(node: &Node) -> Option<OrdinaryRole> {
         | Node::Audio { .. }
         | Node::Refusal { .. }
         | Node::ProviderItem { .. } => None,
-    }
-}
-
-fn anthropic_message_extra_from_node(node: &Node) -> HashMap<String, Value> {
-    match node {
-        Node::Text {
-            phase, extra_body, ..
-        } => {
-            let mut out = extra_body.clone();
-            if let Some(phase) = phase {
-                out.insert("phase".to_string(), Value::String(phase.clone()));
-            }
-            out
-        }
-        Node::Image { extra_body, .. }
-        | Node::File { extra_body, .. }
-        | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. } => extra_body.clone(),
-        Node::ProviderItem {
-            origin_protocol: ProviderProtocol::Messages,
-            extra_body,
-            ..
-        } => extra_body.clone(),
-        Node::Audio { .. }
-        | Node::Refusal { .. }
-        | Node::ToolResult { .. }
-        | Node::NextDownstreamEnvelopeExtra { .. }
-        | Node::ProviderItem { .. } => HashMap::new(),
     }
 }
 

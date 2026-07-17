@@ -24,6 +24,14 @@ pub fn split_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, 
     extra
 }
 
+pub fn normalize_reasoning_effort(effort: &str) -> String {
+    if effort == "minimum" {
+        "minimal".to_string()
+    } else {
+        effort.to_string()
+    }
+}
+
 pub fn deserialize_u64ish_default<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,
@@ -277,6 +285,15 @@ pub fn parse_image_source_from_obj(obj: &Map<String, Value>) -> Option<ImageSour
     let t = obj.get("type")?.as_str()?;
     match t {
         "image_url" | "input_image" | "output_image" | "image" => {
+            if let Some(file_id) = obj.get("file_id").and_then(|v| v.as_str()) {
+                return Some(ImageSource::FileId {
+                    file_id: file_id.to_string(),
+                    detail: obj
+                        .get("detail")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                });
+            }
             if let Some(url) = obj.get("image_url").and_then(|v| v.as_str()) {
                 return Some(ImageSource::Url {
                     url: url.to_string(),
@@ -354,6 +371,7 @@ pub fn parse_image_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -
                 "image_base64",
                 "media_type",
                 "source",
+                "file_id",
             ],
         ),
     })
@@ -372,6 +390,7 @@ pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
                 "image_base64",
                 "media_type",
                 "source",
+                "file_id",
             ],
         ),
     })
@@ -381,6 +400,11 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
     let t = obj.get("type")?.as_str()?;
     match t {
         "input_file" | "output_file" | "document" | "file" => {
+            if let Some(file_id) = obj.get("file_id").and_then(|v| v.as_str()) {
+                return Some(FileSource::FileId {
+                    file_id: file_id.to_string(),
+                });
+            }
             if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
                 return Some(FileSource::Url {
                     url: url.to_string(),
@@ -392,10 +416,28 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
                 });
             }
             if let Some(src) = obj.get("source").and_then(|v| v.as_object()) {
-                if let Some(url) = src.get("url").and_then(|v| v.as_str()) {
-                    return Some(FileSource::Url {
-                        url: url.to_string(),
-                    });
+                match src.get("type").and_then(|v| v.as_str()) {
+                    Some("url") => {
+                        return Some(FileSource::Url {
+                            url: src.get("url")?.as_str()?.to_string(),
+                        });
+                    }
+                    Some("text") => {
+                        return Some(FileSource::Text {
+                            text: src
+                                .get("data")
+                                .or_else(|| src.get("text"))?
+                                .as_str()?
+                                .to_string(),
+                        });
+                    }
+                    Some("content") => {
+                        return Some(FileSource::Content {
+                            content: src.get("content")?.as_array()?.clone(),
+                        });
+                    }
+                    Some("base64") => {}
+                    _ => return None,
                 }
                 return Some(FileSource::Base64 {
                     filename: src
@@ -426,11 +468,6 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
                         .unwrap_or("application/octet-stream")
                         .to_string(),
                     data: data.to_string(),
-                });
-            }
-            if let Some(file_id) = obj.get("file_id").and_then(|v| v.as_str()) {
-                return Some(FileSource::Url {
-                    url: format!("file_id://{file_id}"),
                 });
             }
             None

@@ -9,17 +9,40 @@ fn encode_tool_result_item(
     let mut tool_content = Vec::new();
     for item in content {
         match item {
-            ToolResultContent::Text { text } => {
-                tool_content.push(json!({
+            ToolResultContent::Text { text, extra_body } => {
+                let mut block = json!({
                     "type": "input_text",
                     "text": text,
-                }));
+                });
+                if let Some(obj) = block.as_object_mut() {
+                    merge_extra(obj, extra_body);
+                }
+                tool_content.push(block);
             }
-            ToolResultContent::Image { source } => {
-                tool_content.push(encode_input_image(source, &HashMap::new()));
+            ToolResultContent::Image { source, extra_body } => {
+                if let Some(block) = encode_input_image(source, extra_body) {
+                    tool_content.push(block);
+                }
             }
-            ToolResultContent::File { source } => {
-                tool_content.push(encode_input_file(source, &HashMap::new()));
+            ToolResultContent::File { source, extra_body } => {
+                if let Some(block) = encode_input_file(source, extra_body) {
+                    tool_content.push(block);
+                }
+            }
+            ToolResultContent::ProviderItem {
+                origin_protocol,
+                item_type,
+                body,
+                extra_body,
+            } => {
+                if let Some(block) = encode_provider_item_for_responses(
+                    *origin_protocol,
+                    item_type,
+                    body,
+                    extra_body,
+                ) {
+                    tool_content.push(block);
+                }
             }
         }
     }
@@ -46,6 +69,9 @@ fn encode_tool_result_item(
         obj.insert("output".to_string(), Value::String(String::new()));
     } else if tool_content.len() == 1
         && tool_content[0].get("type").and_then(|v| v.as_str()) == Some("input_text")
+        && tool_content[0]
+            .as_object()
+            .is_some_and(|obj| obj.keys().all(|key| key == "type" || key == "text"))
     {
         obj.insert(
             "output".to_string(),
@@ -71,11 +97,12 @@ fn encode_provider_item_for_responses(
     if origin_protocol != ProviderProtocol::Responses {
         return None;
     }
-    let mut item = match body {
-        Value::Object(obj) => obj.clone(),
+    let sanitized_body = sanitize_provider_item_wire_body(body);
+    let mut item = match sanitized_body {
+        Value::Object(obj) => obj,
         other => {
             let mut obj = Map::new();
-            obj.insert("body".to_string(), other.clone());
+            obj.insert("body".to_string(), other);
             obj
         }
     };
@@ -85,10 +112,47 @@ fn encode_provider_item_for_responses(
     Some(Value::Object(item))
 }
 
+pub(crate) fn encode_image_generation_call_item(
+    id: Option<&str>,
+    source: &ImageSource,
+    extra_body: &HashMap<String, Value>,
+) -> Option<Value> {
+    let mut item = extra_body
+        .get(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)?
+        .as_object()?
+        .clone();
+    let ImageSource::Base64 { data, .. } = source else {
+        return None;
+    };
+
+    item.insert("type".to_string(), json!("image_generation_call"));
+    item.insert("result".to_string(), Value::String(data.clone()));
+    if let Some(id) = id.filter(|id| !id.is_empty()) {
+        item.insert("id".to_string(), Value::String(id.to_string()));
+    }
+    for (key, value) in extra_body {
+        if key != RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY && !key.starts_with("_monoize_") {
+            item.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    item.retain(|key, _| !key.starts_with("_monoize_"));
+    Some(Value::Object(item))
+}
+
+fn encode_image_generation_call_part(part: &Part) -> Option<Value> {
+    let Part::Image {
+        source, extra_body, ..
+    } = part
+    else {
+        return None;
+    };
+    encode_image_generation_call_item(None, source, extra_body)
+}
+
 fn encode_input_image(
     source: &ImageSource,
     extra_body: &std::collections::HashMap<String, Value>,
-) -> Value {
+) -> Option<Value> {
     match source {
         ImageSource::Url { url, detail } => {
             let mut obj = Map::new();
@@ -98,7 +162,7 @@ fn encode_input_image(
                 obj.insert("detail".to_string(), Value::String(detail.clone()));
             }
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
         }
         ImageSource::Base64 { media_type, data } => {
             let mut obj = Map::new();
@@ -108,7 +172,17 @@ fn encode_input_image(
                 Value::String(format!("data:{media_type};base64,{data}")),
             );
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
+        }
+        ImageSource::FileId { file_id, detail } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("input_image".to_string()));
+            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
+            if let Some(detail) = detail {
+                obj.insert("detail".to_string(), Value::String(detail.clone()));
+            }
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
         }
     }
 }
@@ -116,26 +190,21 @@ fn encode_input_image(
 fn encode_input_file(
     source: &FileSource,
     extra_body: &std::collections::HashMap<String, Value>,
-) -> Value {
-    if let Some(file_id) = extra_body.get("file_id").and_then(|v| v.as_str()) {
-        let mut obj = Map::new();
-        obj.insert("type".to_string(), Value::String("input_file".to_string()));
-        obj.insert("file_id".to_string(), Value::String(file_id.to_string()));
-        merge_extra(&mut obj, extra_body);
-        return Value::Object(obj);
-    }
-
+) -> Option<Value> {
     match source {
         FileSource::Url { url } => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), Value::String("input_file".to_string()));
-            if let Some(file_id) = url.strip_prefix("file_id://") {
-                obj.insert("file_id".to_string(), Value::String(file_id.to_string()));
-            } else {
-                obj.insert("file_url".to_string(), Value::String(url.clone()));
-            }
+            obj.insert("file_url".to_string(), Value::String(url.clone()));
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
+        }
+        FileSource::FileId { file_id } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("input_file".to_string()));
+            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
         }
         FileSource::Base64 {
             filename,
@@ -150,15 +219,16 @@ fn encode_input_file(
                 obj.insert("filename".to_string(), Value::String(name.clone()));
             }
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
         }
+        FileSource::Text { .. } | FileSource::Content { .. } => None,
     }
 }
 
 fn encode_output_image(
     source: &ImageSource,
     extra_body: &std::collections::HashMap<String, Value>,
-) -> Value {
+) -> Option<Value> {
     match source {
         ImageSource::Url { url, detail } => {
             let mut obj = Map::new();
@@ -171,7 +241,7 @@ fn encode_output_image(
                 obj.insert("detail".to_string(), Value::String(detail.clone()));
             }
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
         }
         ImageSource::Base64 { media_type, data } => {
             let mut obj = Map::new();
@@ -188,7 +258,20 @@ fn encode_output_image(
                 }),
             );
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
+        }
+        ImageSource::FileId { file_id, detail } => {
+            let mut obj = Map::new();
+            obj.insert(
+                "type".to_string(),
+                Value::String("output_image".to_string()),
+            );
+            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
+            if let Some(detail) = detail {
+                obj.insert("detail".to_string(), Value::String(detail.clone()));
+            }
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
         }
     }
 }
@@ -196,14 +279,21 @@ fn encode_output_image(
 fn encode_output_file(
     source: &FileSource,
     extra_body: &std::collections::HashMap<String, Value>,
-) -> Value {
+) -> Option<Value> {
     match source {
         FileSource::Url { url } => {
             let mut obj = Map::new();
             obj.insert("type".to_string(), Value::String("output_file".to_string()));
             obj.insert("url".to_string(), Value::String(url.clone()));
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
+        }
+        FileSource::FileId { file_id } => {
+            let mut obj = Map::new();
+            obj.insert("type".to_string(), Value::String("output_file".to_string()));
+            obj.insert("file_id".to_string(), Value::String(file_id.clone()));
+            merge_extra(&mut obj, extra_body);
+            Some(Value::Object(obj))
         }
         FileSource::Base64 {
             filename,
@@ -222,7 +312,8 @@ fn encode_output_file(
                 }),
             );
             merge_extra(&mut obj, extra_body);
-            Value::Object(obj)
+            Some(Value::Object(obj))
         }
+        FileSource::Text { .. } | FileSource::Content { .. } => None,
     }
 }

@@ -1,18 +1,21 @@
 use crate::error::{AppError, AppResult};
 use crate::handlers::routing::now_ts;
 use crate::handlers::usage::{
-    latest_stream_usage_snapshot, mark_stream_ttfb_if_needed, parse_usage_from_responses_object,
-    record_stream_done_sentinel, record_stream_terminal_error, record_stream_terminal_event,
-    record_stream_usage_if_present, record_visible_stream_event_delta,
+    mark_stream_ttfb_if_needed, parse_usage_from_responses_object, record_stream_done_sentinel,
+    record_stream_terminal_error, record_stream_terminal_event, record_stream_usage_if_present,
+    record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
-use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
+#[cfg(test)]
+use crate::urp::internal_legacy_bridge::nodes_to_items;
+use crate::urp::internal_legacy_bridge::{Item, Part, Role};
 use crate::urp::stream_helpers::{
     extract_reasoning_parts, extract_responses_message_phase, extract_responses_message_text,
 };
 use crate::urp::{
-    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol, UrpStreamEvent,
-    node_is_empty_text, nodes_semantically_match,
+    FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol,
+    RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_STREAM_START_SOURCE_EXTRA_KEY,
+    UrpStreamEvent, node_is_empty_text, nodes_semantically_match,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;

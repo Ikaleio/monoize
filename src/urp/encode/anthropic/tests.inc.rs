@@ -59,4 +59,73 @@ mod provider_item_tests {
         assert!(!wire.contains("compaction"));
         assert!(!wire.contains("opaque"));
     }
+
+    #[test]
+    fn messages_provider_block_filters_nested_internal_metadata_on_wire() {
+        let native_block = json!({
+            "type": "server_tool_result",
+            "payload": {
+                "keep": 1,
+                "_monoize_nested": "drop",
+                "rows": [{ "keep_row": true, "_monoize_row": "drop" }]
+            },
+            "_monoize_top": "drop"
+        });
+        let req = request_with_input(vec![Node::ProviderItem {
+            id: None,
+            origin_protocol: ProviderProtocol::Messages,
+            role: OrdinaryRole::User,
+            item_type: "server_tool_result".to_string(),
+            body: native_block.clone(),
+            extra_body: empty_map(),
+        }]);
+
+        let encoded = encode_request(&req, "claude-sonnet-4.5");
+
+        assert_eq!(
+            encoded["messages"][0]["content"][0],
+            json!({
+                "type": "server_tool_result",
+                "payload": { "keep": 1, "rows": [{ "keep_row": true }] }
+            })
+        );
+        assert!(matches!(
+            &req.input[0],
+            Node::ProviderItem { body, .. } if body == &native_block
+        ));
+    }
+
+    #[test]
+    fn response_control_extra_applies_to_message_envelope_not_content_block() {
+        let response = UrpResponse {
+            id: "msg_1".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            created_at: None,
+            output: vec![
+                Node::NextDownstreamEnvelopeExtra {
+                    extra_body: [("vendor_message".to_string(), json!({ "trace_id": "t1" }))]
+                        .into_iter()
+                        .collect(),
+                },
+                Node::Text {
+                    id: None,
+                    role: OrdinaryRole::Assistant,
+                    content: "ok".to_string(),
+                    phase: None,
+                    extra_body: [("cache_control".to_string(), json!({ "type": "ephemeral" }))]
+                        .into_iter()
+                        .collect(),
+                },
+            ],
+            finish_reason: Some(FinishReason::Stop),
+            usage: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "claude-sonnet-4-6");
+        assert_eq!(encoded["vendor_message"], json!({ "trace_id": "t1" }));
+        let block = &encoded["content"][0];
+        assert!(block.get("vendor_message").is_none());
+        assert_eq!(block["cache_control"], json!({ "type": "ephemeral" }));
+    }
 }

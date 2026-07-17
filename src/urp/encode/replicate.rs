@@ -33,7 +33,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                                 prompt_parts.push(content.clone());
                             }
                             Part::Image { source, .. } => {
-                                images.push(image_source_to_value(source));
+                                if let Some(image) = image_source_to_value(source) {
+                                    images.push(image);
+                                }
                             }
                             Part::File { source, .. } => {
                                 let url = match source {
@@ -43,6 +45,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                                     } => {
                                         format!("data:{media_type};base64,{data}")
                                     }
+                                    crate::urp::FileSource::FileId { .. }
+                                    | crate::urp::FileSource::Text { .. }
+                                    | crate::urp::FileSource::Content { .. } => continue,
                                 };
                                 input.insert("file".to_string(), Value::String(url));
                             }
@@ -69,7 +74,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             },
             Item::ToolResult { content, .. } => {
                 for c in content {
-                    if let ToolResultContent::Text { text } = c {
+                    if let ToolResultContent::Text { text, .. } = c {
                         prompt_parts.push(text.clone());
                     }
                 }
@@ -117,6 +122,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     // all other extra_body fields also go into input (Replicate model params are
     // model-specific and live inside the input object).
     for (k, v) in &req.extra_body {
+        if k.starts_with("_monoize_") {
+            continue;
+        }
         match k.as_str() {
             "model"
             | "max_multiplier"
@@ -129,7 +137,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             "input" => {
                 if let Some(obj) = v.as_object() {
                     for (ik, iv) in obj {
-                        input.entry(ik.clone()).or_insert_with(|| iv.clone());
+                        if !ik.starts_with("_monoize_") {
+                            input.entry(ik.clone()).or_insert_with(|| iv.clone());
+                        }
                     }
                 }
             }
@@ -156,6 +166,9 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 
     // Only merge top-level Replicate fields from extra_body
     for (k, v) in &req.extra_body {
+        if k.starts_with("_monoize_") {
+            continue;
+        }
         match k.as_str() {
             "webhook" | "webhook_events_filter" => {
                 body.entry(k.clone()).or_insert_with(|| v.clone());
@@ -170,12 +183,13 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     Value::Object(body)
 }
 
-fn image_source_to_value(source: &ImageSource) -> Value {
+fn image_source_to_value(source: &ImageSource) -> Option<Value> {
     match source {
-        ImageSource::Url { url, .. } => Value::String(url.clone()),
+        ImageSource::Url { url, .. } => Some(Value::String(url.clone())),
         ImageSource::Base64 { media_type, data } => {
-            Value::String(format!("data:{media_type};base64,{data}"))
+            Some(Value::String(format!("data:{media_type};base64,{data}")))
         }
+        ImageSource::FileId { .. } => None,
     }
 }
 
@@ -204,6 +218,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                         ImageSource::Base64 { media_type, data } => {
                             image_urls.push(format!("data:{media_type};base64,{data}"));
                         }
+                        ImageSource::FileId { .. } => {}
                     },
                     _ => {}
                 }

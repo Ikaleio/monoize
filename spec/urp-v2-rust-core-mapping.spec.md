@@ -68,7 +68,7 @@ UrpResponse {
 }
 ```
 
-RTYPE-4E. The Rust core layer MUST define `Usage.input_details` with at least these token counters:
+RTYPE-4I. The Rust core layer MUST define `Usage.input_details` with at least these token counters:
 
 ```text
 InputDetails {
@@ -82,9 +82,9 @@ InputDetails {
 }
 ```
 
-RTYPE-4F. `cache_creation_tokens` is the aggregate cache-write count. `cache_creation_5m_tokens` and `cache_creation_1h_tokens` are authoritative split counters when an upstream provider supplies them. The Rust core MUST NOT derive a 5-minute or 1-hour split from the aggregate field.
+RTYPE-4J. `cache_creation_tokens` is the aggregate cache-write count. `cache_creation_5m_tokens` and `cache_creation_1h_tokens` are authoritative split counters when an upstream provider supplies them. The Rust core MUST NOT derive a 5-minute or 1-hour split from the aggregate field.
 
-RTYPE-4G. `cache_read_modality_breakdown` is the authoritative modality split for `cache_read_tokens` when an upstream provider supplies it. The Rust core MUST NOT derive this split from aggregate `cache_read_tokens` or from total input modality counts.
+RTYPE-4K. `cache_read_modality_breakdown` is the authoritative modality split for `cache_read_tokens` when an upstream provider supplies it. The Rust core MUST NOT derive this split from aggregate `cache_read_tokens` or from total input modality counts.
 
 RTYPE-4A. The Rust core layer MUST define exactly one canonical request tool-definition shape:
 
@@ -137,32 +137,38 @@ RTYPE-5. The Rust core module MUST define exactly one canonical top-level conver
 ```text
 Node =
   | Text {
+      id: Option<String>,
       role: OrdinaryRole,
       content: String,
       phase: Option<String>,
       extra_body: HashMap<String, JsonValue>
     }
   | Image {
+      id: Option<String>,
       role: OrdinaryRole,
       source: ImageSource,
       extra_body: HashMap<String, JsonValue>
     }
   | Audio {
+      id: Option<String>,
       role: OrdinaryRole,
       source: AudioSource,
       extra_body: HashMap<String, JsonValue>
     }
   | File {
+      id: Option<String>,
       role: OrdinaryRole,
       source: FileSource,
       extra_body: HashMap<String, JsonValue>
     }
   | Refusal {
+      id: Option<String>,
       role: OrdinaryRole::Assistant,
       content: String,
       extra_body: HashMap<String, JsonValue>
     }
   | Reasoning {
+      id: Option<String>,
       role: OrdinaryRole::Assistant,
       content: Option<String>,
       summary: Option<String>,
@@ -171,6 +177,7 @@ Node =
       extra_body: HashMap<String, JsonValue>
     }
   | ToolCall {
+      id: Option<String>,
       role: OrdinaryRole::Assistant,
       call_id: String,
       name: String,
@@ -178,6 +185,7 @@ Node =
       extra_body: HashMap<String, JsonValue>
     }
   | ProviderItem {
+      id: Option<String>,
       origin_protocol: ProviderProtocol,
       role: OrdinaryRole,
       item_type: String,
@@ -185,6 +193,7 @@ Node =
       extra_body: HashMap<String, JsonValue>
     }
   | ToolResult {
+      id: Option<String>,
       call_id: String,
       is_error: bool,
       content: Vec<ToolResultContent>,
@@ -217,6 +226,12 @@ ToolResultContent =
       source: FileSource,
       extra_body: HashMap<String, JsonValue>
     }
+  | ProviderItem {
+      origin_protocol: ProviderProtocol,
+      item_type: String,
+      body: JsonValue,
+      extra_body: HashMap<String, JsonValue>
+    }
 ```
 
 RTYPE-9. The Rust core layer MUST define exactly one canonical streaming enum family:
@@ -228,10 +243,13 @@ UrpStreamEvent =
   | NodeDelta { node_index: u32, delta: NodeDelta, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
   | NodeDone { node_index: u32, node: Node, usage: Option<Usage>, extra_body: HashMap<String, JsonValue> }
   | ResponseDone { finish_reason: Option<FinishReason>, usage: Option<Usage>, output: Vec<Node>, extra_body: HashMap<String, JsonValue> }
+  | ProviderControl { protocol: String, event_name: String, data: JsonValue, extra_body: HashMap<String, JsonValue> }
   | Error { code: Option<String>, message: String, extra_body: HashMap<String, JsonValue> }
 ```
 
 RTYPE-10. `NodeHeader` and `NodeDelta` MUST mirror the canonical flat event contract in `spec/urp-v2-flat-structure.spec.md`. The Rust core layer MUST NOT retain `ItemHeader`, `PartHeader`, or `PartDelta` as canonical stream types.
+
+RTYPE-10a. `ProviderControl` is stream-local same-protocol passthrough. It MUST NOT create a canonical node, mutate `ResponseDone.output`, or cross a protocol-family boundary. A decoder MUST use it for a valid provider event whose event-level wire shape has no typed URP event mapping and whose same-protocol replay is required for lossless forwarding.
 
 RTYPE-11. The Rust core layer MUST NOT retain `Item`, `Part`, `ItemHeader`, `PartHeader`, `PartDelta`, `UrpRequest.inputs`, `UrpResponse.outputs`, `UrpStreamEvent::ItemStart`, `UrpStreamEvent::PartStart`, `UrpStreamEvent::PartDone`, or `UrpStreamEvent::ItemDone` as canonical URP representations.
 
@@ -286,6 +304,12 @@ MAP-16. `ToolDefinition.name` and `ToolDefinition.description` own top-level too
 MAP-17. `UrpRequest.parallel_tool_calls` owns request-level parallel tool-use permission. A decoder MUST map OpenAI-compatible top-level `parallel_tool_calls` into this field when the value is boolean. An encoder targeting an OpenAI-compatible upstream MUST emit this field as top-level `parallel_tool_calls` and MUST NOT move it into any `ToolDefinition`, `FunctionDefinition`, or `CustomToolDefinition` extras.
 
 MAP-18. Anthropic Messages `tool_choice.disable_parallel_tool_use` is a request-level tool-choice control, not a tool-definition field. A decoder MUST preserve it inside the canonical `ToolChoice` value for Anthropic `auto`, `any`, and named `tool` choices. If the flag is `true`, the decoder MUST also set `UrpRequest.parallel_tool_calls = Some(false)` so cross-family OpenAI-compatible encoders can preserve the no-parallel semantics at top level.
+
+MAP-19. An ordered provider reasoning-detail array MUST decode to an ordered run of `Node::Reasoning` values, one node per source detail. A decoder MUST NOT merge two source detail entries merely because they have the same detail type or occur in the same assistant message.
+
+MAP-20. For an OpenRouter Chat `reasoning_details[]` entry, `Node::Reasoning.id` owns `id`, the typed reasoning fields own `text`, `summary`, or `data`, `source` owns `format`, and node-local passthrough owns `index`, `signature`, the exact detail discriminator, and every unknown entry-local field. A `reasoning.server_tool_call` entry MAY use a `Node::Reasoning` with no text, summary, or encrypted payload when its complete native object is retained in node-local passthrough for same-Chat replay.
+
+MAP-21. A same-Chat encoder MUST reconstruct `reasoning_details[]` in node order, MUST preserve repeated detail types, and MUST NOT deduplicate equal or partially equal detail entries. Cross-family encoders MUST ignore provider-only detail payloads that have no typed semantic target.
 
 ## 3. Node-family helper invariants
 

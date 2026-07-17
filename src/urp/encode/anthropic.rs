@@ -1,8 +1,10 @@
 use crate::urp::encode::{
-    merge_extra, tool_choice_to_value, usage_input_details, usage_output_details,
+    merge_extra, sanitize_provider_item_wire_body, tool_choice_to_value, usage_input_details,
+    usage_output_details,
 };
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, ProviderProtocol,
+    FileSource, FinishReason, ImageSource, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
+    MESSAGES_THINKING_CONFIG_EXTRA_KEY, Node, OrdinaryRole, ProviderProtocol,
     REASONING_ENVELOPE_PREFIX, REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING,
     ToolDefinition, ToolResultContent, UrpRequest, UrpResponse, Usage,
     strip_reasoning_signature_sigil, wrap_reasoning_signature_with_item_id,
@@ -27,8 +29,9 @@ fn encode_messages_provider_block(
     if origin_protocol != ProviderProtocol::Messages {
         return None;
     }
-    let mut block = match body {
-        Value::Object(obj) => obj.clone(),
+    let sanitized_body = sanitize_provider_item_wire_body(body);
+    let mut block = match sanitized_body {
+        Value::Object(obj) => obj,
         _ => return None,
     };
     block

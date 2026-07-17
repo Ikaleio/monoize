@@ -1,11 +1,13 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
-    parse_tool_definition, split_extra, value_to_text,
+    deserialize_u64ish_default, normalize_reasoning_effort, parse_file_part_from_obj,
+    parse_image_part_from_obj, parse_tool_definition, split_extra, value_to_text,
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
-    ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_REASONING_CONTENT_EXTRA_KEY,
+    RESPONSES_REASONING_SUMMARY_EXTRA_KEY, RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ReasoningConfig,
+    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -24,6 +26,11 @@ fn decode_image_generation_call_node(item_obj: &Map<String, Value>) -> Option<No
     if result.is_empty() {
         return None;
     }
+    let mut extra_body = split_extra(item_obj, &["type", "id", "result", "output_format"]);
+    extra_body.insert(
+        RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
+        Value::Object(item_obj.clone()),
+    );
     Some(Node::Image {
         id: item_obj
             .get("id")
@@ -38,7 +45,7 @@ fn decode_image_generation_call_node(item_obj: &Map<String, Value>) -> Option<No
             .to_string(),
             data: result.to_string(),
         },
-        extra_body: split_extra(item_obj, &["type", "id", "result", "output_format"]),
+        extra_body,
     })
 }
 
@@ -244,7 +251,6 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     }
 
     if let Some(input) = obj.get("input") {
-        validate_stateless_responses_input(input)?;
         decode_input_items_nodes(input, &mut input_nodes);
     }
 
@@ -255,7 +261,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             let effort = reasoning_obj
                 .get("effort")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(normalize_reasoning_effort);
             (!reasoning_obj.is_empty()).then(|| ReasoningConfig {
                 effort,
                 extra_body: split_extra(reasoning_obj, &["effort"]),
@@ -280,7 +286,9 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
         parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
         response_format: obj
-            .get("response_format")
+            .get("text")
+            .and_then(|value| value.get("format"))
+            .or_else(|| obj.get("response_format"))
             .cloned()
             .and_then(parse_response_format),
         user: obj
@@ -291,7 +299,6 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             obj,
             &[
                 "model",
-                "instructions",
                 "input",
                 "stream",
                 "temperature",
@@ -302,40 +309,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "tool_choice",
                 "parallel_tool_calls",
                 "response_format",
-                "text",
                 "user",
             ],
         ),
     })
-}
-
-fn validate_stateless_responses_input(input: &Value) -> Result<(), String> {
-    if input.is_string() {
-        return Ok(());
-    }
-
-    if let Some(obj) = input.as_object() {
-        return validate_stateless_responses_input_item(obj);
-    }
-
-    if let Some(arr) = input.as_array() {
-        for item in arr {
-            validate_stateless_responses_input(item)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_stateless_responses_input_item(obj: &Map<String, Value>) -> Result<(), String> {
-    if obj.get("type").and_then(|v| v.as_str()) == Some("item_reference") {
-        return Err(
-            "Monoize is stateless and does not support Responses item_reference continuations; replay the full prior assistant and function_call items instead."
-                .to_string(),
-        );
-    }
-
-    Ok(())
 }
 
 fn decode_input_items_nodes(input: &Value, out: &mut Vec<Node>) {
@@ -518,7 +495,10 @@ fn decode_tool_result_content(output: &Value, content: &mut Vec<ToolResultConten
     match output {
         Value::String(text) => {
             if !text.is_empty() {
-                content.push(ToolResultContent::Text { text: text.clone() });
+                content.push(ToolResultContent::Text {
+                    text: text.clone(),
+                    extra_body: HashMap::new(),
+                });
             }
         }
         Value::Array(items) => {
@@ -530,7 +510,10 @@ fn decode_tool_result_content(output: &Value, content: &mut Vec<ToolResultConten
         other => {
             let text = value_to_text(other);
             if !text.is_empty() {
-                content.push(ToolResultContent::Text { text });
+                content.push(ToolResultContent::Text {
+                    text,
+                    extra_body: HashMap::new(),
+                });
             }
         }
     }
@@ -541,6 +524,7 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
         if !text.is_empty() {
             content.push(ToolResultContent::Text {
                 text: text.to_string(),
+                extra_body: HashMap::new(),
             });
         }
         return;
@@ -548,7 +532,10 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
     let Some(obj) = value.as_object() else {
         let text = value_to_text(value);
         if !text.is_empty() {
-            content.push(ToolResultContent::Text { text });
+            content.push(ToolResultContent::Text {
+                text,
+                extra_body: HashMap::new(),
+            });
         }
         return;
     };
@@ -563,28 +550,31 @@ fn decode_tool_result_item(value: &Value, content: &mut Vec<ToolResultContent>) 
             {
                 content.push(ToolResultContent::Text {
                     text: text.to_string(),
+                    extra_body: split_extra(obj, &["type", "text", "content"]),
                 });
             }
         }
         _ => {
             if let Some(image) = parse_image_part_from_obj(obj) {
-                let Part::Image { source, .. } = image else {
+                let Part::Image { source, extra_body } = image else {
                     unreachable!();
                 };
-                content.push(ToolResultContent::Image { source });
+                content.push(ToolResultContent::Image { source, extra_body });
                 return;
             }
             if let Some(file) = parse_file_part_from_obj(obj) {
-                let Part::File { source, .. } = file else {
+                let Part::File { source, extra_body } = file else {
                     unreachable!();
                 };
-                content.push(ToolResultContent::File { source });
+                content.push(ToolResultContent::File { source, extra_body });
                 return;
             }
-            let text = value_to_text(value);
-            if !text.is_empty() {
-                content.push(ToolResultContent::Text { text });
-            }
+            content.push(ToolResultContent::ProviderItem {
+                origin_protocol: ProviderProtocol::Responses,
+                item_type: ptype.to_string(),
+                body: value.clone(),
+                extra_body: HashMap::new(),
+            });
         }
     }
 }
@@ -632,7 +622,7 @@ fn decode_response_message_nodes(
     }
 
     let mut nodes = Vec::new();
-    push_message_nodes(&mut nodes, role, message_id, parts, extra_body);
+    push_message_nodes_with_envelope_control(&mut nodes, role, message_id, parts, extra_body);
     nodes
 }
 
@@ -640,7 +630,7 @@ fn decode_reasoning_node(
     item_obj: &Map<String, Value>,
     synthesize_missing_id: bool,
 ) -> Option<Node> {
-    let shared_extra = split_extra(
+    let mut shared_extra = split_extra(
         item_obj,
         &[
             "type",
@@ -651,6 +641,18 @@ fn decode_reasoning_node(
             "source",
         ],
     );
+    if let Some(summary) = item_obj.get("summary") {
+        shared_extra.insert(
+            RESPONSES_REASONING_SUMMARY_EXTRA_KEY.to_string(),
+            summary.clone(),
+        );
+    }
+    if let Some(content) = item_obj.get("content") {
+        shared_extra.insert(
+            RESPONSES_REASONING_CONTENT_EXTRA_KEY.to_string(),
+            content.clone(),
+        );
+    }
     let encrypted = item_obj.get("encrypted_content").map(|value| match value {
         Value::String(text) => Value::String(text.clone()),
         _ => value.clone(),
@@ -669,8 +671,14 @@ fn decode_reasoning_node(
     let source = item_obj
         .get("source")
         .and_then(|v| v.as_str())
+        .filter(|source| !source.is_empty())
         .map(|s| s.to_string());
-    (text.is_some() || summary.is_some() || encrypted.is_some()).then(|| {
+    (text.is_some()
+        || summary.is_some()
+        || encrypted.is_some()
+        || (!synthesize_missing_id
+            && (item_obj.contains_key("summary") || item_obj.contains_key("content"))))
+    .then(|| {
         let id = item_obj
             .get("id")
             .and_then(|v| v.as_str())
@@ -846,6 +854,23 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .and_then(|v| v.as_object())
         .map(parse_usage_from_responses);
 
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "id",
+            "object",
+            "created",
+            "created_at",
+            "model",
+            "output",
+            "usage",
+        ],
+    );
+    extra_body.insert(
+        RESPONSES_RESPONSE_SOURCE_EXTRA_KEY.to_string(),
+        Value::Object(obj.clone()),
+    );
+
     Ok(UrpResponse {
         id: obj
             .get("id")
@@ -861,20 +886,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         output: output_nodes,
         finish_reason,
         usage,
-        extra_body: split_extra(
-            obj,
-            &[
-                "id",
-                "object",
-                "created",
-                "created_at",
-                "model",
-                "status",
-                "output",
-                "usage",
-                "error",
-            ],
-        ),
+        extra_body,
     })
 }
 
@@ -915,7 +927,10 @@ fn tool_choice_from_value(v: Value) -> ToolChoice {
 fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
     if let Some(obj) = v.as_object() {
         if obj.get("type").and_then(|x| x.as_str()) == Some("json_schema") {
-            let schema_obj = obj.get("json_schema")?.as_object()?;
+            let schema_obj = obj
+                .get("json_schema")
+                .and_then(Value::as_object)
+                .unwrap_or(obj);
             let name = schema_obj.get("name")?.as_str()?.to_string();
             let schema = schema_obj.get("schema").cloned().unwrap_or(Value::Null);
             return Some(crate::urp::ResponseFormat::JsonSchema {
@@ -929,13 +944,16 @@ fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
                     strict: schema_obj.get("strict").and_then(|x| x.as_bool()),
                     extra_body: split_extra(
                         schema_obj,
-                        &["name", "description", "schema", "strict"],
+                        &["type", "name", "description", "schema", "strict"],
                     ),
                 },
             });
         }
         if obj.get("type").and_then(|x| x.as_str()) == Some("json_object") {
             return Some(crate::urp::ResponseFormat::JsonObject);
+        }
+        if obj.get("type").and_then(|x| x.as_str()) == Some("text") {
+            return Some(crate::urp::ResponseFormat::Text);
         }
     }
     None
@@ -946,6 +964,174 @@ mod tests {
     use super::*;
     use crate::urp::internal_legacy_bridge::nodes_to_items;
     use serde_json::json;
+
+    #[test]
+    fn reasoning_source_omits_empty_and_preserves_non_empty_values() {
+        let empty_source = json!({
+            "type": "reasoning",
+            "content": [{ "type": "reasoning_text", "text": "thinking" }],
+            "source": ""
+        });
+        let explicit_source = json!({
+            "type": "reasoning",
+            "content": [{ "type": "reasoning_text", "text": "thinking" }],
+            "source": "openrouter"
+        });
+
+        let Node::Reasoning { source, .. } =
+            decode_reasoning_node(empty_source.as_object().expect("reasoning object"), true)
+                .expect("reasoning node")
+        else {
+            panic!("expected reasoning node");
+        };
+        assert!(source.is_none());
+
+        let Node::Reasoning { source, .. } =
+            decode_reasoning_node(explicit_source.as_object().expect("reasoning object"), true)
+                .expect("reasoning node")
+        else {
+            panic!("expected reasoning node");
+        };
+        assert_eq!(source.as_deref(), Some("openrouter"));
+    }
+
+    #[test]
+    fn official_text_format_and_structured_instructions_round_trip() {
+        let source = json!({
+            "model": "gpt-5.4",
+            "instructions": [{ "type": "input_text", "text": "be exact" }],
+            "input": "answer",
+            "text": {
+                "verbosity": "low",
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer",
+                    "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } },
+                    "strict": true,
+                    "future_format_field": 7
+                }
+            }
+        });
+
+        let decoded = decode_request(&source).expect("decode Responses request");
+        assert!(matches!(
+            decoded.response_format,
+            Some(crate::urp::ResponseFormat::JsonSchema { .. })
+        ));
+        let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5.4");
+        assert_eq!(encoded["text"], source["text"]);
+        assert_eq!(encoded["instructions"], source["instructions"]);
+    }
+
+    #[test]
+    fn typed_response_format_overrides_preserved_text_format() {
+        let source = json!({
+            "model": "gpt-5.4",
+            "input": "answer",
+            "text": {
+                "verbosity": "low",
+                "future_text_field": { "enabled": true },
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer",
+                    "schema": { "type": "object" },
+                    "strict": true,
+                    "future_format_field": 7
+                }
+            }
+        });
+
+        let mut decoded = decode_request(&source).expect("decode Responses request");
+        decoded.response_format = Some(crate::urp::ResponseFormat::JsonObject);
+
+        let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5.4");
+        assert_eq!(encoded["text"]["format"], json!({ "type": "json_object" }));
+        assert_eq!(encoded["text"]["verbosity"], json!("low"));
+        assert_eq!(
+            encoded["text"]["future_text_field"],
+            json!({ "enabled": true })
+        );
+    }
+
+    #[test]
+    fn failed_response_status_and_error_round_trip() {
+        let source = json!({
+            "id": "resp_failed",
+            "object": "response",
+            "created_at": 123,
+            "model": "gpt-5.4",
+            "status": "failed",
+            "output": [],
+            "error": {
+                "type": "server_error",
+                "code": "capacity",
+                "message": "try later",
+                "param": null
+            }
+        });
+
+        let decoded = decode_response(&source).expect("decode failed response");
+        let encoded = crate::urp::encode::openai_responses::encode_response(&decoded, "gpt-5.4");
+        assert_eq!(encoded["status"], json!("failed"));
+        assert_eq!(encoded["error"], source["error"]);
+        assert!(encoded.get("presence_penalty").is_none());
+        assert!(encoded.get("frequency_penalty").is_none());
+        assert!(encoded.get("truncation").is_none());
+        assert!(encoded.get("incomplete_details").is_none());
+        assert!(encoded.get("completed_at").is_none());
+        assert!(encoded.get(RESPONSES_RESPONSE_SOURCE_EXTRA_KEY).is_none());
+    }
+
+    #[test]
+    fn native_image_generation_call_round_trips_as_top_level_response_and_request_item() {
+        let native_item = json!({
+            "type": "image_generation_call",
+            "id": "ig_1",
+            "status": "completed",
+            "result": "QUJD",
+            "output_format": "webp",
+            "future_field": { "keep": true }
+        });
+        let source = json!({
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 123,
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [native_item.clone()]
+        });
+
+        let decoded = decode_response(&source).expect("decode image-generation response");
+        assert!(matches!(
+            &decoded.output[0],
+            Node::Image { extra_body, .. }
+                if extra_body.get(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)
+                    == Some(&native_item)
+        ));
+
+        let encoded_response =
+            crate::urp::encode::openai_responses::encode_response(&decoded, "gpt-5.4");
+        assert_eq!(encoded_response["output"][0], native_item);
+
+        let request = UrpRequest {
+            model: "gpt-5.4".to_string(),
+            input: decoded.output,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            response_format: None,
+            user: None,
+            extra_body: HashMap::new(),
+        };
+        let encoded_request =
+            crate::urp::encode::openai_responses::encode_request(&request, "gpt-5.4");
+        assert_eq!(encoded_request["input"][0], native_item);
+    }
 
     #[test]
     fn parse_usage_reads_cache_write_tokens_from_input_details() {
@@ -1087,8 +1273,130 @@ mod tests {
             &decoded.input[3],
             Node::ToolResult { call_id, content, .. }
                 if call_id == "call_1"
-                    && matches!(&content[0], ToolResultContent::Text { text } if text == "ok")
+                    && matches!(&content[0], ToolResultContent::Text { text, .. } if text == "ok")
         ));
+    }
+
+    #[test]
+    fn responses_file_ids_round_trip_as_typed_sources_without_synthetic_urls() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "file_id": "file_img_1",
+                        "detail": "high",
+                        "image_trace": "keep"
+                    },
+                    {
+                        "type": "input_file",
+                        "file_id": "file_doc_1",
+                        "file_trace": "keep"
+                    }
+                ]
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::Image {
+                source: crate::urp::ImageSource::FileId { file_id, detail },
+                extra_body,
+                ..
+            } if file_id == "file_img_1"
+                && detail.as_deref() == Some("high")
+                && extra_body.get("image_trace") == Some(&json!("keep"))
+        ));
+        assert!(matches!(
+            &decoded.input[1],
+            Node::File {
+                source: crate::urp::FileSource::FileId { file_id },
+                extra_body,
+                ..
+            } if file_id == "file_doc_1"
+                && extra_body.get("file_trace") == Some(&json!("keep"))
+        ));
+
+        let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5-mini");
+        let wire = serde_json::to_string(&encoded).expect("responses request json");
+        assert!(!wire.contains("file_id://"));
+        let content = encoded["input"][0]["content"]
+            .as_array()
+            .expect("message content array");
+        assert_eq!(content[0]["file_id"], json!("file_img_1"));
+        assert_eq!(content[0]["detail"], json!("high"));
+        assert_eq!(content[0]["image_trace"], json!("keep"));
+        assert_eq!(content[1]["file_id"], json!("file_doc_1"));
+        assert_eq!(content[1]["file_trace"], json!("keep"));
+    }
+
+    #[test]
+    fn responses_tool_result_provider_content_replays_only_to_responses() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [
+                    { "type": "input_text", "text": "ok", "text_trace": 1 },
+                    { "type": "computer_screenshot", "image_url": "https://example.test/shot.png" }
+                ]
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        let Node::ToolResult { content, .. } = &decoded.input[0] else {
+            panic!("expected tool result");
+        };
+        assert!(matches!(
+            &content[0],
+            ToolResultContent::Text { text, extra_body }
+                if text == "ok" && extra_body.get("text_trace") == Some(&json!(1))
+        ));
+        assert!(matches!(
+            &content[1],
+            ToolResultContent::ProviderItem {
+                origin_protocol: ProviderProtocol::Responses,
+                item_type,
+                body,
+                ..
+            } if item_type == "computer_screenshot" && body == &value["input"][0]["output"][1]
+        ));
+
+        let same = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5-mini");
+        assert_eq!(same["input"][0]["output"], value["input"][0]["output"]);
+
+        let mut collision = decoded.clone();
+        let Node::ToolResult { content, .. } = &mut collision.input[0] else {
+            panic!("expected tool result");
+        };
+        let ToolResultContent::Text { extra_body, .. } = &mut content[0] else {
+            panic!("expected text tool result content");
+        };
+        extra_body.insert("type".to_string(), json!("wrong"));
+        extra_body.insert("text".to_string(), json!("wrong"));
+        let collision_wire =
+            crate::urp::encode::openai_responses::encode_request(&collision, "gpt-5-mini");
+        assert_eq!(
+            collision_wire["input"][0]["output"][0]["type"],
+            json!("input_text")
+        );
+        assert_eq!(collision_wire["input"][0]["output"][0]["text"], json!("ok"));
+
+        let mut cross = decoded.clone();
+        crate::urp::retain_provider_items_for_protocol(
+            &mut cross.input,
+            ProviderProtocol::Messages,
+        );
+        let Node::ToolResult { content, .. } = &cross.input[0] else {
+            panic!("expected tool result");
+        };
+        assert_eq!(content.len(), 1);
+        assert!(matches!(content[0], ToolResultContent::Text { .. }));
     }
 
     #[test]
@@ -1124,6 +1432,27 @@ mod tests {
         let reasoning = decoded.reasoning.expect("reasoning should decode");
         assert!(reasoning.effort.is_none());
         assert_eq!(reasoning.extra_body.get("summary"), Some(&json!("auto")));
+    }
+
+    #[test]
+    fn responses_request_normalizes_legacy_minimum_effort_before_reencoding() {
+        let value = json!({
+            "model": "gpt-5-mini",
+            "input": "hello",
+            "reasoning": { "effort": "minimum", "summary": "auto" }
+        });
+
+        let decoded = decode_request(&value).expect("decode_request should succeed");
+        assert_eq!(
+            decoded
+                .reasoning
+                .as_ref()
+                .and_then(|reasoning| reasoning.effort.as_deref()),
+            Some("minimal")
+        );
+        let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5-mini");
+        assert_eq!(encoded["reasoning"]["effort"], json!("minimal"));
+        assert_eq!(encoded["reasoning"]["summary"], json!("auto"));
     }
 
     #[test]

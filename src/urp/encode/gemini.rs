@@ -1,4 +1,6 @@
-use crate::urp::encode::{merge_extra, usage_input_details, usage_output_details};
+use crate::urp::encode::{
+    merge_extra, sanitize_provider_item_wire_body, usage_input_details, usage_output_details,
+};
 use crate::urp::{
     AudioSource, FileSource, FinishReason, FunctionDefinition, ImageSource, Node, OrdinaryRole,
     ProviderProtocol, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
@@ -68,7 +70,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
                 let result = content
                     .iter()
                     .filter_map(|entry| match entry {
-                        ToolResultContent::Text { text } => Some(text.as_str()),
+                        ToolResultContent::Text { text, .. } => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -217,12 +219,20 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 role: OrdinaryRole::Assistant,
                 source,
                 ..
-            } => parts.push(encode_image_part(source)),
+            } => {
+                if let Some(part) = encode_image_part(source) {
+                    parts.push(part);
+                }
+            }
             Node::File {
                 role: OrdinaryRole::Assistant,
                 source,
                 ..
-            } => parts.push(encode_file_part(source)),
+            } => {
+                if let Some(part) = encode_file_part(source) {
+                    parts.push(part);
+                }
+            }
             Node::Audio {
                 role: OrdinaryRole::Assistant,
                 source,
@@ -234,7 +244,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 origin_protocol: ProviderProtocol::Gemini,
                 body,
                 ..
-            } => parts.push(body.clone()),
+            } => parts.push(sanitize_provider_item_wire_body(body)),
             Node::Reasoning { .. }
             | Node::Text { .. }
             | Node::Image { .. }
@@ -298,7 +308,9 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 Value::from(output_details.rejected_prediction_tokens),
             );
             for (k, v) in &usage.extra_body {
-                obj.insert(k.clone(), v.clone());
+                if !k.starts_with("_monoize_") {
+                    obj.insert(k.clone(), v.clone());
+                }
             }
         }
     }
@@ -366,27 +378,27 @@ fn encode_tool_choice(tc: &ToolChoice) -> Option<Value> {
     }
 }
 
-fn encode_image_part(source: &ImageSource) -> Value {
+fn encode_image_part(source: &ImageSource) -> Option<Value> {
     match source {
         ImageSource::Url { url, .. } => {
-            json!({ "fileData": { "mimeType": "image/*", "fileUri": url } })
+            Some(json!({ "fileData": { "mimeType": "image/*", "fileUri": url } }))
         }
         ImageSource::Base64 { media_type, data } => {
-            json!({ "inlineData": { "mimeType": media_type, "data": data } })
+            Some(json!({ "inlineData": { "mimeType": media_type, "data": data } }))
         }
+        ImageSource::FileId { .. } => None,
     }
 }
 
-fn encode_file_part(source: &FileSource) -> Value {
+fn encode_file_part(source: &FileSource) -> Option<Value> {
     match source {
         FileSource::Url { url } => {
-            json!({ "fileData": { "mimeType": "application/octet-stream", "fileUri": url } })
+            Some(json!({ "fileData": { "mimeType": "application/octet-stream", "fileUri": url } }))
         }
         FileSource::Base64 {
             media_type, data, ..
-        } => {
-            json!({ "inlineData": { "mimeType": media_type, "data": data } })
-        }
+        } => Some(json!({ "inlineData": { "mimeType": media_type, "data": data } })),
+        FileSource::FileId { .. } | FileSource::Text { .. } | FileSource::Content { .. } => None,
     }
 }
 
@@ -480,13 +492,13 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
             source,
             extra_body,
             ..
-        } => Some((*role, encode_image_part(source), extra_body.clone())),
+        } => Some((*role, encode_image_part(source)?, extra_body.clone())),
         Node::File {
             role,
             source,
             extra_body,
             ..
-        } => Some((*role, encode_file_part(source), extra_body.clone())),
+        } => Some((*role, encode_file_part(source)?, extra_body.clone())),
         Node::Audio {
             role,
             source,
@@ -547,7 +559,11 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
             body,
             extra_body,
             ..
-        } => Some((*role, body.clone(), extra_body.clone())),
+        } => Some((
+            *role,
+            sanitize_provider_item_wire_body(body),
+            extra_body.clone(),
+        )),
         Node::ProviderItem { .. } => None,
         Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => None,
     }
@@ -686,6 +702,7 @@ mod tests {
                     is_error: false,
                     content: vec![ToolResultContent::Text {
                         text: "ok".to_string(),
+                        extra_body: empty_map(),
                     }],
                     extra_body: empty_map(),
                 },
@@ -750,5 +767,38 @@ mod tests {
         assert_eq!(cross_protocol["contents"], json!([]));
         assert!(!wire.contains("compaction"));
         assert!(!wire.contains("opaque"));
+    }
+
+    #[test]
+    fn gemini_provider_part_filters_nested_internal_metadata_on_wire() {
+        let native_part = json!({
+            "vendorPart": {
+                "keep": 1,
+                "_monoize_nested": "drop",
+                "rows": [{ "keep_row": true, "_monoize_row": "drop" }]
+            },
+            "_monoize_top": "drop"
+        });
+        let req = request_with_input(vec![Node::ProviderItem {
+            id: None,
+            origin_protocol: ProviderProtocol::Gemini,
+            role: OrdinaryRole::User,
+            item_type: "".to_string(),
+            body: native_part.clone(),
+            extra_body: empty_map(),
+        }]);
+
+        let encoded = encode_request(&req, "gemini-2.5-pro");
+
+        assert_eq!(
+            encoded["contents"][0]["parts"][0],
+            json!({
+                "vendorPart": { "keep": 1, "rows": [{ "keep_row": true }] }
+            })
+        );
+        assert!(matches!(
+            &req.input[0],
+            Node::ProviderItem { body, .. } if body == &native_part
+        ));
     }
 }

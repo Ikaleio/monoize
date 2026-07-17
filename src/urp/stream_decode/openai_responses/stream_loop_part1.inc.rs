@@ -7,8 +7,9 @@ pub(crate) async fn stream_responses_to_urp_events(
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4());
-    let created = now_ts();
+    let mut response_id = format!("resp_{}", uuid::Uuid::new_v4());
+    let mut created = now_ts();
+    let mut response_start_sent = false;
     let mut output_texts_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut message_phases_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut message_item_extra_by_output_index: HashMap<u64, HashMap<String, Value>> =
@@ -19,22 +20,9 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut calls: HashMap<String, (String, String)> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut saw_text_delta = false;
-    let mut saw_text_part_done = false;
     let mut response_done_sent = false;
+    let mut terminal_event_name: Option<String> = None;
     let mut index_state = ResponsesStreamIndexState::default();
-
-    let _ = tx
-        .send(UrpStreamEvent::ResponseStart {
-            id: response_id.clone(),
-            model: urp.model.clone(),
-            extra_body: HashMap::from([
-                ("object".to_string(), json!("response")),
-                ("created_at".to_string(), json!(created)),
-                ("status".to_string(), json!("in_progress")),
-                ("output".to_string(), json!([])),
-            ]),
-        })
-        .await;
 
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
     let mut stream = upstream_resp.bytes_stream().eventsource();
@@ -63,14 +51,110 @@ pub(crate) async fn stream_responses_to_urp_events(
             record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
-        let data_val: Value = serde_json::from_str(&ev.data).unwrap_or(Value::String(ev.data));
+        let data_val: Value = match serde_json::from_str(&ev.data) {
+            Ok(value) => value,
+            Err(error) => {
+                let code = "responses_invalid_sse_json".to_string();
+                let message = format!("invalid JSON in upstream Responses event: {error}");
+                let _ = tx
+                    .send(UrpStreamEvent::Error {
+                        code: Some(code.clone()),
+                        message: message.clone(),
+                        extra_body: HashMap::from([
+                            ("event_name".to_string(), json!(ev.event)),
+                            ("raw_data".to_string(), json!(ev.data)),
+                        ]),
+                    })
+                    .await;
+                record_stream_terminal_error(
+                    &runtime_metrics,
+                    "responses_invalid_sse_json",
+                    StreamTerminalError {
+                        code,
+                        message,
+                        http_status: StatusCode::BAD_GATEWAY.as_u16(),
+                        error_type: Some("upstream_protocol_error".to_string()),
+                        param: None,
+                    },
+                )
+                .await;
+                return Ok(());
+            }
+        };
+        let native_start_event = matches!(ev.event.as_str(), "response.created" | "response.in_progress");
+        let terminal_response_event = matches!(
+            ev.event.as_str(),
+            "response.completed" | "response.incomplete" | "response.failed" | "response.cancelled"
+        );
+        let output_event = ev.event.starts_with("response.output_")
+            || ev.event.starts_with("response.content_part.")
+            || ev.event.starts_with("response.reasoning_")
+            || ev.event.starts_with("response.function_call_")
+            || ev.event.starts_with("response.image_generation")
+            || ev.event.starts_with("image_generation.");
+        if !response_start_sent && (native_start_event || terminal_response_event || output_event) {
+            let source_response = data_val
+                .get("response")
+                .and_then(Value::as_object)
+                .cloned();
+            let mut start_model = urp.model.clone();
+            if let Some(source) = source_response.as_ref() {
+                if let Some(id) = source.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+                    response_id = id.to_string();
+                }
+                if let Some(source_created) = source
+                    .get("created_at")
+                    .or_else(|| source.get("created"))
+                    .and_then(Value::as_i64)
+                {
+                    created = source_created;
+                }
+                if let Some(model) = source
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .filter(|model| !model.is_empty())
+                {
+                    start_model = model.to_string();
+                }
+            }
+            let mut start_extra = if native_start_event {
+                source_response
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect::<HashMap<_, _>>()
+            } else {
+                HashMap::from([
+                    ("object".to_string(), json!("response")),
+                    ("created_at".to_string(), json!(created)),
+                    ("status".to_string(), json!("in_progress")),
+                    ("output".to_string(), json!([])),
+                ])
+            };
+            if native_start_event
+                && let Some(source) = source_response
+            {
+                start_extra.insert(
+                    RESPONSES_STREAM_START_SOURCE_EXTRA_KEY.to_string(),
+                    Value::Object(source),
+                );
+            }
+            let _ = tx
+                .send(UrpStreamEvent::ResponseStart {
+                    id: response_id.clone(),
+                    model: start_model,
+                    extra_body: start_extra,
+                })
+                .await;
+            response_start_sent = true;
+        }
         record_stream_usage_if_present(
             &runtime_metrics,
             parse_usage_from_responses_object(&data_val),
         )
         .await;
 
-        if ev.event == "error" || ev.event == "response.failed" {
+        if ev.event == "error" {
             let (code, message, extra_body, terminal_error) =
                 responses_stream_error_parts(&ev.event, data_val);
             let _ = tx
@@ -332,22 +416,25 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
-        if ev.event == "response.content_part.done"
-            && data_val
-                .get("part")
-                .and_then(|part| part.get("type"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|part_type| matches!(part_type, "output_text" | "text"))
-            && data_val
-                .get("part")
-                .and_then(|part| part.get("text"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|text| !text.is_empty())
-        {
-            saw_text_part_done = true;
-        }
-
-        let stream_events = if ev.event == "response.completed" {
+        let is_terminal_response_event = matches!(
+            ev.event.as_str(),
+            "response.completed"
+                | "response.incomplete"
+                | "response.failed"
+                | "response.cancelled"
+        );
+        let stream_events = if is_terminal_response_event {
+            for (output_index, output_state) in &index_state.output_state_by_index {
+                if let Some(item_id) = output_state
+                    .item_id
+                    .as_deref()
+                    .filter(|item_id| !item_id.is_empty())
+                {
+                    item_ids_by_output_index
+                        .entry(*output_index)
+                        .or_insert_with(|| item_id.to_string());
+                }
+            }
             let accumulated_output_entries = build_accumulated_output_entries(
                 &reasoning_by_output_index,
                 &output_texts_by_output_index,
@@ -399,171 +486,49 @@ pub(crate) async fn stream_responses_to_urp_events(
             record_visible_stream_event_delta(started_at, &runtime_metrics, &stream_event).await;
             let _ = tx.send(stream_event).await;
         }
+        if response_done_sent && is_terminal_response_event {
+            terminal_event_name = Some(ev.event);
+            break;
+        }
     }
 
     if !response_done_sent {
-        let output_nodes = build_accumulated_output_nodes_from_reasoning_slots(
-            &reasoning_by_output_index,
-            &output_texts_by_output_index,
-            &message_phases_by_output_index,
-            &message_item_extra_by_output_index,
-            &item_ids_by_output_index,
-            &call_order,
-            &calls,
-            &call_ids_by_output_index,
-        );
-        let output_items = nodes_to_items(&output_nodes);
-        let final_usage = latest_stream_usage_snapshot(&runtime_metrics).await;
-
-        if !saw_text_delta && !saw_text_part_done {
-            let mut grouped_output_nodes = Vec::new();
-            for output_item in &output_items {
-                grouped_output_nodes.push(match output_item {
-                    Item::Message {
-                        id,
-                        role,
-                        parts,
-                        extra_body,
-                    } => {
-                        let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
-                        let mut item_nodes = Vec::new();
-                        for (index, part) in parts.iter().cloned().enumerate() {
-                            let mut node = part.into_node(ordinary_role);
-                            if index == 0 && !extra_body.is_empty() {
-                                node.extra_body_mut().extend(extra_body.clone());
-                            }
-                            if index == 0 {
-                                node.set_id(id.clone());
-                            }
-                            item_nodes.push(node);
-                        }
-                        item_nodes
-                    }
-                    Item::ToolResult {
-                        id,
-                        call_id,
-                        is_error,
-                        content,
-                        extra_body,
-                    } => vec![Node::ToolResult {
-                        id: id.clone(),
-                        call_id: call_id.clone(),
-                        is_error: *is_error,
-                        content: content.clone(),
-                        extra_body: extra_body.clone(),
-                    }],
-                });
-            }
-
-            for (output_item, item_nodes) in output_items.iter().zip(grouped_output_nodes.iter()) {
-                let Item::Message {
-                    role: Role::Assistant,
-                    ..
-                } = output_item
-                else {
-                    continue;
-                };
-
-                for node in item_nodes.iter().filter(|node| {
-                    matches!(
-                        node,
-                        Node::Text {
-                            role: OrdinaryRole::Assistant,
-                            ..
-                        }
-                    )
-                }) {
-                    let Node::Text {
-                        id,
-                        role: OrdinaryRole::Assistant,
-                        content,
-                        phase,
-                        extra_body,
-                    } = node.clone()
-                    else {
-                        continue;
-                    };
-                    let node_index = index_state.allocate_fresh_node_index();
-                    let synthetic_node = Node::Text {
-                        id,
-                        role: OrdinaryRole::Assistant,
-                        content: content.clone(),
-                        phase: phase.clone(),
-                        extra_body: extra_body.clone(),
-                    };
-                    let item_extra = item_extra_body_from_item(&output_item);
-                    if !item_extra.is_empty() {
-                        let _ = tx
-                            .send(UrpStreamEvent::NodeStart {
-                                node_index: index_state.allocate_fresh_node_index(),
-                                header: NodeHeader::NextDownstreamEnvelopeExtra,
-                                extra_body: item_extra.clone(),
-                            })
-                            .await;
-                        let _ = tx
-                            .send(UrpStreamEvent::NodeDone {
-                                node_index: index_state.allocate_fresh_node_index() - 1,
-                                node: Node::NextDownstreamEnvelopeExtra {
-                                    extra_body: item_extra.clone(),
-                                },
-                                usage: final_usage.clone(),
-                                extra_body: item_extra.clone(),
-                            })
-                            .await;
-                    }
-
-                    let _ = tx
-                        .send(UrpStreamEvent::NodeStart {
-                            node_index,
-                            header: NodeHeader::Text {
-                                id: synthetic_node.id().cloned(),
-                                role: OrdinaryRole::Assistant,
-                                phase,
-                            },
-                            extra_body: extra_body.clone(),
-                        })
-                        .await;
-                    let _ = tx
-                        .send(UrpStreamEvent::NodeDelta {
-                            node_index,
-                            delta: NodeDelta::Text {
-                                content: content.clone(),
-                            },
-                            usage: final_usage.clone(),
-                            extra_body: extra_body.clone(),
-                        })
-                        .await;
-                    let _ = tx
-                        .send(UrpStreamEvent::NodeDone {
-                            node_index,
-                            node: synthetic_node,
-                            usage: final_usage.clone(),
-                            extra_body: extra_body.clone(),
-                        })
-                        .await;
-                }
-            }
-        }
-
+        let code = "responses_stream_missing_terminal".to_string();
+        let message = "upstream Responses stream ended without a terminal response event";
         let _ = tx
-            .send(UrpStreamEvent::ResponseDone {
-                finish_reason: Some(if outputs_have_tool_calls(&output_nodes) {
-                    FinishReason::ToolCalls
-                } else {
-                    FinishReason::Stop
-                }),
-                usage: final_usage,
-                output: output_nodes,
-                extra_body: HashMap::from([
-                    ("id".to_string(), json!(response_id)),
-                    ("object".to_string(), json!("response")),
-                    ("created_at".to_string(), json!(created)),
-                    ("model".to_string(), json!(urp.model.clone())),
-                    ("status".to_string(), json!("completed")),
-                ]),
+            .send(UrpStreamEvent::Error {
+                code: Some(code.clone()),
+                message: message.to_string(),
+                extra_body: HashMap::from([(
+                    "expected_events".to_string(),
+                    json!([
+                        "response.completed",
+                        "response.incomplete",
+                        "response.failed",
+                        "response.cancelled"
+                    ]),
+                )]),
             })
             .await;
+        record_stream_terminal_error(
+            &runtime_metrics,
+            "responses_stream_missing_terminal",
+            StreamTerminalError {
+                code,
+                message: message.to_string(),
+                http_status: StatusCode::BAD_GATEWAY.as_u16(),
+                error_type: Some("upstream_protocol_error".to_string()),
+                param: None,
+            },
+        )
+        .await;
+        return Ok(());
     }
-    record_stream_terminal_event(&runtime_metrics, "response.completed", None).await;
+    record_stream_terminal_event(
+        &runtime_metrics,
+        terminal_event_name.as_deref().unwrap_or("responses.terminal"),
+        None,
+    )
+    .await;
     Ok(())
 }

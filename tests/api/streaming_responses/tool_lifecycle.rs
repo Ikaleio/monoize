@@ -112,6 +112,96 @@ async fn responses_streaming_omits_reasoning_source_when_chat_upstream_does_not_
 }
 
 #[tokio::test]
+async fn responses_streaming_raw_cot_uses_one_reasoning_node_and_full_content_lifecycle() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model":"gpt-5-mini",
+                "input":"stream raw cot",
+                "tools":[{
+                    "type":"function",
+                    "name":"tool_a",
+                    "parameters":{"type":"object","additionalProperties":true}
+                }],
+                "stream": true,
+                "stream_mode": "reasoning_text_tool",
+                "reasoning": { "effort": "high" }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let reasoning_added = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, (event, payload))| {
+            event == "response.output_item.added"
+                && payload["item"]["type"].as_str() == Some("reasoning")
+        })
+        .collect::<Vec<_>>();
+    let content_added = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, (event, payload))| {
+            event == "response.content_part.added"
+                && payload["part"]["type"].as_str() == Some("reasoning_text")
+        })
+        .collect::<Vec<_>>();
+    let reasoning_delta = frames
+        .iter()
+        .enumerate()
+        .find(|(_, (event, _))| event == "response.reasoning_text.delta")
+        .unwrap_or_else(|| panic!("reasoning_text.delta: {text}"));
+    let reasoning_done = frames
+        .iter()
+        .enumerate()
+        .find(|(_, (event, _))| event == "response.reasoning_text.done")
+        .unwrap_or_else(|| panic!("reasoning_text.done: {text}"));
+    let content_done = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, (event, payload))| {
+            event == "response.content_part.done"
+                && payload["part"]["type"].as_str() == Some("reasoning_text")
+        })
+        .collect::<Vec<_>>();
+    let reasoning_item_done = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, (event, payload))| {
+            event == "response.output_item.done"
+                && payload["item"]["type"].as_str() == Some("reasoning")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(reasoning_added.len(), 1, "reasoning start duplicated: {text}");
+    assert_eq!(content_added.len(), 1, "reasoning content start duplicated: {text}");
+    assert_eq!(content_done.len(), 1, "reasoning content done duplicated: {text}");
+    assert_eq!(reasoning_item_done.len(), 1, "reasoning done duplicated: {text}");
+    assert!(reasoning_added[0].0 < content_added[0].0);
+    assert!(content_added[0].0 < reasoning_delta.0);
+    assert!(reasoning_delta.0 < reasoning_done.0);
+    assert!(reasoning_done.0 < content_done[0].0);
+    assert!(content_done[0].0 < reasoning_item_done[0].0);
+    assert_eq!(content_added[0].1.1["item_id"].as_str(), Some("rs_mock"));
+    assert_eq!(content_done[0].1.1["part"]["text"].as_str(), Some("mock_reasoning"));
+    assert_eq!(
+        reasoning_item_done[0].1.1["item"]["content"],
+        json!([{ "type": "reasoning_text", "text": "mock_reasoning" }])
+    );
+}
+
+#[tokio::test]
 async fn responses_streaming_from_responses_upstream_does_not_duplicate_completed_items() {
     let ctx = setup().await;
     let req = Request::builder()
@@ -270,7 +360,10 @@ async fn responses_streaming_completed_snapshot_without_phase_does_not_duplicate
         1,
         "completed response output must not replay a duplicate message: {text}"
     );
-    assert_eq!(output[0]["id"].as_str(), Some("msg_stream"));
+    assert_eq!(
+        output[0]["id"].as_str(),
+        Some("msg_completed_snapshot")
+    );
     assert_eq!(output[0]["phase"].as_str(), Some("final_answer"));
     assert_eq!(output[0]["content"][0]["text"].as_str(), Some("same text"));
 }

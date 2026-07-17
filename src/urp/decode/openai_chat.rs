@@ -1,16 +1,22 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
-    parse_tool_call_part_from_obj, parse_tool_definition, split_extra, value_to_text,
+    deserialize_u64ish_default, normalize_reasoning_effort, parse_file_part_from_obj,
+    parse_image_part_from_obj, parse_tool_call_part_from_obj, parse_tool_definition, split_extra,
+    value_to_text,
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
-    ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
-    parse_reasoning_envelope,
+    CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
+    CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING,
+    CHAT_REASONING_SURFACE_REASONING_CONTENT, CHAT_THINKING_CONFIG_EXTRA_KEY, FinishReason,
+    InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol, ReasoningConfig, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+
+const CHAT_CHOICE_EXTRA_BODY_KEY: &str = "_monoize_chat_choice_extra";
+const CHAT_NATIVE_FINISH_REASON_EXTRA_KEY: &str = "_monoize_chat_native_finish_reason";
 
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiChatUsage {
@@ -158,12 +164,11 @@ fn push_message_nodes(
     extra_body: HashMap<String, Value>,
 ) {
     let ordinary_role = role.to_ordinary().unwrap_or(OrdinaryRole::User);
-    for (index, part) in parts.into_iter().enumerate() {
-        let mut node = part.into_node(ordinary_role);
-        if index == 0 && !extra_body.is_empty() {
-            node.extra_body_mut().extend(extra_body.clone());
-        }
-        out.push(node);
+    if !parts.is_empty() && !extra_body.is_empty() {
+        out.push(Node::NextDownstreamEnvelopeExtra { extra_body });
+    }
+    for part in parts {
+        out.push(part.into_node(ordinary_role));
     }
 }
 
@@ -278,7 +283,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             let text = value_to_text(&content);
             let mut tool_result_content = Vec::new();
             if !text.is_empty() {
-                tool_result_content.push(ToolResultContent::Text { text });
+                tool_result_content.push(ToolResultContent::Text {
+                    text,
+                    extra_body: HashMap::new(),
+                });
             }
             input_nodes.push(Node::ToolResult {
                 id: msg_obj
@@ -412,6 +420,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "max_tokens",
                 "reasoning_effort",
                 "reasoning",
+                "thinking",
                 "tools",
                 "tool_choice",
                 "parallel_tool_calls",
@@ -427,12 +436,30 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         .as_object()
         .ok_or_else(|| "chat response must be object".to_string())?;
 
+    if let Some(error) = obj.get("error").filter(|error| !error.is_null()) {
+        return Err(format_chat_completion_error(error));
+    }
+
     let choice = obj
         .get("choices")
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .and_then(|v| v.as_object())
         .ok_or_else(|| "missing choices[0]".to_string())?;
+
+    if let Some(error) = choice.get("error").filter(|error| !error.is_null()) {
+        return Err(format_chat_completion_error(error));
+    }
+
+    let native_finish_reason = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_string);
+    if native_finish_reason.as_deref() == Some("error") {
+        return Err("upstream chat completion terminated with finish_reason=error".to_string());
+    }
+
     let msg_obj = choice
         .get("message")
         .and_then(|v| v.as_object())
@@ -521,15 +548,34 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         message_extra_body.clone(),
     );
 
-    let finish_reason = choice
-        .get("finish_reason")
-        .and_then(|v| v.as_str())
-        .map(parse_finish_reason);
+    let finish_reason = native_finish_reason.as_deref().map(parse_finish_reason);
 
     let usage = obj
         .get("usage")
         .and_then(|v| v.as_object())
         .map(parse_usage_from_chat);
+
+    let mut extra_body = split_extra(
+        obj,
+        &["id", "object", "created", "model", "choices", "usage"],
+    );
+    let choice_extra = choice
+        .iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "index" | "message" | "finish_reason"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<Map<String, Value>>();
+    if !choice_extra.is_empty() {
+        extra_body.insert(
+            CHAT_CHOICE_EXTRA_BODY_KEY.to_string(),
+            Value::Object(choice_extra),
+        );
+    }
+    if let Some(native_finish_reason) = native_finish_reason {
+        extra_body.insert(
+            CHAT_NATIVE_FINISH_REASON_EXTRA_KEY.to_string(),
+            Value::String(native_finish_reason),
+        );
+    }
 
     Ok(UrpResponse {
         id: obj
@@ -546,198 +592,155 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         output: output_nodes,
         finish_reason,
         usage,
-        extra_body: split_extra(
-            obj,
-            &["id", "object", "created", "model", "choices", "usage"],
-        ),
+        extra_body,
     })
 }
 
+fn format_chat_completion_error(error: &Value) -> String {
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())
+        .filter(|message| !message.is_empty())
+        .unwrap_or("upstream chat completion error");
+    let code = error.get("code").and_then(value_as_non_empty_string);
+    match code {
+        Some(code) => format!("{message} (code: {code})"),
+        None => message.to_string(),
+    }
+}
+
+fn value_as_non_empty_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
 fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
-    if let Some(effort) = obj
+    let reasoning_obj = obj.get("reasoning").and_then(Value::as_object);
+    let thinking_obj = obj.get("thinking").and_then(Value::as_object);
+    let effort = obj
         .get("reasoning_effort")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-    {
-        return Some(ReasoningConfig {
-            effort: Some(effort),
-            extra_body: HashMap::new(),
-        });
+        .and_then(Value::as_str)
+        .or_else(|| {
+            reasoning_obj
+                .and_then(|reasoning| reasoning.get("effort"))
+                .and_then(Value::as_str)
+        })
+        .map(normalize_reasoning_effort);
+
+    if effort.is_none() && reasoning_obj.is_none() && thinking_obj.is_none() {
+        return None;
     }
-    if let Some(effort) = obj
-        .get("reasoning")
-        .and_then(|v| v.as_object())
-        .and_then(|v| v.get("effort"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-    {
-        return Some(ReasoningConfig {
-            effort: Some(effort),
-            extra_body: HashMap::new(),
-        });
+
+    let mut extra_body = HashMap::new();
+    if let Some(reasoning) = reasoning_obj {
+        extra_body.insert(
+            CHAT_REASONING_CONFIG_EXTRA_KEY.to_string(),
+            Value::Object(reasoning.clone()),
+        );
     }
-    None
+    if let Some(thinking) = thinking_obj {
+        extra_body.insert(
+            CHAT_THINKING_CONFIG_EXTRA_KEY.to_string(),
+            Value::Object(thinking.clone()),
+        );
+    }
+    Some(ReasoningConfig { effort, extra_body })
 }
 
 fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Part>) {
-    fn merge_reasoning_part(
-        parts: &mut Vec<Part>,
-        content: Option<String>,
-        encrypted: Option<Value>,
-        summary: Option<String>,
-        source: Option<String>,
-    ) {
-        if let Some(Part::Reasoning {
-            content: existing_content,
-            encrypted: existing_encrypted,
-            summary: existing_summary,
-            source: existing_source,
-            ..
-        }) = parts.last_mut()
-        {
-            if existing_content.is_none() && content.is_some() {
-                *existing_content = content;
-            }
-            if existing_encrypted.is_none() && encrypted.is_some() {
-                *existing_encrypted = encrypted;
-            }
-            if existing_summary.is_none() && summary.is_some() {
-                *existing_summary = summary;
-            }
-            if existing_source.is_none() && source.is_some() {
-                *existing_source = source;
-            }
-            return;
-        }
-
-        parts.push(Part::Reasoning {
-            id: None,
-            content,
-            encrypted,
-            summary,
-            source,
-            extra_body: HashMap::new(),
-        });
-    }
-
-    let mut saw_plain = false;
-    let mut saw_encrypted = false;
-
     if let Some(details) = msg_obj.get("reasoning_details").and_then(|v| v.as_array()) {
         for detail in details {
             let Some(detail_obj) = detail.as_object() else {
                 continue;
             };
-            match detail_obj
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-            {
-                "reasoning.text" => {
-                    let source = detail_obj
-                        .get("format")
-                        .and_then(|v| v.as_str())
-                        .filter(|format| !format.is_empty())
-                        .map(|format| format.to_string());
-                    if let Some(text) = detail_obj.get("text").and_then(|v| v.as_str()) {
-                        if !text.is_empty() {
-                            merge_reasoning_part(
-                                parts,
-                                Some(text.to_string()),
-                                None,
-                                None,
-                                source.clone(),
-                            );
-                            saw_plain = true;
-                        }
-                    }
-                }
-                "reasoning.encrypted" => {
-                    let source = detail_obj
-                        .get("format")
-                        .and_then(|v| v.as_str())
-                        .filter(|format| !format.is_empty())
-                        .map(|format| format.to_string());
-                    let detail_id = detail_obj
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .or_else(|| {
-                            detail_obj
-                                .get("data")
-                                .and_then(parse_reasoning_envelope)
-                                .and_then(|envelope| envelope.item_id)
-                        });
-                    if let Some(data) = detail_obj.get("data") {
-                        if !matches!(data, Value::Null) {
-                            if let Some(s) = data.as_str() {
-                                if s.is_empty() {
-                                    continue;
-                                }
-                            }
-                            merge_reasoning_part(parts, None, Some(data.clone()), None, source);
-                            if let Some(id) = detail_id {
-                                if let Some(Part::Reasoning { extra_body, .. }) = parts.last_mut() {
-                                    extra_body.insert("id".to_string(), Value::String(id));
-                                }
-                            }
-                            saw_encrypted = true;
-                        }
-                    }
-                }
-                "reasoning.summary" => {
-                    let source = detail_obj
-                        .get("format")
-                        .and_then(|v| v.as_str())
-                        .filter(|format| !format.is_empty())
-                        .map(|format| format.to_string());
-                    if let Some(summary) = detail_obj.get("summary").and_then(|v| v.as_str()) {
-                        if !summary.is_empty() {
-                            merge_reasoning_part(
-                                parts,
-                                None,
-                                None,
-                                Some(summary.to_string()),
-                                source,
-                            );
-                            saw_plain = true;
-                        }
-                    }
-                }
-                _ => {}
+            let detail_type = detail_obj.get("type").and_then(Value::as_str).unwrap_or("");
+            if !detail_type.starts_with("reasoning.") {
+                continue;
             }
+            let source = detail_obj
+                .get("format")
+                .and_then(Value::as_str)
+                .filter(|format| !format.is_empty())
+                .map(str::to_string);
+            let id = detail_obj
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string);
+            let content = (detail_type == "reasoning.text")
+                .then(|| detail_obj.get("text").and_then(Value::as_str))
+                .flatten()
+                .map(str::to_string);
+            let summary = (detail_type == "reasoning.summary")
+                .then(|| detail_obj.get("summary").and_then(Value::as_str))
+                .flatten()
+                .map(str::to_string);
+            let encrypted = (detail_type == "reasoning.encrypted")
+                .then(|| detail_obj.get("data"))
+                .flatten()
+                .filter(|value| !value.is_null())
+                .cloned();
+            let mut extra_body = HashMap::new();
+            extra_body.insert(
+                CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
+                Value::Object(detail_obj.clone()),
+            );
+            parts.push(Part::Reasoning {
+                id,
+                content,
+                encrypted,
+                summary,
+                source,
+                extra_body,
+            });
+        }
+        if !details.is_empty() {
+            return;
         }
     }
 
-    if !saw_plain {
-        if let Some(reasoning) = msg_obj.get("reasoning").and_then(|v| v.as_str()) {
-            if !reasoning.is_empty() {
-                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None, None);
-                saw_plain = true;
-            }
-        }
+    let scalar = msg_obj
+        .get("reasoning")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(|value| (value, CHAT_REASONING_SURFACE_REASONING))
+        .or_else(|| {
+            msg_obj
+                .get("reasoning_content")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(|value| (value, CHAT_REASONING_SURFACE_REASONING_CONTENT))
+        });
+    if let Some((content, surface)) = scalar {
+        parts.push(Part::Reasoning {
+            id: None,
+            content: Some(content.to_string()),
+            encrypted: None,
+            summary: None,
+            source: None,
+            extra_body: HashMap::from([(
+                CHAT_REASONING_SURFACE_EXTRA_KEY.to_string(),
+                Value::String(surface.to_string()),
+            )]),
+        });
     }
-
-    if !saw_plain {
-        if let Some(reasoning) = msg_obj.get("reasoning_content").and_then(|v| v.as_str()) {
-            if !reasoning.is_empty() {
-                merge_reasoning_part(parts, Some(reasoning.to_string()), None, None, None);
-            }
-        }
-    }
-
-    if !saw_encrypted {
-        if let Some(opaque) = msg_obj.get("reasoning_opaque").and_then(|v| v.as_str()) {
-            if !opaque.is_empty() {
-                merge_reasoning_part(
-                    parts,
-                    None,
-                    Some(Value::String(opaque.to_string())),
-                    None,
-                    None,
-                );
-            }
-        }
+    if let Some(opaque) = msg_obj
+        .get("reasoning_opaque")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(Part::Reasoning {
+            id: None,
+            content: None,
+            encrypted: Some(Value::String(opaque.to_string())),
+            summary: None,
+            source: None,
+            extra_body: HashMap::new(),
+        });
     }
 }
 
@@ -862,22 +865,37 @@ mod tests {
         });
 
         let decoded = decode_response(&value).expect("decode_response should succeed");
-        let mut saw_reasoning = false;
-        let mut saw_sig = false;
         let parts = output_parts(&decoded.output);
-        for part in &parts {
-            if let Part::Reasoning {
-                content, encrypted, ..
-            } = part
-            {
-                assert_eq!(content.as_deref(), Some("new_reasoning"));
-                assert_eq!(encrypted.as_ref().and_then(|v| v.as_str()), Some("new_sig"));
-                saw_reasoning = true;
-                saw_sig = true;
-            }
-        }
-        assert!(saw_reasoning);
-        assert!(saw_sig);
+        let reasoning = parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::Reasoning { .. } => Some(part),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reasoning.len(), 2);
+        assert!(matches!(
+            reasoning[0],
+            Part::Reasoning {
+                content: Some(content),
+                encrypted: None,
+                extra_body,
+                ..
+            } if content == "new_reasoning"
+                && extra_body.get(CHAT_REASONING_DETAIL_EXTRA_KEY)
+                    == Some(&value["choices"][0]["message"]["reasoning_details"][0])
+        ));
+        assert!(matches!(
+            reasoning[1],
+            Part::Reasoning {
+                content: None,
+                encrypted: Some(Value::String(sig)),
+                extra_body,
+                ..
+            } if sig == "new_sig"
+                && extra_body.get(CHAT_REASONING_DETAIL_EXTRA_KEY)
+                    == Some(&value["choices"][0]["message"]["reasoning_details"][1])
+        ));
     }
 
     #[test]
@@ -898,25 +916,23 @@ mod tests {
         });
 
         let decoded = decode_response(&value).expect("decode_response should succeed");
-        let mut saw_reasoning = false;
-        let mut saw_sig = false;
         let parts = output_parts(&decoded.output);
-        for part in &parts {
-            if let Part::Reasoning {
-                content, encrypted, ..
-            } = part
-            {
-                assert_eq!(content.as_deref(), Some("legacy_reasoning"));
-                assert_eq!(
-                    encrypted.as_ref().and_then(|v| v.as_str()),
-                    Some("legacy_sig")
-                );
-                saw_reasoning = true;
-                saw_sig = true;
-            }
-        }
-        assert!(saw_reasoning);
-        assert!(saw_sig);
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            Part::Reasoning {
+                content: Some(content),
+                encrypted: None,
+                ..
+            } if content == "legacy_reasoning"
+        )));
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            Part::Reasoning {
+                content: None,
+                encrypted: Some(Value::String(sig)),
+                ..
+            } if sig == "legacy_sig"
+        )));
     }
 
     #[test]
@@ -958,16 +974,22 @@ mod tests {
 
         let decoded = decode_response(&value).expect("decode_response should succeed");
         let parts = output_parts(&decoded.output);
-        assert!(parts.iter().any(|part| {
-            matches!(
-                part,
-                Part::Reasoning {
-                    content: Some(content),
-                    encrypted: Some(Value::String(sig)),
-                    ..
-                } if content == "plain reasoning" && sig == "opaque_sig_payload"
-            )
-        }));
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            Part::Reasoning {
+                content: Some(content),
+                encrypted: None,
+                ..
+            } if content == "plain reasoning"
+        )));
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            Part::Reasoning {
+                content: None,
+                encrypted: Some(Value::String(sig)),
+                ..
+            } if sig == "opaque_sig_payload"
+        )));
     }
 
     #[test]
@@ -1042,5 +1064,72 @@ mod tests {
                 } if call_id == "call_1" && name == "lookup" && arguments == "{\"q\":1}"
             )
         }));
+    }
+
+    #[test]
+    fn decode_response_rejects_top_level_openrouter_error() {
+        let error = decode_response(&json!({
+            "error": {
+                "message": "provider exhausted",
+                "code": 503,
+                "type": "upstream_error"
+            }
+        }))
+        .expect_err("top-level error must not decode as a successful response");
+
+        assert!(error.contains("provider exhausted"), "{error}");
+        assert!(error.contains("503"), "{error}");
+    }
+
+    #[test]
+    fn decode_response_rejects_choice_error() {
+        let error = decode_response(&json!({
+            "id": "chatcmpl_error",
+            "model": "openrouter/model",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "" },
+                "finish_reason": "error",
+                "native_finish_reason": "error",
+                "error": { "message": "mid-generation failure", "code": 502 }
+            }]
+        }))
+        .expect_err("choice error must not decode as a successful response");
+
+        assert!(error.contains("mid-generation failure"), "{error}");
+        assert!(error.contains("502"), "{error}");
+    }
+
+    #[test]
+    fn decode_response_preserves_unknown_native_finish_reason_and_choice_fields() {
+        let decoded = decode_response(&json!({
+            "id": "chatcmpl_deepseek",
+            "model": "deepseek-v4",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "partial" },
+                "finish_reason": "insufficient_system_resource",
+                "native_finish_reason": "insufficient_system_resource",
+                "provider_marker": "deepseek"
+            }]
+        }))
+        .expect("resource finish reason is a terminal response, not a parse error");
+
+        assert_eq!(decoded.finish_reason, Some(FinishReason::Other));
+        assert_eq!(
+            decoded
+                .extra_body
+                .get(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY)
+                .and_then(Value::as_str),
+            Some("insufficient_system_resource")
+        );
+        assert_eq!(
+            decoded
+                .extra_body
+                .get(CHAT_CHOICE_EXTRA_BODY_KEY)
+                .and_then(Value::as_object)
+                .and_then(|extra| extra.get("provider_marker")),
+            Some(&json!("deepseek"))
+        );
     }
 }

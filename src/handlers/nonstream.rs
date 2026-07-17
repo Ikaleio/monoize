@@ -27,34 +27,6 @@ pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
     });
 }
 
-fn has_replayable_encrypted_reasoning_payload(encrypted: &Option<serde_json::Value>) -> bool {
-    match encrypted {
-        Some(serde_json::Value::String(value)) => !value.is_empty(),
-        Some(serde_json::Value::Null) | None => false,
-        Some(_) => true,
-    }
-}
-
-pub(crate) fn strip_plaintext_reasoning_from_responses_tool_replay(req: &mut urp::UrpRequest) {
-    let has_tool_history = req.input.iter().any(|node| {
-        matches!(
-            node,
-            urp::Node::ToolCall { .. } | urp::Node::ToolResult { .. }
-        )
-    });
-    if !has_tool_history {
-        return;
-    }
-
-    req.input.retain(|node| {
-        !matches!(
-            node,
-            urp::Node::Reasoning { encrypted, .. }
-                if !has_replayable_encrypted_reasoning_payload(encrypted)
-        )
-    });
-}
-
 pub(super) async fn execute_nonstream_typed(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -116,6 +88,9 @@ pub(super) async fn execute_nonstream_typed(
             let mut req_attempt = original_req.clone();
             if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
                 urp::retain_provider_items_for_protocol(&mut req_attempt.input, target_protocol);
+                if target_protocol == urp::ProviderProtocol::Responses {
+                    urp::remove_downstream_only_reasoning_for_responses(&mut req_attempt.input);
+                }
             }
             if attempt.strip_cross_protocol_nested_extra
                 && !downstream.is_same_family(attempt.provider_type)
@@ -587,27 +562,16 @@ async fn collect_streamed_upstream_response(
         })
     };
 
-    let mut fallback_output = Vec::new();
     let mut final_response: Option<urp::UrpResponse> = None;
     let mut stream_error: Option<AppError> = None;
     while let Some(event) = decoded_rx.recv().await {
         match event {
-            crate::urp::UrpStreamEvent::NodeDone { node, .. } => {
-                crate::urp::push_unique_node(&mut fallback_output, node);
-            }
             crate::urp::UrpStreamEvent::ResponseDone {
                 finish_reason,
                 usage,
-                mut output,
+                output,
                 extra_body,
             } => {
-                if output.is_empty() && !fallback_output.is_empty() {
-                    output = fallback_output.clone();
-                } else {
-                    for node in fallback_output.iter().cloned() {
-                        crate::urp::push_unique_node(&mut output, node);
-                    }
-                }
                 final_response = Some(urp::UrpResponse {
                     id: extra_body
                         .get("id")
@@ -694,9 +658,6 @@ pub(super) fn encode_request_for_provider(
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
     filter_tools_for_provider(req, attempt.provider_type, downstream);
     strip_orphaned_tool_calls(req);
-    if attempt.provider_type == ProviderType::Responses {
-        strip_plaintext_reasoning_from_responses_tool_replay(req);
-    }
     let model = req.model.clone();
     let value = match attempt.provider_type {
         ProviderType::Responses => urp::encode::openai_responses::encode_request(req, &model),
@@ -722,6 +683,21 @@ pub(super) fn decode_response_from_provider(
     value: &Value,
     model: &str,
 ) -> AppResult<urp::UrpResponse> {
+    if provider_type == ProviderType::ChatCompletion
+        && let Some(error) = embedded_chat_completion_error(value)
+    {
+        return Err(embedded_chat_completion_error_to_app(error));
+    }
+    if provider_type == ProviderType::ChatCompletion
+        && chat_completion_finish_reason_is_error(value)
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "upstream_chat_error",
+            "upstream Chat Completions response terminated with finish_reason=error",
+        )
+        .with_type("server_error"));
+    }
     let decoded = match provider_type {
         ProviderType::Responses => urp::decode::openai_responses::decode_response(value),
         ProviderType::ChatCompletion => urp::decode::openai_chat::decode_response(value),
@@ -732,6 +708,72 @@ pub(super) fn decode_response_from_provider(
         ProviderType::Group => Err("provider_type group is virtual".to_string()),
     };
     decoded.map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "invalid_upstream_response", e))
+}
+
+fn embedded_chat_completion_error(value: &Value) -> Option<&Value> {
+    value
+        .get("error")
+        .filter(|error| !error.is_null())
+        .or_else(|| {
+            value
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("error"))
+                .filter(|error| !error.is_null())
+        })
+}
+
+fn chat_completion_finish_reason_is_error(value: &Value) -> bool {
+    value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(Value::as_str)
+        == Some("error")
+}
+
+fn embedded_chat_completion_error_to_app(error: &Value) -> AppError {
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())
+        .filter(|message| !message.is_empty())
+        .unwrap_or("upstream Chat Completions response terminated with an error");
+    let upstream_code = error.get("code").and_then(json_scalar_string);
+    let upstream_status = error
+        .get("code")
+        .and_then(Value::as_u64)
+        .filter(|status| (400..=599).contains(status))
+        .and_then(|status| StatusCode::from_u16(status as u16).ok());
+    let upstream_type = error
+        .get("type")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let upstream_param = error
+        .get("param")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    AppError::new(StatusCode::BAD_GATEWAY, "upstream_chat_error", message)
+        .with_type("server_error")
+        .with_upstream_error(
+            upstream_status,
+            upstream_code,
+            upstream_type,
+            upstream_param,
+        )
+}
+
+fn json_scalar_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
 }
 
 pub(super) fn encode_response_for_downstream(

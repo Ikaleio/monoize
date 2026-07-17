@@ -582,6 +582,7 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
                     ImageSource::Base64 { media_type, data } => {
                         format!("\n\n![image](data:{media_type};base64,{data})")
                     }
+                    ImageSource::FileId { .. } => String::new(),
                 };
                 pending_markdown.push_str(&md);
             }
@@ -618,6 +619,7 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
             node,
             urp::Node::Image {
                 role: urp::OrdinaryRole::Assistant,
+                source: ImageSource::Url { .. } | ImageSource::Base64 { .. },
                 ..
             }
         )
@@ -649,17 +651,27 @@ pub(super) fn model_glob_match(pattern: &str, model: &str) -> bool {
 /// these lists cover only the keys that remain in `UrpRequest.extra_body`
 /// and are safe to forward to the given upstream API.
 const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
+    "audio",
     "frequency_penalty",
+    "function_call",
+    "functions",
     "logit_bias",
     "logprobs",
     "top_logprobs",
     "max_completion_tokens",
     "max_tokens",
     "metadata",
+    "moderation",
+    "n",
     "presence_penalty",
+    "prompt_cache_options",
+    "safety_identifier",
     "seed",
+    "service_tier",
     "stop",
     "stream_options",
+    "store",
+    "web_search_options",
     "parallel_tool_calls",
     "debug",
     "image_config",
@@ -680,7 +692,10 @@ const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
     "provider",
     "plugins",
     "session_id",
+    "stop_server_tools_when",
     "trace",
+    "thinking",
+    "user_id",
 ];
 
 const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
@@ -691,20 +706,26 @@ const EXTRA_WHITELIST_RESPONSES: &[&str] = &[
     "instructions",
     "metadata",
     "max_tool_calls",
+    "moderation",
     "parallel_tool_calls",
     "previous_response_id",
     "prompt",
     "prompt_cache_key",
+    "prompt_cache_options",
     "prompt_cache_retention",
     "safety_identifier",
     "service_tier",
     "store",
+    "stream_options",
     "text",
     "top_logprobs",
     "truncation",
 ];
 
 const EXTRA_WHITELIST_ANTHROPIC: &[&str] = &[
+    "cache_control",
+    "container",
+    "fallbacks",
     "max_tokens",
     "metadata",
     "output_config",
@@ -956,6 +977,45 @@ pub(super) fn filter_tools_for_provider(
 mod tests {
     use super::*;
 
+    #[test]
+    fn default_extra_whitelists_cover_current_protocol_extension_fields() {
+        for field in [
+            "audio",
+            "function_call",
+            "functions",
+            "moderation",
+            "n",
+            "prompt_cache_options",
+            "safety_identifier",
+            "service_tier",
+            "store",
+            "web_search_options",
+            "stop_server_tools_when",
+            "thinking",
+            "user_id",
+        ] {
+            assert!(
+                EXTRA_WHITELIST_CHAT_COMPLETION.contains(&field),
+                "missing Chat Completions field {field}"
+            );
+        }
+
+        for field in ["moderation", "prompt_cache_options", "stream_options"] {
+            assert!(
+                EXTRA_WHITELIST_RESPONSES.contains(&field),
+                "missing Responses field {field}"
+            );
+        }
+        assert!(EXTRA_WHITELIST_RESPONSES.contains(&"prompt_cache_retention"));
+
+        for field in ["cache_control", "container", "fallbacks"] {
+            assert!(
+                EXTRA_WHITELIST_ANTHROPIC.contains(&field),
+                "missing Messages field {field}"
+            );
+        }
+    }
+
     fn response_rule(transform: &str) -> TransformRuleConfig {
         TransformRuleConfig {
             transform: transform.to_string(),
@@ -1041,5 +1101,52 @@ mod tests {
             if content == "Here you go\n\n![image](data:image/png;base64,QUJD)\n\n![image](https://example.com/two.png)"
         ));
         assert_eq!(resp.output.len(), 1);
+    }
+
+    #[test]
+    fn assistant_image_markdown_conversion_preserves_file_id_images() {
+        let mut resp = urp::UrpResponse {
+            id: "resp_1".to_string(),
+            model: "gpt-image-1".to_string(),
+            created_at: None,
+            output: vec![
+                urp::Node::Image {
+                    id: None,
+                    role: urp::OrdinaryRole::Assistant,
+                    source: urp::ImageSource::Url {
+                        url: "https://example.com/one.png".to_string(),
+                        detail: None,
+                    },
+                    extra_body: std::collections::HashMap::new(),
+                },
+                urp::Node::Image {
+                    id: None,
+                    role: urp::OrdinaryRole::Assistant,
+                    source: urp::ImageSource::FileId {
+                        file_id: "file_img_1".to_string(),
+                        detail: Some("high".to_string()),
+                    },
+                    extra_body: std::collections::HashMap::new(),
+                },
+            ],
+            finish_reason: Some(urp::FinishReason::Stop),
+            usage: None,
+            extra_body: std::collections::HashMap::new(),
+        };
+
+        convert_assistant_images_to_markdown(&mut resp);
+
+        assert!(resp.output.iter().any(|node| matches!(
+            node,
+            urp::Node::Image {
+                source: urp::ImageSource::FileId { file_id, .. },
+                ..
+            } if file_id == "file_img_1"
+        )));
+        assert!(resp.output.iter().any(|node| matches!(
+            node,
+            urp::Node::Text { content, .. }
+                if content == "\n\n![image](https://example.com/one.png)"
+        )));
     }
 }

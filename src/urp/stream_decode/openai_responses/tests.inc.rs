@@ -98,8 +98,10 @@ mod image_generation_alias_tests {
                     "output": [{
                         "type": "image_generation_call",
                         "id": "ig_1",
+                        "status": "completed",
                         "result": "QUJD",
-                        "output_format": "webp"
+                        "output_format": "webp",
+                        "future_field": 7
                     }]
                 }
             }),
@@ -107,17 +109,31 @@ mod image_generation_alias_tests {
             &mut state,
         );
 
-        assert!(matches!(events.as_slice(), [
-            UrpStreamEvent::ResponseDone {
-                output,
-                ..
-            }
-        ] if matches!(output.as_slice(), [
-            Node::Image {
-                id: Some(id),
-                source: crate::urp::ImageSource::Base64 { media_type, data },
-                ..
-            }
-        ] if id == "ig_1" && media_type == "image/webp" && data == "QUJD")));
+        let [UrpStreamEvent::ResponseDone { output, .. }] = events.as_slice() else {
+            panic!("expected one response done event");
+        };
+        let [Node::Image {
+            id: Some(id),
+            source: crate::urp::ImageSource::Base64 { media_type, data },
+            extra_body,
+            ..
+        }] = output.as_slice()
+        else {
+            panic!("expected one image node");
+        };
+        assert_eq!(id, "ig_1");
+        assert_eq!(media_type, "image/webp");
+        assert_eq!(data, "QUJD");
+        assert_eq!(
+            extra_body.get(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY),
+            Some(&json!({
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "result": "QUJD",
+                "output_format": "webp",
+                "future_field": 7
+            }))
+        );
     }
 }

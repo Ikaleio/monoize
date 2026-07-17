@@ -160,7 +160,7 @@ async fn responses_reasoning_input_roundtrips_to_responses_upstream() {
     );
     assert!(reasoning_item.get("text").is_none());
     assert!(reasoning_item.get("source").is_none());
-    assert!(reasoning_item.get("status").is_none());
+    assert_eq!(reasoning_item["status"].as_str(), Some("completed"));
     let message_item = input
         .iter()
         .find(|item| {
@@ -448,20 +448,15 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
     let output = v["output"].as_array().expect("output array");
     let image = output
         .iter()
-        .find_map(|item| item["content"].as_array())
-        .and_then(|content| {
-            content
-                .iter()
-                .find(|part| part["type"].as_str() == Some("output_image"))
-        })
-        .expect("output image from completed snapshot");
-    assert_eq!(image["source"]["media_type"].as_str(), Some("image/webp"));
+        .find(|item| item["type"].as_str() == Some("image_generation_call"))
+        .expect("native image_generation_call from completed snapshot");
+    assert_eq!(image["id"].as_str(), Some("ig_mock"));
+    assert_eq!(image["output_format"].as_str(), Some("webp"));
     assert!(
-        image["source"]["data"]
-            .as_str()
-            .is_some_and(|data| !data.is_empty()),
+        image["result"].as_str().is_some_and(|data| !data.is_empty()),
         "{body}"
     );
+    assert!(!body.contains("output_image"), "{body}");
 }
 
 #[tokio::test]
@@ -483,8 +478,7 @@ async fn responses_nonstream_dedupes_streamed_image_generation_item_against_comp
     let output = v["output"].as_array().expect("output array");
     let image_count = output
         .iter()
-        .flat_map(|item| item["content"].as_array().into_iter().flatten())
-        .filter(|part| part["type"].as_str() == Some("output_image"))
+        .filter(|item| item["type"].as_str() == Some("image_generation_call"))
         .count();
     let text_count = output
         .iter()
@@ -494,6 +488,7 @@ async fn responses_nonstream_dedupes_streamed_image_generation_item_against_comp
 
     assert_eq!(image_count, 1, "{body}");
     assert_eq!(text_count, 0, "{body}");
+    assert!(!body.contains("output_image"), "{body}");
 }
 
 #[tokio::test]
@@ -677,7 +672,7 @@ async fn image_edits_to_openai_image_use_multipart_edits_endpoint_with_image_byt
 }
 
 #[tokio::test]
-async fn responses_reject_item_reference_continuations_while_remaining_stateless() {
+async fn responses_item_reference_is_same_family_passthrough_only() {
     let ctx = setup().await;
     let (status, body) = json_post(
         &ctx,
@@ -692,16 +687,31 @@ async fn responses_reject_item_reference_continuations_while_remaining_stateless
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    let v: Value = serde_json::from_str(&body).expect("error json");
-    assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
-    let message = v["error"]["message"].as_str().unwrap_or("");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let upstream = last_captured_body(&ctx, "responses");
     assert!(
-        message.contains("item_reference"),
-        "error must mention item_reference: {body}"
+        upstream["input"].as_array().is_some_and(|input| input
+            .iter()
+            .any(|item| item == &json!({ "type": "item_reference", "id": "msg_prev" }))),
+        "same-Responses routing must preserve the native reference: {upstream}"
     );
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "input": [
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "ping" }] },
+                { "type": "item_reference", "id": "msg_prev" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let chat_upstream = last_captured_body(&ctx, "chat");
     assert!(
-        message.contains("stateless"),
-        "error must explain the stateless boundary: {body}"
+        !chat_upstream.to_string().contains("item_reference"),
+        "cross-family routing must omit the native reference: {chat_upstream}"
     );
 }

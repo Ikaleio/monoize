@@ -596,6 +596,7 @@ fn decode_function_response(fr: &Map<String, Value>) -> Node {
         is_error: false,
         content: vec![ToolResultContent::Text {
             text: serde_json::to_string(&response_value).unwrap_or_default(),
+            extra_body: HashMap::new(),
         }],
         extra_body: split_extra(fr, &["id", "name", "response"]),
     }

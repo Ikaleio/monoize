@@ -38,6 +38,32 @@ pub const REASONING_SIGNATURE_SIGIL_PREFIX: &str = "mz1.";
 /// original block type. See `spec/unified_responses_proxy.spec.md` PM5 / DM5.1.
 pub const REASONING_KIND_EXTRA_KEY: &str = "_monoize_reasoning_kind";
 pub const REASONING_KIND_REDACTED_THINKING: &str = "redacted_thinking";
+pub const REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY: &str =
+    "_monoize_reasoning_downstream_only_presentation";
+/// Full OpenRouter `reasoning_details[]` entry retained on one reasoning node.
+/// One source entry maps to one node so repeated entry types and entry order survive replay.
+pub const CHAT_REASONING_DETAIL_EXTRA_KEY: &str = "_monoize_chat_reasoning_detail";
+/// Scalar Chat reasoning surface that supplied a reasoning node when no structured detail existed.
+pub const CHAT_REASONING_SURFACE_EXTRA_KEY: &str = "_monoize_chat_reasoning_surface";
+pub const CHAT_REASONING_SURFACE_REASONING: &str = "reasoning";
+pub const CHAT_REASONING_SURFACE_REASONING_CONTENT: &str = "reasoning_content";
+/// Exact provider-specific request controls kept out of cross-family generic reasoning fields.
+pub const CHAT_REASONING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_reasoning_config";
+pub const CHAT_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_thinking_config";
+pub const MESSAGES_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_messages_thinking_config";
+pub const MESSAGES_OUTPUT_CONFIG_EXTRA_KEY: &str = "_monoize_messages_output_config";
+/// Typed usage observed on an upstream Messages `message_start`, retained until the
+/// downstream Messages encoder emits its own `message_start` envelope.
+pub const MESSAGES_STREAM_START_USAGE_EXTRA_KEY: &str = "_monoize_messages_stream_start_usage";
+pub const RESPONSES_REASONING_SUMMARY_EXTRA_KEY: &str = "_monoize_responses_reasoning_summary";
+pub const RESPONSES_REASONING_CONTENT_EXTRA_KEY: &str = "_monoize_responses_reasoning_content";
+/// Complete native Responses `image_generation_call` item retained on a semantic Image node.
+pub const RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY: &str =
+    "_monoize_responses_image_generation_call";
+/// Complete non-stream Responses object retained so absent optional fields remain absent.
+pub const RESPONSES_RESPONSE_SOURCE_EXTRA_KEY: &str = "_monoize_responses_response_source";
+/// Upstream Responses start object retained for same-protocol stream envelope reconstruction.
+pub const RESPONSES_STREAM_START_SOURCE_EXTRA_KEY: &str = "_monoize_responses_stream_start_source";
 pub const REASONING_ENVELOPE_PREFIX: &str = "mz2.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -490,6 +516,11 @@ pub enum ImageSource {
         media_type: String,
         data: String,
     },
+    FileId {
+        file_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -505,7 +536,17 @@ pub enum FileSource {
     Url {
         url: String,
     },
+    FileId {
+        file_id: String,
+    },
+    Text {
+        text: String,
+    },
+    Content {
+        content: Vec<Value>,
+    },
     Base64 {
+        #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
         media_type: String,
         data: String,
@@ -515,9 +556,39 @@ pub enum FileSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolResultContent {
-    Text { text: String },
-    Image { source: ImageSource },
-    File { source: FileSource },
+    Text {
+        text: String,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    Image {
+        source: ImageSource,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    File {
+        source: FileSource,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+    ProviderItem {
+        origin_protocol: ProviderProtocol,
+        item_type: String,
+        body: Value,
+        #[serde(flatten)]
+        extra_body: HashMap<String, Value>,
+    },
+}
+
+impl ToolResultContent {
+    pub fn extra_body_mut(&mut self) -> &mut HashMap<String, Value> {
+        match self {
+            Self::Text { extra_body, .. }
+            | Self::Image { extra_body, .. }
+            | Self::File { extra_body, .. }
+            | Self::ProviderItem { extra_body, .. } => extra_body,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1054,8 +1125,17 @@ pub fn strip_nested_extra_body(nodes: &mut Vec<Node>) {
             | Node::Refusal { extra_body, .. }
             | Node::Reasoning { extra_body, .. }
             | Node::ToolCall { extra_body, .. }
-            | Node::ProviderItem { extra_body, .. }
-            | Node::ToolResult { extra_body, .. } => extra_body.clear(),
+            | Node::ProviderItem { extra_body, .. } => extra_body.clear(),
+            Node::ToolResult {
+                content,
+                extra_body,
+                ..
+            } => {
+                extra_body.clear();
+                for item in content {
+                    item.extra_body_mut().clear();
+                }
+            }
             Node::NextDownstreamEnvelopeExtra { .. } => {}
         }
     }
@@ -1063,6 +1143,19 @@ pub fn strip_nested_extra_body(nodes: &mut Vec<Node>) {
 }
 
 pub fn retain_provider_items_for_protocol(nodes: &mut Vec<Node>, target: ProviderProtocol) {
+    for node in nodes.iter_mut() {
+        if let Node::ToolResult { content, .. } = node {
+            content.retain(|item| {
+                !matches!(
+                    item,
+                    ToolResultContent::ProviderItem {
+                        origin_protocol,
+                        ..
+                    } if *origin_protocol != target
+                )
+            });
+        }
+    }
     nodes.retain(|node| {
         !matches!(
             node,
@@ -1070,6 +1163,19 @@ pub fn retain_provider_items_for_protocol(nodes: &mut Vec<Node>, target: Provide
                 origin_protocol,
                 ..
             } if *origin_protocol != target
+        )
+    });
+}
+
+pub fn remove_downstream_only_reasoning_for_responses(nodes: &mut Vec<Node>) {
+    nodes.retain(|node| {
+        !matches!(
+            node,
+            Node::Reasoning { extra_body, .. }
+                if extra_body
+                    .get(REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY)
+                    .and_then(Value::as_bool)
+                    == Some(true)
         )
     });
 }
@@ -1149,7 +1255,10 @@ mod tests {
                 id: None,
                 call_id: "c1".into(),
                 is_error: false,
-                content: vec![ToolResultContent::Text { text: "ok".into() }],
+                content: vec![ToolResultContent::Text {
+                    text: "ok".into(),
+                    extra_body: HashMap::new(),
+                }],
                 extra_body: HashMap::new(),
             },
             Node::assistant_text("reply"),
@@ -1175,7 +1284,12 @@ mod tests {
                 id: None,
                 call_id: "call_1".into(),
                 is_error: false,
-                content: vec![ToolResultContent::Text { text: "ok".into() }],
+                content: vec![ToolResultContent::Text {
+                    text: "ok".into(),
+                    extra_body: [("nested".into(), serde_json::json!(true))]
+                        .into_iter()
+                        .collect(),
+                }],
                 extra_body: [("z".into(), serde_json::json!(3))].into_iter().collect(),
             },
         ];
@@ -1185,6 +1299,105 @@ mod tests {
         assert!(
             matches!(&nodes[1], Node::ToolResult { id: _, extra_body, .. } if extra_body.is_empty())
         );
+        assert!(matches!(
+            &nodes[1],
+            Node::ToolResult { content, .. }
+                if matches!(&content[0], ToolResultContent::Text { extra_body, .. } if extra_body.is_empty())
+        ));
+    }
+
+    #[test]
+    fn responses_prestrip_removes_only_downstream_only_reasoning() {
+        let mut nodes = vec![
+            Node::Reasoning {
+                id: None,
+                content: None,
+                encrypted: None,
+                summary: Some("messages summary".into()),
+                source: None,
+                extra_body: [
+                    (
+                        REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY.into(),
+                        serde_json::json!(true),
+                    ),
+                    ("nested".into(), serde_json::json!(1)),
+                ]
+                .into_iter()
+                .collect(),
+            },
+            Node::Reasoning {
+                id: Some("rs_raw".into()),
+                content: Some("raw reasoning".into()),
+                encrypted: None,
+                summary: None,
+                source: None,
+                extra_body: [("nested".into(), serde_json::json!(2))]
+                    .into_iter()
+                    .collect(),
+            },
+        ];
+
+        remove_downstream_only_reasoning_for_responses(&mut nodes);
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(
+            &nodes[0],
+            Node::Reasoning {
+                id: Some(id),
+                content: Some(content),
+                ..
+            } if id == "rs_raw" && content == "raw reasoning"
+        ));
+
+        strip_nested_extra_body(&mut nodes);
+        assert!(matches!(
+            &nodes[0],
+            Node::Reasoning {
+                content: Some(content),
+                extra_body,
+                ..
+            } if content == "raw reasoning" && extra_body.is_empty()
+        ));
+    }
+
+    #[test]
+    fn retain_provider_items_filters_nested_tool_result_content_by_exact_protocol() {
+        let mut nodes = vec![Node::ToolResult {
+            id: None,
+            call_id: "call_1".into(),
+            is_error: false,
+            content: vec![
+                ToolResultContent::Text {
+                    text: "ok".into(),
+                    extra_body: HashMap::new(),
+                },
+                ToolResultContent::ProviderItem {
+                    origin_protocol: ProviderProtocol::Messages,
+                    item_type: "search_result".into(),
+                    body: serde_json::json!({ "type": "search_result" }),
+                    extra_body: HashMap::new(),
+                },
+                ToolResultContent::ProviderItem {
+                    origin_protocol: ProviderProtocol::Responses,
+                    item_type: "computer_screenshot".into(),
+                    body: serde_json::json!({ "type": "computer_screenshot" }),
+                    extra_body: HashMap::new(),
+                },
+            ],
+            extra_body: HashMap::new(),
+        }];
+
+        retain_provider_items_for_protocol(&mut nodes, ProviderProtocol::Messages);
+        let Node::ToolResult { content, .. } = &nodes[0] else {
+            panic!("expected tool result");
+        };
+        assert_eq!(content.len(), 2);
+        assert!(matches!(
+            content[1],
+            ToolResultContent::ProviderItem {
+                origin_protocol: ProviderProtocol::Messages,
+                ..
+            }
+        ));
     }
 
     #[test]

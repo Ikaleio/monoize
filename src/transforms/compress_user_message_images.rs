@@ -310,6 +310,7 @@ async fn compress_image_source(
             };
             Ok(Some(preserve_url_detail(next_source, detail.clone())))
         }
+        ImageSource::FileId { .. } => Ok(None),
     }
 }
 
@@ -378,6 +379,7 @@ fn preserve_url_detail(source: ImageSource, detail: Option<String>) -> ImageSour
             url,
             detail: next_detail.or(detail),
         },
+        source @ ImageSource::FileId { .. } => source,
     }
 }
 

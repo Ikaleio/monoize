@@ -36,7 +36,85 @@ async fn responses_streaming_completed_preserves_service_tier() {
 }
 
 #[tokio::test]
-async fn responses_streaming_image_generation_completed_emits_output_image() {
+async fn responses_streaming_done_without_terminal_event_is_failure() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini",
+                "input": "stream",
+                "stream": true,
+                "stream_mode": "missing_terminal"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+        .to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(!frames.iter().any(|(event, _)| event == "response.completed"));
+    let failed = frames
+        .iter()
+        .find(|(event, _)| event == "response.failed")
+        .map(|(_, payload)| payload)
+        .expect("response.failed frame");
+    assert_eq!(
+        failed["response"]["error"]["code"].as_str(),
+        Some("responses_stream_missing_terminal")
+    );
+    assert_eq!(count_done_sentinels(&text), 1);
+}
+
+#[tokio::test]
+async fn responses_streaming_incomplete_terminal_remains_incomplete() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini",
+                "input": "stream",
+                "stream": true,
+                "stream_mode": "incomplete_terminal"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+        .to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    assert!(!frames.iter().any(|(event, _)| event == "response.completed"));
+    assert!(!frames.iter().any(|(event, _)| event == "response.failed"));
+    let incomplete = frames
+        .iter()
+        .find(|(event, _)| event == "response.incomplete")
+        .map(|(_, payload)| payload)
+        .expect("response.incomplete frame");
+    assert_eq!(incomplete["response"]["status"], json!("incomplete"));
+    assert_eq!(
+        incomplete["response"]["incomplete_details"]["reason"],
+        json!("max_output_tokens")
+    );
+    assert_eq!(count_done_sentinels(&text), 1);
+}
+
+#[tokio::test]
+async fn responses_streaming_image_generation_completed_emits_native_top_level_item() {
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -60,14 +138,17 @@ async fn responses_streaming_image_generation_completed_emits_output_image() {
     let text = String::from_utf8_lossy(&bytes).to_string();
     let frames = parse_responses_sse_json(&text);
 
-    assert!(
-        frames.iter().any(|(event, payload)| {
-            event == "response.content_part.done"
-                && payload["part"]["type"].as_str() == Some("output_image")
-                && payload["part"]["source"]["media_type"].as_str() == Some("image/png")
-        }),
-        "{text}"
-    );
+    assert!(!frames.iter().any(|(event, payload)| {
+        event == "response.content_part.done"
+            && payload["part"]["type"].as_str() == Some("output_image")
+    }));
+    assert!(frames.iter().any(|(event, payload)| {
+        event == "response.output_item.done"
+            && payload["item"]["type"].as_str() == Some("image_generation_call")
+            && payload["item"]["result"]
+                .as_str()
+                .is_some_and(|result| !result.is_empty())
+    }), "{text}");
     assert!(
         frames.iter().any(|(event, payload)| {
             event == "response.completed"
@@ -75,23 +156,22 @@ async fn responses_streaming_image_generation_completed_emits_output_image() {
                     .as_array()
                     .is_some_and(|output| {
                         output.iter().any(|item| {
-                            item["type"].as_str() == Some("message")
-                                && item["content"].as_array().is_some_and(|content| {
-                                    content.iter().any(|part| {
-                                        part["type"].as_str() == Some("output_image")
-                                            && part["source"]["media_type"].as_str()
-                                                == Some("image/png")
-                                    })
-                                })
+                            item["type"].as_str() == Some("image_generation_call")
+                                && item["id"].as_str() == Some("ig_mock")
+                                && item["output_format"].as_str() == Some("png")
+                                && item["result"]
+                                    .as_str()
+                                    .is_some_and(|result| !result.is_empty())
                         })
                     })
         }),
         "{text}"
     );
+    assert!(!text.contains("output_image"), "{text}");
 }
 
 #[tokio::test]
-async fn responses_streaming_completed_snapshot_image_generation_emits_output_image() {
+async fn responses_streaming_completed_snapshot_preserves_native_image_generation_item() {
     let ctx = setup().await;
     let req = Request::builder()
         .method("POST")
@@ -122,22 +202,18 @@ async fn responses_streaming_completed_snapshot_image_generation_emits_output_im
                     .as_array()
                     .is_some_and(|output| {
                         output.iter().any(|item| {
-                            item["type"].as_str() == Some("message")
-                                && item["content"].as_array().is_some_and(|content| {
-                                    content.iter().any(|part| {
-                                        part["type"].as_str() == Some("output_image")
-                                            && part["source"]["media_type"].as_str()
-                                                == Some("image/webp")
-                                            && part["source"]["data"]
-                                                .as_str()
-                                                .is_some_and(|data| !data.is_empty())
-                                    })
-                                })
+                            item["type"].as_str() == Some("image_generation_call")
+                                && item["id"].as_str() == Some("ig_mock")
+                                && item["output_format"].as_str() == Some("webp")
+                                && item["result"]
+                                    .as_str()
+                                    .is_some_and(|data| !data.is_empty())
                         })
                     })
         }),
         "{text}"
     );
+    assert!(!text.contains("output_image"), "{text}");
 }
 
 #[tokio::test]

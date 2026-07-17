@@ -1,5 +1,6 @@
 use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
+use crate::urp::encode::sanitize_provider_item_wire_body;
 use crate::urp::stream_helpers::*;
 use crate::urp::{self, ToolResultContent, UrpStreamEvent};
 use axum::response::sse::Event;

@@ -1,3 +1,4 @@
+#[cfg(test)]
 fn item_extra_body_from_item(item: &Item) -> HashMap<String, Value> {
     match item {
         Item::Message { extra_body, .. } | Item::ToolResult { extra_body, .. } => {
@@ -320,6 +321,7 @@ fn build_accumulated_output_entries(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn build_accumulated_output_nodes_from_reasoning_slots(
     reasoning_by_output_index: &HashMap<u64, AccumulatedReasoningSlot>,
     output_texts_by_output_index: &HashMap<u64, String>,
@@ -400,7 +402,7 @@ fn output_index_for_call_id(
 }
 
 fn item_extra_body_from_value(item: &Value) -> HashMap<String, Value> {
-    split_known_fields(
+    let mut extra_body = split_known_fields(
         item.clone(),
         &[
             "type",
@@ -412,11 +414,18 @@ fn item_extra_body_from_value(item: &Value) -> HashMap<String, Value> {
             "name",
             "arguments",
         ],
-    )
+    );
+    if let Some(native_body) = native_image_generation_call_body(item) {
+        extra_body.insert(
+            RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
+            native_body,
+        );
+    }
+    extra_body
 }
 
 fn part_extra_body_from_value(part: &Value) -> HashMap<String, Value> {
-    split_known_fields(
+    let mut extra_body = split_known_fields(
         part.clone(),
         &[
             "type",
@@ -430,7 +439,14 @@ fn part_extra_body_from_value(part: &Value) -> HashMap<String, Value> {
             "source",
             "encrypted_content",
         ],
-    )
+    );
+    if let Some(native_body) = native_image_generation_call_body(part) {
+        extra_body.insert(
+            RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
+            native_body,
+        );
+    }
+    extra_body
 }
 
 fn split_known_fields(value: Value, known_fields: &[&str]) -> HashMap<String, Value> {

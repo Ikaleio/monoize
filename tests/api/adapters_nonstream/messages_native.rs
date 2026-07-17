@@ -1,3 +1,40 @@
+#[tokio::test]
+async fn messages_message_envelope_extra_stays_out_of_content_block() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "user",
+                "vendor_message": { "trace_id": "trace_1" },
+                "content": [{
+                    "type": "text",
+                    "text": "hello",
+                    "cache_control": { "type": "ephemeral" },
+                    "citations": [{ "type": "page", "page": 1 }],
+                    "caller": { "type": "direct" }
+                }]
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let message = &upstream["messages"][0];
+    assert_eq!(message["vendor_message"], json!({ "trace_id": "trace_1" }));
+    let block = &message["content"][0];
+    assert!(
+        block.get("vendor_message").is_none(),
+        "message envelope fields must not enter content blocks: {upstream}"
+    );
+    assert_eq!(block["cache_control"], json!({ "type": "ephemeral" }));
+    assert_eq!(block["citations"], json!([{ "type": "page", "page": 1 }]));
+    assert_eq!(block["caller"], json!({ "type": "direct" }));
+}
 
 #[tokio::test]
 async fn messages_tool_result_multipart_roundtrip_via_messages_upstream() {
@@ -145,9 +182,7 @@ async fn messages_assistant_empty_text_before_tool_use_is_not_sent_to_messages_u
         2,
         "assistant tool use and user tool result should both remain: {upstream}"
     );
-    let content = messages[0]["content"]
-        .as_array()
-        .expect("content array");
+    let content = messages[0]["content"].as_array().expect("content array");
     assert_eq!(
         content.len(),
         1,

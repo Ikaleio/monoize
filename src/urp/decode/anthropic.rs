@@ -1,12 +1,14 @@
 use crate::urp::decode::{
     deserialize_u64ish_default, parse_file_node_from_obj, parse_file_source_from_obj,
     parse_image_node_from_obj, parse_image_source_from_obj, parse_tool_definition, split_extra,
-    value_to_text,
+    value_to_text, value_to_u64,
 };
 use crate::urp::{
-    FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
-    REASONING_KIND_EXTRA_KEY, REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage, unwrap_reasoning_signature_sigil,
+    FinishReason, InputDetails, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
+    MESSAGES_THINKING_CONFIG_EXTRA_KEY, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
+    REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY, REASONING_KIND_EXTRA_KEY,
+    REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest,
+    UrpResponse, Usage, unwrap_reasoning_signature_sigil,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -32,13 +34,20 @@ fn decode_anthropic_thinking_block(bobj: &Map<String, Value>) -> Option<Node> {
         },
         None => (None, None),
     };
+    let mut extra_body = split_extra(bobj, &["type", "thinking", "signature"]);
+    if thinking.is_some() && id.is_none() {
+        extra_body.insert(
+            REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY.to_string(),
+            Value::Bool(true),
+        );
+    }
     Some(Node::Reasoning {
         id,
         content: None,
         encrypted,
         summary: thinking,
         source: None,
-        extra_body: split_extra(bobj, &["type", "thinking", "signature"]),
+        extra_body,
     })
 }
 
@@ -68,6 +77,56 @@ fn decode_anthropic_redacted_thinking_block(bobj: &Map<String, Value>) -> Option
         source: None,
         extra_body,
     })
+}
+
+fn effort_from_anthropic_budget(budget: u64) -> Option<String> {
+    match budget {
+        0 => None,
+        1..=1024 => Some("low".to_string()),
+        1025..=4096 => Some("medium".to_string()),
+        4097..=16384 => Some("high".to_string()),
+        _ => Some("xhigh".to_string()),
+    }
+}
+
+fn decode_anthropic_reasoning_config(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
+    let thinking = obj.get("thinking").and_then(Value::as_object).cloned();
+    let output_config = obj.get("output_config").and_then(Value::as_object).cloned();
+    if thinking.is_none() && output_config.is_none() {
+        return None;
+    }
+
+    let effort = output_config
+        .as_ref()
+        .and_then(|config| config.get("effort"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            let thinking = thinking.as_ref()?;
+            match thinking.get("type").and_then(Value::as_str) {
+                Some("disabled") => Some("none".to_string()),
+                Some("enabled") => thinking
+                    .get("budget_tokens")
+                    .and_then(Value::as_u64)
+                    .and_then(effort_from_anthropic_budget),
+                _ => None,
+            }
+        });
+
+    let mut extra_body = HashMap::new();
+    if let Some(thinking) = thinking {
+        extra_body.insert(
+            MESSAGES_THINKING_CONFIG_EXTRA_KEY.to_string(),
+            Value::Object(thinking),
+        );
+    }
+    if let Some(output_config) = output_config {
+        extra_body.insert(
+            MESSAGES_OUTPUT_CONFIG_EXTRA_KEY.to_string(),
+            Value::Object(output_config),
+        );
+    }
+    Some(ReasoningConfig { effort, extra_body })
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,7 +196,23 @@ struct AnthropicCacheCreationUsage {
 }
 
 impl From<AnthropicUsage> for Usage {
-    fn from(value: AnthropicUsage) -> Self {
+    fn from(mut value: AnthropicUsage) -> Self {
+        let native_reasoning_tokens = value
+            .extra
+            .get_mut("output_tokens_details")
+            .and_then(Value::as_object_mut)
+            .and_then(|details| details.remove("thinking_tokens"))
+            .and_then(|value| value_to_u64(&value));
+        let output_tokens_details_is_empty = value
+            .extra
+            .get("output_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(Map::is_empty);
+        if output_tokens_details_is_empty {
+            value.extra.remove("output_tokens_details");
+        }
+        let reasoning_tokens = native_reasoning_tokens.unwrap_or(value.reasoning_tokens);
+
         let input_details = if value.cache_read_input_tokens > 0
             || value.cache_creation_input_tokens > 0
             || value.tool_prompt_tokens > 0
@@ -156,13 +231,13 @@ impl From<AnthropicUsage> for Usage {
             None
         };
 
-        let output_details = if value.reasoning_tokens > 0
+        let output_details = if reasoning_tokens > 0
             || value.accepted_prediction_tokens > 0
             || value.rejected_prediction_tokens > 0
         {
             Some(OutputDetails {
                 standard_tokens: 0,
-                reasoning_tokens: value.reasoning_tokens,
+                reasoning_tokens,
                 accepted_prediction_tokens: value.accepted_prediction_tokens,
                 rejected_prediction_tokens: value.rejected_prediction_tokens,
                 modality_breakdown: None,
@@ -206,13 +281,6 @@ fn text_node_with_phase(
         phase: phase.map(str::to_string),
         extra_body,
     }
-}
-
-fn attach_message_extra(node: &mut Node, extra_body: &HashMap<String, Value>) {
-    if extra_body.is_empty() {
-        return;
-    }
-    node.extra_body_mut().extend(extra_body.clone());
 }
 
 fn ordinary_role_from_messages_role(role: &str) -> OrdinaryRole {
@@ -394,8 +462,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             }
         }
 
-        if let Some(first_node) = message_nodes.first_mut() {
-            attach_message_extra(first_node, &msg_extra_body);
+        if !msg_extra_body.is_empty() && !message_nodes.is_empty() {
+            input_nodes.push(Node::NextDownstreamEnvelopeExtra {
+                extra_body: msg_extra_body,
+            });
         }
         input_nodes.extend(message_nodes);
     }
@@ -406,57 +476,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .collect::<Vec<_>>()
     });
 
-    let reasoning = {
-        let thinking = obj.get("thinking").and_then(|v| v.as_object());
-        let thinking_type = thinking
-            .and_then(|t| t.get("type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        match thinking_type {
-            "adaptive" => {
-                let effort = obj
-                    .get("output_config")
-                    .and_then(|v| v.get("effort"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let mut extra = thinking
-                    .map(|t| split_extra(t, &["type"]))
-                    .unwrap_or_default();
-                if let Some(oc_extra) = obj.get("output_config").and_then(|v| v.as_object()) {
-                    for (k, v) in split_extra(oc_extra, &["effort"]) {
-                        extra.insert(format!("output_config.{k}"), v);
-                    }
-                }
-                Some(ReasoningConfig {
-                    effort,
-                    extra_body: extra,
-                })
-            }
-            "enabled" => {
-                let budget = thinking
-                    .and_then(|t| t.get("budget_tokens"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let effort = if budget == 0 {
-                    None
-                } else if budget <= 512 {
-                    Some("low".to_string())
-                } else if budget >= 2048 {
-                    Some("high".to_string())
-                } else {
-                    Some("medium".to_string())
-                };
-                Some(ReasoningConfig {
-                    effort,
-                    extra_body: thinking
-                        .map(|t| split_extra(t, &["type", "budget_tokens"]))
-                        .unwrap_or_default(),
-                })
-            }
-            _ => None,
-        }
-    };
+    let reasoning = decode_anthropic_reasoning_config(obj);
 
     let raw_tool_choice = obj.get("tool_choice").cloned();
     let parallel_tool_calls = obj
@@ -582,9 +602,10 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     }
 
     let finish_reason = match obj.get("stop_reason").and_then(|v| v.as_str()) {
-        Some("end_turn") => Some(FinishReason::Stop),
+        Some("end_turn" | "stop_sequence") => Some(FinishReason::Stop),
         Some("max_tokens") => Some(FinishReason::Length),
         Some("tool_use") => Some(FinishReason::ToolCalls),
+        Some("refusal") => Some(FinishReason::ContentFilter),
         _ => Some(FinishReason::Other),
     };
 
@@ -609,18 +630,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
         output: output_nodes,
         finish_reason,
         usage,
-        extra_body: split_extra(
-            obj,
-            &[
-                "id",
-                "type",
-                "role",
-                "model",
-                "content",
-                "stop_reason",
-                "usage",
-            ],
-        ),
+        extra_body: split_extra(obj, &["id", "type", "role", "model", "content", "usage"]),
     })
 }
 
@@ -709,6 +719,7 @@ fn decode_tool_result_content(content: Option<&Value>) -> Vec<ToolResultContent>
         if !text.is_empty() {
             blocks.push(ToolResultContent::Text {
                 text: text.to_string(),
+                extra_body: HashMap::new(),
             });
         }
         return blocks;
@@ -729,7 +740,10 @@ fn decode_tool_result_content(content: Option<&Value>) -> Vec<ToolResultContent>
 
     let text = value_to_text(content);
     if !text.is_empty() {
-        blocks.push(ToolResultContent::Text { text });
+        blocks.push(ToolResultContent::Text {
+            text,
+            extra_body: HashMap::new(),
+        });
     }
     blocks
 }
@@ -739,6 +753,7 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
         if !text.is_empty() {
             content.push(ToolResultContent::Text {
                 text: text.to_string(),
+                extra_body: HashMap::new(),
             });
         }
         return;
@@ -746,7 +761,10 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
     let Some(obj) = block.as_object() else {
         let text = value_to_text(block);
         if !text.is_empty() {
-            content.push(ToolResultContent::Text { text });
+            content.push(ToolResultContent::Text {
+                text,
+                extra_body: HashMap::new(),
+            });
         }
         return;
     };
@@ -756,22 +774,35 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
             if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
                 content.push(ToolResultContent::Text {
                     text: text.to_string(),
+                    extra_body: split_extra(obj, &["type", "text"]),
                 });
             }
         }
         _ => {
             if let Some(source) = parse_image_source_from_obj(obj) {
-                content.push(ToolResultContent::Image { source });
+                content.push(ToolResultContent::Image {
+                    source,
+                    extra_body: split_extra(obj, &["type", "source"]),
+                });
                 return;
             }
             if let Some(source) = parse_file_source_from_obj(obj) {
-                content.push(ToolResultContent::File { source });
+                content.push(ToolResultContent::File {
+                    source,
+                    extra_body: split_extra(obj, &["type", "source"]),
+                });
                 return;
             }
-            let text = value_to_text(block);
-            if !text.is_empty() {
-                content.push(ToolResultContent::Text { text });
-            }
+            content.push(ToolResultContent::ProviderItem {
+                origin_protocol: ProviderProtocol::Messages,
+                item_type: obj
+                    .get("type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                body: block.clone(),
+                extra_body: HashMap::new(),
+            });
         }
     }
 }
@@ -810,5 +841,394 @@ mod tests {
         assert_eq!(details.cache_creation_tokens, 70);
         assert_eq!(details.cache_creation_5m_tokens, 40);
         assert_eq!(details.cache_creation_1h_tokens, 30);
+    }
+
+    #[test]
+    fn native_thinking_usage_decodes_to_typed_usage_and_round_trips() {
+        let resp = decode_response(&json!({
+            "id": "msg_thinking_usage",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [{ "type": "text", "text": "ok" }],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "output_tokens_details": {
+                    "thinking_tokens": 12,
+                    "future_detail": { "count": 3 }
+                }
+            }
+        }))
+        .expect("anthropic response decodes");
+
+        let usage = resp.usage.as_ref().expect("usage exists");
+        assert_eq!(
+            usage
+                .output_details
+                .as_ref()
+                .expect("output details")
+                .reasoning_tokens,
+            12
+        );
+        assert_eq!(
+            usage.extra_body["output_tokens_details"],
+            json!({ "future_detail": { "count": 3 } })
+        );
+
+        let encoded = crate::urp::encode::anthropic::encode_response(&resp, "claude-sonnet-4-6");
+        assert_eq!(
+            encoded["usage"]["output_tokens_details"],
+            json!({
+                "thinking_tokens": 12,
+                "future_detail": { "count": 3 }
+            })
+        );
+        assert!(encoded["usage"].get("reasoning_output_tokens").is_none());
+    }
+
+    #[test]
+    fn messages_document_sources_round_trip_without_illegal_base64_filename() {
+        let value = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "document", "source": { "type": "url", "url": "https://example.test/a.pdf" } },
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": "cGRm",
+                            "filename": "must-not-replay.pdf"
+                        }
+                    },
+                    { "type": "document", "source": { "type": "text", "media_type": "text/plain", "data": "plain" } },
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "content",
+                            "content": [{ "type": "text", "text": "structured" }]
+                        }
+                    }
+                ]
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("messages request decodes");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::File { source: crate::urp::FileSource::Url { url }, .. }
+                if url == "https://example.test/a.pdf"
+        ));
+        assert!(matches!(
+            &decoded.input[1],
+            Node::File {
+                source: crate::urp::FileSource::Base64 {
+                    filename: Some(filename),
+                    media_type,
+                    data,
+                },
+                ..
+            } if filename == "must-not-replay.pdf"
+                && media_type == "application/pdf"
+                && data == "cGRm"
+        ));
+        assert!(matches!(
+            &decoded.input[2],
+            Node::File { source: crate::urp::FileSource::Text { text }, .. }
+                if text == "plain"
+        ));
+        assert!(matches!(
+            &decoded.input[3],
+            Node::File { source: crate::urp::FileSource::Content { content }, .. }
+                if content == &vec![json!({ "type": "text", "text": "structured" })]
+        ));
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        let content = encoded["messages"][0]["content"]
+            .as_array()
+            .expect("messages content");
+        assert_eq!(content[0], value["messages"][0]["content"][0]);
+        assert_eq!(content[1]["source"]["type"], json!("base64"));
+        assert_eq!(content[1]["source"]["media_type"], json!("application/pdf"));
+        assert_eq!(content[1]["source"]["data"], json!("cGRm"));
+        assert!(content[1]["source"].get("filename").is_none());
+        assert_eq!(content[2], value["messages"][0]["content"][2]);
+        assert_eq!(content[3], value["messages"][0]["content"][3]);
+    }
+
+    #[test]
+    fn messages_tool_result_content_preserves_extras_and_native_blocks() {
+        let value = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        { "type": "text", "text": "ok", "cache_control": { "type": "ephemeral" } },
+                        { "type": "search_result", "source": "web", "title": "Result" },
+                        { "type": "tool_reference", "tool_name": "lookup" }
+                    ]
+                }]
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("messages request decodes");
+        let Node::ToolResult { content, .. } = &decoded.input[0] else {
+            panic!("expected tool result");
+        };
+        assert!(matches!(
+            &content[0],
+            ToolResultContent::Text { text, extra_body }
+                if text == "ok"
+                    && extra_body.get("cache_control")
+                        == Some(&json!({ "type": "ephemeral" }))
+        ));
+        assert!(matches!(
+            &content[1],
+            ToolResultContent::ProviderItem {
+                origin_protocol: ProviderProtocol::Messages,
+                item_type,
+                body,
+                ..
+            } if item_type == "search_result" && body == &value["messages"][0]["content"][0]["content"][1]
+        ));
+        assert!(matches!(
+            &content[2],
+            ToolResultContent::ProviderItem {
+                origin_protocol: ProviderProtocol::Messages,
+                item_type,
+                ..
+            } if item_type == "tool_reference"
+        ));
+
+        let same = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(
+            same["messages"][0]["content"][0]["content"],
+            value["messages"][0]["content"][0]["content"]
+        );
+
+        let mut collision = decoded.clone();
+        let Node::ToolResult { content, .. } = &mut collision.input[0] else {
+            panic!("expected tool result");
+        };
+        let ToolResultContent::Text { extra_body, .. } = &mut content[0] else {
+            panic!("expected text tool result content");
+        };
+        extra_body.insert("type".to_string(), json!("wrong"));
+        extra_body.insert("text".to_string(), json!("wrong"));
+        let collision_wire =
+            crate::urp::encode::anthropic::encode_request(&collision, "claude-sonnet-4-6");
+        assert_eq!(
+            collision_wire["messages"][0]["content"][0]["content"][0]["type"],
+            json!("text")
+        );
+        assert_eq!(
+            collision_wire["messages"][0]["content"][0]["content"][0]["text"],
+            json!("ok")
+        );
+
+        let mut cross = decoded.clone();
+        crate::urp::retain_provider_items_for_protocol(
+            &mut cross.input,
+            ProviderProtocol::Responses,
+        );
+        let Node::ToolResult { content, .. } = &cross.input[0] else {
+            panic!("expected tool result");
+        };
+        assert_eq!(content.len(), 1);
+        assert!(matches!(content[0], ToolResultContent::Text { .. }));
+    }
+
+    #[test]
+    fn messages_reasoning_controls_preserve_exact_objects() {
+        let thinking = json!({
+            "type": "disabled",
+            "display": "omitted",
+            "budget_tokens": 777,
+            "custom": { "enabled": true }
+        });
+        let output_config = json!({
+            "effort": "max",
+            "format": {
+                "type": "json_schema",
+                "schema": { "type": "object", "additionalProperties": false }
+            },
+            "custom": [1, 2, 3]
+        });
+        let value = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "thinking": thinking,
+            "output_config": output_config
+        });
+
+        let decoded = decode_request(&value).expect("messages request decodes");
+        let reasoning = decoded.reasoning.as_ref().expect("reasoning config");
+        assert_eq!(reasoning.effort.as_deref(), Some("max"));
+        assert_eq!(
+            reasoning.extra_body.get(MESSAGES_THINKING_CONFIG_EXTRA_KEY),
+            Some(&thinking)
+        );
+        assert_eq!(
+            reasoning.extra_body.get(MESSAGES_OUTPUT_CONFIG_EXTRA_KEY),
+            Some(&output_config)
+        );
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(encoded["thinking"], thinking);
+        assert_eq!(encoded["output_config"], output_config);
+    }
+
+    #[test]
+    fn messages_summary_without_responses_id_is_downstream_only() {
+        let value = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{
+                "role": "assistant",
+                "content": [{
+                    "type": "thinking",
+                    "thinking": "provider summary"
+                }]
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("messages request decodes");
+        let Node::Reasoning { extra_body, .. } = &decoded.input[0] else {
+            panic!("expected reasoning node");
+        };
+        assert_eq!(
+            extra_body.get(REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY),
+            Some(&json!(true))
+        );
+
+        let same = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(
+            same["messages"][0]["content"][0],
+            value["messages"][0]["content"][0]
+        );
+        let responses =
+            crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5-mini");
+        assert!(
+            responses["input"]
+                .as_array()
+                .is_some_and(|input| input.is_empty())
+        );
+
+        let replayable = decode_request(&json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{
+                "role": "assistant",
+                "content": [{
+                    "type": "thinking",
+                    "thinking": "replayable summary",
+                    "signature": "mz1.rs_replay.sig_replay"
+                }]
+            }]
+        }))
+        .expect("messages sigil request decodes");
+        let Node::Reasoning { id, extra_body, .. } = &replayable.input[0] else {
+            panic!("expected replayable reasoning node");
+        };
+        assert_eq!(id.as_deref(), Some("rs_replay"));
+        assert!(!extra_body.contains_key(REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY));
+        let responses =
+            crate::urp::encode::openai_responses::encode_request(&replayable, "gpt-5-mini");
+        assert_eq!(responses["input"][0]["id"], json!("rs_replay"));
+        assert_eq!(
+            responses["input"][0]["encrypted_content"],
+            json!("sig_replay")
+        );
+    }
+
+    #[test]
+    fn messages_message_envelope_extra_does_not_enter_content_block() {
+        let value = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{
+                "role": "user",
+                "vendor_message": { "trace_id": "trace_1" },
+                "content": [{
+                    "type": "text",
+                    "text": "hello",
+                    "cache_control": { "type": "ephemeral" },
+                    "citations": [{ "type": "page", "page": 1 }],
+                    "caller": { "type": "direct" }
+                }]
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("messages request decodes");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::NextDownstreamEnvelopeExtra { extra_body }
+                if extra_body.get("vendor_message")
+                    == Some(&json!({ "trace_id": "trace_1" }))
+        ));
+        let Node::Text { extra_body, .. } = &decoded.input[1] else {
+            panic!("expected text block after envelope control");
+        };
+        assert!(extra_body.get("vendor_message").is_none());
+        assert_eq!(
+            extra_body.get("cache_control"),
+            Some(&json!({ "type": "ephemeral" }))
+        );
+        assert_eq!(
+            extra_body.get("citations"),
+            Some(&json!([{ "type": "page", "page": 1 }]))
+        );
+        assert_eq!(extra_body.get("caller"), Some(&json!({ "type": "direct" })));
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(
+            encoded["messages"][0]["vendor_message"],
+            json!({ "trace_id": "trace_1" })
+        );
+        let block = &encoded["messages"][0]["content"][0];
+        assert!(block.get("vendor_message").is_none());
+        assert_eq!(block["cache_control"], json!({ "type": "ephemeral" }));
+        assert_eq!(block["citations"], json!([{ "type": "page", "page": 1 }]));
+        assert_eq!(block["caller"], json!({ "type": "direct" }));
+    }
+
+    #[test]
+    fn omitted_thinking_round_trips_as_empty_thinking_with_signature() {
+        let value = json!({
+            "id": "msg_omitted",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [{
+                "type": "thinking",
+                "thinking": "",
+                "signature": "sig_omitted"
+            }],
+            "stop_reason": "pause_turn",
+            "usage": { "input_tokens": 1, "output_tokens": 1 }
+        });
+
+        let decoded = decode_response(&value).expect("messages response decodes");
+        assert!(matches!(
+            &decoded.output[0],
+            Node::Reasoning {
+                content: None,
+                summary: None,
+                encrypted: Some(Value::String(signature)),
+                ..
+            } if signature == "sig_omitted"
+        ));
+        assert_eq!(
+            decoded.extra_body.get("stop_reason"),
+            Some(&json!("pause_turn"))
+        );
+
+        let encoded = crate::urp::encode::anthropic::encode_response(&decoded, "claude-sonnet-4-6");
+        assert_eq!(encoded["content"][0], value["content"][0]);
+        assert_eq!(encoded["stop_reason"], json!("pause_turn"));
     }
 }

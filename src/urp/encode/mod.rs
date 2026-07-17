@@ -12,10 +12,37 @@ use std::collections::HashMap;
 
 pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
     for (k, v) in extra {
+        if k.starts_with("_monoize_") {
+            continue;
+        }
         if !obj.contains_key(k) {
             obj.insert(k.clone(), v.clone());
         }
     }
+}
+
+/// Returns a wire-only clone of an opaque ProviderItem body with internal adapter keys removed.
+pub(crate) fn sanitize_provider_item_wire_body(body: &Value) -> Value {
+    fn sanitize(value: &mut Value) {
+        match value {
+            Value::Object(obj) => {
+                obj.retain(|key, _| !key.starts_with("_monoize_"));
+                for value in obj.values_mut() {
+                    sanitize(value);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    sanitize(value);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+
+    let mut sanitized = body.clone();
+    sanitize(&mut sanitized);
+    sanitized
 }
 
 pub fn role_to_str(role: Role) -> &'static str {
@@ -214,4 +241,42 @@ pub fn extract_reasoning_encrypted_from_nodes(nodes: &[Node]) -> Option<Value> {
         } => Some(data.clone()),
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_item_wire_body_sanitizer_is_recursive_and_non_mutating() {
+        let body = json!({
+            "type": "opaque_item",
+            "vendor_unknown": { "keep": true, "_monoize_nested": "drop" },
+            "items": [
+                { "keep": 1, "_monoize_array_member": "drop" },
+                [
+                    { "deep_keep": "yes", "_monoize_deep": "drop" }
+                ]
+            ],
+            "_monoize_top": "drop"
+        });
+
+        let sanitized = sanitize_provider_item_wire_body(&body);
+
+        assert_eq!(
+            sanitized,
+            json!({
+                "type": "opaque_item",
+                "vendor_unknown": { "keep": true },
+                "items": [
+                    { "keep": 1 },
+                    [
+                        { "deep_keep": "yes" }
+                    ]
+                ]
+            })
+        );
+        assert_eq!(body["_monoize_top"], json!("drop"));
+        assert_eq!(body["vendor_unknown"]["_monoize_nested"], json!("drop"));
+    }
 }

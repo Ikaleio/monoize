@@ -73,6 +73,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     if let Some(format) = &req.response_format {
         apply_response_format(obj, format);
     }
+    merge_responses_text_config(obj, req.extra_body.get("text"));
     merge_extra(obj, &req.extra_body);
     ensure_responses_encrypted_reasoning_include(obj);
     body
@@ -90,6 +91,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 extra_body,
             } => {
                 let mut message_extra = extra_body.clone();
+                message_extra.remove(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY);
                 if let Some(id) = id.clone() {
                     message_extra
                         .entry("id".to_string())
@@ -97,6 +99,11 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 }
                 let mut pending_message: Option<PendingResponsesMessageItem> = None;
                 for part in parts {
+                    if let Some(image_generation_call) = encode_image_generation_call_part(part) {
+                        flush_pending_message_item(&mut pending_message, &mut output);
+                        output.push(image_generation_call);
+                        continue;
+                    }
                     if let Some(content_part) = encode_message_content_part(part, true) {
                         append_content_part_to_pending(
                             &mut pending_message,
@@ -168,37 +175,48 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         Value::Null
     };
 
-    let mut body = json!({
-        "id": resp.id,
-        "object": "response",
-        "created_at": created_at,
-        "completed_at": completed_at,
-        "model": logical_model,
-        "status": status,
-        "output": output,
-        "incomplete_details": null,
-        "previous_response_id": null,
-        "instructions": null,
-        "error": null,
-        "tools": [],
-        "tool_choice": "auto",
-        "truncation": "auto",
-        "parallel_tool_calls": true,
-        "text": { "format": { "type": "text" } },
-        "top_p": 1.0,
-        "presence_penalty": 0,
-        "frequency_penalty": 0,
-        "top_logprobs": 0,
-        "temperature": 1.0,
-        "reasoning": null,
-        "max_output_tokens": null,
-        "max_tool_calls": null,
-        "store": false,
-        "background": false,
-        "metadata": {},
-        "safety_identifier": null,
-        "prompt_cache_key": null
+    let source_response = resp
+        .extra_body
+        .get(RESPONSES_RESPONSE_SOURCE_EXTRA_KEY)
+        .and_then(Value::as_object)
+        .cloned();
+    let mut body = source_response.map(Value::Object).unwrap_or_else(|| {
+        json!({
+            "id": resp.id,
+            "object": "response",
+            "created_at": created_at,
+            "completed_at": completed_at,
+            "model": logical_model,
+            "status": status,
+            "output": output.clone(),
+            "incomplete_details": null,
+            "previous_response_id": null,
+            "instructions": null,
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "truncation": "disabled",
+            "parallel_tool_calls": true,
+            "text": { "format": { "type": "text" } },
+            "top_p": 1.0,
+            "top_logprobs": 0,
+            "temperature": 1.0,
+            "reasoning": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "store": false,
+            "background": false,
+            "metadata": {}
+        })
     });
+    if let Some(obj) = body.as_object_mut() {
+        obj.retain(|key, _| !key.starts_with("_monoize_"));
+        obj.insert("id".to_string(), Value::String(resp.id.clone()));
+        obj.insert("object".to_string(), Value::String("response".to_string()));
+        obj.insert("created_at".to_string(), json!(created_at));
+        obj.insert("model".to_string(), Value::String(logical_model.to_string()));
+        obj.insert("output".to_string(), Value::Array(output));
+    }
 
     if let Some(usage) = &resp.usage {
         let input_details = usage_input_details(usage);
@@ -221,14 +239,25 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         });
         if let Some(obj) = usage_value.as_object_mut() {
             for (k, v) in &usage.extra_body {
-                obj.insert(k.clone(), v.clone());
+                if !k.starts_with("_monoize_") {
+                    obj.insert(k.clone(), v.clone());
+                }
             }
         }
         body["usage"] = usage_value;
     }
 
     if let Some(obj) = body.as_object_mut() {
-        merge_extra(obj, &resp.extra_body);
+        for (key, value) in &resp.extra_body {
+            if !key.starts_with("_monoize_")
+                && !matches!(
+                key.as_str(),
+                "id" | "object" | "created" | "created_at" | "model" | "output" | "usage"
+            )
+            {
+                obj.insert(key.clone(), value.clone());
+            }
+        }
     }
     body
 }
@@ -242,6 +271,7 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             extra_body,
         } => {
             let mut message_extra = extra_body.clone();
+            message_extra.remove(RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY);
             if let Some(id) = id.clone() {
                 message_extra
                     .entry("id".to_string())
@@ -251,6 +281,11 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
             let output_text_type = matches!(role, Role::Assistant);
 
             for part in parts {
+                if let Some(image_generation_call) = encode_image_generation_call_part(part) {
+                    flush_pending_message_item(&mut pending_message, out);
+                    out.push(image_generation_call);
+                    continue;
+                }
                 if let Some(content_part) = encode_message_content_part(part, output_text_type) {
                     append_content_part_to_pending(
                         &mut pending_message,

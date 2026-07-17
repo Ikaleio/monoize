@@ -1050,6 +1050,7 @@ mod tests {
                 "item": {
                     "type": "message",
                     "role": "assistant",
+                    "phase": "commentary",
                     "content": [
                         { "type": "output_text", "text": "answer" },
                         { "type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}" }
@@ -1062,24 +1063,34 @@ mod tests {
 
         assert_eq!(
             done_events.len(),
-            4,
-            "fallback should emit two node lifecycles (start+done each)"
+            5,
+            "fallback should emit text start+delta+done and tool start+done"
         );
         assert!(matches!(
             &done_events[0],
             UrpStreamEvent::NodeStart {
                 node_index: 0,
-                header: NodeHeader::Text { .. },
+                header: NodeHeader::Text { phase: Some(phase), .. },
                 ..
-            }
+            } if phase == "commentary"
         ));
         assert!(matches!(
             &done_events[1],
-            UrpStreamEvent::NodeDone {
+            UrpStreamEvent::NodeDelta {
                 node_index: 0,
-                node: Node::Text { content, .. },
+                delta: NodeDelta::Text { content },
+                extra_body,
                 ..
             } if content == "answer"
+                && extra_body.get("phase") == Some(&json!("commentary"))
+        ));
+        assert!(matches!(
+            &done_events[2],
+            UrpStreamEvent::NodeDone {
+                node_index: 0,
+                node: Node::Text { content, phase: Some(phase), .. },
+                ..
+            } if content == "answer" && phase == "commentary"
         ));
         assert!(done_events.iter().any(|event| matches!(
             event,

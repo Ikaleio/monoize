@@ -285,26 +285,39 @@ async fn messages_streaming_keeps_signature_in_thinking_block_and_delta_order() 
         .filter_map(|(_, data)| serde_json::from_str::<Value>(data).ok())
         .collect();
 
-    let thinking_start = events
+    let thinking_starts = events
         .iter()
-        .find(|event| {
+        .filter(|event| {
             event["type"].as_str() == Some("content_block_start")
                 && event["content_block"]["type"].as_str() == Some("thinking")
         })
-        .expect("thinking block start");
+        .collect::<Vec<_>>();
+    assert_eq!(
+        thinking_starts.len(),
+        1,
+        "reasoning text and its signature must share one thinking block: {text}"
+    );
+    let thinking_start = thinking_starts[0];
+    let thinking_block_index = thinking_start["index"]
+        .as_u64()
+        .expect("thinking block index");
     assert_eq!(
         thinking_start["content_block"]["thinking"].as_str(),
         Some("")
     );
-    assert!(
-        thinking_start["content_block"].get("signature").is_none(),
-        "ordinary thinking content_block_start must not duplicate the later signature_delta: {text}"
+    assert_eq!(
+        thinking_start["content_block"]["signature"].as_str(),
+        Some(""),
+        "ordinary thinking content_block_start must carry the empty signature stub: {text}"
     );
 
     let mut thinking_delta_pos = None;
     let mut signature_delta_pos = None;
     let mut stop_pos = None;
     for (idx, event) in events.iter().enumerate() {
+        if event["index"].as_u64() != Some(thinking_block_index) {
+            continue;
+        }
         match event["delta"]["type"].as_str() {
             Some("thinking_delta") if thinking_delta_pos.is_none() => {
                 thinking_delta_pos = Some(idx)
@@ -753,6 +766,223 @@ async fn messages_stream_passthrough_from_messages_upstream() {
 }
 
 #[tokio::test]
+async fn messages_streaming_merges_partial_usage_and_terminalizes_once() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "partial stream usage" }] }],
+            "stream": true,
+            "stream_mode": "messages_partial_usage"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "partial Messages usage stream");
+    assert_exactly_one_message_terminal_pair(&events, "partial Messages usage stream");
+
+    let message_delta = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("message_delta"))
+        .expect("terminal message_delta");
+    assert_eq!(message_delta["usage"]["input_tokens"].as_u64(), Some(10));
+    assert_eq!(message_delta["usage"]["output_tokens"].as_u64(), Some(9));
+
+    let text = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("text_delta"))
+        .filter_map(|event| event["delta"]["text"].as_str())
+        .collect::<String>();
+    assert_eq!(text, "partial usage");
+}
+
+#[tokio::test]
+async fn messages_streaming_preserves_full_cumulative_usage_at_start_and_terminal() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "full stream usage" }] }],
+            "stream": true,
+            "stream_mode": "messages_partial_usage"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "full cumulative Messages usage stream");
+    assert_exactly_one_message_terminal_pair(&events, "full cumulative Messages usage stream");
+
+    let start_usage = &events.first().expect("message_start")["message"]["usage"];
+    assert_eq!(start_usage["input_tokens"], json!(10));
+    assert_eq!(start_usage["output_tokens"], json!(0));
+    assert_eq!(start_usage["cache_read_input_tokens"], json!(3));
+    assert_eq!(start_usage["cache_creation_input_tokens"], json!(2));
+    assert_eq!(
+        start_usage["cache_creation"]["ephemeral_5m_input_tokens"],
+        json!(1)
+    );
+    assert_eq!(
+        start_usage["cache_creation"]["ephemeral_1h_input_tokens"],
+        json!(1)
+    );
+    assert_eq!(start_usage["tool_prompt_input_tokens"], json!(4));
+    assert_eq!(
+        start_usage["output_tokens_details"]["thinking_tokens"],
+        json!(0)
+    );
+    assert!(start_usage.get("reasoning_output_tokens").is_none());
+    assert_eq!(start_usage["accepted_prediction_output_tokens"], json!(6));
+    assert_eq!(start_usage["rejected_prediction_output_tokens"], json!(7));
+    assert_eq!(start_usage["native_counter"], json!(17));
+    assert_eq!(
+        start_usage["server_tool_use"]["web_search_requests"],
+        json!(2)
+    );
+
+    let terminal_usage = &events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("message_delta"))
+        .expect("terminal message_delta")["usage"];
+    assert_eq!(terminal_usage["input_tokens"], json!(10));
+    assert_eq!(terminal_usage["output_tokens"], json!(9));
+    assert_eq!(terminal_usage["cache_read_input_tokens"], json!(3));
+    assert_eq!(terminal_usage["cache_creation_input_tokens"], json!(2));
+    assert_eq!(
+        terminal_usage["cache_creation"]["ephemeral_5m_input_tokens"],
+        json!(1)
+    );
+    assert_eq!(
+        terminal_usage["cache_creation"]["ephemeral_1h_input_tokens"],
+        json!(1)
+    );
+    assert_eq!(terminal_usage["tool_prompt_input_tokens"], json!(4));
+    assert_eq!(
+        terminal_usage["output_tokens_details"]["thinking_tokens"],
+        json!(5)
+    );
+    assert!(terminal_usage.get("reasoning_output_tokens").is_none());
+    assert_eq!(
+        terminal_usage["accepted_prediction_output_tokens"],
+        json!(6)
+    );
+    assert_eq!(
+        terminal_usage["rejected_prediction_output_tokens"],
+        json!(7)
+    );
+    assert_eq!(terminal_usage["native_counter"], json!(17));
+    assert_eq!(
+        terminal_usage["server_tool_use"]["web_search_requests"],
+        json!(2)
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.to_string().contains("_monoize_")),
+        "internal usage snapshot marker must not reach Messages SSE: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn messages_streaming_preserves_omitted_thinking_lifecycle() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "omit thinking text" }] }],
+            "stream": true,
+            "stream_mode": "messages_omitted_thinking"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "omitted Messages thinking stream");
+    assert_non_interleaved_message_blocks(&events, "omitted Messages thinking stream");
+    assert_exactly_one_message_terminal_pair(&events, "omitted Messages thinking stream");
+
+    let start = events
+        .iter()
+        .find(|event| {
+            event["type"].as_str() == Some("content_block_start")
+                && event["content_block"]["type"].as_str() == Some("thinking")
+        })
+        .expect("omitted thinking block start");
+    let index = start["index"].as_u64().expect("thinking block index");
+    assert_eq!(start["content_block"]["thinking"].as_str(), Some(""));
+    assert_eq!(start["content_block"]["signature"].as_str(), Some(""));
+
+    let thinking_delta_count = events
+        .iter()
+        .filter(|event| {
+            event["index"].as_u64() == Some(index)
+                && event["delta"]["type"].as_str() == Some("thinking_delta")
+        })
+        .count();
+    assert_eq!(
+        thinking_delta_count, 0,
+        "omitted thinking must not synthesize a thinking_delta: {events:?}"
+    );
+
+    let signature_deltas: Vec<&str> = events
+        .iter()
+        .filter(|event| {
+            event["index"].as_u64() == Some(index)
+                && event["delta"]["type"].as_str() == Some("signature_delta")
+        })
+        .filter_map(|event| event["delta"]["signature"].as_str())
+        .collect();
+    assert_eq!(
+        signature_deltas.len(),
+        1,
+        "omitted thinking must emit exactly one signature_delta: {events:?}"
+    );
+    assert!(!signature_deltas[0].is_empty());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                event["type"].as_str() == Some("content_block_stop")
+                    && event["index"].as_u64() == Some(index)
+            })
+            .count(),
+        1,
+        "omitted thinking block must stop exactly once: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn messages_streaming_preserves_exact_messages_stop_reason() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "pause after this turn" }] }],
+            "stream": true,
+            "stream_mode": "messages_pause_turn"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "Messages pause_turn stream");
+    assert_exactly_one_message_terminal_pair(&events, "Messages pause_turn stream");
+    let message_delta = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("message_delta"))
+        .expect("terminal message_delta");
+    assert_eq!(
+        message_delta["delta"]["stop_reason"].as_str(),
+        Some("pause_turn")
+    );
+}
+
+#[tokio::test]
 async fn messages_stream_passthrough_preserves_chunked_deltas_and_suppresses_upstream_ping() {
     let ctx = setup().await;
     let text = collect_messages_stream_text(
@@ -987,6 +1217,108 @@ async fn messages_stream_passthrough_preserves_messages_upstream_error() {
 }
 
 #[tokio::test]
+async fn messages_stream_malformed_json_is_terminal_even_before_message_stop() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "malformed" }] }],
+            "stream": true,
+            "stream_mode": "messages_malformed_then_stop"
+        }),
+    )
+    .await;
+    let events: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+
+    let error = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("error"))
+        .expect("malformed Messages JSON must emit a terminal error");
+    assert_eq!(
+        error["error"]["type"].as_str(),
+        Some("messages_invalid_sse_json")
+    );
+    assert!(
+        events.iter().all(|event| !matches!(
+            event["type"].as_str(),
+            Some("message_delta" | "message_stop")
+        )),
+        "a later upstream message_stop must not turn malformed JSON into success: {text}"
+    );
+}
+
+#[tokio::test]
+async fn messages_stream_noncontiguous_wire_indices_become_contiguous_blocks() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "indices" }] }],
+            "stream": true,
+            "stream_mode": "messages_noncontiguous_indices"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "noncontiguous upstream Messages indices");
+    let starts: Vec<u64> = events
+        .iter()
+        .filter(|event| event["type"].as_str() == Some("content_block_start"))
+        .filter_map(|event| event["index"].as_u64())
+        .collect();
+    assert_eq!(starts, vec![0, 1]);
+    let text_deltas: Vec<&str> = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("text_delta"))
+        .filter_map(|event| event["delta"]["text"].as_str())
+        .collect();
+    assert_eq!(text_deltas, vec!["first", "second"]);
+}
+
+#[tokio::test]
+async fn messages_stream_unmarked_eof_emits_error_not_success() {
+    let ctx = setup().await;
+    let text = collect_messages_stream_text(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "truncated" }] }],
+            "stream": true,
+            "stream_mode": "messages_unmarked_eof"
+        }),
+    )
+    .await;
+    let events: Vec<Value> = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .collect();
+
+    let error = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("error"))
+        .expect("unmarked Messages EOF must emit a terminal error");
+    assert_eq!(
+        error["error"]["type"].as_str(),
+        Some("upstream_stream_missing_terminal")
+    );
+    assert!(
+        events.iter().all(|event| !matches!(
+            event["type"].as_str(),
+            Some("message_delta" | "message_stop")
+        )),
+        "channel EOF must not synthesize a successful Messages terminal pair: {text}"
+    );
+}
+
+#[tokio::test]
 async fn messages_streaming_prestream_upstream_error_returns_error_stream() {
     let ctx = setup().await;
     let text = collect_messages_stream_text(
@@ -1116,10 +1448,6 @@ async fn messages_stream_thinking_from_responses_upstream() {
         }),
     )
     .await;
-
-    for (idx, event) in events.iter().enumerate() {
-        eprintln!("event {} type = {:?}", idx, event["type"].as_str());
-    }
 
     assert_messages_stream_invariants(&events, "resp→msg thinking stream");
 
@@ -1624,8 +1952,9 @@ async fn messages_stream_signature_delta_carries_sigil_from_responses_upstream()
         combined.starts_with("mz2."),
         "signature emitted to downstream MUST carry an mz2 envelope so history round-trip preserves item and model metadata; got `{combined}`"
     );
-    assert!(
-        start_signature.is_none(),
-        "ordinary thinking content_block_start must not duplicate the signature_delta payload"
+    assert_eq!(
+        start_signature.as_deref(),
+        Some(""),
+        "ordinary thinking content_block_start must carry an empty signature stub"
     );
 }

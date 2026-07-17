@@ -16,6 +16,8 @@ pub(crate) async fn encode_urp_stream_as_responses(
     let mut streamed_output_indices: HashSet<usize> = HashSet::new();
     let mut reasoning_delta_indices: HashSet<usize> = HashSet::new();
     let mut reasoning_done_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_content_part_added_indices: HashSet<usize> = HashSet::new();
+    let mut reasoning_content_part_done_indices: HashSet<usize> = HashSet::new();
     let mut reasoning_summary_added_indices: HashSet<usize> = HashSet::new();
     let mut reasoning_summary_delta_indices: HashSet<usize> = HashSet::new();
     let mut reasoning_summary_text_done_indices: HashSet<usize> = HashSet::new();
@@ -156,13 +158,30 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         .unwrap_or_else(now_ts),
                 );
 
-                let payload = response_envelope_payload(
-                    &id,
-                    created.expect("response.created timestamp set from response start"),
-                    logical_model,
-                    "in_progress",
-                    Value::Array(Vec::new()),
-                );
+                let payload = if let Some(source) = extra_body
+                    .get(urp::RESPONSES_STREAM_START_SOURCE_EXTRA_KEY)
+                    .and_then(Value::as_object)
+                {
+                    let mut response = source.clone();
+                    response.retain(|key, _| !key.starts_with("_monoize_"));
+                    response.insert("id".to_string(), Value::String(id.clone()));
+                    response.insert("object".to_string(), json!("response"));
+                    response.insert(
+                        "created_at".to_string(),
+                        json!(created.expect("response.created timestamp set from response start")),
+                    );
+                    response.remove("created");
+                    response.insert("model".to_string(), json!(logical_model));
+                    json!({ "response": response })
+                } else {
+                    response_envelope_payload(
+                        &id,
+                        created.expect("response.created timestamp set from response start"),
+                        logical_model,
+                        "in_progress",
+                        Value::Array(Vec::new()),
+                    )
+                };
                 send_responses_event(&tx, &mut seq, "response.created", payload.clone()).await?;
                 send_responses_event(&tx, &mut seq, "response.in_progress", payload).await?;
             }
@@ -182,7 +201,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 {
                     continue;
                 }
-                let zone = zone_from_node_header(&header);
+                let zone = zone_from_node_header(&header, &extra_body);
                 let phase = node_header_phase(&header);
                 let starts_new_shared_message = zone == ResponsesOutputZone::Message
                     && active_node_message_output.as_ref().is_none_or(|active| {
@@ -489,6 +508,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         if let Some(content) =
                             content.as_deref().filter(|content| !content.is_empty())
                         {
+                            ensure_reasoning_content_part_added(
+                                &tx,
+                                &mut seq,
+                                &mut reasoning_content_part_added_indices,
+                                node_state.output_index,
+                                Value::String(node_state.item_id.clone()),
+                            )
+                            .await?;
                             reasoning_delta_indices.insert(node_state.output_index);
                             send_responses_delta_string(
                                 &tx,
@@ -665,6 +692,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                         if let Some(content) =
                             content.as_deref().filter(|content| !content.is_empty())
                         {
+                            ensure_reasoning_content_part_added(
+                                &tx,
+                                &mut seq,
+                                &mut reasoning_content_part_added_indices,
+                                node_state.output_index,
+                                Value::String(node_state.item_id.clone()),
+                            )
+                            .await?;
                             if reasoning_done_indices.insert(node_state.output_index) {
                                 send_responses_event(
                                     &tx,
@@ -682,6 +717,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                 )
                                 .await?;
                             }
+                            ensure_reasoning_content_part_done(
+                                &tx,
+                                &mut seq,
+                                &mut reasoning_content_part_done_indices,
+                                node_state.output_index,
+                                Value::String(node_state.item_id.clone()),
+                                content,
+                            )
+                            .await?;
                         }
                     }
                     urp::Node::ToolCall {
@@ -792,6 +836,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 output,
                 extra_body,
             } => {
+                let terminal_extra = extra_body.clone();
                 let mut remaining_node_indices: Vec<u32> = node_states.keys().copied().collect();
                 remaining_node_indices.sort_unstable();
                 let mut used_terminal_output_positions = HashSet::new();
@@ -971,6 +1016,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                             if let Some(content) =
                                 content.as_deref().filter(|content| !content.is_empty())
                             {
+                                ensure_reasoning_content_part_added(
+                                    &tx,
+                                    &mut seq,
+                                    &mut reasoning_content_part_added_indices,
+                                    node_state.output_index,
+                                    Value::String(node_state.item_id.clone()),
+                                )
+                                .await?;
                                 if reasoning_delta_indices.insert(node_state.output_index) {
                                     send_responses_delta_string(
                                         &tx,
@@ -1007,6 +1060,15 @@ pub(crate) async fn encode_urp_stream_as_responses(
                                     )
                                     .await?;
                                 }
+                                ensure_reasoning_content_part_done(
+                                    &tx,
+                                    &mut seq,
+                                    &mut reasoning_content_part_done_indices,
+                                    node_state.output_index,
+                                    Value::String(node_state.item_id.clone()),
+                                    content,
+                                )
+                                .await?;
                             }
                         }
                         urp::Node::ToolCall {
@@ -1139,15 +1201,6 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 if let Some(created) = created {
                     response["created_at"] = json!(created);
                 }
-                let mut terminal_output = response
-                    .get("output")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let shared_terminal_extra =
-                    active_node_message_output.as_ref().and_then(|active| {
-                        (!active.envelope_extra.is_empty()).then_some(active.envelope_extra.clone())
-                    });
                 if let Some(active) = active_node_message_output.take()
                     && active.item.is_object()
                     && completed_output_indices.insert(active.output_index)
@@ -1168,64 +1221,30 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     .await?;
                     completed_output_items.push((active.output_index, done_item));
                 }
-                let mut rebuild_output_items = completed_output_items.clone();
-                for (output_index, item) in terminal_output.iter().enumerate() {
-                    if let Some((_, existing_item)) = rebuild_output_items
-                        .iter_mut()
-                        .find(|(existing_index, _)| *existing_index == output_index)
-                    {
-                        merge_terminal_output_item(existing_item, item);
-                    } else if let Some((_, existing_item)) = rebuild_output_items
-                        .iter_mut()
-                        .find(|(_, existing_item)| {
-                            responses_output_items_semantically_match(existing_item, item)
-                        })
-                    {
-                        merge_terminal_output_item(existing_item, item);
-                    } else {
-                        rebuild_output_items.push((output_index, item.clone()));
-                    }
-                }
-                if !completed_output_items.is_empty() && !streamed_output_indices.is_empty() {
-                    rebuild_output_items.sort_by_key(|(idx, _)| *idx);
-                    response["output"] =
-                        Value::Array(rebuild_completed_response_output(&rebuild_output_items));
-                } else if terminal_output.is_empty() {
-                    if !completed_output_items.is_empty() {
-                        completed_output_items.sort_by_key(|(idx, _)| *idx);
-                        response["output"] = Value::Array(rebuild_completed_response_output(
-                            &completed_output_items,
-                        ));
-                    }
-                } else {
-                    if let Some(extra) = shared_terminal_extra.as_ref()
-                        && let Some(first_message) = terminal_output.iter_mut().find(|item| {
-                            item.get("type").and_then(Value::as_str) == Some("message")
-                        })
-                        && let Some(obj) = first_message.as_object_mut()
-                    {
-                        merge_json_extra_preserving_typed(obj, extra);
-                    }
-                    response["output"] = Value::Array(terminal_output);
-                }
-                terminal_output = response
+                response = response_with_reasoning_durations(
+                    response,
+                    Some(stream_started_at.elapsed().as_secs()),
+                );
+                // Completed lifecycle items are emission evidence only. The encoded
+                // ResponseDone output remains authoritative even when it removes or
+                // reorders items that were visible earlier in the stream.
+                let terminal_output = response
                     .get("output")
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                sync_completed_output_items_with_terminal_output(
-                    &mut completed_output_items,
-                    &terminal_output,
-                );
                 emit_missing_terminal_output_done_events(
                     &tx,
                     &mut seq,
+                    &mut next_output_index,
                     &mut completed_output_indices,
                     &mut streamed_output_indices,
                     &mut completed_output_items,
                     &terminal_output,
                     &mut reasoning_delta_indices,
                     &mut reasoning_done_indices,
+                    &mut reasoning_content_part_added_indices,
+                    &mut reasoning_content_part_done_indices,
                     &mut reasoning_summary_added_indices,
                     &mut reasoning_summary_delta_indices,
                     &mut reasoning_summary_text_done_indices,
@@ -1236,17 +1255,14 @@ pub(crate) async fn encode_urp_stream_as_responses(
                     sse_max_frame_length,
                 )
                 .await?;
-                if !completed_output_items.is_empty() {
-                    completed_output_items.sort_by_key(|(idx, _)| *idx);
-                    response["output"] =
-                        Value::Array(rebuild_completed_response_output(&completed_output_items));
-                }
                 emit_missing_terminal_sub_lifecycles(
                     &tx,
                     &mut seq,
                     &completed_output_items,
                     &mut reasoning_delta_indices,
                     &mut reasoning_done_indices,
+                    &mut reasoning_content_part_added_indices,
+                    &mut reasoning_content_part_done_indices,
                     &mut reasoning_summary_added_indices,
                     &mut reasoning_summary_delta_indices,
                     &mut reasoning_summary_text_done_indices,
@@ -1259,17 +1275,55 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 let mut completed_response = ensure_response_object_user_field(
                     sanitize_responses_completed_for_frame_limit(&response, sse_max_frame_length),
                 );
-                completed_response["completed_at"] = json!(now_ts());
+                for key in ["status", "error", "incomplete_details", "completed_at"] {
+                    if let Some(value) = terminal_extra.get(key) {
+                        completed_response[key] = value.clone();
+                    }
+                }
+                let terminal_status = completed_response
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("completed")
+                    .to_string();
+                if terminal_status == "completed" && completed_response.get("completed_at").is_none()
+                {
+                    completed_response["completed_at"] = json!(now_ts());
+                }
+                let terminal_event = match terminal_status.as_str() {
+                    "incomplete" => "response.incomplete",
+                    "failed" => "response.failed",
+                    "cancelled" => "response.cancelled",
+                    _ => "response.completed",
+                };
                 send_responses_event(
                     &tx,
                     &mut seq,
-                    "response.completed",
+                    terminal_event,
                     json!({ "response": completed_response }),
                 )
                 .await?;
                 send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
             }
-            UrpStreamEvent::ProviderControl { .. } => {}
+            UrpStreamEvent::ProviderControl {
+                protocol,
+                event_name,
+                data,
+                ..
+            } => {
+                if protocol == "responses"
+                    && !matches!(
+                        event_name.as_str(),
+                        "response.created"
+                            | "response.in_progress"
+                            | "response.completed"
+                            | "response.incomplete"
+                            | "response.failed"
+                            | "response.cancelled"
+                    )
+                {
+                    send_responses_event(&tx, &mut seq, &event_name, data).await?;
+                }
+            }
             UrpStreamEvent::Error {
                 code,
                 message,
@@ -1300,8 +1354,16 @@ pub(crate) async fn encode_urp_stream_as_responses(
     Ok(())
 }
 
-fn zone_from_node_header(header: &urp::NodeHeader) -> ResponsesOutputZone {
+fn zone_from_node_header(
+    header: &urp::NodeHeader,
+    extra_body: &HashMap<String, Value>,
+) -> ResponsesOutputZone {
     match header {
+        urp::NodeHeader::Image { .. }
+            if extra_body.contains_key(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY) =>
+        {
+            ResponsesOutputZone::ImageGenerationCall
+        }
         urp::NodeHeader::Reasoning { .. } => ResponsesOutputZone::Reasoning,
         urp::NodeHeader::ToolCall { .. } => ResponsesOutputZone::FunctionCall,
         urp::NodeHeader::ProviderItem { .. } => ResponsesOutputZone::ProviderItem,
@@ -1385,7 +1447,11 @@ fn image_generation_call_event_payload(
         }
     };
     for (key, value) in extra_body {
-        if key != "type" && key != "provider_event_type" && key != "sequence_number" {
+        if !key.starts_with("_monoize_")
+            && key != "type"
+            && key != "provider_event_type"
+            && key != "sequence_number"
+        {
             payload.entry(key.clone()).or_insert(value.clone());
         }
     }
@@ -1398,7 +1464,11 @@ fn image_generation_call_image_event_payload(
 ) -> Value {
     let mut payload = Map::new();
     for (key, value) in extra_body {
-        if key != "type" && key != "provider_event_type" && key != "sequence_number" {
+        if !key.starts_with("_monoize_")
+            && key != "type"
+            && key != "provider_event_type"
+            && key != "sequence_number"
+        {
             payload.insert(key.clone(), value.clone());
         }
     }
@@ -1492,6 +1562,31 @@ fn stream_output_item_start_stub_from_node_header(
             merge_json_extra(&mut obj, extra_body);
             Value::Object(obj)
         }
+        ResponsesOutputZone::ImageGenerationCall => {
+            let mut obj = extra_body
+                .get(urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            obj.insert("type".to_string(), json!("image_generation_call"));
+            obj.remove("result");
+            let id = node_header_id(header)
+                .or_else(|| obj.get("id").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_else(|| format!("ig_{}", uuid::Uuid::new_v4()));
+            obj.insert("id".to_string(), json!(id));
+            obj.insert("status".to_string(), json!("in_progress"));
+            merge_json_extra_preserving_typed(&mut obj, envelope_extra);
+            for (key, value) in extra_body {
+                if key != urp::RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY
+                    && !key.starts_with("_monoize_")
+                    && key != "result"
+                {
+                    obj.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
+            obj.retain(|key, _| !key.starts_with("_monoize_"));
+            Value::Object(obj)
+        }
         ResponsesOutputZone::FunctionCall => {
             let (call_id, name) = match header {
                 urp::NodeHeader::ToolCall { call_id, name, .. } => (call_id.clone(), name.clone()),
@@ -1541,7 +1636,13 @@ fn stream_output_item_start_stub_from_node_header(
                 obj.insert("id".to_string(), json!(id));
             }
             merge_json_extra_preserving_typed(&mut obj, envelope_extra);
-            merge_json_extra(&mut obj, extra_body);
+            if let Value::Object(sanitized_extra_body) = sanitize_provider_item_wire_body(
+                &Value::Object(extra_body.clone().into_iter().collect()),
+            ) {
+                for (key, value) in sanitized_extra_body {
+                    obj.insert(key, value);
+                }
+            }
             Value::Object(obj)
         }
     }
@@ -1612,11 +1713,12 @@ fn encode_node_done_content_part(node: &urp::Node) -> Value {
             if *origin_protocol != urp::ProviderProtocol::Responses {
                 return Value::Null;
             }
-            let mut obj = match body {
-                Value::Object(map) => map.clone(),
+            let sanitized_body = sanitize_provider_item_wire_body(body);
+            let mut obj = match sanitized_body {
+                Value::Object(map) => map,
                 other => {
                     let mut map = Map::new();
-                    map.insert("body".to_string(), other.clone());
+                    map.insert("body".to_string(), other);
                     map
                 }
             };
@@ -1635,11 +1737,12 @@ fn encode_responses_provider_output_item(
     extra_body: &HashMap<String, Value>,
     id: Option<&String>,
 ) -> Value {
-    let mut obj = match body {
-        Value::Object(map) => map.clone(),
+    let sanitized_body = sanitize_provider_item_wire_body(body);
+    let mut obj = match sanitized_body {
+        Value::Object(map) => map,
         other => {
             let mut map = Map::new();
-            map.insert("body".to_string(), other.clone());
+            map.insert("body".to_string(), other);
             map
         }
     };
@@ -1780,11 +1883,18 @@ fn encode_stream_output_item_from_node(node: &urp::Node) -> Value {
             Value::Object(obj)
         }
         urp::Node::Image {
+            id,
             role,
             source,
             extra_body,
-            ..
         } => {
+            if let Some(item) = urp::encode::openai_responses::encode_image_generation_call_item(
+                id.as_deref(),
+                source,
+                extra_body,
+            ) {
+                return complete_stream_output_item(item);
+            }
             let mut obj = Map::new();
             obj.insert("type".to_string(), json!("message"));
             obj.insert("role".to_string(), json!(ordinary_role_to_str(*role)));
@@ -2021,10 +2131,13 @@ fn append_node_delta_to_completed_item(
             append_string_field(&mut item, "arguments", arguments);
         }
         (ResponsesOutputZone::ProviderItem, urp::NodeDelta::ProviderItem { data }) => {
-            match (item.as_object_mut(), data) {
+            let sanitized_data = sanitize_provider_item_wire_body(data);
+            match (item.as_object_mut(), &sanitized_data) {
                 (Some(obj), Value::Object(delta_obj)) => {
                     for (key, value) in delta_obj {
-                        obj.insert(key.clone(), value.clone());
+                        if !key.starts_with("_monoize_") {
+                            obj.insert(key.clone(), value.clone());
+                        }
                     }
                 }
                 (Some(obj), Value::Null) => {
@@ -2080,6 +2193,9 @@ fn apply_node_done_to_stream_output_item_state(
                     content.push(encoded_part);
                 }
             }
+        }
+        ResponsesOutputZone::ImageGenerationCall => {
+            *item = complete_stream_output_item(encode_stream_output_item_from_node(node));
         }
         ResponsesOutputZone::Reasoning => {
             let existing_id = item.get("id").cloned();
@@ -2164,6 +2280,7 @@ fn apply_node_done_to_stream_output_item(
             }
         }
         ResponsesOutputZone::Reasoning
+        | ResponsesOutputZone::ImageGenerationCall
         | ResponsesOutputZone::FunctionCall
         | ResponsesOutputZone::ProviderItem => {}
     }
@@ -2264,7 +2381,13 @@ fn complete_stream_output_item(mut item: Value) -> Value {
     if let Some(obj) = item.as_object_mut() {
         if matches!(
             obj.get("type").and_then(Value::as_str),
-            Some("message" | "reasoning" | "function_call" | "function_call_output")
+            Some(
+                "message"
+                    | "image_generation_call"
+                    | "reasoning"
+                    | "function_call"
+                    | "function_call_output"
+            )
         ) {
             obj.insert("status".to_string(), json!("completed"));
         }
@@ -2410,32 +2533,6 @@ fn response_with_reasoning_durations(mut response: Value, duration_secs: Option<
     response
 }
 
-fn rebuild_completed_response_output(completed_output_items: &[(usize, Value)]) -> Vec<Value> {
-    completed_output_items
-        .iter()
-        .map(|(_, item)| item.clone())
-        .collect()
-}
-
-fn sync_completed_output_items_with_terminal_output(
-    completed_output_items: &mut Vec<(usize, Value)>,
-    terminal_output: &[Value],
-) {
-    for (output_index, item) in terminal_output.iter().enumerate() {
-        if let Some((_, existing_item)) = completed_output_items
-            .iter_mut()
-            .find(|(existing_index, _)| *existing_index == output_index)
-        {
-            merge_terminal_output_item(existing_item, item);
-        } else if let Some((_, existing_item)) = completed_output_items
-            .iter_mut()
-            .find(|(_, existing_item)| responses_output_items_semantically_match(existing_item, item))
-        {
-            merge_terminal_output_item(existing_item, item);
-        }
-    }
-}
-
 fn responses_output_items_semantically_match(left: &Value, right: &Value) -> bool {
     let left_type = left.get("type").and_then(Value::as_str);
     let right_type = right.get("type").and_then(Value::as_str);
@@ -2514,75 +2611,19 @@ fn responses_reasoning_items_semantically_match(left: &Value, right: &Value) -> 
         && left.get("summary") == right.get("summary")
 }
 
-fn merge_terminal_output_item(existing_item: &mut Value, terminal_item: &Value) {
-    let existing_type = existing_item
-        .get("type")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let terminal_type = terminal_item
-        .get("type")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    if existing_type.is_none() || existing_type != terminal_type {
-        return;
-    }
-
-    let Some(existing_obj) = existing_item.as_object_mut() else {
-        return;
-    };
-    let Some(terminal_obj) = terminal_item.as_object() else {
-        return;
-    };
-
-    match existing_type.as_deref() {
-        Some("message") => {
-            if let Some(content) = terminal_obj.get("content").cloned() {
-                existing_obj.insert("content".to_string(), content);
-            }
-            if let Some(status) = terminal_obj.get("status").cloned() {
-                existing_obj.insert("status".to_string(), status);
-            }
-        }
-        Some("reasoning") => {
-            for key in [
-                "content",
-                "summary",
-                "encrypted_content",
-                "source",
-                "status",
-            ] {
-                if let Some(value) = terminal_obj.get(key).cloned() {
-                    existing_obj.insert(key.to_string(), value);
-                }
-            }
-        }
-        Some("function_call") => {
-            for key in ["arguments", "call_id", "name", "status"] {
-                if let Some(value) = terminal_obj.get(key).cloned() {
-                    existing_obj.insert(key.to_string(), value);
-                }
-            }
-        }
-        _ => {
-            for (key, value) in terminal_obj {
-                if key != "id" && key != "type" {
-                    existing_obj.insert(key.clone(), value.clone());
-                }
-            }
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn emit_missing_terminal_output_done_events(
     tx: &mpsc::Sender<Event>,
     seq: &mut u64,
+    next_output_index: &mut usize,
     completed_output_indices: &mut HashSet<usize>,
     streamed_output_indices: &mut HashSet<usize>,
     completed_output_items: &mut Vec<(usize, Value)>,
     terminal_output: &[Value],
     reasoning_delta_indices: &mut HashSet<usize>,
     reasoning_done_indices: &mut HashSet<usize>,
+    reasoning_content_part_added_indices: &mut HashSet<usize>,
+    reasoning_content_part_done_indices: &mut HashSet<usize>,
     reasoning_summary_added_indices: &mut HashSet<usize>,
     reasoning_summary_delta_indices: &mut HashSet<usize>,
     reasoning_summary_text_done_indices: &mut HashSet<usize>,
@@ -2592,17 +2633,29 @@ async fn emit_missing_terminal_output_done_events(
     default_reasoning_duration_secs: u64,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
-    for (output_index, item) in terminal_output.iter().enumerate() {
-        if completed_output_indices.contains(&output_index) {
+    for (terminal_position, item) in terminal_output.iter().enumerate() {
+        if completed_output_items.iter().any(|(_, existing_item)| {
+            responses_output_items_semantically_match(existing_item, item)
+        }) {
             continue;
         }
-        if let Some((_, existing_item)) = completed_output_items
-            .iter_mut()
-            .find(|(_, existing_item)| responses_output_items_semantically_match(existing_item, item))
+        let output_index = if !streamed_output_indices.contains(&terminal_position)
+            && !completed_output_indices.contains(&terminal_position)
         {
-            merge_terminal_output_item(existing_item, item);
-            continue;
-        }
+            *next_output_index = (*next_output_index).max(terminal_position + 1);
+            terminal_position
+        } else {
+            // A wire-visible output_index cannot be reassigned to a different
+            // terminal-only item, so complete that item on the next unused index.
+            while streamed_output_indices.contains(&*next_output_index)
+                || completed_output_indices.contains(&*next_output_index)
+            {
+                *next_output_index += 1;
+            }
+            let allocated = *next_output_index;
+            *next_output_index += 1;
+            allocated
+        };
         let done_item = sanitize_responses_output_item_for_frame_limit(
             &reasoning_item_with_duration(item.clone(), Some(default_reasoning_duration_secs)),
             sse_max_frame_length,
@@ -2634,6 +2687,8 @@ async fn emit_missing_terminal_output_done_events(
             &single_item,
             reasoning_delta_indices,
             reasoning_done_indices,
+            reasoning_content_part_added_indices,
+            reasoning_content_part_done_indices,
             reasoning_summary_added_indices,
             reasoning_summary_delta_indices,
             reasoning_summary_text_done_indices,
@@ -2742,12 +2797,63 @@ async fn emit_missing_terminal_message_child_lifecycles(
     Ok(())
 }
 
+async fn ensure_reasoning_content_part_added(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    added_indices: &mut HashSet<usize>,
+    output_index: usize,
+    item_id: Value,
+) -> AppResult<()> {
+    if added_indices.insert(output_index) {
+        send_responses_event(
+            tx,
+            seq,
+            "response.content_part.added",
+            json!({
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": { "type": "reasoning_text", "text": "" },
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn ensure_reasoning_content_part_done(
+    tx: &mpsc::Sender<Event>,
+    seq: &mut u64,
+    done_indices: &mut HashSet<usize>,
+    output_index: usize,
+    item_id: Value,
+    text: &str,
+) -> AppResult<()> {
+    if done_indices.insert(output_index) {
+        send_responses_event(
+            tx,
+            seq,
+            "response.content_part.done",
+            json!({
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": { "type": "reasoning_text", "text": text },
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn emit_missing_terminal_sub_lifecycles(
     tx: &mpsc::Sender<Event>,
     seq: &mut u64,
     completed_output_items: &[(usize, Value)],
     reasoning_delta_indices: &mut HashSet<usize>,
     reasoning_done_indices: &mut HashSet<usize>,
+    reasoning_content_part_added_indices: &mut HashSet<usize>,
+    reasoning_content_part_done_indices: &mut HashSet<usize>,
     reasoning_summary_added_indices: &mut HashSet<usize>,
     reasoning_summary_delta_indices: &mut HashSet<usize>,
     reasoning_summary_text_done_indices: &mut HashSet<usize>,
@@ -2833,6 +2939,14 @@ async fn emit_missing_terminal_sub_lifecycles(
                     }
                 }
                 if let Some(text) = reasoning_text_from_item(item) {
+                    ensure_reasoning_content_part_added(
+                        tx,
+                        seq,
+                        reasoning_content_part_added_indices,
+                        *output_index,
+                        item_id.clone(),
+                    )
+                    .await?;
                     if reasoning_delta_indices.insert(*output_index) {
                         send_responses_delta_string(
                             tx,
@@ -2869,6 +2983,15 @@ async fn emit_missing_terminal_sub_lifecycles(
                         )
                         .await?;
                     }
+                    ensure_reasoning_content_part_done(
+                        tx,
+                        seq,
+                        reasoning_content_part_done_indices,
+                        *output_index,
+                        item_id.clone(),
+                        &text,
+                    )
+                    .await?;
                 }
             }
             "function_call" => {
@@ -2918,6 +3041,7 @@ fn encode_image_part(
     extra_body: &HashMap<String, Value>,
 ) -> Value {
     let mut obj = Map::new();
+    merge_json_extra(&mut obj, extra_body);
     obj.insert("type".to_string(), json!("output_image"));
     match source {
         crate::urp::ImageSource::Url { url, detail } => {
@@ -2932,13 +3056,19 @@ fn encode_image_part(
                 json!({ "type": "base64", "media_type": media_type, "data": data }),
             );
         }
+        crate::urp::ImageSource::FileId { file_id, detail } => {
+            obj.insert("file_id".to_string(), json!(file_id));
+            if let Some(detail) = detail {
+                obj.insert("detail".to_string(), json!(detail));
+            }
+        }
     }
-    merge_json_extra(&mut obj, extra_body);
     Value::Object(obj)
 }
 
 fn encode_file_part(source: &crate::urp::FileSource, extra_body: &HashMap<String, Value>) -> Value {
     let mut obj = Map::new();
+    merge_json_extra(&mut obj, extra_body);
     obj.insert("type".to_string(), json!("output_file"));
     match source {
         crate::urp::FileSource::Url { url } => {
@@ -2959,8 +3089,22 @@ fn encode_file_part(source: &crate::urp::FileSource, extra_body: &HashMap<String
                 }),
             );
         }
+        crate::urp::FileSource::FileId { file_id } => {
+            obj.insert("file_id".to_string(), json!(file_id));
+        }
+        crate::urp::FileSource::Text { text } => {
+            obj.insert(
+                "source".to_string(),
+                json!({ "type": "text", "text": text }),
+            );
+        }
+        crate::urp::FileSource::Content { content } => {
+            obj.insert(
+                "source".to_string(),
+                json!({ "type": "content", "content": content }),
+            );
+        }
     }
-    merge_json_extra(&mut obj, extra_body);
     Value::Object(obj)
 }
 
@@ -2978,7 +3122,9 @@ fn encode_tool_result_output(content: &[ToolResultContent]) -> Value {
         return Value::String(String::new());
     }
     if content.len() == 1 {
-        if let ToolResultContent::Text { text } = &content[0] {
+        if let ToolResultContent::Text { text, extra_body } = &content[0]
+            && extra_body.is_empty()
+        {
             return Value::String(text.clone());
         }
     }
@@ -2986,10 +3132,40 @@ fn encode_tool_result_output(content: &[ToolResultContent]) -> Value {
     Value::Array(
         content
             .iter()
-            .map(|part| match part {
-                ToolResultContent::Text { text } => json!({ "type": "input_text", "text": text }),
-                ToolResultContent::Image { source } => encode_image_part(source, &HashMap::new()),
-                ToolResultContent::File { source } => encode_file_part(source, &HashMap::new()),
+            .filter_map(|part| match part {
+                ToolResultContent::Text { text, extra_body } => {
+                    let mut obj = Map::new();
+                    merge_json_extra(&mut obj, extra_body);
+                    obj.insert("type".to_string(), json!("input_text"));
+                    obj.insert("text".to_string(), json!(text));
+                    Some(Value::Object(obj))
+                }
+                ToolResultContent::Image { source, extra_body } => {
+                    Some(encode_image_part(source, extra_body))
+                }
+                ToolResultContent::File { source, extra_body } => {
+                    Some(encode_file_part(source, extra_body))
+                }
+                ToolResultContent::ProviderItem {
+                    origin_protocol: crate::urp::ProviderProtocol::Responses,
+                    item_type,
+                    body,
+                    extra_body,
+                } => {
+                    let sanitized_body = sanitize_provider_item_wire_body(body);
+                    let mut obj = sanitized_body.as_object().cloned().unwrap_or_else(|| {
+                        [("body".to_string(), sanitized_body)].into_iter().collect()
+                    });
+                    for (key, value) in extra_body {
+                        if !key.starts_with("_monoize_") {
+                            obj.entry(key.clone()).or_insert_with(|| value.clone());
+                        }
+                    }
+                    obj.entry("type".to_string())
+                        .or_insert_with(|| json!(item_type));
+                    Some(Value::Object(obj))
+                }
+                ToolResultContent::ProviderItem { .. } => None,
             })
             .collect(),
     )
@@ -2997,7 +3173,9 @@ fn encode_tool_result_output(content: &[ToolResultContent]) -> Value {
 
 fn merge_json_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
     for (k, v) in extra {
-        obj.insert(k.clone(), v.clone());
+        if !k.starts_with("_monoize_") {
+            obj.insert(k.clone(), v.clone());
+        }
     }
 }
 
@@ -3006,7 +3184,7 @@ fn merge_hashmap_extra_preserving_typed(
     extra: &HashMap<String, Value>,
 ) {
     for (k, v) in extra {
-        if !dst.contains_key(k) {
+        if !k.starts_with("_monoize_") && !dst.contains_key(k) {
             dst.insert(k.clone(), v.clone());
         }
     }
@@ -3014,7 +3192,7 @@ fn merge_hashmap_extra_preserving_typed(
 
 fn merge_json_extra_preserving_typed(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>) {
     for (k, v) in extra {
-        if !obj.contains_key(k) {
+        if !k.starts_with("_monoize_") && !obj.contains_key(k) {
             obj.insert(k.clone(), v.clone());
         }
     }

@@ -757,6 +757,107 @@ async fn chat_streaming_prestream_upstream_error_is_logged_as_error_and_not_bill
 }
 
 #[tokio::test]
+async fn chat_streaming_openrouter_error_is_logged_as_error_and_not_billed() {
+    let ctx = setup().await;
+
+    let user_before = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user before")
+        .expect("user exists");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini-chat",
+                "messages": [{ "role": "user", "content": "stream error" }],
+                "stream": true,
+                "stream_mode": "chat_choice_error"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(
+        text.contains("openrouter choice failure") && text.contains("\"code\":502"),
+        "downstream should preserve the OpenRouter error: {text}"
+    );
+    assert_eq!(text.matches("data: [DONE]").count(), 1, "{text}");
+    assert!(
+        !text.contains("\"finish_reason\":\"stop\""),
+        "error stream must not synthesize success: {text}"
+    );
+
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+
+    let mut matched = None;
+    for _ in 0..20 {
+        ctx.state.user_store.flush_all_batchers().await;
+        let (logs, _, _) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(
+                &user.id,
+                100,
+                0,
+                Some("gpt-5-mini-chat"),
+                Some("error"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("list request logs");
+        matched = logs.into_iter().find(|log| {
+            log.model == "gpt-5-mini-chat"
+                && log.is_stream
+                && log.error.code.as_deref() == Some("502")
+        });
+        if matched.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let log = matched.expect("OpenRouter stream error request log should be inserted");
+    assert_eq!(log.status, "error");
+    assert_eq!(log.error.http_status, Some(502));
+    assert_eq!(
+        log.error.message.as_deref(),
+        Some("openrouter choice failure")
+    );
+    assert_eq!(log.billing.charge_nano_usd, None);
+    assert_eq!(log.tokens.input, None);
+    assert_eq!(log.tokens.output, None);
+
+    let user_after = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user after")
+        .expect("user exists");
+    assert_eq!(user_before.balance_nano_usd, user_after.balance_nano_usd);
+}
+
+#[tokio::test]
 async fn responses_streaming_response_failed_is_logged_as_error_and_not_billed() {
     let ctx = setup().await;
 
@@ -1544,7 +1645,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         .expect("user exists");
     let before: i64 = user_before.balance_nano_usd.parse().unwrap();
 
-    let (status, _body) = json_post(
+    let (status, body) = json_post(
         &ctx,
         "/v1/responses",
         json!({
@@ -1555,7 +1656,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     ctx.state.user_store.flush_all_batchers().await;
     let user_after = ctx

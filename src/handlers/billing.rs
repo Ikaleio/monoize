@@ -366,6 +366,7 @@ pub(super) async fn resolve_billing_rate_matrix(
     if let Some(resolution) =
         resolve_billing_rate_matrix_for_model(state, &normalized_upstream_model, provider_type)
             .await?
+        && billing_rate_matrix_allows_request(&resolution, &[]).is_ok_and(|complete| complete)
     {
         return Ok(Some(resolution));
     }

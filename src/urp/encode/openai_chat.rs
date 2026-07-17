@@ -1,15 +1,20 @@
 use crate::urp::encode::{
-    merge_extra, role_to_str, text_parts, tool_choice_to_openai_value, usage_input_details,
-    usage_output_details,
+    role_to_str, sanitize_provider_item_wire_body, text_parts, tool_choice_to_openai_value,
+    usage_input_details, usage_output_details,
 };
 use crate::urp::internal_legacy_bridge::{Item, Part, Role, nodes_to_items};
 use crate::urp::stream_helpers::{reasoning_encrypted_detail_value, reasoning_text_detail_value};
 use crate::urp::{
-    FileSource, FinishReason, ImageSource, Node, OrdinaryRole, ProviderProtocol, ResponseFormat,
-    ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
+    CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
+    CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING_CONTENT,
+    CHAT_THINKING_CONFIG_EXTRA_KEY, FileSource, FinishReason, ImageSource, Node, OrdinaryRole,
+    ProviderProtocol, ResponseFormat, ToolDefinition, ToolResultContent, UrpRequest, UrpResponse,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+
+const CHAT_CHOICE_EXTRA_BODY_KEY: &str = "_monoize_chat_choice_extra";
+const CHAT_NATIVE_FINISH_REASON_EXTRA_KEY: &str = "_monoize_chat_native_finish_reason";
 
 struct PendingChatMessage {
     role: Role,
@@ -29,7 +34,7 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
         } => {
             let mut block = json!({ "type": "text", "text": content });
             if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
+                merge_chat_wire_extra(obj, extra_body);
             }
             Some(block)
         }
@@ -44,9 +49,10 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
                     "type": "image_url",
                     "image_url": { "url": format!("data:{};base64,{}", media_type, data) }
                 }),
+                ImageSource::FileId { .. } => return None,
             };
             if let Some(obj) = image.as_object_mut() {
-                merge_extra(obj, extra_body);
+                merge_chat_wire_extra(obj, extra_body);
             }
             Some(image)
         }
@@ -64,10 +70,13 @@ fn encode_chat_content_part(part: &Part) -> Option<Value> {
                     filename.clone().unwrap_or_else(|| "file".to_string()),
                     media_type
                 ),
+                FileSource::FileId { .. }
+                | FileSource::Text { .. }
+                | FileSource::Content { .. } => return None,
             };
             let mut block = json!({ "type": "text", "text": text });
             if let Some(obj) = block.as_object_mut() {
-                merge_extra(obj, extra_body);
+                merge_chat_wire_extra(obj, extra_body);
             }
             Some(block)
         }
@@ -89,9 +98,9 @@ fn encode_chat_provider_part(
     if origin_protocol != ProviderProtocol::ChatCompletion {
         return None;
     }
-    let mut part = body.clone();
+    let mut part = sanitize_provider_item_wire_body(body);
     if let Some(obj) = part.as_object_mut() {
-        merge_extra(obj, extra_body);
+        merge_chat_wire_extra(obj, extra_body);
     }
     Some(part)
 }
@@ -166,8 +175,8 @@ fn flush_pending_chat_message(pending: &mut Option<PendingChatMessage>, out: &mu
             Value::Array(pending_msg.tool_calls),
         );
     }
-    insert_openrouter_reasoning_fields(&mut m, &pending_msg.reasoning_parts);
-    merge_extra(&mut m, &pending_msg.message_extra);
+    insert_openrouter_reasoning_fields(&mut m, &pending_msg.reasoning_parts, false);
+    merge_chat_wire_extra(&mut m, &pending_msg.message_extra);
     out.push(Value::Object(m));
 }
 
@@ -249,14 +258,56 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         obj.insert("top_p".to_string(), Value::from(top_p));
     }
     if let Some(max) = req.max_output_tokens {
-        obj.insert("max_completion_tokens".to_string(), Value::from(max));
+        let key = if is_deepseek_model(upstream_model) {
+            "max_tokens"
+        } else {
+            "max_completion_tokens"
+        };
+        obj.insert(key.to_string(), Value::from(max));
     }
     if let Some(reasoning) = &req.reasoning {
-        if let Some(effort) = &reasoning.effort {
-            if effort != "none" {
+        let deepseek_model = is_deepseek_model(upstream_model);
+        let raw_reasoning = reasoning
+            .extra_body
+            .get(CHAT_REASONING_CONFIG_EXTRA_KEY)
+            .and_then(Value::as_object)
+            .cloned();
+        let raw_thinking = reasoning
+            .extra_body
+            .get(CHAT_THINKING_CONFIG_EXTRA_KEY)
+            .cloned();
+        let had_raw_reasoning = raw_reasoning.is_some();
+        if let Some(mut raw_reasoning) = raw_reasoning {
+            if let Some(effort) = reasoning.effort.as_deref() {
+                raw_reasoning.insert(
+                    "effort".to_string(),
+                    Value::String(chat_wire_effort(effort).to_string()),
+                );
+            }
+            if !(deepseek_model && reasoning.effort.is_some()) {
+                obj.insert("reasoning".to_string(), Value::Object(raw_reasoning));
+            }
+        }
+        if let Some(raw_thinking) = raw_thinking {
+            obj.insert("thinking".to_string(), raw_thinking);
+        }
+        if let Some(effort) = reasoning.effort.as_deref() {
+            if deepseek_model {
+                let wire_effort = deepseek_wire_effort(effort);
+                if effort == "none" {
+                    obj.insert("thinking".to_string(), json!({ "type": "disabled" }));
+                    obj.remove("reasoning_effort");
+                } else {
+                    obj.insert("thinking".to_string(), json!({ "type": "enabled" }));
+                    obj.insert(
+                        "reasoning_effort".to_string(),
+                        Value::String(wire_effort.to_string()),
+                    );
+                }
+            } else if !had_raw_reasoning && effort != "none" {
                 obj.insert(
                     "reasoning_effort".to_string(),
-                    Value::String(effort.clone()),
+                    Value::String(chat_wire_effort(effort).to_string()),
                 );
             }
         }
@@ -280,19 +331,21 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
         obj.insert("user".to_string(), Value::String(user.clone()));
     }
 
-    merge_extra(obj, &req.extra_body);
+    merge_chat_wire_extra(obj, &req.extra_body);
 
-    // Unconditionally request usage from upstream to prevent billing leaks.
-    // For streaming, this populates the final chunk with token counts;
-    // for non-streaming, OpenAI ignores it harmlessly.
-    match obj.get_mut("stream_options") {
-        Some(Value::Object(so)) => {
-            so.entry("include_usage".to_string())
-                .or_insert(Value::Bool(true));
-        }
-        Some(_) => {}
-        None => {
-            obj.insert("stream_options".to_string(), json!({"include_usage": true}));
+    // Streaming usage otherwise arrives only when the caller explicitly opts in.
+    // Non-stream requests carry usage on the response object and must not receive
+    // a stream-only option.
+    if req.stream == Some(true) {
+        match obj.get_mut("stream_options") {
+            Some(Value::Object(so)) => {
+                so.entry("include_usage".to_string())
+                    .or_insert(Value::Bool(true));
+            }
+            Some(_) => {}
+            None => {
+                obj.insert("stream_options".to_string(), json!({"include_usage": true}));
+            }
         }
     }
 
@@ -302,10 +355,15 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let message = encode_assistant_chat_message_from_nodes(&resp.output);
 
-    let finish_reason = resp
-        .finish_reason
-        .map(finish_reason_to_chat)
-        .unwrap_or_else(|| {
+    let native_finish_reason = resp
+        .extra_body
+        .get(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY)
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty());
+    let finish_reason = match resp.finish_reason {
+        Some(FinishReason::Other) => native_finish_reason.unwrap_or("error"),
+        Some(reason) => finish_reason_to_chat(reason),
+        None => {
             if resp
                 .output
                 .iter()
@@ -315,12 +373,15 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             } else {
                 "stop"
             }
-        });
+        }
+    };
 
     let mut result = json!({
         "id": resp.id,
         "object": "chat.completion",
-        "created": chrono::Utc::now().timestamp(),
+        "created": resp
+            .created_at
+            .unwrap_or_else(|| chrono::Utc::now().timestamp()),
         "model": logical_model,
         "choices": [{
             "index": 0,
@@ -350,14 +411,36 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
         });
         if let Some(obj) = usage_value.as_object_mut() {
             for (k, v) in &usage.extra_body {
-                obj.insert(k.clone(), v.clone());
+                if !k.starts_with("_monoize_") {
+                    obj.insert(k.clone(), v.clone());
+                }
             }
         }
         result["usage"] = usage_value;
     }
 
+    if let Some(choice_extra) = resp
+        .extra_body
+        .get(CHAT_CHOICE_EXTRA_BODY_KEY)
+        .and_then(Value::as_object)
+        && let Some(choice) = result
+            .get_mut("choices")
+            .and_then(Value::as_array_mut)
+            .and_then(|choices| choices.first_mut())
+            .and_then(Value::as_object_mut)
+    {
+        for (key, value) in choice_extra {
+            if !key.starts_with("_monoize_") {
+                choice.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+
     let obj = result.as_object_mut().expect("chat response object");
-    merge_extra(obj, &resp.extra_body);
+    let mut response_extra = resp.extra_body.clone();
+    response_extra.remove(CHAT_CHOICE_EXTRA_BODY_KEY);
+    response_extra.remove(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY);
+    merge_chat_wire_extra(obj, &response_extra);
     result
 }
 
@@ -373,6 +456,16 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
 
     for node in nodes {
         match node {
+            Node::NextDownstreamEnvelopeExtra { extra_body } => {
+                merge_extra_preserving_existing(
+                    &mut message_extra,
+                    extra_body
+                        .iter()
+                        .filter(|(key, _)| !key.starts_with("_monoize_"))
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                );
+            }
             Node::Text {
                 role: OrdinaryRole::Assistant,
                 content,
@@ -381,7 +474,7 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
             } => {
                 let mut block = json!({ "type": "text", "text": content });
                 if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
+                    merge_chat_wire_extra(obj, extra_body);
                 }
                 merge_extra_preserving_existing(
                     &mut message_extra,
@@ -403,9 +496,10 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                         "type": "image_url",
                         "image_url": { "url": format!("data:{};base64,{}", media_type, data) }
                     }),
+                    ImageSource::FileId { .. } => continue,
                 };
                 if let Some(obj) = image.as_object_mut() {
-                    merge_extra(obj, extra_body);
+                    merge_chat_wire_extra(obj, extra_body);
                 }
                 merge_extra_preserving_existing(
                     &mut message_extra,
@@ -430,10 +524,13 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
                         filename.clone().unwrap_or_else(|| "file".to_string()),
                         media_type
                     ),
+                    FileSource::FileId { .. }
+                    | FileSource::Text { .. }
+                    | FileSource::Content { .. } => continue,
                 };
                 let mut block = json!({ "type": "text", "text": text });
                 if let Some(obj) = block.as_object_mut() {
-                    merge_extra(obj, extra_body);
+                    merge_chat_wire_extra(obj, extra_body);
                 }
                 merge_extra_preserving_existing(
                     &mut message_extra,
@@ -509,36 +606,46 @@ fn encode_assistant_chat_message_from_nodes(nodes: &[Node]) -> Map<String, Value
     if !tool_calls.is_empty() {
         message.insert("tool_calls".to_string(), Value::Array(tool_calls));
     }
-    insert_openrouter_reasoning_fields(&mut message, &reasoning_parts);
-    merge_extra(&mut message, &message_extra);
+    insert_openrouter_reasoning_fields(&mut message, &reasoning_parts, true);
+    merge_chat_wire_extra(&mut message, &message_extra);
     message
 }
 
 fn assistant_message_extra_from_node(node: &Node) -> HashMap<String, Value> {
     match node {
-        Node::Text {
-            phase, extra_body, ..
-        } => {
-            let mut out = extra_body.clone();
+        Node::Text { phase, .. } => {
+            let mut out = HashMap::new();
             if let Some(phase) = phase {
                 out.insert("phase".to_string(), Value::String(phase.clone()));
             }
             out
         }
-        Node::Image { extra_body, .. }
-        | Node::Audio { extra_body, .. }
-        | Node::File { extra_body, .. }
-        | Node::Refusal { extra_body, .. }
-        | Node::Reasoning { extra_body, .. }
-        | Node::ToolCall { extra_body, .. }
-        | Node::ProviderItem { extra_body, .. } => extra_body.clone(),
-        Node::ToolResult { .. } | Node::NextDownstreamEnvelopeExtra { .. } => HashMap::new(),
+        Node::Image { .. }
+        | Node::Audio { .. }
+        | Node::File { .. }
+        | Node::Refusal { .. }
+        | Node::ToolCall { .. }
+        | Node::ProviderItem { .. }
+        | Node::Reasoning { .. }
+        | Node::ToolResult { .. }
+        | Node::NextDownstreamEnvelopeExtra { .. } => HashMap::new(),
     }
 }
 
 fn merge_extra_preserving_existing(dst: &mut HashMap<String, Value>, src: HashMap<String, Value>) {
     for (k, v) in src {
         dst.entry(k).or_insert(v);
+    }
+}
+
+fn merge_chat_wire_extra(
+    wire_object: &mut Map<String, Value>,
+    extra_body: &HashMap<String, Value>,
+) {
+    for (key, value) in extra_body {
+        if !key.starts_with("_monoize_") && !wire_object.contains_key(key) {
+            wire_object.insert(key.clone(), value.clone());
+        }
     }
 }
 
@@ -555,7 +662,7 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                 let text = content
                     .iter()
                     .filter_map(|content| match content {
-                        ToolResultContent::Text { text } => Some(text.as_str()),
+                        ToolResultContent::Text { text, .. } => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -564,7 +671,7 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                 m.insert("role".to_string(), Value::String("tool".to_string()));
                 m.insert("content".to_string(), Value::String(text));
                 m.insert("tool_call_id".to_string(), Value::String(call_id.clone()));
-                merge_extra(&mut m, extra_body);
+                merge_chat_wire_extra(&mut m, extra_body);
                 out.push(Value::Object(m));
             }
             Item::Message {
@@ -577,7 +684,7 @@ fn encode_messages(messages: &[Item]) -> Vec<Value> {
                     let mut m = Map::new();
                     m.insert("role".to_string(), Value::String("tool".to_string()));
                     m.insert("content".to_string(), Value::String(text_parts(parts)));
-                    merge_extra(&mut m, extra_body);
+                    merge_chat_wire_extra(&mut m, extra_body);
                     out.push(Value::Object(m));
                     continue;
                 }
@@ -615,12 +722,12 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
                 if let Some(strict) = function.strict {
                     fn_obj.insert("strict".to_string(), Value::Bool(strict));
                 }
-                super::merge_extra(&mut fn_obj, &function.extra_body);
+                merge_chat_wire_extra(&mut fn_obj, &function.extra_body);
 
                 let mut obj = Map::new();
                 obj.insert("type".to_string(), Value::String("function".to_string()));
                 obj.insert("function".to_string(), Value::Object(fn_obj));
-                super::merge_extra(&mut obj, &tool.extra_body);
+                merge_chat_wire_extra(&mut obj, &tool.extra_body);
                 out.push(Value::Object(obj));
             }
         } else if tool.tool_type == "custom"
@@ -634,12 +741,12 @@ fn encode_tools(tools: &[ToolDefinition]) -> Vec<Value> {
             if let Some(format) = &custom.format {
                 custom_obj.insert("format".to_string(), format.clone());
             }
-            super::merge_extra(&mut custom_obj, &custom.extra_body);
+            merge_chat_wire_extra(&mut custom_obj, &custom.extra_body);
 
             let mut obj = Map::new();
             obj.insert("type".to_string(), Value::String("custom".to_string()));
             obj.insert("custom".to_string(), Value::Object(custom_obj));
-            super::merge_extra(&mut obj, &tool.extra_body);
+            merge_chat_wire_extra(&mut obj, &tool.extra_body);
             out.push(Value::Object(obj));
         }
     }
@@ -660,7 +767,7 @@ fn encode_response_format(format: &ResponseFormat) -> Value {
             if let Some(strict) = json_schema.strict {
                 schema_obj.insert("strict".to_string(), Value::Bool(strict));
             }
-            super::merge_extra(&mut schema_obj, &json_schema.extra_body);
+            merge_chat_wire_extra(&mut schema_obj, &json_schema.extra_body);
             json!({
                 "type": "json_schema",
                 "json_schema": Value::Object(schema_obj),
@@ -669,7 +776,11 @@ fn encode_response_format(format: &ResponseFormat) -> Value {
     }
 }
 
-fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &[Part]) {
+fn insert_openrouter_reasoning_fields(
+    message: &mut Map<String, Value>,
+    parts: &[Part],
+    derive_scalar_aliases_from_raw_details: bool,
+) {
     let mut details = Vec::new();
     let mut reasoning_value: Option<String> = None;
     let mut reasoning_summary_value: Option<String> = None;
@@ -689,14 +800,74 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
         };
         let format = source.as_deref().filter(|format| !format.is_empty());
 
+        if let Some(raw_detail) = extra_body
+            .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
+            .and_then(Value::as_object)
+        {
+            let mut detail = raw_detail.clone();
+            if let Some(id) = id.as_deref().filter(|id| !id.is_empty()) {
+                detail.insert("id".to_string(), Value::String(id.to_string()));
+            }
+            if let Some(format) = format {
+                detail.insert("format".to_string(), Value::String(format.to_string()));
+            }
+            match detail.get("type").and_then(Value::as_str) {
+                Some("reasoning.summary") => {
+                    if let Some(summary) = summary {
+                        if derive_scalar_aliases_from_raw_details
+                            && reasoning_summary_value.is_none()
+                            && !summary.is_empty()
+                        {
+                            reasoning_summary_value = Some(summary.clone());
+                        }
+                        detail.insert("summary".to_string(), Value::String(summary.clone()));
+                    }
+                }
+                Some("reasoning.text") => {
+                    if let Some(content) = content {
+                        if derive_scalar_aliases_from_raw_details
+                            && reasoning_value.is_none()
+                            && !content.is_empty()
+                        {
+                            reasoning_value = Some(content.clone());
+                        }
+                        detail.insert("text".to_string(), Value::String(content.clone()));
+                    }
+                }
+                Some("reasoning.encrypted") => {
+                    if let Some(encrypted) = encrypted {
+                        detail.insert("data".to_string(), encrypted.clone());
+                    }
+                }
+                _ => {}
+            }
+            details.push(Value::Object(detail));
+            continue;
+        }
+
+        if extra_body
+            .get(CHAT_REASONING_SURFACE_EXTRA_KEY)
+            .and_then(Value::as_str)
+            == Some(CHAT_REASONING_SURFACE_REASONING_CONTENT)
+        {
+            if reasoning_content_value.is_none() {
+                reasoning_content_value = content
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| summary.as_deref().filter(|value| !value.is_empty()))
+                    .map(str::to_string);
+            }
+            continue;
+        }
+
         if let Some(summary) = summary.as_deref().filter(|summary| !summary.is_empty()) {
             if reasoning_summary_value.is_none() {
                 reasoning_summary_value = Some(summary.to_string());
             }
-            if extra_body
+            if (extra_body
                 .get("openwebui_reasoning_content")
                 .and_then(Value::as_bool)
-                == Some(true)
+                == Some(true))
                 && reasoning_content_value.is_none()
             {
                 reasoning_content_value = Some(summary.to_string());
@@ -736,9 +907,7 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
                 {
                     detail["id"] = Value::String(id.to_string());
                 }
-                if !details.iter().any(|existing| existing == &detail) {
-                    details.push(detail);
-                }
+                details.push(detail);
             }
         }
     }
@@ -759,13 +928,33 @@ fn insert_openrouter_reasoning_fields(message: &mut Map<String, Value>, parts: &
     }
 }
 
+fn is_deepseek_model(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("deepseek")
+}
+
+fn chat_wire_effort(effort: &str) -> &str {
+    if effort == "minimum" {
+        "minimal"
+    } else {
+        effort
+    }
+}
+
+fn deepseek_wire_effort(effort: &str) -> &str {
+    match effort {
+        "none" | "minimal" | "minimum" | "low" | "medium" => "high",
+        "xhigh" | "max" => "max",
+        _ => "high",
+    }
+}
+
 fn finish_reason_to_chat(finish_reason: FinishReason) -> &'static str {
     match finish_reason {
         FinishReason::Stop => "stop",
         FinishReason::Length => "length",
         FinishReason::ToolCalls => "tool_calls",
         FinishReason::ContentFilter => "content_filter",
-        FinishReason::Other => "stop",
+        FinishReason::Other => "error",
     }
 }
 
@@ -797,6 +986,161 @@ mod tests {
             user: None,
             extra_body: empty_map(),
         }
+    }
+
+    #[test]
+    fn chat_stream_options_are_synthesized_only_for_streaming_requests() {
+        let mut req = base_request(vec![Item::new_message(Role::User)]);
+
+        let absent = encode_request(&req, "gpt-5.4");
+        assert!(absent.get("stream_options").is_none());
+
+        req.stream = Some(false);
+        let non_stream = encode_request(&req, "gpt-5.4");
+        assert!(non_stream.get("stream_options").is_none());
+
+        req.stream = Some(true);
+        let stream = encode_request(&req, "gpt-5.4");
+        assert_eq!(stream["stream_options"]["include_usage"], json!(true));
+    }
+
+    #[test]
+    fn deepseek_request_uses_current_thinking_and_token_controls() {
+        let mut req = base_request(vec![Item::new_message(Role::User)]);
+        req.max_output_tokens = Some(2048);
+        req.reasoning = Some(crate::urp::ReasoningConfig {
+            effort: Some("low".to_string()),
+            extra_body: empty_map(),
+        });
+
+        let enabled = encode_request(&req, "deepseek-v4");
+        assert_eq!(enabled["thinking"], json!({ "type": "enabled" }));
+        assert_eq!(enabled["reasoning_effort"], json!("high"));
+        assert_eq!(enabled["max_tokens"], json!(2048));
+        assert!(enabled.get("max_completion_tokens").is_none());
+
+        req.reasoning.as_mut().expect("reasoning").effort = Some("max".to_string());
+        let max = encode_request(&req, "deepseek-v4");
+        assert_eq!(max["reasoning_effort"], json!("max"));
+
+        req.reasoning.as_mut().expect("reasoning").effort = Some("none".to_string());
+        let disabled = encode_request(&req, "deepseek-v4");
+        assert_eq!(disabled["thinking"], json!({ "type": "disabled" }));
+        assert!(disabled.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn native_reasoning_object_is_the_single_chat_effort_container() {
+        let req = decode_chat::decode_request(&json!({
+            "model": "openai/gpt-5.4",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "reasoning_effort": "high",
+            "reasoning": {
+                "effort": "low",
+                "max_tokens": 4096,
+                "exclude": true,
+                "vendor_flag": "keep"
+            }
+        }))
+        .expect("decode Chat request with native reasoning object");
+
+        let encoded = encode_request(&req, "openai/gpt-5.4");
+        assert_eq!(encoded["reasoning"]["effort"], json!("high"));
+        assert_eq!(encoded["reasoning"]["max_tokens"], json!(4096));
+        assert_eq!(encoded["reasoning"]["exclude"], json!(true));
+        assert_eq!(encoded["reasoning"]["vendor_flag"], json!("keep"));
+        assert!(encoded.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn deepseek_normalized_effort_overrides_conflicting_raw_thinking() {
+        let disabled = decode_chat::decode_request(&json!({
+            "model": "deepseek-v4",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "reasoning_effort": "none",
+            "thinking": { "type": "enabled", "vendor_flag": true }
+        }))
+        .expect("decode disabled DeepSeek request");
+        let disabled = encode_request(&disabled, "deepseek-v4");
+        assert_eq!(disabled["thinking"], json!({ "type": "disabled" }));
+        assert!(disabled.get("reasoning_effort").is_none());
+
+        let enabled = decode_chat::decode_request(&json!({
+            "model": "deepseek-v4",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "reasoning_effort": "high",
+            "reasoning": { "effort": "low", "vendor_flag": true },
+            "thinking": { "type": "disabled", "vendor_flag": true }
+        }))
+        .expect("decode enabled DeepSeek request");
+        let enabled = encode_request(&enabled, "deepseek-v4");
+        assert_eq!(enabled["thinking"], json!({ "type": "enabled" }));
+        assert_eq!(enabled["reasoning_effort"], json!("high"));
+        assert!(enabled.get("reasoning").is_none());
+
+        let raw_only = decode_chat::decode_request(&json!({
+            "model": "deepseek-v4",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "thinking": { "type": "enabled", "vendor_flag": true }
+        }))
+        .expect("decode raw-only DeepSeek request");
+        let raw_only = encode_request(&raw_only, "deepseek-v4");
+        assert_eq!(
+            raw_only["thinking"],
+            json!({ "type": "enabled", "vendor_flag": true })
+        );
+        assert!(raw_only.get("reasoning_effort").is_none());
+
+        let raw_reasoning_only = decode_chat::decode_request(&json!({
+            "model": "deepseek-v4",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "reasoning": { "summary": "detailed", "vendor_flag": true }
+        }))
+        .expect("decode raw-reasoning-only DeepSeek request");
+        let raw_reasoning_only = encode_request(&raw_reasoning_only, "deepseek-v4");
+        assert_eq!(
+            raw_reasoning_only["reasoning"],
+            json!({ "summary": "detailed", "vendor_flag": true })
+        );
+        assert!(raw_reasoning_only.get("thinking").is_none());
+        assert!(raw_reasoning_only.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn deepseek_tool_loop_replays_reasoning_content_without_openrouter_aliases() {
+        let downstream = json!({
+            "model": "deepseek-v4",
+            "messages": [
+                { "role": "user", "content": "lookup" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_content": "private tool reasoning",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": "lookup", "arguments": "{}" }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_1", "content": "ok" }
+            ]
+        });
+
+        let decoded = decode_chat::decode_request(&downstream).expect("decode DeepSeek history");
+        let encoded = encode_request(&decoded, "deepseek-v4");
+        let assistant = encoded["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find(|message| message.get("tool_calls").is_some())
+            .expect("assistant tool-call message");
+
+        assert_eq!(
+            assistant["reasoning_content"],
+            json!("private tool reasoning")
+        );
+        assert!(assistant.get("reasoning").is_none());
+        assert!(assistant.get("reasoning_details").is_none());
     }
 
     #[test]
@@ -994,6 +1338,40 @@ mod tests {
     }
 
     #[test]
+    fn chat_provider_part_filters_nested_internal_metadata_on_wire() {
+        let downstream = json!({
+            "model": "gpt-5.4",
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "vendor_part",
+                    "payload": {
+                        "keep": 1,
+                        "_monoize_nested": "drop",
+                        "rows": [{ "keep_row": true, "_monoize_row": "drop" }]
+                    },
+                    "_monoize_top": "drop"
+                }]
+            }]
+        });
+
+        let decoded = decode_chat::decode_request(&downstream).expect("decode chat request");
+        let encoded = encode_request(&decoded, "gpt-5.4");
+
+        assert_eq!(
+            encoded["messages"][0]["content"][0],
+            json!({
+                "type": "vendor_part",
+                "payload": { "keep": 1, "rows": [{ "keep_row": true }] }
+            })
+        );
+        assert!(matches!(
+            &decoded.input[0],
+            Node::ProviderItem { body, .. } if body == &downstream["messages"][0]["content"][0]
+        ));
+    }
+
+    #[test]
     fn chat_encoder_ignores_cross_protocol_provider_item_without_textifying() {
         let req = UrpRequest {
             model: "logical-model".to_string(),
@@ -1076,15 +1454,18 @@ mod tests {
             content: vec![
                 ToolResultContent::Text {
                     text: "hello".to_string(),
+                    extra_body: HashMap::new(),
                 },
                 ToolResultContent::Image {
                     source: ImageSource::Url {
                         url: "https://example.com/image.png".to_string(),
                         detail: None,
                     },
+                    extra_body: HashMap::new(),
                 },
                 ToolResultContent::Text {
                     text: " world".to_string(),
+                    extra_body: HashMap::new(),
                 },
             ],
             extra_body: HashMap::from([("provider_field".to_string(), json!(true))]),
@@ -1320,15 +1701,27 @@ mod tests {
             panic!("expected assistant output");
         };
 
-        assert!(matches!(
-            &parts[0],
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            Part::Reasoning {
+                summary: Some(summary),
+                ..
+            } if summary == "brief summary"
+        )));
+        assert!(parts.iter().any(|part| matches!(
+            part,
             Part::Reasoning {
                 content: Some(content),
-                summary: Some(summary),
+                ..
+            } if content == "full reasoning"
+        )));
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            Part::Reasoning {
                 encrypted: Some(Value::String(sig)),
                 ..
-            } if content == "full reasoning" && summary == "brief summary" && sig == "sig_1"
-        ));
+            } if sig == "sig_1"
+        )));
         let message = &encoded["choices"][0]["message"];
         assert_eq!(message["reasoning"], json!("full reasoning"));
         assert_eq!(
@@ -1576,6 +1969,11 @@ mod tests {
 
         let decoded = decode_chat::decode_response(&upstream).expect("decode response");
         let reencoded = encode_response(&decoded, "gpt-5.4");
+        assert_eq!(reencoded["created"], json!(1773667800i64));
+        assert_eq!(
+            reencoded["choices"][0]["message"]["reasoning"],
+            json!("plain reasoning")
+        );
         let details = reencoded["choices"][0]["message"]["reasoning_details"]
             .as_array()
             .expect("reasoning details array");
@@ -1588,5 +1986,40 @@ mod tests {
             detail["type"].as_str() == Some("reasoning.encrypted")
                 && detail["data"].as_str() == Some("opaque_sig_payload")
         }));
+    }
+
+    #[test]
+    fn deepseek_insufficient_system_resource_round_trips_with_choice_extras() {
+        let upstream = json!({
+            "id": "chatcmpl_deepseek",
+            "object": "chat.completion",
+            "created": 1773667800i64,
+            "model": "deepseek-v4",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "partial" },
+                "finish_reason": "insufficient_system_resource",
+                "native_finish_reason": "insufficient_system_resource",
+                "provider_marker": "deepseek"
+            }]
+        });
+
+        let decoded = decode_chat::decode_response(&upstream).expect("decode response");
+        let reencoded = encode_response(&decoded, "deepseek-v4");
+
+        assert_eq!(
+            reencoded["choices"][0]["finish_reason"],
+            json!("insufficient_system_resource")
+        );
+        assert_eq!(
+            reencoded["choices"][0]["native_finish_reason"],
+            json!("insufficient_system_resource")
+        );
+        assert_eq!(
+            reencoded["choices"][0]["provider_marker"],
+            json!("deepseek")
+        );
+        assert!(reencoded.get(CHAT_NATIVE_FINISH_REASON_EXTRA_KEY).is_none());
+        assert!(reencoded.get(CHAT_CHOICE_EXTRA_BODY_KEY).is_none());
     }
 }

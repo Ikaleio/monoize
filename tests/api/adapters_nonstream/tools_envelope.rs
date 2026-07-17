@@ -152,7 +152,7 @@ async fn responses_tool_results_to_messages_upstream_do_not_emit_empty_text_or_s
 }
 
 #[tokio::test]
-async fn responses_nonstream_image_generation_tool_returns_output_image() {
+async fn responses_nonstream_image_generation_tool_returns_native_top_level_item() {
     let ctx = setup().await;
     let (status, body) = json_post(
         &ctx,
@@ -167,26 +167,17 @@ async fn responses_nonstream_image_generation_tool_returns_output_image() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let v: Value = serde_json::from_str(&body).unwrap();
     let output = v["output"].as_array().expect("output array");
-    let message = output
+    let image = output
         .iter()
-        .find(|item| item["type"].as_str() == Some("message"))
-        .expect("message output item");
-    let content = message["content"].as_array().expect("content array");
-    let image = content
-        .iter()
-        .find(|part| part["type"].as_str() == Some("output_image"))
-        .expect("output image part");
-    assert_eq!(
-        image["source"]["media_type"].as_str(),
-        Some("image/png"),
-        "{body}"
-    );
+        .find(|item| item["type"].as_str() == Some("image_generation_call"))
+        .expect("native image_generation_call output item");
+    assert_eq!(image["id"].as_str(), Some("ig_mock"), "{body}");
+    assert_eq!(image["output_format"].as_str(), Some("png"), "{body}");
     assert!(
-        image["source"]["data"]
-            .as_str()
-            .is_some_and(|data| !data.is_empty()),
+        image["result"].as_str().is_some_and(|data| !data.is_empty()),
         "{body}"
     );
+    assert!(!body.contains("output_image"), "{body}");
 }
 
 #[tokio::test]

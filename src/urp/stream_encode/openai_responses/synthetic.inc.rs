@@ -93,6 +93,18 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     .await?;
                 }
                 if !text.is_empty() {
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.content_part.added",
+                        json!({
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                            "content_index": 0,
+                            "part": { "type": "reasoning_text", "text": "" },
+                        }),
+                    )
+                    .await?;
                     send_responses_delta_string(
                         &tx,
                         &mut seq,
@@ -123,6 +135,18 @@ pub(crate) async fn emit_synthetic_responses_stream(
                             }),
                             source.as_deref(),
                         ),
+                    )
+                    .await?;
+                    send_responses_event(
+                        &tx,
+                        &mut seq,
+                        "response.content_part.done",
+                        json!({
+                            "item_id": item.get("id").cloned().unwrap_or(Value::Null),
+                            "output_index": output_index,
+                            "content_index": 0,
+                            "part": { "type": "reasoning_text", "text": text },
+                        }),
                     )
                     .await?;
                 }

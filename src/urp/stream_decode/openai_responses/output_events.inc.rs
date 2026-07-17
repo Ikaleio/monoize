@@ -1,6 +1,6 @@
 fn map_response_completed_with_accumulated(
     data_val: Value,
-    _index_state: &mut ResponsesStreamIndexState,
+    index_state: &mut ResponsesStreamIndexState,
     accumulated_outputs: &[AccumulatedOutputEntry],
 ) -> Vec<UrpStreamEvent> {
     let mut events = Vec::new();
@@ -21,9 +21,27 @@ fn map_response_completed_with_accumulated(
             items
                 .iter()
                 .enumerate()
-                .map(|(output_index, item)| AccumulatedOutputEntry {
-                    output_index: output_index as u64,
-                    nodes: nodes_from_item_value(item),
+                .map(|(output_index, item)| {
+                    let output_index = output_index as u64;
+                    let mut item = item.clone();
+                    let terminal_id_missing = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty);
+                    if terminal_id_missing
+                        && let Some(streamed_id) = index_state
+                            .output_state_by_index
+                            .get(&output_index)
+                            .and_then(|state| state.item_id.as_deref())
+                            .filter(|id| !id.is_empty())
+                        && let Some(item_obj) = item.as_object_mut()
+                    {
+                        item_obj.insert("id".to_string(), Value::String(streamed_id.to_string()));
+                    }
+                    AccumulatedOutputEntry {
+                        output_index,
+                        nodes: nodes_from_item_value(&item),
+                    }
                 })
                 .collect::<Vec<_>>()
         })
@@ -39,20 +57,15 @@ fn map_response_completed_with_accumulated(
             return events;
         }
     };
-    let finish_reason = if outputs_have_tool_calls(&outputs) {
-        Some(FinishReason::ToolCalls)
-    } else {
-        decoded
+    let finish_reason = match response_obj.get("status").and_then(Value::as_str) {
+        Some("incomplete") => Some(FinishReason::Length),
+        Some("failed" | "cancelled") => Some(FinishReason::Other),
+        Some("completed") if outputs_have_tool_calls(&outputs) => Some(FinishReason::ToolCalls),
+        Some("completed") => decoded
             .as_ref()
             .and_then(|resp| resp.finish_reason)
-            .or_else(
-                || match response_obj.get("status").and_then(|v| v.as_str()) {
-                    Some("completed") => Some(FinishReason::Stop),
-                    Some("incomplete") => Some(FinishReason::Length),
-                    Some("failed") => Some(FinishReason::Other),
-                    _ => None,
-                },
-            )
+            .or(Some(FinishReason::Stop)),
+        _ => decoded.as_ref().and_then(|resp| resp.finish_reason),
     };
     events.push(UrpStreamEvent::ResponseDone {
         finish_reason,
@@ -68,10 +81,8 @@ fn map_response_completed_with_accumulated(
                 "created",
                 "created_at",
                 "model",
-                "status",
                 "output",
                 "usage",
-                "error",
             ],
         ),
     });
@@ -90,6 +101,14 @@ fn urp_node_index_from_delta(data_val: &Value, index_state: &mut ResponsesStream
         .get("output_index")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    if index_state
+        .output_state_by_index
+        .get(&output_index)
+        .and_then(|state| state.item_type.as_deref())
+        == Some("reasoning")
+    {
+        return index_state.synthetic_node_index_for_output(output_index);
+    }
     if let Some(content_index) = data_val
         .get("content_index")
         .or_else(|| data_val.get("part_index"))
@@ -277,6 +296,22 @@ fn decode_part_from_value(part: &Value) -> Part {
                 .get("source")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            extra_body: part_extra_body_from_value(part),
+        },
+        "reasoning_text" => Part::Reasoning {
+            id: None,
+            content: part
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string),
+            encrypted: None,
+            summary: None,
+            source: part
+                .get("source")
+                .and_then(Value::as_str)
+                .filter(|source| !source.is_empty())
+                .map(str::to_string),
             extra_body: part_extra_body_from_value(part),
         },
         "refusal" => Part::Refusal {
