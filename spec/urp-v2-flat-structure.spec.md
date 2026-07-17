@@ -37,6 +37,8 @@ UrpRequestV2 {
   reasoning?: ReasoningConfig,
   tools?: Vec<ToolDefinition>,
   tool_choice?: ToolChoice,
+  stop?: StopControl,
+  verbosity?: String,
   response_format?: ResponseFormat,
   user?: String,
   ...extra_body
@@ -67,6 +69,17 @@ URPV2-6. Top-level request and response objects MUST support unknown-field passt
 URPV2-7. If a key exists in both a typed top-level field and top-level `extra_body`, the typed field value MUST win.
 
 URPV2-8. The flat redesign changes only canonical conversational storage. `usage`, `finish_reason`, model selection fields, and top-level request controls remain top-level request or response fields and are not represented as nodes.
+
+URPV2-8a. `UrpRequestV2.stop` MUST be a typed `StopControl` with exactly one of these shapes:
+
+- `Single(String)` for a Chat Completions scalar `stop` value;
+- `Multiple(Vec<String>)` for a Chat Completions array `stop` value or a Messages `stop_sequences` array.
+
+A Chat request decoder MUST preserve whether the source used the scalar or array shape. A Messages request decoder MUST use `Multiple`. A Chat encoder MUST emit `Single` as a JSON string and `Multiple` as a JSON string array. A Messages encoder MUST emit `Single(s)` as `stop_sequences = [s]` and `Multiple(values)` as `stop_sequences = values`. A Responses encoder MUST omit `stop` because Responses create has no equivalent request control.
+
+URPV2-8b. `UrpRequestV2.verbosity` is the typed OpenAI verbosity string. A Chat request decoder MUST read top-level `verbosity`. A Responses request decoder MUST read `text.verbosity`. Chat and Responses encoders MUST emit the corresponding native field. A Messages encoder MUST omit `verbosity` because Messages create has no equivalent request control.
+
+URPV2-8c. `UrpRequestV2.user` owns the semantic caller identifier. Chat and Responses decoders MUST read top-level `user`; a Messages decoder MUST read `metadata.user_id`. Chat and Responses encoders MUST emit top-level `user`; a Messages encoder MUST emit `metadata.user_id`. A Messages decoder MUST preserve every non-`user_id` member of the source `metadata` object in `extra_body.metadata`. A Messages encoder MUST merge those preserved members into the emitted `metadata` object. If typed `user` and `extra_body.metadata.user_id` collide, typed `user` MUST win.
 
 ## 3. Canonical node model
 
@@ -124,6 +137,7 @@ Node =
       type: "tool_call",
       id?: String,
       role: "assistant",
+      tool_type: "function" | "custom",
       call_id: String,
       name: String,
       arguments: String,
@@ -141,6 +155,7 @@ Node =
   | ToolResult {
       type: "tool_result",
       id?: String,
+      tool_type: "function" | "custom",
       call_id: String,
       is_error?: bool,
       content: Vec<ToolResultContent>,
@@ -197,6 +212,12 @@ FileSource =
     }
 ```
 
+URPV2-13a. A decoder that creates an `ImageSource::FileId` or `FileSource::FileId` MUST write the file-identifier namespace into the owning node or `ToolResultContent` extra body under internal key `_monoize_file_id_origin`. The value MUST be `openai` for Chat Completions or Responses file identifiers and `messages` for Anthropic Files API identifiers.
+
+URPV2-13b. Provider file identifiers are provider-scoped opaque capabilities, not universally portable file references. A Chat Completions or Responses encoder MAY emit a typed file identifier only when `_monoize_file_id_origin = "openai"`. A Messages encoder MAY emit one only when `_monoize_file_id_origin = "messages"`. If the marker is absent or names the other namespace, the encoder MUST omit that image or file part. Chat Completions and Responses MAY translate file-id syntax between their two endpoint families because both use the OpenAI Files namespace. No adapter may infer portability from the identifier prefix or copy an OpenAI file identifier into Anthropic Files API syntax, or vice versa.
+
+URPV2-13c. `_monoize_file_id_origin` is internal metadata under XTRA-10. Cross-family passthrough stripping MUST retain it until target encoding so URPV2-13b can be enforced. It MUST NOT appear on any wire object.
+
 ### 3.1 Ordinary node invariants
 
 ORD-1. Every ordinary node MUST carry `role` directly on the node. No ordinary node may be nested under a message wrapper.
@@ -244,6 +265,10 @@ RSN-8. Distinct `Reasoning` nodes are order-significant. URP MUST preserve their
 TCL-1. `ToolCall.call_id` MUST be non-empty.
 
 TCL-2. `ToolCall.arguments` MUST be a JSON-encoded string. If a source protocol delivers structured arguments as a JSON object or array, the decoder MUST serialize that structured value to JSON text before storing it in `arguments`.
+
+TCL-3. `ToolCall.tool_type` MUST be `function` for JSON-schema function calls and `custom` for freeform custom-tool calls. Missing `tool_type` in legacy internal data defaults to `function`.
+
+TCL-4. `ToolResult.tool_type` MUST equal the correlated `ToolCall.tool_type`. A decoder that receives an explicitly typed Responses `custom_tool_call_output` MUST set `tool_type = "custom"`. A Chat tool-role result MUST inherit the type of the earlier call with the same `call_id`; if no correlated call is present, it defaults to `function`.
 
 TR-1. `ToolResult` is a distinct top-level node. It MUST NOT carry `role`.
 
@@ -301,10 +326,12 @@ XTRA-4. Cross-family stripping applies only to nested passthrough state. Top-lev
 
 XTRA-5. Immediately before an encode step into a different protocol family, the runtime MUST:
 
-1. clear `extra_body` on every ordinary node;
-2. clear `extra_body` on every `ToolResult` node;
-3. clear `extra_body` on every `ToolResultContent` entry; and
+1. remove every non-internal member from `extra_body` on every ordinary node;
+2. remove every non-internal member from `extra_body` on every `ToolResult` node;
+3. remove every non-internal member from `extra_body` on every `ToolResultContent` entry; and
 4. remove every `NextDownstreamEnvelopeExtra` control node.
+
+A decoder-created or transform-created member reserved by XTRA-10 is internal semantic provenance, not nested wire passthrough. The runtime MUST retain such a member through XTRA-5 until the target adapter consumes or discards it. The target adapter MUST NOT emit the reserved member on the wire. This retained provenance includes `_monoize_chat_reasoning_detail`, which is required to apply MSG-6 to adjacent Chat reasoning-detail nodes after a Chat-to-Messages family transition.
 
 XTRA-6. After XTRA-5, later transforms or adapters for the target family MAY add new target-family passthrough fields.
 
@@ -314,7 +341,7 @@ XTRA-8. The same-family passthrough rules in XTRA-4 through XTRA-7 do not author
 
 XTRA-9. Before request-phase transforms run for one upstream attempt, the runtime MUST remove every downstream-origin `ProviderItem` whose `origin_protocol` differs from the selected upstream provider protocol. Later transforms MAY insert a `ProviderItem` only when they set `origin_protocol` to the intended target provider protocol.
 
-XTRA-10. A key whose name starts with `_monoize_` is internal metadata, not wire passthrough. An envelope reconstruction helper or protocol encoder MUST NOT emit such a key as a provider request field. A same-family encoder MAY consume an internal key to reconstruct the native field represented by its value, then MUST discard the internal key. For Chat `reasoning_details`, the raw detail object stored under `_monoize_chat_reasoning_detail` remains authoritative replay data; only the wrapper key is internal. An opaque same-protocol `ProviderItem.body` MUST be cloned at its wire boundary. The clone MUST recursively remove object members whose keys start with `_monoize_`, including members below arrays, while preserving every other member. This sanitization MUST NOT mutate the canonical URP body and MUST NOT apply to arbitrary typed or user payloads.
+XTRA-10. A key whose name starts with `_monoize_` is internal metadata, not wire passthrough. A wire decoder MUST treat that prefix as reserved and MUST NOT copy an incoming `_monoize_` member into an `extra_body`; only decoder or transform logic MAY create internal metadata after parsing semantic wire fields. An envelope reconstruction helper or protocol encoder MUST NOT emit such a key as a provider request field. A same-family encoder MAY consume an internal key to reconstruct the native field represented by its value, then MUST discard the internal key. For Chat `reasoning_details`, the raw detail object stored under `_monoize_chat_reasoning_detail` remains authoritative replay data; only the wrapper key is internal. An opaque same-protocol `ProviderItem.body` or `ProviderControl.data` MUST be cloned at its wire boundary. The clone MUST recursively remove object members whose keys start with `_monoize_`, including members below arrays, while preserving every other member. This sanitization MUST NOT mutate the canonical URP body or control data and MUST NOT apply to arbitrary typed or user payloads.
 
 ## 5. Canonical flat streaming events
 
@@ -416,7 +443,7 @@ STR-11. Downstream stream encoders own logical envelope reconstruction from `Nod
 
 STR-12. `ProviderControl` is same-protocol stream passthrough for one valid provider event that has no typed URP event mapping. It MUST NOT create a node, consume a `node_index`, mutate `ResponseDone.output`, or cross a protocol-family boundary.
 
-STR-13. A same-protocol stream encoder MAY replay `ProviderControl.data` only when `ProviderControl.protocol` equals the target protocol and `event_name` identifies the source wire event. A mismatched encoder MUST drop the event without converting it to text or success state.
+STR-13. A same-protocol stream encoder MAY replay `ProviderControl.data` only when `ProviderControl.protocol` equals the target protocol and `event_name` identifies the source wire event. Before replay, the encoder MUST clone `ProviderControl.data` and recursively remove every object member whose key starts with `_monoize_`, including members below arrays. The encoder MUST preserve all other members and MUST NOT mutate canonical `ProviderControl.data`. A mismatched encoder MUST drop the event without converting it to text or success state.
 
 ### 5.1 Delta accumulation invariants
 
@@ -462,7 +489,9 @@ RESP-1. The Responses encoder MUST reconstruct canonical Responses output items 
 
 RESP-2. Each `Reasoning` node MUST encode as one top-level Responses `reasoning` item.
 
-RESP-3. Each `ToolCall` node MUST encode as one top-level Responses `function_call` item.
+RESP-3. Each `ToolCall(tool_type = "function")` node MUST encode as one top-level Responses `function_call` item. Each `ToolCall(tool_type = "custom")` node MUST encode as one top-level Responses `custom_tool_call` item with freeform `input`.
+
+RESP-3a. `ToolResult(tool_type = "function")` MUST encode as `function_call_output`. `ToolResult(tool_type = "custom")` MUST encode as `custom_tool_call_output`.
 
 RESP-4. Each maximal run of adjacent ordinary nodes that are not `Reasoning` and not `ToolCall`, and that share the same `role`, MAY encode as one Responses `message` item.
 
@@ -509,7 +538,7 @@ MSG-5. Content-block lifecycles MUST NOT interleave. At most one content block m
 
 MSG-6. `Reasoning` nodes MUST reconstruct Anthropic `thinking` blocks. If adjacent Chat reasoning-detail nodes contain non-empty plaintext followed by an encrypted-only payload, a Messages encoder MUST render those two semantic surfaces in one thinking block while preserving the two URP nodes for same-Chat replay. If the stream exposes both thinking text and signature state, `thinking_delta` MUST occur before `signature_delta`, and both MUST occur before that block's `content_block_stop`.
 
-MSG-7. `ToolCall` nodes MUST reconstruct Anthropic `tool_use` blocks. Streamed tool input JSON remains block-scoped and index-scoped.
+MSG-7. `ToolCall(tool_type = "function")` nodes MUST reconstruct Anthropic `tool_use` blocks. Streamed tool input JSON remains block-scoped and index-scoped. Messages has no specified freeform custom-call lifecycle; its encoder MUST omit `ToolCall(tool_type = "custom")` and `ToolResult(tool_type = "custom")` rather than reinterpret freeform input as JSON tool input.
 
 MSG-8. `ToolResult` nodes MUST reconstruct Anthropic `tool_result` blocks as distinct tool-result protocol objects. They MUST NOT be rewritten as ordinary role-bearing nodes.
 
@@ -541,6 +570,8 @@ CHAT-5. Opaque encrypted reasoning payloads MUST appear only in `reasoning_detai
 CHAT-6. Streaming chat output remains data-only SSE and terminates with exactly one `[DONE]` sentinel.
 
 CHAT-7. If streamed chat output emits tool-call deltas, terminal `finish_reason` semantics for that downstream stream remain `tool_calls`.
+
+CHAT-7a. A Chat encoder MUST emit `ToolCall(tool_type = "function")` as `{type:"function",function:{name,arguments}}` and `ToolCall(tool_type = "custom")` as `{type:"custom",custom:{name,input}}`. A Chat decoder MUST accept both shapes in request history, non-stream output, and stream deltas. Chat tool-role results inherit the correlated call type so a later Responses encoder can choose `function_call_output` versus `custom_tool_call_output`.
 
 CHAT-8. If cumulative usage is available when a successful Chat Completions stream terminates, the encoder MUST emit exactly one usage chunk after the empty-delta finish chunk and immediately before `[DONE]`. The usage chunk MUST use the same `id`, `object`, `created`, and `model` envelope values as the finish chunk, MUST set `choices` to an empty array, and MUST contain the cumulative `usage` object. The finish chunk MUST NOT contain a non-null `usage` object. If cumulative usage is unavailable, the encoder MUST omit the usage chunk.
 

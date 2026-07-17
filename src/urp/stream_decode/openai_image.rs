@@ -189,7 +189,10 @@ fn image_extra_body(payload: &Value) -> HashMap<String, Value> {
         .as_object()
         .map(|obj| {
             obj.iter()
-                .filter(|(key, _)| !known.contains(&key.as_str()))
+                .filter(|(key, _)| {
+                    !crate::urp::decode::is_internal_extra_key(key)
+                        && !known.contains(&key.as_str())
+                })
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect()
         })
@@ -222,7 +225,9 @@ mod tests {
             "type": "image_generation.completed",
             "id": "ig_1",
             "b64_json": "QUJD",
-            "output_format": "webp"
+            "output_format": "webp",
+            "vendor_image_counter": 7,
+            "_monoize_spoofed_image": true
         }))
         .expect("image node");
 
@@ -232,8 +237,12 @@ mod tests {
                 id: Some(id),
                 role: OrdinaryRole::Assistant,
                 source: ImageSource::Base64 { media_type, data },
-                ..
-            } if id == "ig_1" && media_type == "image/webp" && data == "QUJD"
+                extra_body,
+            } if id == "ig_1"
+                && media_type == "image/webp"
+                && data == "QUJD"
+                && extra_body.get("vendor_image_counter") == Some(&json!(7))
+                && !extra_body.contains_key("_monoize_spoofed_image")
         ));
     }
 

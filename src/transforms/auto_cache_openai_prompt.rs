@@ -321,6 +321,8 @@ mod tests {
             }]),
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: Some(ResponseFormat::Text),
             user: None,
             extra_body: HashMap::new(),

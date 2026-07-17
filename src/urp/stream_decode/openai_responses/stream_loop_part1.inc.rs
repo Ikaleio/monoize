@@ -17,7 +17,7 @@ pub(crate) async fn stream_responses_to_urp_events(
     let mut item_ids_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut reasoning_by_output_index: HashMap<u64, AccumulatedReasoningSlot> = HashMap::new();
     let mut call_order: Vec<String> = Vec::new();
-    let mut calls: HashMap<String, (String, String)> = HashMap::new();
+    let mut calls: HashMap<String, (ToolCallType, String, String)> = HashMap::new();
     let mut call_ids_by_output_index: HashMap<u64, String> = HashMap::new();
     let mut saw_text_delta = false;
     let mut response_done_sent = false;
@@ -97,6 +97,9 @@ pub(crate) async fn stream_responses_to_urp_events(
                 .get("response")
                 .and_then(Value::as_object)
                 .cloned();
+            let sanitized_source_response = source_response
+                .as_ref()
+                .map(|source| crate::urp::decode::split_extra(source, &[]));
             let mut start_model = urp.model.clone();
             if let Some(source) = source_response.as_ref() {
                 if let Some(id) = source.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
@@ -118,11 +121,9 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
             let mut start_extra = if native_start_event {
-                source_response
+                sanitized_source_response
                     .clone()
                     .unwrap_or_default()
-                    .into_iter()
-                    .collect::<HashMap<_, _>>()
             } else {
                 HashMap::from([
                     ("object".to_string(), json!("response")),
@@ -132,11 +133,11 @@ pub(crate) async fn stream_responses_to_urp_events(
                 ])
             };
             if native_start_event
-                && let Some(source) = source_response
+                && let Some(source) = sanitized_source_response
             {
                 start_extra.insert(
                     RESPONSES_STREAM_START_SOURCE_EXTRA_KEY.to_string(),
-                    Value::Object(source),
+                    Value::Object(source.into_iter().collect()),
                 );
             }
             let _ = tx
@@ -268,18 +269,29 @@ pub(crate) async fn stream_responses_to_urp_events(
                         .or_insert_with(|| id.to_string());
                 }
             }
-            if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
+            let item_type = item.get("type").and_then(|v| v.as_str());
+            if matches!(item_type, Some("function_call" | "custom_tool_call")) {
+                let tool_type = if item_type == Some("custom_tool_call") {
+                    ToolCallType::Custom
+                } else {
+                    ToolCallType::Function
+                };
                 if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
                     if !calls.contains_key(call_id) {
                         call_order.push(call_id.to_string());
                         calls.insert(
                             call_id.to_string(),
                             (
+                                tool_type,
                                 item.get("name")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string(),
-                                item.get("arguments")
+                                item.get(if tool_type == ToolCallType::Custom {
+                                    "input"
+                                } else {
+                                    "arguments"
+                                })
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string(),
@@ -314,7 +326,15 @@ pub(crate) async fn stream_responses_to_urp_events(
                 }
             }
         }
-        if ev.event == "response.function_call_arguments.delta" {
+        if matches!(
+            ev.event.as_str(),
+            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta"
+        ) {
+            let tool_type = if ev.event == "response.custom_tool_call_input.delta" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            };
             let call_id_opt = data_val
                 .get("call_id")
                 .and_then(|v| v.as_str())
@@ -330,17 +350,26 @@ pub(crate) async fn stream_responses_to_urp_events(
                 let delta = data_val.get("delta").and_then(|v| v.as_str()).unwrap_or("");
                 if !calls.contains_key(call_id.as_str()) {
                     call_order.push(call_id.clone());
-                    calls.insert(call_id.clone(), (name.to_string(), String::new()));
+                    calls.insert(
+                        call_id.clone(),
+                        (tool_type, name.to_string(), String::new()),
+                    );
                 }
                 if let Some(entry) = calls.get_mut(call_id.as_str()) {
-                    if entry.0.is_empty() && !name.is_empty() {
-                        entry.0 = name.to_string();
+                    if tool_type == ToolCallType::Custom {
+                        entry.0 = ToolCallType::Custom;
                     }
-                    entry.1.push_str(delta);
+                    if entry.1.is_empty() && !name.is_empty() {
+                        entry.1 = name.to_string();
+                    }
+                    entry.2.push_str(delta);
                 }
             }
         }
-        if ev.event == "response.function_call_arguments.done" {
+        if matches!(
+            ev.event.as_str(),
+            "response.function_call_arguments.done" | "response.custom_tool_call_input.done"
+        ) {
             let call_id_opt = data_val
                 .get("call_id")
                 .and_then(|v| v.as_str())
@@ -353,12 +382,20 @@ pub(crate) async fn stream_responses_to_urp_events(
                 });
             if let Some(call_id) = call_id_opt {
                 let args = data_val
-                    .get("arguments")
+                    .get(if ev.event == "response.custom_tool_call_input.done" {
+                        "input"
+                    } else {
+                        "arguments"
+                    })
+                    .or_else(|| data_val.get("arguments"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if let Some(entry) = calls.get_mut(call_id.as_str()) {
-                    if entry.1.is_empty() && !args.is_empty() {
-                        entry.1 = args.to_string();
+                    if ev.event == "response.custom_tool_call_input.done" {
+                        entry.0 = ToolCallType::Custom;
+                    }
+                    if entry.2.is_empty() && !args.is_empty() {
+                        entry.2 = args.to_string();
                     }
                 }
             }
@@ -375,19 +412,38 @@ pub(crate) async fn stream_responses_to_urp_events(
                         .or_insert_with(|| id.to_string());
                 }
             }
-            if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
+            let item_type = item.get("type").and_then(|v| v.as_str());
+            if matches!(item_type, Some("function_call" | "custom_tool_call")) {
+                let tool_type = if item_type == Some("custom_tool_call") {
+                    ToolCallType::Custom
+                } else {
+                    ToolCallType::Function
+                };
                 if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
                     let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    let args = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
+                    let args = item
+                        .get(if tool_type == ToolCallType::Custom {
+                            "input"
+                        } else {
+                            "arguments"
+                        })
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if !calls.contains_key(call_id) {
                         call_order.push(call_id.to_string());
-                        calls.insert(call_id.to_string(), (name.to_string(), args.to_string()));
+                        calls.insert(
+                            call_id.to_string(),
+                            (tool_type, name.to_string(), args.to_string()),
+                        );
                     } else if let Some(entry) = calls.get_mut(call_id) {
-                        if entry.0.is_empty() && !name.is_empty() {
-                            entry.0 = name.to_string();
+                        if tool_type == ToolCallType::Custom {
+                            entry.0 = ToolCallType::Custom;
                         }
-                        if entry.1.is_empty() && !args.is_empty() {
-                            entry.1 = args.to_string();
+                        if entry.1.is_empty() && !name.is_empty() {
+                            entry.1 = name.to_string();
+                        }
+                        if entry.2.is_empty() && !args.is_empty() {
+                            entry.2 = args.to_string();
                         }
                     }
                     if let Some(idx) = data_val.get("output_index").and_then(|v| v.as_u64()) {

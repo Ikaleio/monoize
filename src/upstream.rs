@@ -325,15 +325,18 @@ fn extract_error_info(text: &str) -> UpstreamErrorInfo {
     let Some(error) = value.get("error") else {
         return UpstreamErrorInfo::default();
     };
+    let metadata = error.get("metadata").and_then(Value::as_object);
     UpstreamErrorInfo {
-        code: error
-            .get("code")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        error_type: error
-            .get("type")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        code: error.get("code").and_then(json_scalar_string).or_else(|| {
+            metadata
+                .and_then(|metadata| metadata.get("provider_code"))
+                .and_then(json_scalar_string)
+        }),
+        error_type: error.get("type").and_then(json_scalar_string).or_else(|| {
+            metadata
+                .and_then(|metadata| metadata.get("error_type"))
+                .and_then(json_scalar_string)
+        }),
         param: error
             .get("param")
             .and_then(|v| v.as_str())
@@ -342,5 +345,34 @@ fn extract_error_info(text: &str) -> UpstreamErrorInfo {
             .get("message")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+    }
+}
+
+fn json_scalar_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openrouter_error_info_accepts_numeric_code_and_metadata_fallbacks() {
+        let info = extract_error_info(
+            r#"{"error":{"code":502,"message":"provider failed","metadata":{"provider_code":"P502","error_type":"provider_error"}}}"#,
+        );
+        assert_eq!(info.code.as_deref(), Some("502"));
+        assert_eq!(info.error_type.as_deref(), Some("provider_error"));
+
+        let fallback = extract_error_info(
+            r#"{"error":{"message":"provider failed","metadata":{"provider_code":529,"error_type":"upstream_error"}}}"#,
+        );
+        assert_eq!(fallback.code.as_deref(), Some("529"));
+        assert_eq!(fallback.error_type.as_deref(), Some("upstream_error"));
     }
 }

@@ -129,10 +129,45 @@ fn build_test_urp_request(model: &str) -> urp::UrpRequest {
         tools: None,
         tool_choice: None,
         parallel_tool_calls: None,
+        stop: None,
+        verbosity: None,
         response_format: None,
         user: None,
         extra_body: HashMap::new(),
     }
+}
+
+#[test]
+fn provider_extra_filter_retains_internal_state_until_same_chat_encoding() {
+    let mut req = urp::decode::openai_chat::decode_request(&serde_json::json!({
+        "model": "gpt-4-0613",
+        "messages": [{ "role": "user", "content": "hello" }],
+        "functions": [{
+            "name": "lookup",
+            "parameters": { "type": "object" }
+        }],
+        "function_call": { "name": "lookup", "x_choice": "kept" },
+        "unlisted_provider_field": "drop"
+    }))
+    .expect("decode deprecated Chat controls");
+
+    filter_extra_body_for_provider(&mut req, ProviderType::ChatCompletion, &None);
+
+    assert!(
+        req.extra_body
+            .contains_key(urp::CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY)
+    );
+    assert!(!req.extra_body.contains_key("unlisted_provider_field"));
+
+    let wire = urp::encode::openai_chat::encode_request(&req, "gpt-4-0613");
+    assert_eq!(
+        wire["function_call"],
+        serde_json::json!({ "name": "lookup", "x_choice": "kept" })
+    );
+    assert_eq!(wire["functions"][0]["name"], serde_json::json!("lookup"));
+    assert!(wire.get("tool_choice").is_none());
+    assert!(wire.get("tools").is_none());
+    assert!(!wire.to_string().contains("_monoize_"));
 }
 
 fn build_test_routing_request(model: &str) -> UrpRequest {
@@ -166,6 +201,7 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
             },
             urp::Node::ToolCall {
                 id: Some("fc_answered".to_string()),
+                tool_type: urp::ToolCallType::Function,
                 call_id: "call_answered".to_string(),
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
@@ -173,6 +209,7 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
             },
             urp::Node::ToolCall {
                 id: Some("fc_unanswered".to_string()),
+                tool_type: urp::ToolCallType::Function,
                 call_id: "call_unanswered".to_string(),
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
@@ -180,6 +217,7 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
             },
             urp::Node::ToolResult {
                 id: None,
+                tool_type: urp::ToolCallType::Function,
                 call_id: "call_answered".to_string(),
                 is_error: false,
                 content: vec![urp::ToolResultContent::Text {
@@ -190,6 +228,7 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
             },
             urp::Node::ToolResult {
                 id: None,
+                tool_type: urp::ToolCallType::Function,
                 call_id: "call_missing".to_string(),
                 is_error: false,
                 content: vec![urp::ToolResultContent::Text {
@@ -214,6 +253,8 @@ fn strip_orphaned_tool_calls_keeps_only_closed_stateless_pairs() {
         tools: None,
         tool_choice: None,
         parallel_tool_calls: None,
+        stop: None,
+        verbosity: None,
         response_format: None,
         user: None,
         extra_body: HashMap::new(),
@@ -262,6 +303,7 @@ fn responses_tool_replay_preserves_plaintext_raw_cot_reasoning() {
             },
             urp::Node::ToolCall {
                 id: Some("fc_answered".to_string()),
+                tool_type: urp::ToolCallType::Function,
                 call_id: "call_answered".to_string(),
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
@@ -269,6 +311,7 @@ fn responses_tool_replay_preserves_plaintext_raw_cot_reasoning() {
             },
             urp::Node::ToolResult {
                 id: None,
+                tool_type: urp::ToolCallType::Function,
                 call_id: "call_answered".to_string(),
                 is_error: false,
                 content: vec![urp::ToolResultContent::Text {
@@ -294,6 +337,8 @@ fn responses_tool_replay_preserves_plaintext_raw_cot_reasoning() {
         tools: None,
         tool_choice: None,
         parallel_tool_calls: None,
+        stop: None,
+        verbosity: None,
         response_format: None,
         user: None,
         extra_body: HashMap::new(),

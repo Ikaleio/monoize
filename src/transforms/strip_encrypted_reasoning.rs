@@ -386,6 +386,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: HashMap::new(),

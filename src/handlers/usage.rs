@@ -179,10 +179,32 @@ pub(crate) fn usage_to_chat_usage_json(usage: &urp::Usage) -> Value {
             "tool_prompt_tokens": usage.input_details.as_ref().map(|d| d.tool_prompt_tokens).unwrap_or(0)
         }
     });
-    // Overwrite with full upstream detail objects (e.g. cache_write_tokens)
     if let Some(map) = obj.as_object_mut() {
+        for detail_key in ["prompt_tokens_details", "completion_tokens_details"] {
+            let Some(extra_detail) = usage.extra_body.get(detail_key).and_then(Value::as_object)
+            else {
+                continue;
+            };
+            let Some(generated_detail) = map.get_mut(detail_key).and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            for (key, value) in extra_detail {
+                if !key.starts_with("_monoize_") {
+                    generated_detail
+                        .entry(key.clone())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+
         for (k, v) in &usage.extra_body {
-            if !k.starts_with("_monoize_") {
+            if !k.starts_with("_monoize_")
+                && !matches!(
+                    k.as_str(),
+                    "prompt_tokens_details" | "completion_tokens_details"
+                )
+            {
                 map.insert(k.clone(), v.clone());
             }
         }
@@ -194,10 +216,14 @@ fn split_usage_extra(usage: &Map<String, Value>, known_keys: &[&str]) -> HashMap
     usage
         .iter()
         .filter_map(|(k, v)| {
-            if known_keys.contains(&k.as_str()) {
+            if known_keys.contains(&k.as_str()) || urp::decode::is_internal_extra_key(k) {
                 None
             } else {
-                Some((k.clone(), v.clone()))
+                let mut value = v.clone();
+                if let Some(object) = value.as_object_mut() {
+                    object.retain(|key, _| !urp::decode::is_internal_extra_key(key));
+                }
+                Some((k.clone(), value))
             }
         })
         .collect()

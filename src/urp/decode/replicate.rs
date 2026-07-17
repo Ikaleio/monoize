@@ -78,6 +78,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         tools: None,
         tool_choice: None,
         parallel_tool_calls: None,
+        stop: None,
+        verbosity: None,
         response_format: None,
         user: None,
         extra_body: split_extra(obj, &["model", "input", "stream", "version"]),

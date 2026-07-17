@@ -222,6 +222,87 @@ async fn cross_family_top_level_extra_survives_while_nested_extra_is_stripped() 
 }
 
 #[tokio::test]
+async fn responses_nonstream_same_family_node_and_envelope_passthrough() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "request_envelope_unknown": { "scope": "message" },
+                    "content": [{
+                        "type": "input_text",
+                        "text": "same-family passthrough",
+                        "request_node_unknown": { "scope": "content" }
+                    }]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "second envelope",
+                        "request_second_node_unknown": true
+                    }]
+                }
+            ],
+            "extra_echo": "request-top-unknown",
+            "stream_mode": "responses_same_family_passthrough"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["extra_echo"], json!("request-top-unknown"));
+    let upstream_input = upstream["input"]
+        .as_array()
+        .expect("Responses upstream input array");
+    assert_eq!(
+        upstream_input[0]["request_envelope_unknown"],
+        json!({ "scope": "message" })
+    );
+    assert_eq!(
+        upstream_input[0]["content"][0]["request_node_unknown"],
+        json!({ "scope": "content" })
+    );
+    assert!(
+        upstream_input[1].get("request_envelope_unknown").is_none(),
+        "request envelope passthrough must apply only to the next item: {upstream_input:?}"
+    );
+    assert_eq!(
+        upstream_input[1]["content"][0]["request_second_node_unknown"],
+        json!(true)
+    );
+
+    let response: Value = serde_json::from_str(&body).expect("Responses response JSON");
+    assert_eq!(
+        response["response_top_unknown"],
+        json!({ "scope": "response" })
+    );
+    let output = response["output"]
+        .as_array()
+        .expect("Responses output array");
+    assert_eq!(
+        output[0]["response_envelope_unknown"],
+        json!({ "scope": "message" })
+    );
+    assert_eq!(
+        output[0]["content"][0]["response_node_unknown"],
+        json!({ "scope": "content" })
+    );
+    assert!(
+        output[1].get("response_envelope_unknown").is_none(),
+        "response envelope passthrough must apply only to the next item: {output:?}"
+    );
+    assert_eq!(output[1]["response_tool_node_unknown"], json!(true));
+}
+
+#[tokio::test]
 async fn responses_same_family_next_downstream_envelope_extra_applies_once() {
     let ctx = setup().await;
     let (status, body) = json_post(

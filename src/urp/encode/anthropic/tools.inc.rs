@@ -61,6 +61,8 @@ mod tests {
             }]),
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -140,6 +142,8 @@ mod tests {
             }]),
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -197,6 +201,8 @@ mod tests {
             tools: Some(vec![parsed_tool]),
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -284,6 +290,8 @@ mod tests {
             tools: Some(tools),
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -340,6 +348,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: Some(ResponseFormat::JsonObject),
             user: None,
             extra_body: empty_map(),
@@ -355,6 +365,81 @@ mod tests {
             json!(ANTHROPIC_DEFAULT_MAX_TOKENS),
             "Anthropic requests without a downstream cap must default to Anthropic's max output budget"
         );
+    }
+
+    #[test]
+    fn messages_structured_output_uses_output_config_format() {
+        let mut req = UrpRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            input: items_to_nodes(vec![Item::Message {
+                id: None,
+                role: Role::User,
+                parts: vec![Part::Text {
+                    content: "hello".to_string(),
+                    extra_body: empty_map(),
+                }],
+                extra_body: empty_map(),
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            reasoning: Some(crate::urp::ReasoningConfig {
+                effort: Some("high".to_string()),
+                extra_body: HashMap::from([(
+                    MESSAGES_OUTPUT_CONFIG_EXTRA_KEY.to_string(),
+                    json!({
+                        "effort": "max",
+                        "format": {
+                            "type": "json_schema",
+                            "schema": { "type": "string" },
+                            "messages_extension": true
+                        },
+                        "vendor_control": [1, 2, 3]
+                    }),
+                )]),
+            }),
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
+            response_format: Some(ResponseFormat::JsonSchema {
+                json_schema: crate::urp::JsonSchemaDefinition {
+                    name: "openai_name_must_not_leak".to_string(),
+                    description: Some("OpenAI-only description".to_string()),
+                    schema: json!({
+                        "type": "object",
+                        "properties": { "answer": { "type": "string" } }
+                    }),
+                    strict: Some(true),
+                    extra_body: HashMap::from([("openai_extension".to_string(), json!(true))]),
+                },
+            }),
+            user: None,
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_request(&req, "claude-sonnet-4-6");
+        assert_eq!(encoded["output_config"]["effort"], json!("max"));
+        assert_eq!(encoded["output_config"]["vendor_control"], json!([1, 2, 3]));
+        assert_eq!(
+            encoded["output_config"]["format"],
+            json!({
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": { "answer": { "type": "string" } }
+                },
+                "messages_extension": true
+            })
+        );
+        assert!(encoded.get("response_format").is_none());
+
+        req.response_format = Some(ResponseFormat::JsonObject);
+        let encoded = encode_request(&req, "claude-sonnet-4-6");
+        assert!(encoded["output_config"].get("format").is_none());
+        assert_eq!(encoded["output_config"]["vendor_control"], json!([1, 2, 3]));
     }
 
     #[test]
@@ -378,6 +463,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -570,6 +657,7 @@ mod tests {
                     parts: vec![
                         Part::ToolCall {
                             id: None,
+                            tool_type: ToolCallType::Function,
                             call_id: "answered".to_string(),
                             name: "bash".to_string(),
                             arguments: r#"{"command":"ls"}"#.to_string(),
@@ -577,6 +665,7 @@ mod tests {
                         },
                         Part::ToolCall {
                             id: None,
+                            tool_type: ToolCallType::Function,
                             call_id: "orphan".to_string(),
                             name: "bash".to_string(),
                             arguments: r#"{"command":"cat x"}"#.to_string(),
@@ -587,6 +676,7 @@ mod tests {
                 },
                 Item::ToolResult {
                     id: None,
+                    tool_type: ToolCallType::Function,
                     call_id: "answered".to_string(),
                     is_error: false,
                     content: vec![ToolResultContent::Text {
@@ -605,6 +695,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -647,6 +739,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),

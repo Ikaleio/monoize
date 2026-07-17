@@ -169,7 +169,7 @@ pub(super) async fn execute_nonstream_typed(
                     &path,
                     &upstream_body,
                     attempt.request_timeout_ms.saturating_mul(10).max(600_000),
-                    provider_extra_headers(attempt.provider_type),
+                    provider_extra_headers(attempt.provider_type, &upstream_body),
                 )
                 .await;
                 match call {
@@ -202,7 +202,7 @@ pub(super) async fn execute_nonstream_typed(
                     &path,
                     form,
                     attempt.request_timeout_ms,
-                    provider_extra_headers(attempt.provider_type),
+                    provider_extra_headers(attempt.provider_type, &upstream_body),
                 )
                 .await
                 {
@@ -235,7 +235,7 @@ pub(super) async fn execute_nonstream_typed(
                     &path,
                     &upstream_body,
                     attempt.request_timeout_ms,
-                    provider_extra_headers(attempt.provider_type),
+                    provider_extra_headers(attempt.provider_type, &upstream_body),
                 )
                 .await
                 .map(|value| (Some(value), None))
@@ -662,7 +662,10 @@ pub(super) fn encode_request_for_provider(
     let value = match attempt.provider_type {
         ProviderType::Responses => urp::encode::openai_responses::encode_request(req, &model),
         ProviderType::ChatCompletion => urp::encode::openai_chat::encode_request(req, &model),
-        ProviderType::Messages => urp::encode::anthropic::encode_request(req, &model),
+        ProviderType::Messages => urp::encode::anthropic::encode_request_checked(req, &model)
+            .map_err(|message| {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+            })?,
         ProviderType::Gemini => urp::encode::gemini::encode_request(req, &model),
         ProviderType::OpenaiImage => urp::encode::openai_image::encode_request(req, &model),
         ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model),
@@ -741,17 +744,22 @@ fn embedded_chat_completion_error_to_app(error: &Value) -> AppError {
         .or_else(|| error.as_str())
         .filter(|message| !message.is_empty())
         .unwrap_or("upstream Chat Completions response terminated with an error");
-    let upstream_code = error.get("code").and_then(json_scalar_string);
+    let metadata = error.get("metadata").and_then(Value::as_object);
+    let upstream_code = error.get("code").and_then(json_scalar_string).or_else(|| {
+        metadata
+            .and_then(|metadata| metadata.get("provider_code"))
+            .and_then(json_scalar_string)
+    });
     let upstream_status = error
         .get("code")
         .and_then(Value::as_u64)
         .filter(|status| (400..=599).contains(status))
         .and_then(|status| StatusCode::from_u16(status as u16).ok());
-    let upstream_type = error
-        .get("type")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let upstream_type = error.get("type").and_then(json_scalar_string).or_else(|| {
+        metadata
+            .and_then(|metadata| metadata.get("error_type"))
+            .and_then(json_scalar_string)
+    });
     let upstream_param = error
         .get("param")
         .and_then(Value::as_str)

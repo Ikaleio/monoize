@@ -1,5 +1,6 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj, split_extra,
+    deserialize_u64ish_default, parse_file_part_from_obj, parse_image_part_from_obj,
+    retain_wire_extra_fields, split_extra,
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
@@ -80,7 +81,8 @@ struct GeminiUsage {
 }
 
 impl From<GeminiUsage> for Usage {
-    fn from(value: GeminiUsage) -> Self {
+    fn from(mut value: GeminiUsage) -> Self {
+        retain_wire_extra_fields(&mut value.extra);
         let input_details = if value.cached_content_token_count > 0
             || value.cache_creation_tokens > 0
             || value.tool_prompt_tokens > 0
@@ -244,6 +246,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         tools,
         tool_choice,
         parallel_tool_calls: None,
+        stop: None,
+        verbosity: None,
         response_format: None,
         user: None,
         extra_body: split_extra(
@@ -490,6 +494,7 @@ fn decode_content_parts(obj: &Map<String, Value>) -> Vec<Part> {
         if !name.is_empty() {
             out.push(Part::ToolCall {
                 id: fc.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                tool_type: crate::urp::ToolCallType::Function,
                 call_id,
                 name,
                 arguments: args,
@@ -592,6 +597,7 @@ fn decode_function_response(fr: &Map<String, Value>) -> Node {
     let response_value = fr.get("response").cloned().unwrap_or(Value::Null);
     Node::ToolResult {
         id: fr.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        tool_type: crate::urp::ToolCallType::Function,
         call_id: name.clone(),
         is_error: false,
         content: vec![ToolResultContent::Text {
@@ -675,7 +681,7 @@ fn parse_usage(obj: &Map<String, Value>) -> Usage {
             output_tokens: 0,
             input_details: None,
             output_details: None,
-            extra_body: obj.clone().into_iter().collect(),
+            extra_body: split_extra(obj, &[]),
         })
 }
 
@@ -698,9 +704,25 @@ fn collect_content_text(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_response;
+    use super::{decode_response, parse_usage};
     use crate::urp::internal_legacy_bridge::nodes_to_items;
     use serde_json::{Value, json};
+
+    #[test]
+    fn gemini_usage_rejects_reserved_wire_keys_and_preserves_vendor_extras() {
+        let usage = parse_usage(
+            json!({
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 2,
+                "vendorUsageCounter": 3,
+                "_monoize_spoofed_usage": true
+            })
+            .as_object()
+            .expect("usage object"),
+        );
+        assert_eq!(usage.extra_body["vendorUsageCounter"], json!(3));
+        assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
+    }
 
     #[test]
     fn decode_response_greedy_merges_assistant_parts_and_extracts_tool_results() {
@@ -740,6 +762,7 @@ mod tests {
                 }),
                 json!({
                     "type": "tool_call",
+                    "tool_type": "function",
                     "call_id": "lookup",
                     "name": "lookup",
                     "arguments": "{\"q\":1}"
@@ -751,6 +774,7 @@ mod tests {
                 }),
                 json!({
                     "type": "tool_result",
+                    "tool_type": "function",
                     "call_id": "lookup",
                     "is_error": false,
                     "content": [

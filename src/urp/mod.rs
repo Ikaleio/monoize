@@ -50,8 +50,17 @@ pub const CHAT_REASONING_SURFACE_REASONING_CONTENT: &str = "reasoning_content";
 /// Exact provider-specific request controls kept out of cross-family generic reasoning fields.
 pub const CHAT_REASONING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_reasoning_config";
 pub const CHAT_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_chat_thinking_config";
+pub const CHAT_MESSAGE_AUDIO_EXTRA_KEY: &str = "_monoize_chat_message_audio";
+pub const CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY: &str =
+    "_monoize_chat_legacy_function_definition";
+pub const CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY: &str = "_monoize_chat_legacy_function_choice";
+pub const CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY: &str = "_monoize_chat_legacy_function_call";
+pub const CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY: &str = "_monoize_chat_legacy_function_result";
 pub const MESSAGES_THINKING_CONFIG_EXTRA_KEY: &str = "_monoize_messages_thinking_config";
 pub const MESSAGES_OUTPUT_CONFIG_EXTRA_KEY: &str = "_monoize_messages_output_config";
+pub const FILE_ID_ORIGIN_EXTRA_KEY: &str = "_monoize_file_id_origin";
+pub const FILE_ID_ORIGIN_OPENAI: &str = "openai";
+pub const FILE_ID_ORIGIN_MESSAGES: &str = "messages";
 /// Typed usage observed on an upstream Messages `message_start`, retained until the
 /// downstream Messages encoder emits its own `message_start` envelope.
 pub const MESSAGES_STREAM_START_USAGE_EXTRA_KEY: &str = "_monoize_messages_stream_start_usage";
@@ -60,6 +69,10 @@ pub const RESPONSES_REASONING_CONTENT_EXTRA_KEY: &str = "_monoize_responses_reas
 /// Complete native Responses `image_generation_call` item retained on a semantic Image node.
 pub const RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY: &str =
     "_monoize_responses_image_generation_call";
+/// Exact top-level Responses `instructions` value retained for same-protocol request replay.
+pub const RESPONSES_INSTRUCTIONS_EXTRA_KEY: &str = "_monoize_responses_instructions";
+/// Marks semantic nodes decoded from top-level Responses `instructions`.
+pub const RESPONSES_INSTRUCTION_NODE_EXTRA_KEY: &str = "_monoize_responses_instruction_node";
 /// Complete non-stream Responses object retained so absent optional fields remain absent.
 pub const RESPONSES_RESPONSE_SOURCE_EXTRA_KEY: &str = "_monoize_responses_response_source";
 /// Upstream Responses start object retained for same-protocol stream envelope reconstruction.
@@ -373,6 +386,13 @@ impl ProviderProtocol {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StopControl {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrpRequest {
     pub model: String,
@@ -394,6 +414,10 @@ pub struct UrpRequest {
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<StopControl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -463,6 +487,8 @@ pub enum Node {
     ToolCall {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: ToolCallType,
         call_id: String,
         name: String,
         arguments: String,
@@ -482,6 +508,8 @@ pub enum Node {
     ToolResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: ToolCallType,
         call_id: String,
         #[serde(default)]
         is_error: bool,
@@ -502,6 +530,14 @@ pub enum OrdinaryRole {
     Developer,
     User,
     Assistant,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallType {
+    #[default]
+    Function,
+    Custom,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -866,6 +902,8 @@ pub enum NodeHeader {
     ToolCall {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: ToolCallType,
         call_id: String,
         name: String,
     },
@@ -879,6 +917,8 @@ pub enum NodeHeader {
     ToolResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: ToolCallType,
         call_id: String,
     },
     NextDownstreamEnvelopeExtra,
@@ -1116,6 +1156,10 @@ pub fn push_unique_node(output: &mut Vec<Node>, node: Node) {
 }
 
 pub fn strip_nested_extra_body(nodes: &mut Vec<Node>) {
+    fn retain_internal_metadata(extra_body: &mut HashMap<String, Value>) {
+        extra_body.retain(|key, _| key.starts_with("_monoize_"));
+    }
+
     for node in nodes.iter_mut() {
         match node {
             Node::Text { extra_body, .. }
@@ -1125,15 +1169,17 @@ pub fn strip_nested_extra_body(nodes: &mut Vec<Node>) {
             | Node::Refusal { extra_body, .. }
             | Node::Reasoning { extra_body, .. }
             | Node::ToolCall { extra_body, .. }
-            | Node::ProviderItem { extra_body, .. } => extra_body.clear(),
+            | Node::ProviderItem { extra_body, .. } => {
+                retain_internal_metadata(extra_body);
+            }
             Node::ToolResult {
                 content,
                 extra_body,
                 ..
             } => {
-                extra_body.clear();
+                retain_internal_metadata(extra_body);
                 for item in content {
-                    item.extra_body_mut().clear();
+                    retain_internal_metadata(item.extra_body_mut());
                 }
             }
             Node::NextDownstreamEnvelopeExtra { .. } => {}
@@ -1222,6 +1268,7 @@ mod tests {
 
         let tc = Node::ToolCall {
             id: None,
+            tool_type: ToolCallType::Function,
             call_id: "c1".into(),
             name: "fn".into(),
             arguments: "{}".into(),
@@ -1234,6 +1281,7 @@ mod tests {
     fn node_role_returns_none_for_tool_result_and_control() {
         let tr = Node::ToolResult {
             id: None,
+            tool_type: ToolCallType::Function,
             call_id: "c1".into(),
             is_error: false,
             content: vec![],
@@ -1253,6 +1301,7 @@ mod tests {
             Node::text(OrdinaryRole::User, "hi"),
             Node::ToolResult {
                 id: None,
+                tool_type: ToolCallType::Function,
                 call_id: "c1".into(),
                 is_error: false,
                 content: vec![ToolResultContent::Text {
@@ -1268,41 +1317,67 @@ mod tests {
     }
 
     #[test]
-    fn strip_nested_extra_body_clears_node_extras_and_control_nodes() {
+    fn strip_nested_extra_body_keeps_internal_metadata_and_removes_wire_extras() {
         let mut nodes = vec![
             Node::Text {
                 id: None,
                 role: OrdinaryRole::Assistant,
                 content: "hi".into(),
                 phase: Some("commentary".into()),
-                extra_body: [("x".into(), serde_json::json!(1))].into_iter().collect(),
+                extra_body: [
+                    ("x".into(), serde_json::json!(1)),
+                    ("_monoize_text_semantics".into(), serde_json::json!(4)),
+                ]
+                .into_iter()
+                .collect(),
             },
             Node::NextDownstreamEnvelopeExtra {
                 extra_body: [("y".into(), serde_json::json!(2))].into_iter().collect(),
             },
             Node::ToolResult {
                 id: None,
+                tool_type: ToolCallType::Function,
                 call_id: "call_1".into(),
                 is_error: false,
                 content: vec![ToolResultContent::Text {
                     text: "ok".into(),
-                    extra_body: [("nested".into(), serde_json::json!(true))]
-                        .into_iter()
-                        .collect(),
+                    extra_body: [
+                        ("nested".into(), serde_json::json!(true)),
+                        ("_monoize_content_semantics".into(), serde_json::json!(5)),
+                    ]
+                    .into_iter()
+                    .collect(),
                 }],
-                extra_body: [("z".into(), serde_json::json!(3))].into_iter().collect(),
+                extra_body: [
+                    ("z".into(), serde_json::json!(3)),
+                    ("_monoize_result_semantics".into(), serde_json::json!(6)),
+                ]
+                .into_iter()
+                .collect(),
             },
         ];
         strip_nested_extra_body(&mut nodes);
         assert_eq!(nodes.len(), 2);
-        assert!(matches!(&nodes[0], Node::Text { extra_body, .. } if extra_body.is_empty()));
+        assert!(matches!(&nodes[0], Node::Text { extra_body, .. }
+        if extra_body == &HashMap::from([(
+            "_monoize_text_semantics".to_string(),
+            serde_json::json!(4),
+        )])));
         assert!(
-            matches!(&nodes[1], Node::ToolResult { id: _, extra_body, .. } if extra_body.is_empty())
+            matches!(&nodes[1], Node::ToolResult { id: _, extra_body, .. }
+            if extra_body == &HashMap::from([(
+                "_monoize_result_semantics".to_string(),
+                serde_json::json!(6),
+            )]))
         );
         assert!(matches!(
             &nodes[1],
             Node::ToolResult { content, .. }
-                if matches!(&content[0], ToolResultContent::Text { extra_body, .. } if extra_body.is_empty())
+                if matches!(&content[0], ToolResultContent::Text { extra_body, .. }
+                    if extra_body == &HashMap::from([(
+                        "_monoize_content_semantics".to_string(),
+                        serde_json::json!(5),
+                    )]))
         ));
     }
 
@@ -1363,6 +1438,7 @@ mod tests {
     fn retain_provider_items_filters_nested_tool_result_content_by_exact_protocol() {
         let mut nodes = vec![Node::ToolResult {
             id: None,
+            tool_type: ToolCallType::Function,
             call_id: "call_1".into(),
             is_error: false,
             content: vec![

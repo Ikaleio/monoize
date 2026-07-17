@@ -129,8 +129,9 @@ fn map_responses_event_to_urp_events_with_state(
         | "response.reasoning_summary_part.added"
         | "response.reasoning_summary_part.done"
         | "response.output_text.done"
-        | "response.function_call_arguments.done" => Vec::new(),
-        "response.function_call_arguments.delta" => {
+        | "response.function_call_arguments.done"
+        | "response.custom_tool_call_input.done" => Vec::new(),
+        "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
             if let Some(output_index) = data_val.get("output_index").and_then(|v| v.as_u64()) {
                 output_state_for(index_state, output_index).function_arguments_delta_seen = true;
             }

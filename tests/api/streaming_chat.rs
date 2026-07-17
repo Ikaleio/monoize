@@ -1565,6 +1565,37 @@ async fn chat_streaming_openrouter_error_chunks_are_terminal_and_preserved() {
             );
         }
     }
+
+    let metadata_error = chat_stream_for_mode(&ctx, "chat_metadata_error").await;
+    assert_eq!(count_done_sentinels(&metadata_error), 1, "{metadata_error}");
+    assert!(metadata_error.contains("openrouter metadata failure"));
+    assert!(
+        metadata_error.contains("\"code\":\"P529\""),
+        "{metadata_error}"
+    );
+    assert!(
+        metadata_error.contains("provider_error"),
+        "{metadata_error}"
+    );
+}
+
+#[tokio::test]
+async fn chat_streaming_preserves_choice_logprobs_on_nonterminal_frame() {
+    let ctx = setup().await;
+    let text = chat_stream_for_mode(&ctx, "chat_token_logprobs").await;
+    let logprobs_frame = parse_sse_frames(&text)
+        .into_iter()
+        .filter_map(|(_, data)| serde_json::from_str::<Value>(&data).ok())
+        .find(|frame| frame["choices"][0].get("logprobs").is_some())
+        .expect("choice-level logprobs frame");
+
+    assert_eq!(
+        logprobs_frame["choices"][0]["logprobs"]["content"][0]["token"],
+        json!("A")
+    );
+    assert_eq!(logprobs_frame["choices"][0]["delta"], json!({}));
+    assert_eq!(logprobs_frame["choices"][0]["finish_reason"], Value::Null);
+    assert_eq!(count_done_sentinels(&text), 1, "{text}");
 }
 
 #[tokio::test]

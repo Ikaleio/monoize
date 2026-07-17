@@ -49,6 +49,11 @@ async fn chat_nonstream_openrouter_errors_do_not_become_successful_completions()
             "503",
         ),
         ("chat_choice_error", "openrouter choice failure", "502"),
+        (
+            "chat_metadata_error",
+            "openrouter metadata failure",
+            "P529",
+        ),
     ] {
         let (status, body) = json_post(
             &ctx,
@@ -70,8 +75,35 @@ async fn chat_nonstream_openrouter_errors_do_not_become_successful_completions()
         let error: Value = serde_json::from_str(&body).expect("error response JSON");
         assert_eq!(error["error"]["code"], json!("upstream_chat_error"));
         assert_eq!(error["error"]["upstream_code"], json!(expected_code));
-        assert_eq!(error["error"]["upstream_type"], json!("upstream_error"));
+        assert_eq!(
+            error["error"]["upstream_type"],
+            json!(if mode == "chat_metadata_error" {
+                "provider_error"
+            } else {
+                "upstream_error"
+            })
+        );
     }
+}
+
+#[tokio::test]
+async fn chat_multiple_choices_are_rejected_before_upstream_dispatch() {
+    let ctx = setup().await;
+    let before = ctx.captured_bodies.lock().unwrap().len();
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": "two answers" }],
+            "n": 2
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("n must be the integer 1"), "{body}");
+    assert_eq!(ctx.captured_bodies.lock().unwrap().len(), before);
 }
 
 #[tokio::test]
@@ -249,6 +281,79 @@ async fn chat_completions_adapter_nonstream() {
     let v: Value = serde_json::from_str(&body).unwrap();
     let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
     assert!(text.contains("hi|extra_echo=E2"));
+}
+
+#[tokio::test]
+async fn chat_file_and_audio_inputs_round_trip_and_map_only_to_supported_targets() {
+    let chat_ctx = setup().await;
+    let chat_content = json!([
+        { "type": "text", "text": "inspect" },
+        { "type": "file", "file": { "file_id": "file_openai_1" } },
+        {
+            "type": "file",
+            "file": { "file_data": "ZmlsZQ==", "filename": "note.txt" }
+        },
+        {
+            "type": "input_audio",
+            "input_audio": { "data": "YXVkaW8=", "format": "mp3" }
+        }
+    ]);
+    let (status, _) = json_post(
+        &chat_ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": chat_content.clone() }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let chat_upstream = last_captured_body(&chat_ctx, "chat");
+    assert_eq!(chat_upstream["messages"][0]["content"], chat_content);
+
+    let responses_ctx = setup().await;
+    let (status, _) = json_post(
+        &responses_ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "file", "file": { "file_id": "file_openai_1" } },
+                    {
+                        "type": "file",
+                        "file": { "file_data": "ZmlsZQ==", "filename": "note.txt" }
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": { "data": "YXVkaW8=", "format": "mp3" }
+                    }
+                ]
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let responses_upstream = last_captured_body(&responses_ctx, "responses");
+    let content = responses_upstream["input"]
+        .as_array()
+        .expect("responses input")
+        .iter()
+        .find(|item| item["type"].as_str() == Some("message"))
+        .and_then(|item| item["content"].as_array())
+        .expect("responses message content");
+    assert_eq!(
+        content,
+        &vec![
+            json!({ "type": "input_file", "file_id": "file_openai_1" }),
+            json!({
+                "type": "input_file",
+                "file_data": "ZmlsZQ==",
+                "filename": "note.txt"
+            })
+        ]
+    );
 }
 
 #[tokio::test]

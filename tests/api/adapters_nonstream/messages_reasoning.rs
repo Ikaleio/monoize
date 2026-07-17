@@ -53,8 +53,6 @@ async fn messages_request_preserves_explicit_thinking_and_output_config() {
     let ctx = setup().await;
     let thinking = json!({
         "type": "disabled",
-        "display": "omitted",
-        "budget_tokens": 777,
         "vendor_control": { "mode": "exact" }
     });
     let output_config = json!({
@@ -88,6 +86,205 @@ async fn messages_request_preserves_explicit_thinking_and_output_config() {
     let upstream = last_captured_body(&ctx, "messages");
     assert_eq!(upstream["thinking"], thinking);
     assert_eq!(upstream["output_config"], output_config);
+}
+
+#[tokio::test]
+async fn messages_thinking_validation_rejects_before_upstream_dispatch() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 4096,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": "valid manual thinking" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let captured_after_valid = ctx.captured_bodies.lock().expect("captured bodies").len();
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 2048,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": "invalid manual thinking" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let error: Value = serde_json::from_str(&body).expect("Messages error JSON");
+    assert_eq!(error["type"], json!("error"));
+    assert_eq!(error["error"]["type"], json!("invalid_request_error"));
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("must be less than max_tokens")),
+        "unexpected validation error: {error}"
+    );
+    assert_eq!(
+        ctx.captured_bodies.lock().expect("captured bodies").len(),
+        captured_after_valid,
+        "invalid explicit thinking must not reach upstream"
+    );
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "messages": [{ "role": "user", "content": "invalid generated thinking" }],
+            "max_completion_tokens": 64,
+            "reasoning_effort": "high"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let error: Value = serde_json::from_str(&body).expect("Chat error JSON");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("must be less than max_tokens")),
+        "unexpected generated-control validation error: {error}"
+    );
+    assert_eq!(
+        ctx.captured_bodies.lock().expect("captured bodies").len(),
+        captured_after_valid,
+        "invalid generated thinking must not reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn messages_structured_output_round_trips_and_maps_to_openai_families() {
+    let ctx = setup().await;
+    let schema = json!({
+        "type": "object",
+        "properties": { "answer": { "type": "string" } },
+        "required": ["answer"],
+        "additionalProperties": false
+    });
+    let output_config = json!({
+        "effort": "high",
+        "format": {
+            "type": "json_schema",
+            "schema": schema.clone(),
+            "messages_extension": { "mode": "exact" }
+        },
+        "vendor_control": ["preserve", "verbatim"]
+    });
+
+    for (model, target) in [
+        ("gpt-5-mini-msg", "messages"),
+        ("gpt-5-mini-chat", "chat"),
+        ("gpt-5-mini", "responses"),
+    ] {
+        let (status, body) = json_post(
+            &ctx,
+            "/v1/messages",
+            json!({
+                "model": model,
+                "max_tokens": 64,
+                "output_config": output_config.clone(),
+                "messages": [{ "role": "user", "content": "structured answer" }]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "target={target}: {body}");
+
+        let upstream = last_captured_body(&ctx, target);
+        match target {
+            "messages" => assert_eq!(upstream["output_config"], output_config),
+            "chat" => {
+                assert_eq!(upstream["response_format"]["type"], json!("json_schema"));
+                assert_eq!(
+                    upstream["response_format"]["json_schema"],
+                    json!({ "name": "response", "schema": schema.clone() })
+                );
+            }
+            "responses" => {
+                assert_eq!(
+                    upstream["text"]["format"],
+                    json!({
+                        "type": "json_schema",
+                        "name": "response",
+                        "schema": schema.clone()
+                    })
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn openai_json_schemas_map_to_messages_output_config_format() {
+    let ctx = setup().await;
+    let chat_schema = json!({
+        "type": "object",
+        "properties": { "chat": { "type": "boolean" } },
+        "required": ["chat"]
+    });
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "messages": [{ "role": "user", "content": "chat schema" }],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "chat_answer",
+                    "description": "OpenAI-only description",
+                    "schema": chat_schema.clone(),
+                    "strict": true
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(
+        upstream["output_config"]["format"],
+        json!({ "type": "json_schema", "schema": chat_schema })
+    );
+
+    let responses_schema = json!({
+        "type": "object",
+        "properties": { "responses": { "type": "integer" } },
+        "required": ["responses"]
+    });
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "input": "responses schema",
+            "text": {
+                "verbosity": "low",
+                "format": {
+                    "type": "json_schema",
+                    "name": "responses_answer",
+                    "description": "OpenAI-only description",
+                    "schema": responses_schema.clone(),
+                    "strict": true
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(
+        upstream["output_config"]["format"],
+        json!({ "type": "json_schema", "schema": responses_schema })
+    );
+    assert!(upstream["output_config"].get("name").is_none());
+    assert!(upstream["output_config"].get("strict").is_none());
 }
 
 #[tokio::test]

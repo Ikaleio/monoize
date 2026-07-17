@@ -457,6 +457,7 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             arguments,
         } => Node::ToolCall {
             id: Some(call_id.clone()),
+            tool_type: crate::urp::ToolCallType::Function,
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),
@@ -487,8 +488,14 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
         Node::Reasoning { .. } => NodeHeader::Reasoning {
             id: node.id().cloned(),
         },
-        Node::ToolCall { call_id, name, .. } => NodeHeader::ToolCall {
+        Node::ToolCall {
+            tool_type,
+            call_id,
+            name,
+            ..
+        } => NodeHeader::ToolCall {
             id: node.id().cloned(),
+            tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
         },
@@ -518,8 +525,11 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role: *role,
             item_type: item_type.clone(),
         },
-        Node::ToolResult { call_id, .. } => NodeHeader::ToolResult {
+        Node::ToolResult {
+            tool_type, call_id, ..
+        } => NodeHeader::ToolResult {
             id: node.id().cloned(),
+            tool_type: *tool_type,
             call_id: call_id.clone(),
         },
         Node::NextDownstreamEnvelopeExtra { .. } => NodeHeader::NextDownstreamEnvelopeExtra,
@@ -628,6 +638,7 @@ mod tests {
                     2,
                     Node::ToolCall {
                         id: None,
+                        tool_type: crate::urp::ToolCallType::Function,
                         call_id: "call_1".to_string(),
                         name: "lookup".to_string(),
                         arguments: "{\"a\":1}".to_string(),

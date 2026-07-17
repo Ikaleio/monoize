@@ -129,10 +129,59 @@ async fn messages_thinking_maps_to_chat_upstream_reasoning_effort() {
     assert_eq!(status, StatusCode::OK);
     let v: Value = serde_json::from_str(&body).unwrap();
     let blocks = v["content"].as_array().cloned().unwrap_or_default();
+    let thinking_blocks = blocks
+        .iter()
+        .filter(|block| block["type"].as_str() == Some("thinking"))
+        .collect::<Vec<_>>();
+    assert_eq!(thinking_blocks.len(), 1);
+    assert_eq!(thinking_blocks[0]["thinking"], json!("mock_reasoning"));
     assert!(
-        blocks
-            .iter()
-            .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("thinking"))
+        thinking_blocks[0]["signature"]
+            .as_str()
+            .is_some_and(|signature| !signature.is_empty()),
+        "plaintext and encrypted Chat details must share one Messages thinking block"
+    );
+}
+
+#[tokio::test]
+async fn chat_reasoning_detail_pair_merges_for_messages_upstream_replay() {
+    let ctx = setup().await;
+    let (status, _) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "messages": [
+                { "role": "user", "content": "start" },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_details": [
+                        { "type": "reasoning.text", "text": "plain think", "format": "openrouter" },
+                        { "type": "reasoning.encrypted", "data": "sig_1", "format": "openrouter" }
+                    ]
+                },
+                { "role": "user", "content": "continue" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let upstream = last_captured_body(&ctx, "messages");
+    let assistant = upstream["messages"]
+        .as_array()
+        .expect("messages array")
+        .iter()
+        .find(|message| message["role"].as_str() == Some("assistant"))
+        .expect("assistant history");
+    assert_eq!(
+        assistant["content"],
+        json!([{
+            "type": "thinking",
+            "thinking": "plain think",
+            "signature": "sig_1"
+        }])
     );
 }
 

@@ -61,11 +61,15 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             }
             Node::ToolResult {
                 id: _,
+                tool_type,
                 call_id,
                 content,
                 is_error,
                 extra_body,
             } => {
+                if *tool_type == crate::urp::ToolCallType::Custom {
+                    continue;
+                }
                 flush_pending_gemini_message(&mut pending_content, &mut contents);
                 let result = content
                     .iter()
@@ -534,11 +538,15 @@ fn encode_request_node_part(node: &Node) -> Option<(OrdinaryRole, Value, HashMap
         )),
         Node::ToolCall {
             id: _,
+            tool_type,
             call_id,
             name,
             arguments,
             extra_body,
         } => {
+            if *tool_type == crate::urp::ToolCallType::Custom {
+                return None;
+            }
             let args = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
             Some((
                 OrdinaryRole::Assistant,
@@ -593,6 +601,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -689,6 +699,7 @@ mod tests {
                     role: Role::Assistant,
                     parts: vec![Part::ToolCall {
                         id: None,
+                        tool_type: crate::urp::ToolCallType::Function,
                         call_id: "call_1".to_string(),
                         name: "lookup".to_string(),
                         arguments: "{\"q\":1}".to_string(),
@@ -698,6 +709,7 @@ mod tests {
                 },
                 Item::ToolResult {
                     id: None,
+                    tool_type: crate::urp::ToolCallType::Function,
                     call_id: "call_1".to_string(),
                     is_error: false,
                     content: vec![ToolResultContent::Text {
@@ -715,6 +727,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),

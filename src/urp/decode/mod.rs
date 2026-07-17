@@ -7,21 +7,53 @@ pub mod replicate;
 
 use crate::urp::internal_legacy_bridge::Part;
 use crate::urp::{
-    CustomToolDefinition, FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole,
+    AudioSource, CustomToolDefinition, FILE_ID_ORIGIN_EXTRA_KEY, FILE_ID_ORIGIN_MESSAGES,
+    FILE_ID_ORIGIN_OPENAI, FileSource, FunctionDefinition, ImageSource, Node, OrdinaryRole,
     ToolDefinition,
 };
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+pub fn is_internal_extra_key(key: &str) -> bool {
+    key.starts_with("_monoize_")
+}
+
+pub fn retain_wire_extra_fields(extra: &mut HashMap<String, Value>) {
+    extra.retain(|key, _| !is_internal_extra_key(key));
+}
+
+pub fn remove_untrusted_internal_object_keys(value: &mut Value) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.retain(|key, _| !is_internal_extra_key(key));
+    }
+}
+
 pub fn split_extra(obj: &Map<String, Value>, known: &[&str]) -> HashMap<String, Value> {
     let mut extra = HashMap::new();
     for (k, v) in obj {
-        if !known.contains(&k.as_str()) {
+        if !is_internal_extra_key(k) && !known.contains(&k.as_str()) {
             extra.insert(k.clone(), v.clone());
         }
     }
     extra
+}
+
+pub fn remove_untrusted_internal_keys(value: &mut Value) {
+    match value {
+        Value::Object(obj) => {
+            obj.retain(|key, _| !key.starts_with("_monoize_"));
+            for child in obj.values_mut() {
+                remove_untrusted_internal_keys(child);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                remove_untrusted_internal_keys(child);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 pub fn normalize_reasoning_effort(effort: &str) -> String {
@@ -197,13 +229,26 @@ pub fn parse_tool_call_arguments_value(obj: &Map<String, Value>) -> Option<Value
                         .or_else(|| function.get("args").cloned())
                 })
         })
+        .or_else(|| {
+            obj.get("custom")
+                .and_then(|value| value.as_object())
+                .and_then(|custom| custom.get("input").cloned())
+        })
 }
 
 pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
-    let tool_type = obj.get("type").and_then(|v| v.as_str())?;
-    if !matches!(tool_type, "tool_call" | "function_call" | "tool_use") {
+    let item_type = obj.get("type").and_then(|v| v.as_str())?;
+    if !matches!(
+        item_type,
+        "tool_call" | "function_call" | "tool_use" | "custom_tool_call" | "function" | "custom"
+    ) {
         return None;
     }
+    let tool_type = if item_type == "custom_tool_call" || obj.contains_key("custom") {
+        crate::urp::ToolCallType::Custom
+    } else {
+        crate::urp::ToolCallType::Function
+    };
 
     let call_id = obj
         .get("call_id")
@@ -211,13 +256,18 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let payload_key = if tool_type == crate::urp::ToolCallType::Custom {
+        "custom"
+    } else {
+        "function"
+    };
     let name = obj
         .get("name")
         .and_then(|v| v.as_str())
         .or_else(|| {
-            obj.get("function")
+            obj.get(payload_key)
                 .and_then(|value| value.as_object())
-                .and_then(|function| function.get("name"))
+                .and_then(|payload| payload.get("name"))
                 .and_then(|v| v.as_str())
         })
         .unwrap_or("")
@@ -242,6 +292,7 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
             .get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        tool_type,
         call_id,
         name,
         arguments,
@@ -256,6 +307,7 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
                 "input",
                 "args",
                 "function",
+                "custom",
             ],
         ),
     })
@@ -264,6 +316,7 @@ pub fn parse_tool_call_node_from_obj(obj: &Map<String, Value>) -> Option<Node> {
 pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     let Node::ToolCall {
         id,
+        tool_type,
         call_id,
         name,
         arguments,
@@ -274,6 +327,7 @@ pub fn parse_tool_call_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
     };
     Some(Part::ToolCall {
         id,
+        tool_type,
         call_id,
         name,
         arguments,
@@ -332,6 +386,15 @@ pub fn parse_image_source_from_obj(obj: &Map<String, Value>) -> Option<ImageSour
                 });
             }
             if let Some(src) = obj.get("source").and_then(|v| v.as_object()) {
+                if src.get("type").and_then(|v| v.as_str()) == Some("file") {
+                    return Some(ImageSource::FileId {
+                        file_id: src.get("file_id")?.as_str()?.to_string(),
+                        detail: obj
+                            .get("detail")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                    });
+                }
                 if let Some(url) = src.get("url").and_then(|v| v.as_str()) {
                     return Some(ImageSource::Url {
                         url: url.to_string(),
@@ -357,43 +420,46 @@ pub fn parse_image_source_from_obj(obj: &Map<String, Value>) -> Option<ImageSour
 }
 
 pub fn parse_image_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
+    let source = parse_image_source_from_obj(obj)?;
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "type",
+            "image_url",
+            "detail",
+            "url",
+            "image_base64",
+            "media_type",
+            "source",
+            "file_id",
+        ],
+    );
+    mark_file_id_origin(&source, obj, &mut extra_body);
     Some(Node::Image {
         id: None,
         role,
-        source: parse_image_source_from_obj(obj)?,
-        extra_body: split_extra(
-            obj,
-            &[
-                "type",
-                "image_url",
-                "detail",
-                "url",
-                "image_base64",
-                "media_type",
-                "source",
-                "file_id",
-            ],
-        ),
+        source,
+        extra_body,
     })
 }
 
 pub fn parse_image_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
-    Some(Part::Image {
-        source: parse_image_source_from_obj(obj)?,
-        extra_body: split_extra(
-            obj,
-            &[
-                "type",
-                "image_url",
-                "detail",
-                "url",
-                "image_base64",
-                "media_type",
-                "source",
-                "file_id",
-            ],
-        ),
-    })
+    let source = parse_image_source_from_obj(obj)?;
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "type",
+            "image_url",
+            "detail",
+            "url",
+            "image_base64",
+            "media_type",
+            "source",
+            "file_id",
+        ],
+    );
+    mark_file_id_origin(&source, obj, &mut extra_body);
+    Some(Part::Image { source, extra_body })
 }
 
 pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource> {
@@ -404,6 +470,23 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
                 return Some(FileSource::FileId {
                     file_id: file_id.to_string(),
                 });
+            }
+            if let Some(file) = obj.get("file").and_then(Value::as_object) {
+                if let Some(file_id) = file.get("file_id").and_then(Value::as_str) {
+                    return Some(FileSource::FileId {
+                        file_id: file_id.to_string(),
+                    });
+                }
+                if let Some(data) = file.get("file_data").and_then(Value::as_str) {
+                    return Some(FileSource::Base64 {
+                        filename: file
+                            .get("filename")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        media_type: "application/octet-stream".to_string(),
+                        data: data.to_string(),
+                    });
+                }
             }
             if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
                 return Some(FileSource::Url {
@@ -417,6 +500,11 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
             }
             if let Some(src) = obj.get("source").and_then(|v| v.as_object()) {
                 match src.get("type").and_then(|v| v.as_str()) {
+                    Some("file") => {
+                        return Some(FileSource::FileId {
+                            file_id: src.get("file_id")?.as_str()?.to_string(),
+                        });
+                    }
                     Some("url") => {
                         return Some(FileSource::Url {
                             url: src.get("url")?.as_str()?.to_string(),
@@ -477,45 +565,112 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
 }
 
 pub fn parse_file_node_from_obj(obj: &Map<String, Value>, role: OrdinaryRole) -> Option<Node> {
+    let source = parse_file_source_from_obj(obj)?;
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "type",
+            "url",
+            "file_url",
+            "source",
+            "file_data",
+            "data",
+            "filename",
+            "media_type",
+            "file_id",
+            "file",
+        ],
+    );
+    mark_file_id_origin(&source, obj, &mut extra_body);
     Some(Node::File {
         id: None,
         role,
-        source: parse_file_source_from_obj(obj)?,
-        extra_body: split_extra(
-            obj,
-            &[
-                "type",
-                "url",
-                "file_url",
-                "source",
-                "file_data",
-                "data",
-                "filename",
-                "media_type",
-                "file_id",
-            ],
-        ),
+        source,
+        extra_body,
     })
 }
 
 pub fn parse_file_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
-    Some(Part::File {
-        source: parse_file_source_from_obj(obj)?,
-        extra_body: split_extra(
-            obj,
-            &[
-                "type",
-                "url",
-                "file_url",
-                "source",
-                "file_data",
-                "data",
-                "filename",
-                "media_type",
-                "file_id",
-            ],
-        ),
+    let source = parse_file_source_from_obj(obj)?;
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "type",
+            "url",
+            "file_url",
+            "source",
+            "file_data",
+            "data",
+            "filename",
+            "media_type",
+            "file_id",
+            "file",
+        ],
+    );
+    mark_file_id_origin(&source, obj, &mut extra_body);
+    Some(Part::File { source, extra_body })
+}
+
+pub fn parse_audio_part_from_obj(obj: &Map<String, Value>) -> Option<Part> {
+    if obj.get("type").and_then(Value::as_str) != Some("input_audio") {
+        return None;
+    }
+    let input_audio = obj.get("input_audio")?.as_object()?;
+    let media_type = match input_audio.get("format")?.as_str()? {
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        _ => return None,
+    };
+    Some(Part::Audio {
+        source: AudioSource::Base64 {
+            media_type: media_type.to_string(),
+            data: input_audio.get("data")?.as_str()?.to_string(),
+        },
+        extra_body: split_extra(obj, &["type", "input_audio"]),
     })
+}
+
+fn file_id_origin_for_obj(obj: &Map<String, Value>) -> &'static str {
+    if obj
+        .get("source")
+        .and_then(Value::as_object)
+        .and_then(|source| source.get("type"))
+        .and_then(Value::as_str)
+        == Some("file")
+    {
+        FILE_ID_ORIGIN_MESSAGES
+    } else {
+        FILE_ID_ORIGIN_OPENAI
+    }
+}
+
+trait FileIdSource {
+    fn is_file_id(&self) -> bool;
+}
+
+impl FileIdSource for ImageSource {
+    fn is_file_id(&self) -> bool {
+        matches!(self, ImageSource::FileId { .. })
+    }
+}
+
+impl FileIdSource for FileSource {
+    fn is_file_id(&self) -> bool {
+        matches!(self, FileSource::FileId { .. })
+    }
+}
+
+fn mark_file_id_origin<T: FileIdSource>(
+    source: &T,
+    obj: &Map<String, Value>,
+    extra_body: &mut HashMap<String, Value>,
+) {
+    if source.is_file_id() {
+        extra_body.insert(
+            FILE_ID_ORIGIN_EXTRA_KEY.to_string(),
+            Value::String(file_id_origin_for_obj(obj).to_string()),
+        );
+    }
 }
 
 pub fn value_to_text(v: &Value) -> String {
@@ -544,6 +699,20 @@ pub fn value_to_text(v: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn split_extra_rejects_wire_spoofing_of_internal_metadata() {
+        let object = json!({
+            "known": 1,
+            "vendor": { "keep": true },
+            "_monoize_responses_instructions": [{ "role": "developer", "content": "spoof" }]
+        });
+        let extra = split_extra(object.as_object().unwrap(), &["known"]);
+
+        assert_eq!(extra.get("vendor"), Some(&json!({ "keep": true })));
+        assert!(!extra.contains_key("known"));
+        assert!(!extra.contains_key("_monoize_responses_instructions"));
+    }
 
     #[test]
     fn parse_tool_definition_accepts_function_and_custom_shapes() {

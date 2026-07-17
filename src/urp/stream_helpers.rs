@@ -353,6 +353,40 @@ pub(crate) fn chat_delta_path_tool_arguments(value: &mut Value, content: &str) {
     }
 }
 
+pub(crate) fn chat_delta_path_function_call_arguments(value: &mut Value, content: &str) {
+    if let Some(function_call) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+        .and_then(|delta| delta.get_mut("function_call"))
+        .and_then(Value::as_object_mut)
+    {
+        function_call.insert("arguments".to_string(), Value::String(content.to_string()));
+    }
+}
+
+pub(crate) fn chat_delta_path_custom_tool_input(value: &mut Value, content: &str) {
+    if let Some(custom) = value
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("delta"))
+        .and_then(Value::as_object_mut)
+        .and_then(|delta| delta.get_mut("tool_calls"))
+        .and_then(Value::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|tool| tool.get_mut("custom"))
+        .and_then(Value::as_object_mut)
+    {
+        custom.insert("input".to_string(), Value::String(content.to_string()));
+    }
+}
+
 pub(crate) fn messages_delta_path_text(value: &mut Value, content: &str) {
     if let Some(delta) = value.get_mut("delta").and_then(Value::as_object_mut) {
         delta.insert("text".to_string(), Value::String(content.to_string()));

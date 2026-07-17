@@ -293,6 +293,7 @@ mod tests {
     fn tool_call(call_id: &str) -> Node {
         Node::ToolCall {
             id: None,
+            tool_type: crate::urp::ToolCallType::Function,
             call_id: call_id.to_owned(),
             name: "lookup".to_owned(),
             arguments: "{}".to_owned(),

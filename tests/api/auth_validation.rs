@@ -265,7 +265,13 @@ async fn body_json_array_returns_bad_request() {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let v: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap();
-        assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+        if path == "/v1/messages" {
+            assert_eq!(v["type"].as_str(), Some("error"));
+            assert_eq!(v["error"]["type"].as_str(), Some("invalid_request_error"));
+            assert!(v["error"].get("code").is_none());
+        } else {
+            assert_eq!(v["error"]["code"].as_str(), Some("invalid_request"));
+        }
         assert_eq!(v["error"]["message"].as_str(), Some("body must be object"));
     }
 }

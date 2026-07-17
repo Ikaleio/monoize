@@ -1,14 +1,16 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, parse_file_node_from_obj, parse_file_source_from_obj,
-    parse_image_node_from_obj, parse_image_source_from_obj, parse_tool_definition, split_extra,
+    deserialize_u64ish_default, is_internal_extra_key, parse_file_node_from_obj,
+    parse_file_source_from_obj, parse_image_node_from_obj, parse_image_source_from_obj,
+    parse_tool_definition, remove_untrusted_internal_keys, retain_wire_extra_fields, split_extra,
     value_to_text, value_to_u64,
 };
 use crate::urp::{
-    FinishReason, InputDetails, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
+    FILE_ID_ORIGIN_EXTRA_KEY, FILE_ID_ORIGIN_MESSAGES, FileSource, FinishReason, ImageSource,
+    InputDetails, JsonSchemaDefinition, MESSAGES_OUTPUT_CONFIG_EXTRA_KEY,
     MESSAGES_THINKING_CONFIG_EXTRA_KEY, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
     REASONING_DOWNSTREAM_ONLY_PRESENTATION_EXTRA_KEY, REASONING_KIND_EXTRA_KEY,
-    REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ToolChoice, ToolResultContent, UrpRequest,
-    UrpResponse, Usage, unwrap_reasoning_signature_sigil,
+    REASONING_KIND_REDACTED_THINKING, ReasoningConfig, ResponseFormat, StopControl, ToolChoice,
+    ToolResultContent, UrpRequest, UrpResponse, Usage, unwrap_reasoning_signature_sigil,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -90,8 +92,14 @@ fn effort_from_anthropic_budget(budget: u64) -> Option<String> {
 }
 
 fn decode_anthropic_reasoning_config(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
-    let thinking = obj.get("thinking").and_then(Value::as_object).cloned();
-    let output_config = obj.get("output_config").and_then(Value::as_object).cloned();
+    let mut thinking = obj.get("thinking").and_then(Value::as_object).cloned();
+    let mut output_config = obj.get("output_config").and_then(Value::as_object).cloned();
+    if let Some(thinking) = thinking.as_mut() {
+        thinking.retain(|key, _| !is_internal_extra_key(key));
+    }
+    if let Some(output_config) = output_config.as_mut() {
+        output_config.retain(|key, _| !is_internal_extra_key(key));
+    }
     if thinking.is_none() && output_config.is_none() {
         return None;
     }
@@ -127,6 +135,28 @@ fn decode_anthropic_reasoning_config(obj: &Map<String, Value>) -> Option<Reasoni
         );
     }
     Some(ReasoningConfig { effort, extra_body })
+}
+
+fn decode_anthropic_response_format(obj: &Map<String, Value>) -> Option<ResponseFormat> {
+    let format = obj
+        .get("output_config")?
+        .as_object()?
+        .get("format")?
+        .as_object()?;
+    if format.get("type").and_then(Value::as_str) != Some("json_schema") {
+        return None;
+    }
+
+    Some(ResponseFormat::JsonSchema {
+        json_schema: JsonSchemaDefinition {
+            // Messages has no schema-name field. OpenAI-compatible targets require one.
+            name: "response".to_string(),
+            description: None,
+            schema: format.get("schema")?.clone(),
+            strict: None,
+            extra_body: HashMap::new(),
+        },
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -197,6 +227,14 @@ struct AnthropicCacheCreationUsage {
 
 impl From<AnthropicUsage> for Usage {
     fn from(mut value: AnthropicUsage) -> Self {
+        if let Some(output_details) = value
+            .extra
+            .get_mut("output_tokens_details")
+            .and_then(Value::as_object_mut)
+        {
+            output_details.retain(|key, _| !is_internal_extra_key(key));
+        }
+        retain_wire_extra_fields(&mut value.extra);
         let native_reasoning_tokens = value
             .extra
             .get_mut("output_tokens_details")
@@ -418,6 +456,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                                 .get("id")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string()),
+                            tool_type: crate::urp::ToolCallType::Function,
                             call_id,
                             name,
                             arguments,
@@ -436,6 +475,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                             .unwrap_or(false);
                         message_nodes.push(Node::ToolResult {
                             id: None,
+                            tool_type: crate::urp::ToolCallType::Function,
                             call_id,
                             is_error,
                             content: decode_tool_result_content(bobj.get("content")),
@@ -489,6 +529,32 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 .map(|disabled| !disabled)
         });
 
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "model",
+            "messages",
+            "system",
+            "stream",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "thinking",
+            "output_config",
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "stop_sequences",
+            "metadata",
+        ],
+    );
+    if let Some(mut metadata) = obj.get("metadata").and_then(Value::as_object).cloned() {
+        metadata.remove("user_id");
+        if !metadata.is_empty() {
+            extra_body.insert("metadata".to_string(), Value::Object(metadata));
+        }
+    }
+
     Ok(UrpRequest {
         model,
         input: input_nodes,
@@ -500,30 +566,25 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         tools,
         tool_choice: raw_tool_choice.map(tool_choice_from_messages_value),
         parallel_tool_calls,
-        response_format: None,
+        stop: obj
+            .get("stop_sequences")
+            .and_then(Value::as_array)
+            .and_then(|stops| {
+                stops
+                    .iter()
+                    .map(Value::as_str)
+                    .map(|stop| stop.map(str::to_string))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .map(StopControl::Multiple),
+        verbosity: None,
+        response_format: decode_anthropic_response_format(obj),
         user: obj
             .get("metadata")
             .and_then(|v| v.get("user_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        extra_body: split_extra(
-            obj,
-            &[
-                "model",
-                "messages",
-                "system",
-                "stream",
-                "temperature",
-                "top_p",
-                "max_tokens",
-                "thinking",
-                "output_config",
-                "tools",
-                "tool_choice",
-                "parallel_tool_calls",
-                "metadata",
-            ],
-        ),
+        extra_body,
     })
 }
 
@@ -577,6 +638,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                             .get("id")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
+                        tool_type: crate::urp::ToolCallType::Function,
                         call_id,
                         name,
                         arguments,
@@ -654,7 +716,8 @@ fn provider_item_from_messages_block(block: &Map<String, Value>, role: OrdinaryR
     }
 }
 
-fn tool_choice_from_messages_value(v: Value) -> ToolChoice {
+fn tool_choice_from_messages_value(mut v: Value) -> ToolChoice {
+    remove_untrusted_internal_keys(&mut v);
     if let Some(obj) = v.as_object() {
         let disable_parallel = obj
             .get("disable_parallel_tool_use")
@@ -780,17 +843,25 @@ fn decode_tool_result_content_block(block: &Value, content: &mut Vec<ToolResultC
         }
         _ => {
             if let Some(source) = parse_image_source_from_obj(obj) {
-                content.push(ToolResultContent::Image {
-                    source,
-                    extra_body: split_extra(obj, &["type", "source"]),
-                });
+                let mut extra_body = split_extra(obj, &["type", "source"]);
+                if matches!(source, ImageSource::FileId { .. }) {
+                    extra_body.insert(
+                        FILE_ID_ORIGIN_EXTRA_KEY.to_string(),
+                        Value::String(FILE_ID_ORIGIN_MESSAGES.to_string()),
+                    );
+                }
+                content.push(ToolResultContent::Image { source, extra_body });
                 return;
             }
             if let Some(source) = parse_file_source_from_obj(obj) {
-                content.push(ToolResultContent::File {
-                    source,
-                    extra_body: split_extra(obj, &["type", "source"]),
-                });
+                let mut extra_body = split_extra(obj, &["type", "source"]);
+                if matches!(source, FileSource::FileId { .. }) {
+                    extra_body.insert(
+                        FILE_ID_ORIGIN_EXTRA_KEY.to_string(),
+                        Value::String(FILE_ID_ORIGIN_MESSAGES.to_string()),
+                    );
+                }
+                content.push(ToolResultContent::File { source, extra_body });
                 return;
             }
             content.push(ToolResultContent::ProviderItem {
@@ -857,8 +928,11 @@ mod tests {
                 "output_tokens": 20,
                 "output_tokens_details": {
                     "thinking_tokens": 12,
-                    "future_detail": { "count": 3 }
-                }
+                    "future_detail": { "count": 3 },
+                    "_monoize_spoofed_detail": true
+                },
+                "vendor_usage_counter": 7,
+                "_monoize_spoofed_usage": true
             }
         }))
         .expect("anthropic response decodes");
@@ -876,6 +950,8 @@ mod tests {
             usage.extra_body["output_tokens_details"],
             json!({ "future_detail": { "count": 3 } })
         );
+        assert_eq!(usage.extra_body["vendor_usage_counter"], json!(7));
+        assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
 
         let encoded = crate::urp::encode::anthropic::encode_response(&resp, "claude-sonnet-4-6");
         assert_eq!(
@@ -958,6 +1034,51 @@ mod tests {
         assert!(content[1]["source"].get("filename").is_none());
         assert_eq!(content[2], value["messages"][0]["content"][2]);
         assert_eq!(content[3], value["messages"][0]["content"][3]);
+    }
+
+    #[test]
+    fn messages_file_id_sources_round_trip() {
+        let value = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": { "type": "file", "file_id": "file_image_1" }
+                    },
+                    {
+                        "type": "document",
+                        "source": { "type": "file", "file_id": "file_document_1" },
+                        "title": "Reference"
+                    }
+                ]
+            }]
+        });
+
+        let decoded = decode_request(&value).expect("messages request decodes");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::Image {
+                source: crate::urp::ImageSource::FileId { file_id, .. },
+                ..
+            } if file_id == "file_image_1"
+        ));
+        assert!(matches!(
+            &decoded.input[1],
+            Node::File {
+                source: crate::urp::FileSource::FileId { file_id },
+                extra_body,
+                ..
+            } if file_id == "file_document_1"
+                && extra_body.get("title") == Some(&json!("Reference"))
+        ));
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(
+            encoded["messages"][0]["content"],
+            value["messages"][0]["content"]
+        );
     }
 
     #[test]
@@ -1046,6 +1167,68 @@ mod tests {
     }
 
     #[test]
+    fn messages_tool_result_file_ids_keep_files_api_provenance() {
+        let value = json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "toolu_files",
+                        "name": "inspect",
+                        "input": {}
+                    }]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_files",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": { "type": "file", "file_id": "file_image_1" }
+                            },
+                            {
+                                "type": "document",
+                                "source": { "type": "file", "file_id": "file_document_1" },
+                                "title": "Result"
+                            }
+                        ]
+                    }]
+                }
+            ]
+        });
+
+        let decoded = decode_request(&value).expect("messages request decodes");
+        let Node::ToolResult { content, .. } = &decoded.input[1] else {
+            panic!("expected tool result");
+        };
+        assert!(matches!(
+            &content[0],
+            ToolResultContent::Image { source: ImageSource::FileId { file_id, .. }, extra_body }
+                if file_id == "file_image_1"
+                    && extra_body.get(FILE_ID_ORIGIN_EXTRA_KEY)
+                        == Some(&json!(FILE_ID_ORIGIN_MESSAGES))
+        ));
+        assert!(matches!(
+            &content[1],
+            ToolResultContent::File { source: FileSource::FileId { file_id }, extra_body }
+                if file_id == "file_document_1"
+                    && extra_body.get(FILE_ID_ORIGIN_EXTRA_KEY)
+                        == Some(&json!(FILE_ID_ORIGIN_MESSAGES))
+                    && extra_body.get("title") == Some(&json!("Result"))
+        ));
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(
+            encoded["messages"][1]["content"][0]["content"],
+            value["messages"][1]["content"][0]["content"]
+        );
+    }
+
+    #[test]
     fn messages_reasoning_controls_preserve_exact_objects() {
         let thinking = json!({
             "type": "disabled",
@@ -1083,6 +1266,79 @@ mod tests {
         let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
         assert_eq!(encoded["thinking"], thinking);
         assert_eq!(encoded["output_config"], output_config);
+    }
+
+    #[test]
+    fn messages_structured_output_decodes_to_canonical_format() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } },
+            "required": ["answer"],
+            "additionalProperties": false
+        });
+        let output_config = json!({
+            "effort": "high",
+            "format": {
+                "type": "json_schema",
+                "schema": schema.clone(),
+                "messages_extension": { "mode": "exact" }
+            },
+            "vendor_control": ["preserve", "verbatim"]
+        });
+        let decoded = decode_request(&json!({
+            "model": "claude-sonnet-4-6",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "output_config": output_config.clone()
+        }))
+        .expect("messages request decodes");
+
+        let Some(ResponseFormat::JsonSchema { json_schema }) = &decoded.response_format else {
+            panic!("expected canonical JSON schema response format");
+        };
+        assert_eq!(json_schema.name, "response");
+        assert_eq!(json_schema.schema, schema);
+        assert_eq!(json_schema.strict, None);
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(encoded["output_config"], output_config);
+    }
+
+    #[test]
+    fn messages_request_controls_preserve_metadata_and_typed_user_wins() {
+        let mut decoded = decode_request(&json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": "hello" }],
+            "stop_sequences": ["ONE", "TWO"],
+            "metadata": {
+                "user_id": "typed-user",
+                "trace_id": "trace-1",
+                "future": { "enabled": true }
+            }
+        }))
+        .expect("messages request decodes");
+
+        assert_eq!(
+            decoded.stop,
+            Some(StopControl::Multiple(vec![
+                "ONE".to_string(),
+                "TWO".to_string()
+            ]))
+        );
+        assert_eq!(decoded.user.as_deref(), Some("typed-user"));
+        assert_eq!(decoded.extra_body["metadata"]["trace_id"], json!("trace-1"));
+        decoded
+            .extra_body
+            .get_mut("metadata")
+            .and_then(Value::as_object_mut)
+            .expect("metadata object")
+            .insert("user_id".to_string(), json!("passthrough-collision"));
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(encoded["stop_sequences"], json!(["ONE", "TWO"]));
+        assert_eq!(encoded["metadata"]["user_id"], json!("typed-user"));
+        assert_eq!(encoded["metadata"]["trace_id"], json!("trace-1"));
+        assert_eq!(encoded["metadata"]["future"], json!({ "enabled": true }));
     }
 
     #[test]
@@ -1194,6 +1450,41 @@ mod tests {
         assert_eq!(block["cache_control"], json!({ "type": "ephemeral" }));
         assert_eq!(block["citations"], json!([{ "type": "page", "page": 1 }]));
         assert_eq!(block["caller"], json!({ "type": "direct" }));
+    }
+
+    #[test]
+    fn messages_tool_choice_rejects_recursive_internal_key_spoofing() {
+        let decoded = decode_request(&json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": "hello" }],
+            "tool_choice": {
+                "type": "vendor_mode",
+                "vendor_keep": true,
+                "_monoize_outer_spoof": true,
+                "nested": {
+                    "vendor_nested_keep": 7,
+                    "_monoize_nested_spoof": true
+                }
+            }
+        }))
+        .expect("decode Messages selector");
+
+        let expected = json!({
+            "type": "vendor_mode",
+            "vendor_keep": true,
+            "nested": { "vendor_nested_keep": 7 }
+        });
+        assert_eq!(
+            crate::urp::encode::tool_choice_to_value(
+                decoded.tool_choice.as_ref().expect("tool choice")
+            ),
+            expected
+        );
+
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet-4-6");
+        assert_eq!(encoded["tool_choice"], expected);
+        assert!(!encoded["tool_choice"].to_string().contains("_monoize_"));
     }
 
     #[test]

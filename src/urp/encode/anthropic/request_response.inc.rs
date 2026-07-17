@@ -3,19 +3,29 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     let mut content = Vec::new();
     let mut envelope_extra = HashMap::new();
     let mut envelope_open = false;
-    for node in response_nodes {
+    let mut node_index = 0;
+    while node_index < response_nodes.len() {
+        let merged_reasoning = response_nodes.get(node_index + 1).and_then(|next| {
+            merge_adjacent_chat_reasoning_for_messages(&response_nodes[node_index], next)
+        });
+        let consumed_nodes = if merged_reasoning.is_some() { 2 } else { 1 };
+        let node = merged_reasoning
+            .as_ref()
+            .unwrap_or(&response_nodes[node_index]);
         if let Node::NextDownstreamEnvelopeExtra { extra_body } = node {
             if !envelope_open {
                 for (key, value) in extra_body {
                     envelope_extra.insert(key.clone(), value.clone());
                 }
             }
+            node_index += consumed_nodes;
             continue;
         }
         if let Some(block) = encode_assistant_response_block(node) {
             envelope_open = true;
             content.push(block);
         }
+        node_index += consumed_nodes;
     }
 
     let stop_reason = resp

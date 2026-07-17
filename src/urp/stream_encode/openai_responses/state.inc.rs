@@ -34,6 +34,7 @@ struct StreamedNodeState {
     node_extra_body: HashMap<String, Value>,
     completed_item: Option<Value>,
     is_shared_message_output: bool,
+    message_allocation_deferred: bool,
     reasoning_started_at: Option<Instant>,
 }
 
@@ -191,14 +192,26 @@ fn synthesize_terminal_node_from_state(state: &StreamedNodeState) -> Option<urp:
                 extra_body: state.node_extra_body.clone(),
             })
         }
-        urp::NodeHeader::ToolCall { id, call_id, name } => Some(urp::Node::ToolCall {
+        urp::NodeHeader::ToolCall {
+            id,
+            tool_type,
+            call_id,
+            name,
+        } => Some(urp::Node::ToolCall {
             id: id
                 .clone()
                 .or_else(|| (!state.item_id.is_empty()).then(|| state.item_id.clone())),
+            tool_type: *tool_type,
             call_id: state.call_id.clone().unwrap_or_else(|| call_id.clone()),
             name: state.name.clone().unwrap_or_else(|| name.clone()),
             arguments: completed_item
-                .and_then(|item| item.get("arguments"))
+                .and_then(|item| {
+                    item.get(if *tool_type == urp::ToolCallType::Custom {
+                        "input"
+                    } else {
+                        "arguments"
+                    })
+                })
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),

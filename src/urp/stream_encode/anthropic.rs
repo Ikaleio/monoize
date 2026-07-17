@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 
 const CHAT_REASONING_DETAIL_TYPE_KEY: &str = "_monoize_messages_chat_reasoning_detail_type";
+const MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY: &str =
+    "_monoize_messages_provider_item_start_body";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MessagesSurfaceKind {
@@ -40,6 +42,7 @@ enum AnthropicBlockPayload {
     },
     ProviderItem {
         body: Value,
+        deltas: Vec<Value>,
     },
 }
 
@@ -91,7 +94,7 @@ impl PendingAnthropicBlock {
                 *saw_tool_use = true;
                 json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })
             }
-            AnthropicBlockPayload::ProviderItem { body } => body.clone(),
+            AnthropicBlockPayload::ProviderItem { body, .. } => body.clone(),
         }
     }
 
@@ -181,13 +184,63 @@ impl PendingAnthropicBlock {
                     .await?;
                 }
             }
-            AnthropicBlockPayload::ProviderItem { .. } => {}
+            AnthropicBlockPayload::ProviderItem { deltas, .. } => {
+                for delta in deltas {
+                    emit_messages_provider_item_delta(
+                        tx,
+                        self.block_index,
+                        delta,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                }
+            }
         }
 
         let stop = json!({ "type": "content_block_stop", "index": self.block_index });
         send_named_messages_event(tx, stop).await?;
         Ok(())
     }
+}
+
+async fn emit_messages_provider_item_delta(
+    tx: &mpsc::Sender<Event>,
+    block_index: u32,
+    delta: &Value,
+    sse_max_frame_length: Option<usize>,
+) -> AppResult<()> {
+    let sanitized_delta = sanitize_provider_item_wire_body(delta);
+    if sanitized_delta.get("type").and_then(Value::as_str) == Some("input_json_delta")
+        && let Some(partial_json) = sanitized_delta.get("partial_json").and_then(Value::as_str)
+    {
+        let partial_json = partial_json.to_string();
+        let mut delta_template = sanitized_delta;
+        if let Some(object) = delta_template.as_object_mut() {
+            object.insert("partial_json".to_string(), Value::String(String::new()));
+        }
+        return send_messages_delta_string(
+            tx,
+            json!({
+                "type": "content_block_delta",
+                "index": block_index,
+                "delta": delta_template
+            }),
+            messages_delta_path_partial_json,
+            &partial_json,
+            sse_max_frame_length,
+        )
+        .await;
+    }
+
+    send_named_messages_event(
+        tx,
+        json!({
+            "type": "content_block_delta",
+            "index": block_index,
+            "delta": sanitized_delta
+        }),
+    )
+    .await
 }
 
 fn payload_is_redacted(extra: &HashMap<String, Value>) -> bool {
@@ -402,11 +455,12 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
             })
         }
         Node::ToolCall {
+            tool_type,
             call_id,
             name,
             arguments,
             ..
-        } => Some(AnthropicBlockPayload::ToolUse {
+        } => (*tool_type == urp::ToolCallType::Function).then(|| AnthropicBlockPayload::ToolUse {
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),
@@ -414,8 +468,12 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
         Node::ProviderItem {
             origin_protocol: urp::ProviderProtocol::Messages,
             ..
-        } => messages_provider_block_from_node(node)
-            .map(|body| AnthropicBlockPayload::ProviderItem { body }),
+        } => messages_provider_block_from_node(node).map(|body| {
+            AnthropicBlockPayload::ProviderItem {
+                body,
+                deltas: Vec::new(),
+            }
+        }),
         Node::Image { .. }
         | Node::Audio { .. }
         | Node::File { .. }
@@ -439,11 +497,39 @@ fn anthropic_block_from_node_header(
             item_id: None,
             extra: reasoning_kind_marker(extra_body),
         }),
-        NodeHeader::ToolCall { call_id, name, .. } => Some(AnthropicBlockPayload::ToolUse {
+        NodeHeader::ToolCall {
+            tool_type,
+            call_id,
+            name,
+            ..
+        } => (*tool_type == urp::ToolCallType::Function).then(|| AnthropicBlockPayload::ToolUse {
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: String::new(),
         }),
+        NodeHeader::ProviderItem {
+            id,
+            origin_protocol: urp::ProviderProtocol::Messages,
+            item_type,
+            ..
+        } => {
+            let body = extra_body
+                .get(MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY)
+                .map(sanitize_provider_item_wire_body)
+                .unwrap_or_else(|| {
+                    let mut object = Map::new();
+                    object.insert("type".to_string(), Value::String(item_type.clone()));
+                    if let Some(id) = id.as_ref().filter(|id| !id.is_empty()) {
+                        object.insert("id".to_string(), Value::String(id.clone()));
+                    }
+                    merge_json_extra_preserving_typed(&mut object, extra_body);
+                    Value::Object(object)
+                });
+            Some(AnthropicBlockPayload::ProviderItem {
+                body,
+                deltas: Vec::new(),
+            })
+        }
         NodeHeader::Image { .. }
         | NodeHeader::Audio { .. }
         | NodeHeader::File { .. }
@@ -472,6 +558,7 @@ fn merge_hashmap_extra_preserving_typed(
     }
 }
 
+#[cfg(test)]
 fn merge_provider_delta_body(body: &mut Value, data: &Value) {
     let sanitized_data = sanitize_provider_item_wire_body(data);
     match (body.as_object_mut(), &sanitized_data) {
@@ -533,6 +620,13 @@ fn messages_stop_reason<'a>(
     }
 }
 
+fn messages_stop_sequence(extra_body: &HashMap<String, Value>) -> Value {
+    extra_body
+        .get("stop_sequence")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDelta) {
     match (payload, delta) {
         (AnthropicBlockPayload::Text { content }, NodeDelta::Text { content: delta })
@@ -580,8 +674,8 @@ fn apply_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta: &NodeDe
         ) => {
             arguments.push_str(delta);
         }
-        (AnthropicBlockPayload::ProviderItem { body }, NodeDelta::ProviderItem { data }) => {
-            merge_provider_delta_body(body, data);
+        (AnthropicBlockPayload::ProviderItem { deltas, .. }, NodeDelta::ProviderItem { data }) => {
+            deltas.push(data.clone());
         }
         _ => {}
     }
@@ -632,8 +726,8 @@ fn apply_emitted_node_delta_to_block(payload: &mut AnthropicBlockPayload, delta:
         ) => {
             arguments.push_str(delta);
         }
-        (AnthropicBlockPayload::ProviderItem { body }, NodeDelta::ProviderItem { data }) => {
-            merge_provider_delta_body(body, data);
+        (AnthropicBlockPayload::ProviderItem { deltas, .. }, NodeDelta::ProviderItem { data }) => {
+            deltas.push(data.clone());
         }
         _ => {}
     }
@@ -665,6 +759,60 @@ fn maybe_override_reasoning_item_id(
         return;
     };
     *item_id = Some(reasoning_item_id.to_string());
+}
+
+fn provider_item_input_json(body: &Value, deltas: &[Value]) -> Option<String> {
+    let input = body.get("input");
+    let mut assembled = match input {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(value)) => value.clone(),
+        Some(value) => value.to_string(),
+    };
+    let mut replace_on_next_delta = matches!(input, None | Some(Value::Null))
+        || input.and_then(Value::as_object).is_some_and(Map::is_empty);
+    let mut saw_delta = false;
+    for delta in deltas {
+        if delta.get("type").and_then(Value::as_str) != Some("input_json_delta") {
+            continue;
+        }
+        let Some(partial_json) = delta.get("partial_json").and_then(Value::as_str) else {
+            continue;
+        };
+        if replace_on_next_delta {
+            assembled.clear();
+            replace_on_next_delta = false;
+        }
+        assembled.push_str(partial_json);
+        saw_delta = true;
+    }
+    (saw_delta || input.is_some()).then_some(assembled)
+}
+
+fn merge_provider_item_payload_with_terminal(
+    body: &mut Value,
+    deltas: &mut Vec<Value>,
+    terminal_body: Value,
+) {
+    let current_input = provider_item_input_json(body, deltas);
+    let terminal_input = provider_item_input_json(&terminal_body, &[]);
+    match (current_input.as_deref(), terminal_input.as_deref()) {
+        (Some(current), Some(terminal)) if current == terminal => {}
+        (Some(current), Some(terminal)) => {
+            if let Some(suffix) = terminal
+                .strip_prefix(current)
+                .filter(|suffix| !suffix.is_empty())
+            {
+                deltas.push(json!({
+                    "type": "input_json_delta",
+                    "partial_json": suffix
+                }));
+            } else if deltas.is_empty() {
+                *body = terminal_body;
+            }
+        }
+        _ if deltas.is_empty() => *body = terminal_body,
+        _ => {}
+    }
 }
 
 fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &Node) {
@@ -717,14 +865,14 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
             }
         }
         (
-            AnthropicBlockPayload::ProviderItem { body },
+            AnthropicBlockPayload::ProviderItem { body, deltas },
             Node::ProviderItem {
                 origin_protocol: urp::ProviderProtocol::Messages,
                 ..
             },
         ) => {
             if let Some(terminal_body) = messages_provider_block_from_node(node) {
-                *body = terminal_body;
+                merge_provider_item_payload_with_terminal(body, deltas, terminal_body);
             }
         }
         _ => {}
@@ -856,6 +1004,9 @@ async fn emit_live_delta_for_node_delta(
                 .await?;
             }
         }
+        (AnthropicBlockPayload::ProviderItem { .. }, NodeDelta::ProviderItem { data }) => {
+            emit_messages_provider_item_delta(tx, block_index, data, sse_max_frame_length).await?;
+        }
         _ => {}
     }
     Ok(())
@@ -925,7 +1076,12 @@ async fn emit_accumulated_payload_deltas(
             )
             .await?;
         }
-        AnthropicBlockPayload::ProviderItem { .. } => {}
+        AnthropicBlockPayload::ProviderItem { deltas, .. } => {
+            for delta in deltas {
+                emit_messages_provider_item_delta(tx, block_index, delta, sse_max_frame_length)
+                    .await?;
+            }
+        }
     }
     Ok(())
 }
@@ -1032,6 +1188,36 @@ async fn emit_terminal_suffix_before_stop(
                         arguments: suffix.to_string(),
                     },
                     &empty_extra_body,
+                    sse_max_frame_length,
+                )
+                .await?;
+            }
+        }
+        (
+            AnthropicBlockPayload::ProviderItem { body, deltas },
+            Node::ProviderItem {
+                origin_protocol: urp::ProviderProtocol::Messages,
+                ..
+            },
+        ) => {
+            let Some(terminal_body) = messages_provider_block_from_node(terminal_node) else {
+                return Ok(());
+            };
+            let current_input = provider_item_input_json(body, deltas);
+            let terminal_input = provider_item_input_json(&terminal_body, &[]);
+            if let (Some(current), Some(terminal)) =
+                (current_input.as_deref(), terminal_input.as_deref())
+                && let Some(suffix) = terminal
+                    .strip_prefix(current)
+                    .filter(|suffix| !suffix.is_empty())
+            {
+                emit_messages_provider_item_delta(
+                    tx,
+                    block_index,
+                    &json!({
+                        "type": "input_json_delta",
+                        "partial_json": suffix
+                    }),
                     sse_max_frame_length,
                 )
                 .await?;
@@ -1212,11 +1398,12 @@ pub(crate) async fn emit_synthetic_messages_stream(
     }
 
     let stop_reason = messages_stop_reason(&resp.extra_body, resp.finish_reason, saw_tool_use);
+    let stop_sequence = messages_stop_sequence(&resp.extra_body);
     let message_delta = json!({
         "type": "message_delta",
         "delta": {
             "stop_reason": stop_reason,
-            "stop_sequence": Value::Null
+            "stop_sequence": stop_sequence
         },
         "usage": anthropic_native_usage_json(&usage)
     });
@@ -1622,11 +1809,12 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     extra_body: HashMap::new(),
                 });
                 let stop_reason = messages_stop_reason(&extra_body, finish_reason, saw_tool_use);
+                let stop_sequence = messages_stop_sequence(&extra_body);
                 let message_delta = json!({
                     "type": "message_delta",
                     "delta": {
                         "stop_reason": stop_reason,
-                        "stop_sequence": Value::Null
+                        "stop_sequence": stop_sequence
                     },
                     "usage": anthropic_native_usage_json(&usage)
                 });
@@ -1647,7 +1835,11 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     );
                 }
             }
-            UrpStreamEvent::Error { code, message, .. } => {
+            UrpStreamEvent::Error {
+                code,
+                message,
+                extra_body,
+            } => {
                 ensure_message_start(
                     &tx,
                     response_id.as_deref().unwrap_or("msg_mock"),
@@ -1657,13 +1849,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     &mut message_start_sent,
                 )
                 .await?;
-                let error = json!({
-                    "type": "error",
-                    "error": {
-                        "type": code.unwrap_or_else(|| "server_error".to_string()),
-                        "message": message
-                    }
-                });
+                let error = messages_error_payload(code.as_deref(), &message, &extra_body);
                 send_named_messages_event(&tx, error).await?;
                 return Ok(());
             }
@@ -1671,6 +1857,38 @@ pub(crate) async fn encode_urp_stream_as_messages(
     }
 
     Ok(())
+}
+
+fn messages_error_payload(
+    code: Option<&str>,
+    message: &str,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
+    let nested_error = extra_body.get("error").and_then(Value::as_object);
+    let error_type = extra_body
+        .get("error_type")
+        .and_then(Value::as_str)
+        .or_else(|| extra_body.get("type").and_then(Value::as_str))
+        .or_else(|| {
+            nested_error
+                .and_then(|error| error.get("type"))
+                .and_then(Value::as_str)
+        })
+        .filter(|value| !value.is_empty())
+        .or(code.filter(|value| !value.is_empty()))
+        .unwrap_or("server_error");
+
+    let mut error = nested_error.cloned().unwrap_or_default();
+    error.retain(|key, _| !key.starts_with("_monoize_"));
+    for (key, value) in extra_body {
+        if !matches!(key.as_str(), "error" | "error_type" | "type") && !key.starts_with("_monoize_")
+        {
+            error.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    error.insert("type".to_string(), Value::String(error_type.to_string()));
+    error.insert("message".to_string(), Value::String(message.to_string()));
+    json!({ "type": "error", "error": error })
 }
 
 async fn emit_messages_response_done_fallback(
@@ -1761,5 +1979,24 @@ mod provider_item_wire_tests {
             Node::ProviderItem { body, .. } if body == native_body
         ));
         assert_eq!(delta["_monoize_delta"], json!("drop"));
+    }
+
+    #[test]
+    fn messages_stream_error_preserves_error_type_and_unknown_members() {
+        let payload = messages_error_payload(
+            Some("529"),
+            "provider failed",
+            &HashMap::from([
+                ("error_type".to_string(), json!("overloaded_error")),
+                ("provider_code".to_string(), json!("P529")),
+                ("_monoize_private".to_string(), json!(true)),
+            ]),
+        );
+
+        assert_eq!(payload["type"], json!("error"));
+        assert_eq!(payload["error"]["type"], json!("overloaded_error"));
+        assert_eq!(payload["error"]["message"], json!("provider failed"));
+        assert_eq!(payload["error"]["provider_code"], json!("P529"));
+        assert!(payload["error"].get("_monoize_private").is_none());
     }
 }

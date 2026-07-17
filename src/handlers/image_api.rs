@@ -386,6 +386,8 @@ async fn fan_out_subrequests(
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: extra_body.clone(),
@@ -559,7 +561,7 @@ async fn execute_stream_collected_image_typed(
                 &path,
                 &upstream_body,
                 attempt.request_timeout_ms.saturating_mul(10).max(600_000),
-                provider_extra_headers(attempt.provider_type),
+                provider_extra_headers(attempt.provider_type, &upstream_body),
             )
             .await;
 

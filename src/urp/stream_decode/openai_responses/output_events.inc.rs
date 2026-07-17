@@ -169,7 +169,8 @@ fn role_from_item(item: &Value) -> Role {
 }
 
 fn decode_item_from_value(item: &Value) -> Item {
-    match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match item_type {
         "message" => {
             let parts = item
                 .get("content")
@@ -187,12 +188,17 @@ fn decode_item_from_value(item: &Value) -> Item {
                 extra_body: item_extra_body_from_value(item),
             }
         }
-        "function_call_output" => Item::ToolResult {
+        "function_call_output" | "custom_tool_call_output" => Item::ToolResult {
             id: item
                 .get("id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .or_else(|| Some(crate::urp::synthetic_tool_result_id())),
+            tool_type: if item_type == "custom_tool_call_output" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            },
             call_id: item
                 .get("call_id")
                 .or_else(|| item.get("id"))
@@ -213,7 +219,7 @@ fn decode_item_from_value(item: &Value) -> Item {
             parts: vec![decode_part_from_value(item)],
             extra_body: HashMap::new(),
         },
-        "function_call" => Item::Message {
+        "function_call" | "custom_tool_call" => Item::Message {
             id: item
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -257,7 +263,8 @@ fn decode_item_from_value(item: &Value) -> Item {
 }
 
 fn decode_part_from_value(part: &Value) -> Part {
-    match part.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+    let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match part_type {
         "output_text" | "text" => Part::Text {
             content: part
                 .get("text")
@@ -323,12 +330,17 @@ fn decode_part_from_value(part: &Value) -> Part {
                 .to_string(),
             extra_body: part_extra_body_from_value(part),
         },
-        "function_call" | "tool_call" => Part::ToolCall {
+        "function_call" | "tool_call" | "custom_tool_call" => Part::ToolCall {
             id: part
                 .get("id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .or_else(|| Some(crate::urp::synthetic_tool_call_id())),
+            tool_type: if part_type == "custom_tool_call" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            },
             call_id: part
                 .get("call_id")
                 .and_then(|v| v.as_str())
@@ -340,7 +352,11 @@ fn decode_part_from_value(part: &Value) -> Part {
                 .unwrap_or_default()
                 .to_string(),
             arguments: part
-                .get("arguments")
+                .get(if part_type == "custom_tool_call" {
+                    "input"
+                } else {
+                    "arguments"
+                })
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string(),

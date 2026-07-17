@@ -79,6 +79,8 @@ pub enum Part {
     ToolCall {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: super::ToolCallType,
         call_id: String,
         name: String,
         arguments: String,
@@ -115,6 +117,8 @@ pub enum Item {
     ToolResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: super::ToolCallType,
         call_id: String,
         #[serde(default)]
         is_error: bool,
@@ -159,6 +163,8 @@ pub enum ItemHeader {
     ToolResult {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: super::ToolCallType,
         call_id: String,
     },
 }
@@ -175,6 +181,8 @@ pub enum PartHeader {
     ToolCall {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default)]
+        tool_type: super::ToolCallType,
         call_id: String,
         name: String,
     },
@@ -286,12 +294,14 @@ impl Part {
             },
             Part::ToolCall {
                 id,
+                tool_type,
                 call_id,
                 name,
                 arguments,
                 extra_body,
             } => Node::ToolCall {
                 id,
+                tool_type,
                 call_id,
                 name,
                 arguments,
@@ -349,6 +359,7 @@ impl Item {
             }
             Item::ToolResult {
                 id,
+                tool_type,
                 call_id,
                 is_error,
                 content,
@@ -356,6 +367,7 @@ impl Item {
             } => {
                 vec![Node::ToolResult {
                     id,
+                    tool_type,
                     call_id,
                     is_error,
                     content,
@@ -388,6 +400,7 @@ pub fn nodes_to_items(nodes: &[Node]) -> Vec<Item> {
         match node {
             Node::ToolResult {
                 id,
+                tool_type,
                 call_id,
                 is_error,
                 content,
@@ -405,14 +418,13 @@ pub fn nodes_to_items(nodes: &[Node]) -> Vec<Item> {
                     current_zone = None;
                     current_message_item_id = None;
                 }
-                let mut merged_extra = without_internal_markers(extra_body);
+                let mut merged_extra = extra_body.clone();
                 for (key, value) in std::mem::take(&mut pending_control_extra) {
-                    if !is_internal_marker(&key) {
-                        merged_extra.entry(key).or_insert(value);
-                    }
+                    merged_extra.entry(key).or_insert(value);
                 }
                 items.push(Item::ToolResult {
                     id: id.clone(),
+                    tool_type: *tool_type,
                     call_id: call_id.clone(),
                     is_error: *is_error,
                     content: content.clone(),
@@ -574,12 +586,14 @@ fn node_to_part(node: &Node) -> Part {
         },
         Node::ToolCall {
             id,
+            tool_type,
             call_id,
             name,
             arguments,
             extra_body,
         } => Part::ToolCall {
             id: id.clone(),
+            tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),
@@ -627,14 +641,6 @@ fn message_group_id(node: &Node) -> Option<String> {
 
 fn is_internal_marker(key: &str) -> bool {
     key.starts_with("_monoize_")
-}
-
-fn without_internal_markers(extra_body: &HashMap<String, Value>) -> HashMap<String, Value> {
-    extra_body
-        .iter()
-        .filter(|(key, _)| !is_internal_marker(key))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
 }
 
 #[cfg(test)]

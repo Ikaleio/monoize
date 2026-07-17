@@ -282,6 +282,18 @@ pub async fn create_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<Value>,
+) -> Response {
+    let request_id = extract_request_id(&headers);
+    match create_messages_inner(state, headers, body).await {
+        Ok(response) => response,
+        Err(err) => anthropic_error_response(err, request_id.as_deref()),
+    }
+}
+
+async fn create_messages_inner(
+    state: AppState,
+    headers: HeaderMap,
+    body: Value,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
     let raw_input = body.clone();
@@ -339,6 +351,49 @@ pub async fn create_messages(
     )
     .await?;
     Ok(Json(value).into_response())
+}
+
+fn anthropic_error_response(err: AppError, request_id: Option<&str>) -> Response {
+    let error_type = err
+        .upstream_type
+        .as_deref()
+        .unwrap_or(&err.error_type)
+        .to_string();
+    let mut error = json!({
+        "type": error_type,
+        "message": err.message,
+    });
+    if let Some(obj) = error.as_object_mut() {
+        if let Some(status) = err.upstream_status {
+            obj.insert("upstream_status".to_string(), Value::from(status));
+        }
+        if let Some(code) = err.upstream_code {
+            obj.insert("upstream_code".to_string(), Value::String(code));
+        }
+        if let Some(error_type) = err.upstream_type {
+            obj.insert("upstream_type".to_string(), Value::String(error_type));
+        }
+        if let Some(param) = err.upstream_param {
+            obj.insert("upstream_param".to_string(), Value::String(param));
+        }
+    }
+    let mut body = json!({ "type": "error", "error": error });
+    if let Some(request_id) = request_id.filter(|value| !value.is_empty()) {
+        body.as_object_mut().expect("Anthropic error body").insert(
+            "request_id".to_string(),
+            Value::String(request_id.to_string()),
+        );
+    }
+
+    let mut response = (err.status, Json(body)).into_response();
+    if let Some(request_id) = request_id
+        && let Ok(value) = axum::http::HeaderValue::from_str(request_id)
+    {
+        response
+            .headers_mut()
+            .insert(axum::http::HeaderName::from_static("request-id"), value);
+    }
+    response
 }
 
 pub async fn create_embeddings(

@@ -6,7 +6,9 @@ pub mod openai_responses;
 pub mod replicate;
 
 use crate::urp::internal_legacy_bridge::{Part, Role};
-use crate::urp::{InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage};
+use crate::urp::{
+    FILE_ID_ORIGIN_EXTRA_KEY, InputDetails, Node, OrdinaryRole, OutputDetails, ToolChoice, Usage,
+};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
@@ -19,6 +21,16 @@ pub fn merge_extra(obj: &mut Map<String, Value>, extra: &HashMap<String, Value>)
             obj.insert(k.clone(), v.clone());
         }
     }
+}
+
+pub(crate) fn file_id_origin_matches(
+    extra_body: &HashMap<String, Value>,
+    target_origin: &str,
+) -> bool {
+    extra_body
+        .get(FILE_ID_ORIGIN_EXTRA_KEY)
+        .and_then(Value::as_str)
+        == Some(target_origin)
 }
 
 /// Returns a wire-only clone of an opaque ProviderItem body with internal adapter keys removed.
@@ -58,27 +70,157 @@ pub fn role_to_str(role: Role) -> &'static str {
 pub fn tool_choice_to_value(tc: &ToolChoice) -> Value {
     match tc {
         ToolChoice::Mode(s) => Value::String(s.clone()),
-        ToolChoice::Specific(v) => v.clone(),
+        ToolChoice::Specific(v) => sanitize_provider_item_wire_body(v),
     }
 }
 
-pub fn tool_choice_to_openai_value(tc: &ToolChoice) -> Value {
+fn selector_name(obj: &Map<String, Value>, nested_key: &str) -> Option<Value> {
+    obj.get(nested_key)
+        .and_then(Value::as_object)
+        .and_then(|nested| nested.get("name"))
+        .cloned()
+        .or_else(|| obj.get("name").cloned())
+}
+
+fn specific_tool_choice_to_chat_value(obj: &Map<String, Value>) -> Value {
+    let Value::Object(mut out) = sanitize_provider_item_wire_body(&Value::Object(obj.clone()))
+    else {
+        unreachable!("tool choice sanitizer preserves object shape")
+    };
+    out.remove("disable_parallel_tool_use");
+    match out.get("type").and_then(Value::as_str) {
+        Some(mode @ ("auto" | "required" | "none")) => Value::String(mode.to_string()),
+        Some(kind @ ("function" | "custom")) => {
+            let kind = kind.to_string();
+            let name = selector_name(&out, &kind);
+            let mut nested = out
+                .remove(&kind)
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            out.remove("name");
+            if let Some(name) = name {
+                nested.insert("name".to_string(), name);
+            }
+            out.insert("type".to_string(), Value::String(kind.clone()));
+            out.insert(kind, Value::Object(nested));
+            Value::Object(out)
+        }
+        Some("allowed_tools") => {
+            let mut allowed = out
+                .remove("allowed_tools")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            if !allowed.contains_key("mode")
+                && let Some(mode) = out.remove("mode")
+            {
+                allowed.insert("mode".to_string(), mode);
+            } else {
+                out.remove("mode");
+            }
+            if !allowed.contains_key("tools")
+                && let Some(tools) = out.remove("tools")
+            {
+                allowed.insert("tools".to_string(), tools);
+            } else {
+                out.remove("tools");
+            }
+            if let Some(tools) = allowed.get_mut("tools").and_then(Value::as_array_mut) {
+                for selector in tools {
+                    if let Value::Object(selector_obj) = selector {
+                        *selector = specific_tool_choice_to_chat_value(selector_obj);
+                    }
+                }
+            }
+            out.insert(
+                "type".to_string(),
+                Value::String("allowed_tools".to_string()),
+            );
+            out.insert("allowed_tools".to_string(), Value::Object(allowed));
+            Value::Object(out)
+        }
+        _ => Value::Object(out),
+    }
+}
+
+fn specific_tool_choice_to_responses_value(obj: &Map<String, Value>) -> Value {
+    let Value::Object(mut out) = sanitize_provider_item_wire_body(&Value::Object(obj.clone()))
+    else {
+        unreachable!("tool choice sanitizer preserves object shape")
+    };
+    out.remove("disable_parallel_tool_use");
+    match out.get("type").and_then(Value::as_str) {
+        Some(mode @ ("auto" | "required" | "none")) => Value::String(mode.to_string()),
+        Some(kind @ ("function" | "custom")) => {
+            let kind = kind.to_string();
+            let name = selector_name(&out, &kind);
+            out.remove("function");
+            out.remove("custom");
+            out.remove("name");
+            out.insert("type".to_string(), Value::String(kind));
+            if let Some(name) = name {
+                out.insert("name".to_string(), name);
+            }
+            Value::Object(out)
+        }
+        Some("allowed_tools") => {
+            let allowed = out
+                .remove("allowed_tools")
+                .and_then(|value| value.as_object().cloned());
+            let canonical_mode = allowed
+                .as_ref()
+                .and_then(|allowed| allowed.get("mode"))
+                .cloned()
+                .or_else(|| out.get("mode").cloned());
+            let canonical_tools = allowed
+                .as_ref()
+                .and_then(|allowed| allowed.get("tools"))
+                .cloned()
+                .or_else(|| out.get("tools").cloned());
+            out.remove("mode");
+            out.remove("tools");
+            if let Some(allowed) = allowed {
+                for (key, value) in allowed {
+                    if !matches!(key.as_str(), "mode" | "tools") {
+                        out.entry(key).or_insert(value);
+                    }
+                }
+            }
+            out.insert(
+                "type".to_string(),
+                Value::String("allowed_tools".to_string()),
+            );
+            if let Some(mode) = canonical_mode {
+                out.insert("mode".to_string(), mode);
+            }
+            if let Some(mut tools) = canonical_tools {
+                if let Some(tools) = tools.as_array_mut() {
+                    for selector in tools {
+                        if let Value::Object(selector_obj) = selector {
+                            *selector = specific_tool_choice_to_responses_value(selector_obj);
+                        }
+                    }
+                }
+                out.insert("tools".to_string(), tools);
+            }
+            Value::Object(out)
+        }
+        _ => Value::Object(out),
+    }
+}
+
+pub fn tool_choice_to_chat_value(tc: &ToolChoice) -> Value {
     match tc {
         ToolChoice::Mode(s) => Value::String(s.clone()),
-        ToolChoice::Specific(Value::Object(obj)) => match obj.get("type").and_then(Value::as_str) {
-            Some("auto" | "required" | "none") => Value::String(
-                obj.get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
-            _ => {
-                let mut out = obj.clone();
-                out.remove("disable_parallel_tool_use");
-                Value::Object(out)
-            }
-        },
-        ToolChoice::Specific(v) => v.clone(),
+        ToolChoice::Specific(Value::Object(obj)) => specific_tool_choice_to_chat_value(obj),
+        ToolChoice::Specific(v) => sanitize_provider_item_wire_body(v),
+    }
+}
+
+pub fn tool_choice_to_responses_value(tc: &ToolChoice) -> Value {
+    match tc {
+        ToolChoice::Mode(s) => Value::String(s.clone()),
+        ToolChoice::Specific(Value::Object(obj)) => specific_tool_choice_to_responses_value(obj),
+        ToolChoice::Specific(v) => sanitize_provider_item_wire_body(v),
     }
 }
 
@@ -278,5 +420,113 @@ mod tests {
         );
         assert_eq!(body["_monoize_top"], json!("drop"));
         assert_eq!(body["vendor_unknown"]["_monoize_nested"], json!("drop"));
+    }
+
+    #[test]
+    fn target_specific_tool_choice_shapes_preserve_semantics() {
+        let function = ToolChoice::Specific(json!({
+            "type": "function",
+            "name": "stale-flat-name",
+            "function": { "name": "lookup", "_monoize_nested_spoof": true },
+            "future_selector_field": 7,
+            "disable_parallel_tool_use": true,
+            "_monoize_outer_spoof": true
+        }));
+        assert_eq!(
+            tool_choice_to_chat_value(&function),
+            json!({
+                "type": "function",
+                "function": { "name": "lookup" },
+                "future_selector_field": 7
+            })
+        );
+        assert_eq!(
+            tool_choice_to_responses_value(&function),
+            json!({
+                "type": "function",
+                "name": "lookup",
+                "future_selector_field": 7
+            })
+        );
+
+        let custom = ToolChoice::Specific(json!({
+            "type": "custom",
+            "custom": { "name": "grammar" }
+        }));
+        assert_eq!(
+            tool_choice_to_responses_value(&custom),
+            json!({ "type": "custom", "name": "grammar" })
+        );
+
+        let allowed = ToolChoice::Specific(json!({
+            "type": "allowed_tools",
+            "mode": "stale",
+            "tools": [{ "type": "file_search" }],
+            "allowed_tools": {
+                "mode": "required",
+                "_monoize_wrapper_spoof": true,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": { "name": "lookup", "_monoize_inner_spoof": true }
+                    },
+                    { "type": "custom", "custom": { "name": "grammar" } },
+                    { "type": "mcp", "server_label": "docs", "name": "search" },
+                    { "type": "image_generation" }
+                ]
+            }
+        }));
+        assert_eq!(
+            tool_choice_to_chat_value(&allowed),
+            json!({
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [
+                        { "type": "function", "function": { "name": "lookup" } },
+                        { "type": "custom", "custom": { "name": "grammar" } },
+                        { "type": "mcp", "server_label": "docs", "name": "search" },
+                        { "type": "image_generation" }
+                    ]
+                }
+            })
+        );
+        assert_eq!(
+            tool_choice_to_responses_value(&allowed),
+            json!({
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [
+                    { "type": "function", "name": "lookup" },
+                    { "type": "custom", "name": "grammar" },
+                    { "type": "mcp", "server_label": "docs", "name": "search" },
+                    { "type": "image_generation" }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn target_tool_choice_fallbacks_reject_recursive_internal_keys() {
+        let fallback = ToolChoice::Specific(json!([
+            {
+                "type": "vendor_selector",
+                "vendor_keep": true,
+                "_monoize_outer_spoof": true,
+                "nested": {
+                    "vendor_nested_keep": 7,
+                    "_monoize_nested_spoof": true
+                }
+            }
+        ]));
+        let expected = json!([{
+            "type": "vendor_selector",
+            "vendor_keep": true,
+            "nested": { "vendor_nested_keep": 7 }
+        }]);
+
+        assert_eq!(tool_choice_to_value(&fallback), expected);
+        assert_eq!(tool_choice_to_chat_value(&fallback), expected);
+        assert_eq!(tool_choice_to_responses_value(&fallback), expected);
     }
 }

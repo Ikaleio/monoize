@@ -6,7 +6,11 @@ mod tests {
     fn build_accumulated_output_nodes_greedily_merge_into_one_compat_message() {
         let calls = HashMap::from([(
             "call_1".to_string(),
-            ("lookup".to_string(), "{}".to_string()),
+            (
+                ToolCallType::Function,
+                "lookup".to_string(),
+                "{}".to_string(),
+            ),
         )]);
 
         let outputs = build_accumulated_output_nodes(
@@ -155,7 +159,11 @@ mod tests {
     fn build_accumulated_output_nodes_preserve_real_output_index_order_in_fallback() {
         let calls = HashMap::from([(
             "call_1".to_string(),
-            ("lookup".to_string(), "{}".to_string()),
+            (
+                ToolCallType::Function,
+                "lookup".to_string(),
+                "{}".to_string(),
+            ),
         )]);
 
         let outputs = build_accumulated_output_nodes(
@@ -364,6 +372,7 @@ mod tests {
                 output_index: 2,
                 nodes: vec![Node::ToolCall {
                     id: Some("fc_1".to_string()),
+                    tool_type: ToolCallType::Function,
                     call_id: "call_1".to_string(),
                     name: "search_codebase".to_string(),
                     arguments: "{\"query\":\"reasoning\"}".to_string(),
@@ -386,6 +395,7 @@ mod tests {
                 output_index: 1,
                 nodes: vec![Node::ToolCall {
                     id: None,
+                    tool_type: ToolCallType::Function,
                     call_id: "call_1".to_string(),
                     name: "search_codebase".to_string(),
                     arguments: "{\"query\":\"reasoning\"}".to_string(),
@@ -692,6 +702,86 @@ mod tests {
                 ..
             } if *node_index == tool_call_node_index && arguments == "{}"
         ));
+    }
+
+    #[test]
+    fn custom_tool_call_input_delta_and_done_decode() {
+        let mut state = ResponsesStreamIndexState::default();
+        let added = map_responses_event_to_urp_events_with_state(
+            "response.output_item.added",
+            json!({
+                "output_index": 3,
+                "item": {
+                    "type": "custom_tool_call",
+                    "id": "ctc_1",
+                    "call_id": "call_custom",
+                    "name": "grammar",
+                    "input": ""
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        let node_index = added
+            .iter()
+            .find_map(|event| match event {
+                UrpStreamEvent::NodeStart {
+                    node_index,
+                    header:
+                        NodeHeader::ToolCall {
+                            tool_type: ToolCallType::Custom,
+                            call_id,
+                            name,
+                            ..
+                        },
+                    ..
+                } if call_id == "call_custom" && name == "grammar" => Some(*node_index),
+                _ => None,
+            })
+            .expect("custom tool node start");
+
+        let delta = map_responses_event_to_urp_events_with_state(
+            "response.custom_tool_call_input.delta",
+            json!({ "output_index": 3, "delta": "SELECT 3" }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(matches!(
+            &delta[0],
+            UrpStreamEvent::NodeDelta {
+                node_index: actual,
+                delta: NodeDelta::ToolCallArguments { arguments },
+                ..
+            } if *actual == node_index && arguments == "SELECT 3"
+        ));
+
+        let done = map_responses_event_to_urp_events_with_state(
+            "response.output_item.done",
+            json!({
+                "output_index": 3,
+                "item": {
+                    "type": "custom_tool_call",
+                    "id": "ctc_1",
+                    "call_id": "call_custom",
+                    "name": "grammar",
+                    "input": "SELECT 3"
+                }
+            }),
+            &HashMap::new(),
+            &mut state,
+        );
+        assert!(done.iter().any(|event| matches!(
+            event,
+            UrpStreamEvent::NodeDone {
+                node_index: actual,
+                node: Node::ToolCall {
+                    tool_type: ToolCallType::Custom,
+                    arguments,
+                    ..
+                },
+                ..
+            } if *actual == node_index && arguments == "SELECT 3"
+        )));
     }
 
     #[test]
@@ -1125,7 +1215,11 @@ mod tests {
             &["call_1".to_string()],
             &HashMap::from([(
                 "call_1".to_string(),
-                ("lookup".to_string(), "{}".to_string()),
+                (
+                    ToolCallType::Function,
+                    "lookup".to_string(),
+                    "{}".to_string(),
+                ),
             )]),
             &HashMap::from([(1, "call_1".to_string())]),
         );

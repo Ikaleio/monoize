@@ -18,6 +18,8 @@ mod provider_item_tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -58,6 +60,27 @@ mod provider_item_tests {
         assert_eq!(cross_protocol["messages"], json!([]));
         assert!(!wire.contains("compaction"));
         assert!(!wire.contains("opaque"));
+    }
+
+    #[test]
+    fn messages_unknown_system_provider_block_replays_in_system_array() {
+        let native_block = json!({
+            "type": "future_system_block",
+            "payload": { "version": 2 }
+        });
+        let req = request_with_input(vec![Node::ProviderItem {
+            id: None,
+            origin_protocol: ProviderProtocol::Messages,
+            role: OrdinaryRole::System,
+            item_type: "future_system_block".to_string(),
+            body: native_block.clone(),
+            extra_body: empty_map(),
+        }]);
+
+        let encoded = encode_request(&req, "claude-sonnet-4.5");
+
+        assert_eq!(encoded["system"], json!([native_block]));
+        assert_eq!(encoded["messages"], json!([]));
     }
 
     #[test]

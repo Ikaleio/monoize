@@ -10,8 +10,8 @@ use crate::urp::stream_helpers::{
     extract_chat_reasoning_content_block, extract_chat_reasoning_delta_chunks,
 };
 use crate::urp::{
-    CHAT_REASONING_DETAIL_EXTRA_KEY, FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole,
-    ProviderProtocol, UrpStreamEvent,
+    CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY, FinishReason, Node,
+    NodeDelta, NodeHeader, OrdinaryRole, ProviderProtocol, ToolCallType, UrpStreamEvent,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -28,7 +28,7 @@ const CHAT_NATIVE_FINISH_REASON_EXTRA_KEY: &str = "_monoize_chat_native_finish_r
 
 struct ChatToolCallStreamState<'a> {
     call_order: &'a mut Vec<String>,
-    calls: &'a mut HashMap<String, (String, String)>,
+    calls: &'a mut HashMap<String, (ToolCallType, String, String, bool)>,
     call_id_by_index: &'a mut HashMap<usize, String>,
     response_started: &'a mut bool,
     next_node_index: &'a mut u32,
@@ -53,7 +53,7 @@ pub(crate) async fn stream_chat_to_urp_events(
     let mut reasoning_source: Option<String> = None;
     let mut reasoning_detail_nodes: Vec<(u32, Node)> = Vec::new();
     let mut call_order: Vec<String> = Vec::new();
-    let mut calls: HashMap<String, (String, String)> = HashMap::new();
+    let mut calls: HashMap<String, (ToolCallType, String, String, bool)> = HashMap::new();
     let mut call_id_by_index: HashMap<usize, String> = HashMap::new();
     let mut provider_items: Vec<(u32, Node)> = Vec::new();
 
@@ -207,6 +207,15 @@ pub(crate) async fn stream_chat_to_urp_events(
         for (key, value) in chat_delta_extra(&delta) {
             delta_extra.insert(key, value);
         }
+        if !protocol_terminal_seen && let Some(choice) = choice {
+            let choice_extra = chat_choice_extra(choice);
+            if !choice_extra.is_empty() {
+                delta_extra.insert(
+                    CHAT_CHOICE_EXTRA_BODY_KEY.to_string(),
+                    Value::Object(choice_extra),
+                );
+            }
+        }
 
         if assistant_message_phase.is_none() {
             assistant_message_phase = delta
@@ -333,7 +342,7 @@ pub(crate) async fn stream_chat_to_urp_events(
                 let mut recognized = false;
                 if let Some(text) = block_obj.get("text").and_then(|v| v.as_str()) {
                     let item_type = block_obj.get("type").and_then(|v| v.as_str());
-                    if !matches!(item_type, Some("tool_call" | "function_call" | "tool_use")) {
+                    if matches!(item_type, Some("text" | "output_text")) {
                         process_text_delta(
                             &tx,
                             &response_id,
@@ -369,6 +378,7 @@ pub(crate) async fn stream_chat_to_urp_events(
                     &urp.model,
                     block,
                     content_pos,
+                    false,
                     &mut tool_state,
                 )
                 .await?;
@@ -479,10 +489,36 @@ pub(crate) async fn stream_chat_to_urp_events(
                     &urp.model,
                     tc,
                     tool_call_pos,
+                    false,
                     &mut tool_state,
                 )
                 .await?;
             }
+        }
+
+        if let Some(function_call) = delta
+            .get("function_call")
+            .and_then(legacy_function_call_as_tool_call)
+        {
+            let mut tool_state = ChatToolCallStreamState {
+                call_order: &mut call_order,
+                calls: &mut calls,
+                call_id_by_index: &mut call_id_by_index,
+                response_started: &mut response_started,
+                next_node_index: &mut next_node_index,
+                tool_node_index_by_call_id: &mut tool_node_index_by_call_id,
+                delta_extra: &mut delta_extra,
+            };
+            process_tool_call_delta(
+                &tx,
+                &response_id,
+                &urp.model,
+                &function_call,
+                0,
+                true,
+                &mut tool_state,
+            )
+            .await?;
         }
 
         if let Some(message) = choice
@@ -611,10 +647,11 @@ fn chat_choice_extra(choice: &Map<String, Value>) -> Map<String, Value> {
     choice
         .iter()
         .filter(|(key, _)| {
-            !matches!(
-                key.as_str(),
-                "index" | "delta" | "message" | "finish_reason"
-            )
+            !crate::urp::decode::is_internal_extra_key(key)
+                && !matches!(
+                    key.as_str(),
+                    "index" | "delta" | "message" | "finish_reason"
+                )
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
@@ -627,18 +664,20 @@ fn chat_delta_extra(delta: &Value) -> Map<String, Value> {
     delta
         .iter()
         .filter(|(key, _)| {
-            !matches!(
-                key.as_str(),
-                "role"
-                    | "content"
-                    | "reasoning"
-                    | "reasoning_content"
-                    | "reasoning_details"
-                    | "reasoning_opaque"
-                    | "tool_calls"
-                    | "refusal"
-                    | "phase"
-            )
+            !crate::urp::decode::is_internal_extra_key(key)
+                && !matches!(
+                    key.as_str(),
+                    "role"
+                        | "content"
+                        | "reasoning"
+                        | "reasoning_content"
+                        | "reasoning_details"
+                        | "reasoning_opaque"
+                        | "tool_calls"
+                        | "function_call"
+                        | "refusal"
+                        | "phase"
+                )
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
@@ -667,21 +706,54 @@ fn chat_delta_has_payload(delta: &Value) -> bool {
             .get("tool_calls")
             .and_then(Value::as_array)
             .is_some_and(|calls| !calls.is_empty())
+        || delta
+            .get("function_call")
+            .and_then(Value::as_object)
+            .is_some_and(|call| !call.is_empty())
 }
 
-fn chat_delta_event_extra(delta_extra: Map<String, Value>) -> HashMap<String, Value> {
-    if delta_extra.is_empty() {
-        HashMap::new()
-    } else {
-        HashMap::from([(
+fn legacy_function_call_as_tool_call(function_call: &Value) -> Option<Value> {
+    let mut function = function_call.as_object()?.clone();
+    function.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
+    if function.is_empty() {
+        return None;
+    }
+    let name = function
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
+    let mut normalized = Map::from_iter([
+        ("index".to_string(), Value::from(0)),
+        ("type".to_string(), Value::String("function".to_string())),
+        ("function".to_string(), Value::Object(function)),
+    ]);
+    if let Some(name) = name {
+        normalized.insert(
+            "id".to_string(),
+            Value::String(format!("legacy_function:{name}")),
+        );
+    }
+    Some(Value::Object(normalized))
+}
+
+fn chat_delta_event_extra(mut delta_extra: Map<String, Value>) -> HashMap<String, Value> {
+    let choice_extra = delta_extra.remove(CHAT_CHOICE_EXTRA_BODY_KEY);
+    let mut event_extra = HashMap::new();
+    if !delta_extra.is_empty() {
+        event_extra.insert(
             CHAT_DELTA_EXTRA_BODY_KEY.to_string(),
             Value::Object(delta_extra),
-        )])
+        );
     }
+    if let Some(choice_extra) = choice_extra {
+        event_extra.insert(CHAT_CHOICE_EXTRA_BODY_KEY.to_string(), choice_extra);
+    }
+    event_extra
 }
 
 fn chat_error_code_and_message(error: &Value) -> (Option<String>, String) {
-    let code = error.get("code").and_then(json_scalar_string);
+    let code = chat_error_scalar(error, "code", "provider_code");
     let message = error
         .get("message")
         .and_then(Value::as_str)
@@ -690,6 +762,19 @@ fn chat_error_code_and_message(error: &Value) -> (Option<String>, String) {
         .unwrap_or("upstream Chat Completions error")
         .to_string();
     (code, message)
+}
+
+fn chat_error_scalar(error: &Value, direct_key: &str, metadata_key: &str) -> Option<String> {
+    error
+        .get(direct_key)
+        .and_then(json_scalar_string)
+        .or_else(|| {
+            error
+                .get("metadata")
+                .and_then(Value::as_object)
+                .and_then(|metadata| metadata.get(metadata_key))
+                .and_then(json_scalar_string)
+        })
 }
 
 fn json_scalar_string(value: &Value) -> Option<String> {
@@ -710,8 +795,7 @@ async fn emit_chat_terminal_error(
 ) -> AppResult<()> {
     let error = error_value.as_ref();
     let code = error
-        .and_then(|error| error.get("code"))
-        .and_then(json_scalar_string)
+        .and_then(|error| chat_error_scalar(error, "code", "provider_code"))
         .unwrap_or_else(|| fallback_code.to_string());
     let message = error
         .and_then(|error| error.get("message"))
@@ -720,11 +804,7 @@ async fn emit_chat_terminal_error(
         .filter(|message| !message.is_empty())
         .unwrap_or(fallback_message)
         .to_string();
-    let error_type = error
-        .and_then(|error| error.get("type"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let error_type = error.and_then(|error| chat_error_scalar(error, "type", "error_type"));
     let param = error
         .and_then(|error| error.get("param"))
         .and_then(Value::as_str)
@@ -830,8 +910,9 @@ async fn process_provider_item_block(
 fn chat_stream_block_is_tool_call_like(block_obj: &Map<String, Value>) -> bool {
     matches!(
         block_obj.get("type").and_then(|v| v.as_str()),
-        Some("tool_call" | "function_call" | "tool_use")
+        Some("tool_call" | "function_call" | "tool_use" | "custom_tool_call" | "custom")
     ) || block_obj.contains_key("function")
+        || block_obj.contains_key("custom")
         || block_obj.contains_key("call_id")
         || block_obj.contains_key("input")
 }
@@ -926,9 +1007,11 @@ fn chat_reasoning_node_from_detail(detail: &Map<String, Value>) -> Option<Node> 
         .flatten()
         .filter(|value| !value.is_null())
         .cloned();
+    let mut raw_detail = detail.clone();
+    raw_detail.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
     let extra_body = HashMap::from([(
         CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
-        Value::Object(detail.clone()),
+        Value::Object(raw_detail),
     )]);
 
     Some(Node::Reasoning {
@@ -1223,7 +1306,9 @@ fn reasoning_detail_completion(
     let payload_key = reasoning_detail_payload_key(detail_type)?;
     let mut merged_raw = existing_raw.clone();
     for (key, value) in terminal {
-        merged_raw.insert(key.clone(), value.clone());
+        if !crate::urp::decode::is_internal_extra_key(key) {
+            merged_raw.insert(key.clone(), value.clone());
+        }
     }
     let merged_node = chat_reasoning_node_from_detail(&merged_raw)?;
 
@@ -1278,6 +1363,7 @@ fn reasoning_detail_completion(
     };
 
     let mut delta_detail = terminal.clone();
+    delta_detail.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
     delta_detail.insert(payload_key.to_string(), payload_delta);
     let extra_body = HashMap::from([(
         CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
@@ -1348,7 +1434,9 @@ async fn process_terminal_reasoning_details(
                 .cloned()
                 .unwrap_or_default();
             for (key, value) in detail_obj {
-                merged_raw.insert(key.clone(), value.clone());
+                if !crate::urp::decode::is_internal_extra_key(key) {
+                    merged_raw.insert(key.clone(), value.clone());
+                }
             }
             if let Some(merged_node) = chat_reasoning_node_from_detail(&merged_raw) {
                 *existing_node = merged_node;
@@ -1389,6 +1477,8 @@ fn tool_call_with_arguments_delta(raw: &Value, arguments: &str) -> Value {
             "arguments".to_string(),
             Value::String(arguments.to_string()),
         );
+    } else if let Some(custom) = obj.get_mut("custom").and_then(Value::as_object_mut) {
+        custom.insert("input".to_string(), Value::String(arguments.to_string()));
     } else {
         obj.remove("input");
         obj.insert(
@@ -1405,6 +1495,7 @@ async fn process_terminal_tool_call_snapshot(
     model: &str,
     raw_tool_call: &Value,
     tool_call_pos: usize,
+    legacy_function_call: bool,
     state: &mut ChatToolCallStreamState<'_>,
 ) -> AppResult<()> {
     let Some(tool_call) = raw_tool_call.as_object() else {
@@ -1419,7 +1510,13 @@ async fn process_terminal_tool_call_snapshot(
         return Ok(());
     };
     let terminal_arguments = tool_call_arguments_delta_text(tool_call).unwrap_or_default();
-    if let Some((name, streamed_arguments)) = state.calls.get_mut(&call_id) {
+    if let Some((tool_type, name, streamed_arguments, stored_legacy_function_call)) =
+        state.calls.get_mut(&call_id)
+    {
+        *stored_legacy_function_call |= legacy_function_call;
+        if chat_tool_call_type(tool_call) == ToolCallType::Custom {
+            *tool_type = ToolCallType::Custom;
+        }
         let terminal_name = tool_call
             .get("name")
             .and_then(Value::as_str)
@@ -1429,18 +1526,41 @@ async fn process_terminal_tool_call_snapshot(
                     .and_then(|function| function.get("name"))
                     .and_then(Value::as_str)
             })
+            .or_else(|| {
+                tool_call
+                    .get("custom")
+                    .and_then(|custom| custom.get("name"))
+                    .and_then(Value::as_str)
+            })
             .unwrap_or("");
         if name.is_empty() && !terminal_name.is_empty() {
             *name = terminal_name.to_string();
         }
         if let Some(suffix) = snapshot_suffix(streamed_arguments, &terminal_arguments) {
             let delta_call = tool_call_with_arguments_delta(raw_tool_call, suffix);
-            process_tool_call_delta(tx, response_id, model, &delta_call, tool_call_pos, state)
-                .await?;
+            process_tool_call_delta(
+                tx,
+                response_id,
+                model,
+                &delta_call,
+                tool_call_pos,
+                legacy_function_call,
+                state,
+            )
+            .await?;
         }
         return Ok(());
     }
-    process_tool_call_delta(tx, response_id, model, raw_tool_call, tool_call_pos, state).await
+    process_tool_call_delta(
+        tx,
+        response_id,
+        model,
+        raw_tool_call,
+        tool_call_pos,
+        legacy_function_call,
+        state,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1460,7 +1580,7 @@ async fn process_terminal_message_snapshot(
     reasoning_source: &mut Option<String>,
     reasoning_detail_nodes: &mut Vec<(u32, Node)>,
     call_order: &mut Vec<String>,
-    calls: &mut HashMap<String, (String, String)>,
+    calls: &mut HashMap<String, (ToolCallType, String, String, bool)>,
     call_id_by_index: &mut HashMap<usize, String>,
     tool_node_index_by_call_id: &mut HashMap<String, u32>,
     provider_items: &mut Vec<(u32, Node)>,
@@ -1487,6 +1607,7 @@ async fn process_terminal_message_snapshot(
                     | "reasoning_details"
                     | "reasoning_opaque"
                     | "tool_calls"
+                    | "function_call"
                     | "refusal"
                     | "phase"
             )
@@ -1613,9 +1734,9 @@ async fn process_terminal_message_snapshot(
                     continue;
                 };
                 if let Some(text) = block_obj.get("text").and_then(Value::as_str)
-                    && !matches!(
+                    && matches!(
                         block_obj.get("type").and_then(Value::as_str),
-                        Some("tool_call" | "function_call" | "tool_use")
+                        Some("text" | "output_text")
                     )
                 {
                     snapshot_text.push_str(text);
@@ -1654,6 +1775,7 @@ async fn process_terminal_message_snapshot(
                         model,
                         block,
                         block_pos,
+                        false,
                         &mut tool_state,
                     )
                     .await?;
@@ -1693,10 +1815,35 @@ async fn process_terminal_message_snapshot(
                 model,
                 tool_call,
                 tool_call_pos,
+                false,
                 &mut tool_state,
             )
             .await?;
         }
+    }
+    if let Some(function_call) = message
+        .get("function_call")
+        .and_then(legacy_function_call_as_tool_call)
+    {
+        let mut tool_state = ChatToolCallStreamState {
+            call_order,
+            calls,
+            call_id_by_index,
+            response_started,
+            next_node_index,
+            tool_node_index_by_call_id,
+            delta_extra,
+        };
+        process_terminal_tool_call_snapshot(
+            tx,
+            response_id,
+            model,
+            &function_call,
+            0,
+            true,
+            &mut tool_state,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -1707,6 +1854,7 @@ async fn process_tool_call_delta(
     model: &str,
     raw_tool_call: &Value,
     tool_call_pos: usize,
+    legacy_function_call: bool,
     state: &mut ChatToolCallStreamState<'_>,
 ) -> AppResult<()> {
     let Some(tc_obj) = raw_tool_call.as_object() else {
@@ -1747,6 +1895,7 @@ async fn process_tool_call_delta(
         state.call_id_by_index.insert(idx, call_id.clone());
     }
 
+    let tool_type = chat_tool_call_type(tc_obj);
     let name = tc_obj
         .get("name")
         .and_then(|v| v.as_str())
@@ -1756,15 +1905,22 @@ async fn process_tool_call_delta(
                 .and_then(|f| f.get("name"))
                 .and_then(|v| v.as_str())
         })
+        .or_else(|| {
+            tc_obj
+                .get("custom")
+                .and_then(|custom| custom.get("name"))
+                .and_then(|v| v.as_str())
+        })
         .unwrap_or("")
         .to_string();
     let args_delta = tool_call_arguments_delta_text(tc_obj).unwrap_or_default();
 
     if !state.calls.contains_key(&call_id) {
         state.call_order.push(call_id.clone());
-        state
-            .calls
-            .insert(call_id.clone(), (name.clone(), String::new()));
+        state.calls.insert(
+            call_id.clone(),
+            (tool_type, name.clone(), String::new(), legacy_function_call),
+        );
     }
 
     ensure_response_started(tx, response_id, model, state.response_started).await?;
@@ -1777,16 +1933,24 @@ async fn process_tool_call_delta(
         state
             .tool_node_index_by_call_id
             .insert(call_id.clone(), node_index);
+        let mut extra_body = chat_delta_event_extra(std::mem::take(state.delta_extra));
+        if legacy_function_call {
+            extra_body.insert(
+                CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY.to_string(),
+                Value::Bool(true),
+            );
+        }
         send_event(
             tx,
             UrpStreamEvent::NodeStart {
                 node_index,
                 header: NodeHeader::ToolCall {
                     id: None,
+                    tool_type,
                     call_id: call_id.clone(),
                     name: name.clone(),
                 },
-                extra_body: chat_delta_event_extra(std::mem::take(state.delta_extra)),
+                extra_body,
             },
         )
         .await?;
@@ -1798,11 +1962,15 @@ async fn process_tool_call_delta(
         return Ok(());
     };
 
-    if !name.is_empty() && entry.0.is_empty() {
-        entry.0 = name.clone();
+    if tool_type == ToolCallType::Custom {
+        entry.0 = ToolCallType::Custom;
+    }
+    entry.3 |= legacy_function_call;
+    if !name.is_empty() && entry.1.is_empty() {
+        entry.1 = name.clone();
     }
     if !args_delta.is_empty() {
-        entry.1.push_str(&args_delta);
+        entry.2.push_str(&args_delta);
         send_node_delta(
             tx,
             node_index,
@@ -1829,6 +1997,18 @@ fn tool_call_arguments_delta_text(tc_obj: &Map<String, Value>) -> Option<String>
         .map(|text| text.to_string())
         .or_else(|| Some(value.to_string()))
         .filter(|text| !text.is_empty())
+}
+
+fn chat_tool_call_type(tc_obj: &Map<String, Value>) -> ToolCallType {
+    if matches!(
+        tc_obj.get("type").and_then(Value::as_str),
+        Some("custom" | "custom_tool_call")
+    ) || tc_obj.contains_key("custom")
+    {
+        ToolCallType::Custom
+    } else {
+        ToolCallType::Function
+    }
 }
 
 async fn ensure_response_started(
@@ -1953,7 +2133,7 @@ fn sorted_nodes(
     reasoning_source: Option<&str>,
     reasoning_detail_nodes: &[(u32, Node)],
     call_order: &[String],
-    calls: &HashMap<String, (String, String)>,
+    calls: &HashMap<String, (ToolCallType, String, String, bool)>,
     tool_node_index_by_call_id: &HashMap<String, u32>,
     provider_items: &[(u32, Node)],
 ) -> Vec<(u32, Node)> {
@@ -1993,17 +2173,26 @@ fn sorted_nodes(
         let Some(node_index) = tool_node_index_by_call_id.get(call_id).copied() else {
             continue;
         };
-        let Some((name, arguments)) = calls.get(call_id) else {
+        let Some((tool_type, name, arguments, legacy_function_call)) = calls.get(call_id) else {
             continue;
+        };
+        let extra_body = if *legacy_function_call {
+            HashMap::from([(
+                CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY.to_string(),
+                Value::Bool(true),
+            )])
+        } else {
+            HashMap::new()
         };
         nodes.push((
             node_index,
             Node::ToolCall {
                 id: Some(crate::urp::synthetic_tool_call_id()),
+                tool_type: *tool_type,
                 call_id: call_id.clone(),
                 name: name.clone(),
                 arguments: arguments.clone(),
-                extra_body: HashMap::new(),
+                extra_body,
             },
         ));
     }
@@ -2016,6 +2205,7 @@ fn sorted_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tokio::sync::mpsc;
 
     #[test]
@@ -2136,6 +2326,7 @@ mod tests {
                 }
             }),
             0,
+            false,
             &mut tool_state,
         )
         .await
@@ -2192,11 +2383,21 @@ mod tests {
         let calls = HashMap::from([
             (
                 "call_b".to_string(),
-                ("beta".to_string(), "{\"b\":2}".to_string()),
+                (
+                    ToolCallType::Function,
+                    "beta".to_string(),
+                    "{\"b\":2}".to_string(),
+                    false,
+                ),
             ),
             (
                 "call_a".to_string(),
-                ("alpha".to_string(), "{\"a\":1}".to_string()),
+                (
+                    ToolCallType::Function,
+                    "alpha".to_string(),
+                    "{\"a\":1}".to_string(),
+                    false,
+                ),
             ),
         ]);
         let tool_node_index_by_call_id =
@@ -2243,5 +2444,158 @@ mod tests {
             (5, Node::ToolCall { call_id, name, arguments, .. })
                 if call_id == "call_b" && name == "beta" && arguments == "{\"b\":2}"
         ));
+    }
+
+    #[tokio::test]
+    async fn legacy_function_call_deltas_become_one_marked_tool_call_node() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut call_order = Vec::new();
+        let mut calls = HashMap::new();
+        let mut call_id_by_index = HashMap::new();
+        let mut response_started = false;
+        let mut next_node_index = 0;
+        let mut tool_node_index_by_call_id = HashMap::new();
+        let mut delta_extra = Map::new();
+
+        for function_call in [
+            json!({ "name": "lookup", "arguments": "{\"q\":" }),
+            json!({ "arguments": "1}" }),
+        ] {
+            let normalized = legacy_function_call_as_tool_call(&function_call)
+                .expect("legacy function call must normalize");
+            let mut state = ChatToolCallStreamState {
+                call_order: &mut call_order,
+                calls: &mut calls,
+                call_id_by_index: &mut call_id_by_index,
+                response_started: &mut response_started,
+                next_node_index: &mut next_node_index,
+                tool_node_index_by_call_id: &mut tool_node_index_by_call_id,
+                delta_extra: &mut delta_extra,
+            };
+            process_tool_call_delta(
+                &tx,
+                "resp_legacy",
+                "gpt-4",
+                &normalized,
+                0,
+                true,
+                &mut state,
+            )
+            .await
+            .expect("legacy function call delta");
+        }
+
+        let nodes = sorted_nodes(
+            None,
+            None,
+            "",
+            None,
+            "",
+            "",
+            "",
+            None,
+            &[],
+            &call_order,
+            &calls,
+            &tool_node_index_by_call_id,
+            &[],
+        );
+        let Node::ToolCall {
+            call_id,
+            name,
+            arguments,
+            extra_body,
+            ..
+        } = &nodes[0].1
+        else {
+            panic!("expected tool call");
+        };
+        assert_eq!(call_id, "legacy_function:lookup");
+        assert_eq!(name, "lookup");
+        assert_eq!(arguments, "{\"q\":1}");
+        assert_eq!(
+            extra_body.get(CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY),
+            Some(&Value::Bool(true))
+        );
+
+        drop(tx);
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        assert!(matches!(
+            &events[1],
+            UrpStreamEvent::NodeStart { extra_body, .. }
+                if extra_body.get(CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY) == Some(&Value::Bool(true))
+        ));
+    }
+
+    #[tokio::test]
+    async fn chat_stream_rejects_reserved_wire_extras_and_modern_legacy_marker_spoof() {
+        let choice = chat_choice_extra(
+            json!({
+                "index": 0,
+                "vendor_choice_counter": 1,
+                "_monoize_spoofed_choice": true
+            })
+            .as_object()
+            .expect("choice object"),
+        );
+        assert_eq!(choice.get("vendor_choice_counter"), Some(&json!(1)));
+        assert!(!choice.contains_key("_monoize_spoofed_choice"));
+        let delta = chat_delta_extra(&json!({
+            "role": "assistant",
+            "vendor_delta_counter": 2,
+            "_monoize_spoofed_delta": true
+        }));
+        assert_eq!(delta.get("vendor_delta_counter"), Some(&json!(2)));
+        assert!(!delta.contains_key("_monoize_spoofed_delta"));
+
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut call_order = Vec::new();
+        let mut calls = HashMap::new();
+        let mut call_id_by_index = HashMap::new();
+        let mut response_started = false;
+        let mut next_node_index = 0;
+        let mut tool_node_index_by_call_id = HashMap::new();
+        let mut delta_extra = Map::new();
+        {
+            let mut state = ChatToolCallStreamState {
+                call_order: &mut call_order,
+                calls: &mut calls,
+                call_id_by_index: &mut call_id_by_index,
+                response_started: &mut response_started,
+                next_node_index: &mut next_node_index,
+                tool_node_index_by_call_id: &mut tool_node_index_by_call_id,
+                delta_extra: &mut delta_extra,
+            };
+            process_tool_call_delta(
+                &tx,
+                "resp_modern",
+                "gpt-4",
+                &json!({
+                    "index": 0,
+                    "id": "call_modern",
+                    "_monoize_chat_legacy_function_call": true,
+                    "function": { "name": "lookup", "arguments": "{}" }
+                }),
+                0,
+                false,
+                &mut state,
+            )
+            .await
+            .expect("modern tool call");
+        }
+        assert!(!calls["call_modern"].3);
+
+        drop(tx);
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        assert!(
+            matches!(&events[1], UrpStreamEvent::NodeStart { extra_body, .. }
+            if !extra_body.contains_key(CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY))
+        );
     }
 }

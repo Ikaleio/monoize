@@ -37,6 +37,86 @@ async fn messages_message_envelope_extra_stays_out_of_content_block() {
 }
 
 #[tokio::test]
+async fn messages_unknown_system_block_round_trips_same_family() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "system": [
+                { "type": "text", "text": "system text" },
+                {
+                    "type": "future_system_block",
+                    "payload": { "version": 2, "keep": true }
+                }
+            ],
+            "messages": [{ "role": "user", "content": "hello" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(
+        upstream["system"],
+        json!([
+            { "type": "text", "text": "system text" },
+            {
+                "type": "future_system_block",
+                "payload": { "version": 2, "keep": true }
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn messages_nonstream_error_uses_anthropic_envelope_and_request_id() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .header("x-request-id", "req_messages_error")
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini-msg",
+                "max_tokens": 64,
+                "messages": [{ "role": "user", "content": "fail" }],
+                "force_upstream_error_status": 422,
+                "force_upstream_error_code": "invalid_request_error",
+                "force_upstream_error_message": "invalid request"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        resp.headers()
+            .get("request-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("req_messages_error")
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&body).expect("Anthropic error JSON");
+    assert_eq!(body["type"], json!("error"));
+    assert_eq!(body["error"]["type"], json!("invalid_request_error"));
+    assert_eq!(
+        body["error"]["message"],
+        json!("upstream status 422 Unprocessable Entity: invalid request")
+    );
+    assert_eq!(
+        body["error"]["upstream_code"],
+        json!("invalid_request_error")
+    );
+    assert_eq!(body["request_id"], json!("req_messages_error"));
+}
+
+#[tokio::test]
 async fn messages_tool_result_multipart_roundtrip_via_messages_upstream() {
     let ctx = setup().await;
     let image_url = "https://example.com/tool.png";
@@ -336,6 +416,202 @@ async fn messages_request_forwards_ordinary_url_image_to_messages_upstream() {
     assert_eq!(
         content[1],
         json!({ "type": "image", "source": { "type": "url", "url": image_url } })
+    );
+}
+
+#[tokio::test]
+async fn messages_file_id_sources_forward_with_files_beta_header() {
+    let ctx = setup().await;
+    let (status, _) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "inspect files" },
+                    {
+                        "type": "image",
+                        "source": { "type": "file", "file_id": "file_image_1" }
+                    },
+                    {
+                        "type": "document",
+                        "source": { "type": "file", "file_id": "file_document_1" },
+                        "title": "Reference"
+                    },
+                    { "type": "container_upload", "file_id": "file_dataset_1" }
+                ]
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let upstream = ctx
+        .captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .iter()
+        .rev()
+        .find(|(kind, _)| kind == "messages")
+        .map(|(_, body)| body.clone())
+        .expect("messages upstream body");
+    assert_eq!(
+        upstream["messages"][0]["content"],
+        json!([
+            { "type": "text", "text": "inspect files" },
+            {
+                "type": "image",
+                "source": { "type": "file", "file_id": "file_image_1" }
+            },
+            {
+                "type": "document",
+                "source": { "type": "file", "file_id": "file_document_1" },
+                "title": "Reference"
+            },
+            { "type": "container_upload", "file_id": "file_dataset_1" }
+        ])
+    );
+    assert!(
+        ctx.captured_headers
+            .lock()
+            .expect("captured headers lock")
+            .iter()
+            .any(|(key, value)| { key == "anthropic-beta" && value == "files-api-2025-04-14" }),
+        "expected the Files API beta header"
+    );
+}
+
+#[tokio::test]
+async fn messages_tool_result_file_ids_round_trip_with_files_beta_header() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "call_files",
+                        "name": "inspect",
+                        "input": {}
+                    }]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "call_files",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": { "type": "file", "file_id": "file_image_result" }
+                            },
+                            {
+                                "type": "document",
+                                "source": { "type": "file", "file_id": "file_document_result" },
+                                "title": "Tool result"
+                            }
+                        ]
+                    }]
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(
+        upstream["messages"][1]["content"][0]["content"],
+        json!([
+            {
+                "type": "image",
+                "source": { "type": "file", "file_id": "file_image_result" }
+            },
+            {
+                "type": "document",
+                "source": { "type": "file", "file_id": "file_document_result" },
+                "title": "Tool result"
+            }
+        ])
+    );
+    assert!(
+        ctx.captured_headers
+            .lock()
+            .expect("captured headers lock")
+            .iter()
+            .any(|(key, value)| key == "anthropic-beta" && value == "files-api-2025-04-14"),
+        "expected Files API beta header for tool_result file IDs"
+    );
+}
+
+#[tokio::test]
+async fn provider_scoped_file_ids_are_not_cross_family_translated() {
+    let to_messages = setup().await;
+    let (status, _) = json_post(
+        &to_messages,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "inspect" },
+                    { "type": "input_file", "file_id": "file_openai_1" }
+                ]
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let messages_upstream = last_captured_body(&to_messages, "messages");
+    assert!(
+        !messages_upstream.to_string().contains("file_openai_1"),
+        "OpenAI file IDs must not be emitted as Anthropic Files IDs"
+    );
+    assert!(
+        !to_messages
+            .captured_headers
+            .lock()
+            .expect("captured headers lock")
+            .iter()
+            .any(|(key, _)| key == "anthropic-beta"),
+        "an omitted OpenAI file ID must not enable the Anthropic Files beta"
+    );
+
+    let to_responses = setup().await;
+    let (status, _) = json_post(
+        &to_responses,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "inspect" },
+                    {
+                        "type": "document",
+                        "source": { "type": "file", "file_id": "file_anthropic_1" }
+                    }
+                ]
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let responses_upstream = last_captured_body(&to_responses, "responses");
+    assert!(
+        !responses_upstream.to_string().contains("file_anthropic_1"),
+        "Anthropic file IDs must not be emitted as OpenAI Files IDs"
     );
 }
 

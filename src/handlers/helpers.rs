@@ -695,6 +695,7 @@ const EXTRA_WHITELIST_CHAT_COMPLETION: &[&str] = &[
     "stop_server_tools_when",
     "trace",
     "thinking",
+    "include_reasoning",
     "user_id",
 ];
 
@@ -794,8 +795,11 @@ pub(super) fn filter_extra_body_for_provider(
         .map(|v| v.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 
-    req.extra_body
-        .retain(|k, _| defaults.contains(&k.as_str()) || override_set.contains(k.as_str()));
+    req.extra_body.retain(|k, _| {
+        k.starts_with("_monoize_")
+            || defaults.contains(&k.as_str())
+            || override_set.contains(k.as_str())
+    });
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -906,38 +910,63 @@ fn provider_supports_custom_tool(tool: &urp::ToolDefinition, provider_type: Prov
     }
 }
 
-fn insert_tool_identifiers(out: &mut HashSet<String>, tool: &urp::ToolDefinition) {
-    out.insert(tool.tool_type.clone());
-    if let Some(name) = &tool.name {
-        out.insert(name.clone());
-    }
-    if let Some(function) = &tool.function {
-        out.insert(function.name.clone());
-    }
-    if let Some(custom) = &tool.custom {
-        out.insert(custom.name.clone());
+fn selector_name<'a>(obj: &'a serde_json::Map<String, Value>, kind: &str) -> Option<&'a str> {
+    obj.get(kind)
+        .and_then(Value::as_object)
+        .and_then(|nested| nested.get("name"))
+        .and_then(Value::as_str)
+        .or_else(|| obj.get("name").and_then(Value::as_str))
+}
+
+fn selector_matches_tool(
+    selector: &serde_json::Map<String, Value>,
+    tool: &urp::ToolDefinition,
+) -> bool {
+    match selector.get("type").and_then(Value::as_str) {
+        Some("function") => {
+            tool.tool_type == "function"
+                && selector_name(selector, "function")
+                    .zip(
+                        tool.function
+                            .as_ref()
+                            .map(|function| function.name.as_str()),
+                    )
+                    .is_some_and(|(selected, available)| selected == available)
+        }
+        Some("custom") => {
+            tool.tool_type == "custom"
+                && selector_name(selector, "custom")
+                    .zip(tool.custom.as_ref().map(|custom| custom.name.as_str()))
+                    .is_some_and(|(selected, available)| selected == available)
+        }
+        Some("mcp") => {
+            tool.tool_type == "mcp"
+                && selector
+                    .get("server_label")
+                    .and_then(Value::as_str)
+                    .zip(tool.extra_body.get("server_label").and_then(Value::as_str))
+                    .is_some_and(|(selected, available)| selected == available)
+        }
+        Some("auto" | "required" | "any" | "none" | "allowed_tools") | None => false,
+        Some(native_type) => tool.tool_type == native_type,
     }
 }
 
-fn selected_tool_choice_identifier(choice: &urp::ToolChoice) -> Option<String> {
+fn allowed_tool_references_mut(choice: &mut urp::ToolChoice) -> Option<&mut Vec<Value>> {
     let urp::ToolChoice::Specific(Value::Object(obj)) = choice else {
         return None;
     };
-
-    obj.get("function")
-        .and_then(|function| function.get("name"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            obj.get("custom")
-                .and_then(|custom| custom.get("name"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| obj.get("name").and_then(Value::as_str))
-        .or_else(|| match obj.get("type").and_then(Value::as_str) {
-            Some("auto" | "required" | "any" | "none" | "function" | "custom") | None => None,
-            Some(native_type) => Some(native_type),
-        })
-        .map(str::to_string)
+    if obj.get("type").and_then(Value::as_str) != Some("allowed_tools") {
+        return None;
+    }
+    if obj.contains_key("allowed_tools") {
+        return obj
+            .get_mut("allowed_tools")
+            .and_then(Value::as_object_mut)
+            .and_then(|allowed| allowed.get_mut("tools"))
+            .and_then(Value::as_array_mut);
+    }
+    obj.get_mut("tools").and_then(Value::as_array_mut)
 }
 
 pub(super) fn filter_tools_for_provider(
@@ -946,6 +975,9 @@ pub(super) fn filter_tools_for_provider(
     downstream: DownstreamProtocol,
 ) {
     let Some(tools) = req.tools.as_mut() else {
+        if matches!(req.tool_choice, Some(urp::ToolChoice::Specific(_))) {
+            req.tool_choice = None;
+        }
         return;
     };
 
@@ -956,20 +988,53 @@ pub(super) fn filter_tools_for_provider(
         return;
     }
 
-    if let Some(selected) = req
-        .tool_choice
-        .as_ref()
-        .and_then(selected_tool_choice_identifier)
-    {
-        let mut available = HashSet::new();
-        if let Some(tools) = &req.tools {
-            for tool in tools {
-                insert_tool_identifiers(&mut available, tool);
-            }
+    let Some(choice) = req.tool_choice.as_mut() else {
+        return;
+    };
+    let is_allowed_tools = matches!(
+        choice,
+        urp::ToolChoice::Specific(Value::Object(obj))
+            if obj.get("type").and_then(Value::as_str) == Some("allowed_tools")
+    );
+    if is_allowed_tools {
+        if !matches!(
+            provider_type,
+            ProviderType::ChatCompletion | ProviderType::Responses
+        ) {
+            req.tool_choice = None;
+            return;
         }
-        if !available.contains(&selected) {
+        let Some(references) = allowed_tool_references_mut(choice) else {
+            req.tool_choice = None;
+            return;
+        };
+        let available = req.tools.as_deref().unwrap_or_default();
+        references.retain(|reference| {
+            reference.as_object().is_some_and(|selector| {
+                available
+                    .iter()
+                    .any(|tool| selector_matches_tool(selector, tool))
+            })
+        });
+        if references.is_empty() {
             req.tool_choice = None;
         }
+        return;
+    }
+
+    if let urp::ToolChoice::Specific(Value::Object(selector)) = choice
+        && !matches!(
+            selector.get("type").and_then(Value::as_str),
+            Some("auto" | "required" | "any" | "none") | None
+        )
+        && !req
+            .tools
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|tool| selector_matches_tool(selector, tool))
+    {
+        req.tool_choice = None;
     }
 }
 
@@ -992,6 +1057,7 @@ mod tests {
             "web_search_options",
             "stop_server_tools_when",
             "thinking",
+            "include_reasoning",
             "user_id",
         ] {
             assert!(
@@ -1014,6 +1080,27 @@ mod tests {
                 "missing Messages field {field}"
             );
         }
+    }
+
+    #[test]
+    fn provider_extra_filter_preserves_internal_adapter_state() {
+        let mut request = urp::decode::openai_responses::decode_request(&json!({
+            "model": "gpt-5-mini",
+            "instructions": [{ "type": "input_text", "text": "policy" }],
+            "input": "answer",
+            "unknown_wire_field": true
+        }))
+        .expect("decode request");
+
+        filter_extra_body_for_provider(&mut request, ProviderType::Responses, &None);
+
+        assert_eq!(
+            request
+                .extra_body
+                .get(urp::RESPONSES_INSTRUCTIONS_EXTRA_KEY),
+            Some(&json!([{ "type": "input_text", "text": "policy" }]))
+        );
+        assert!(!request.extra_body.contains_key("unknown_wire_field"));
     }
 
     fn response_rule(transform: &str) -> TransformRuleConfig {

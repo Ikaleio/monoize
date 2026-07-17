@@ -166,15 +166,24 @@ pub(crate) async fn emit_synthetic_responses_stream(
                 }
                 let _ = sig;
             }
-            "function_call" => {
+            "function_call" | "custom_tool_call" => {
+                let is_custom = item.get("type").and_then(Value::as_str)
+                    == Some("custom_tool_call");
                 let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                 let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let arguments = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
+                let arguments = item
+                    .get(if is_custom { "input" } else { "arguments" })
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !arguments.is_empty() {
                     send_responses_delta_string(
                         &tx,
                         &mut seq,
-                        "response.function_call_arguments.delta",
+                        if is_custom {
+                            "response.custom_tool_call_input.delta"
+                        } else {
+                            "response.function_call_arguments.delta"
+                        },
                         json!({
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "output_index": output_index,
@@ -187,9 +196,13 @@ pub(crate) async fn emit_synthetic_responses_stream(
                     send_responses_event(
                         &tx,
                         &mut seq,
-                        "response.function_call_arguments.done",
+                        if is_custom {
+                            "response.custom_tool_call_input.done"
+                        } else {
+                            "response.function_call_arguments.done"
+                        },
                         json!({
-                            "arguments": arguments,
+                            (if is_custom { "input" } else { "arguments" }): arguments,
                             "call_id": call_id,
                             "item_id": item.get("id").cloned().unwrap_or(Value::Null),
                             "name": name,

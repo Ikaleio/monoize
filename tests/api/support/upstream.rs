@@ -1891,6 +1891,73 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             return Sse::new(futures_util::stream::iter(events)).into_response();
         }
 
+        if body.get("stream_mode").and_then(|v| v.as_str())
+            == Some("responses_same_family_passthrough")
+        {
+            return Json(json!({
+                "id": "resp_same_family_passthrough",
+                "object": "response",
+                "created_at": 0,
+                "model": model,
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_same_family_passthrough",
+                        "role": "assistant",
+                        "status": "completed",
+                        "response_envelope_unknown": { "scope": "message" },
+                        "content": [{
+                            "type": "output_text",
+                            "text": text,
+                            "annotations": [],
+                            "response_node_unknown": { "scope": "content" }
+                        }]
+                    },
+                    {
+                        "type": "function_call",
+                        "id": "fc_same_family_passthrough",
+                        "call_id": "call_same_family_passthrough",
+                        "name": "noop",
+                        "arguments": "{}",
+                        "status": "completed",
+                        "response_tool_node_unknown": true
+                    }
+                ],
+                "response_top_unknown": { "scope": "response" }
+            }))
+            .into_response();
+        }
+
+        if body.get("stream_mode").and_then(|v| v.as_str()) == Some("nested_usage_details") {
+            return Json(json!({
+                "id": "resp_nested_usage",
+                "object": "response",
+                "created_at": 0,
+                "model": model,
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": text }]
+                }],
+                "usage": {
+                    "input_tokens": 14,
+                    "output_tokens": 9,
+                    "total_tokens": 23,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "vendor_input_detail": { "kind": "warm" }
+                    },
+                    "output_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "vendor_output_detail": [3, 4]
+                    }
+                }
+            }))
+            .into_response();
+        }
+
         if tools_present && tool_outputs.is_empty() {
             if image_generation_tool {
                 let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
@@ -2114,6 +2181,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 Some(
                     "chat_top_level_error"
                         | "chat_choice_error"
+                        | "chat_metadata_error"
                         | "chat_malformed_json"
                         | "chat_done_before_terminal"
                         | "chat_eof_before_terminal"
@@ -2171,6 +2239,24 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                                         "type": "upstream_error"
                                     }
                                 }]
+                            })
+                            .to_string(),
+                        )));
+                    }
+                    Some("chat_metadata_error") => {
+                        chunks.push(Ok(Event::default().data(
+                            json!({
+                                "id": "chatcmpl_mock",
+                                "object": "chat.completion.chunk",
+                                "created": 0,
+                                "model": model,
+                                "error": {
+                                    "message": "openrouter metadata failure",
+                                    "metadata": {
+                                        "provider_code": "P529",
+                                        "error_type": "provider_error"
+                                    }
+                                }
                             })
                             .to_string(),
                         )));
@@ -2771,13 +2857,18 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 return Sse::new(stream).into_response();
             }
 
-            let chunk = json!({
+            let mut chunk = json!({
                 "id": "chatcmpl_mock",
                 "object": "chat.completion.chunk",
                 "created": 0,
                 "model": model,
                 "choices": [{ "index": 0, "delta": { "content": text }, "finish_reason": Value::Null }]
             });
+            if stream_mode == Some("chat_token_logprobs") {
+                chunk["choices"][0]["logprobs"] = json!({
+                    "content": [{ "token": "A", "logprob": -0.1 }]
+                });
+            }
             let mut chunks = Vec::new();
             if reasoning_enabled {
                 chunks.push(Ok::<_, Infallible>(Event::default().data(json!({
@@ -2850,6 +2941,18 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 }))
                 .into_response();
             }
+            Some("chat_metadata_error") => {
+                return Json(json!({
+                    "error": {
+                        "message": "openrouter metadata failure",
+                        "metadata": {
+                            "provider_code": "P529",
+                            "error_type": "provider_error"
+                        }
+                    }
+                }))
+                .into_response();
+            }
             Some("chat_insufficient_system_resource") => {
                 return Json(json!({
                     "id": "chatcmpl_mock",
@@ -2867,6 +2970,34 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 .into_response();
             }
             _ => {}
+        }
+
+        if body.get("stream_mode").and_then(|v| v.as_str()) == Some("nested_usage_details") {
+            return Json(json!({
+                "id": "chatcmpl_nested_usage",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": text },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 8,
+                    "total_tokens": 20,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 0,
+                        "vendor_prompt_detail": { "kind": "warm" }
+                    },
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "vendor_completion_detail": [1, 2]
+                    }
+                }
+            }))
+            .into_response();
         }
 
         if tools_present && tool_outputs.is_empty() {
@@ -2957,6 +3088,11 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
         {
             if let Ok(mut lock) = captured_headers.lock() {
                 lock.push(("anthropic-version".to_string(), v.to_string()));
+            }
+        }
+        if let Some(v) = headers.get("anthropic-beta").and_then(|h| h.to_str().ok()) {
+            if let Ok(mut lock) = captured_headers.lock() {
+                lock.push(("anthropic-beta".to_string(), v.to_string()));
             }
         }
         if let Some(v) = headers.get("x-goog-api-key").and_then(|h| h.to_str().ok()) {
@@ -3345,6 +3481,103 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                     Ok::<_, Infallible>(Event::default().event("message_stop").data(json!({
                         "type": "message_stop"
                     }).to_string())),
+                ]);
+                return Sse::new(stream).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("messages_server_tool_native")
+            {
+                let stream = futures_util::stream::iter(vec![
+                    Ok::<_, Infallible>(
+                        Event::default().event("message_start").data(
+                            json!({
+                                "type": "message_start",
+                                "message": {
+                                    "id": "msg_server_tool_native",
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "model": model,
+                                    "content": [],
+                                    "stop_reason": Value::Null,
+                                    "stop_sequence": Value::Null,
+                                    "usage": { "input_tokens": 6, "output_tokens": 0 }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("content_block_start").data(
+                            json!({
+                                "type": "content_block_start",
+                                "index": 0,
+                                "content_block": {
+                                    "type": "server_tool_use",
+                                    "id": "srvtoolu_1",
+                                    "name": "web_search",
+                                    "input": {}
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("content_block_delta").data(
+                            json!({
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": {
+                                    "type": "input_json_delta",
+                                    "partial_json": "{\"query\":\"mono"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("content_block_delta").data(
+                            json!({
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": {
+                                    "type": "input_json_delta",
+                                    "partial_json": "ize\",\"max_uses\":2}"
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("content_block_stop").data(
+                            json!({
+                                "type": "content_block_stop",
+                                "index": 0
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("message_delta").data(
+                            json!({
+                                "type": "message_delta",
+                                "delta": {
+                                    "stop_reason": "stop_sequence",
+                                    "stop_sequence": "<END>"
+                                },
+                                "usage": { "output_tokens": 4 }
+                            })
+                            .to_string(),
+                        ),
+                    ),
+                    Ok::<_, Infallible>(
+                        Event::default().event("message_stop").data(
+                            json!({
+                                "type": "message_stop"
+                            })
+                            .to_string(),
+                        ),
+                    ),
                 ]);
                 return Sse::new(stream).into_response();
             }

@@ -16,9 +16,11 @@ const CHAT_NATIVE_FINISH_REASON_EXTRA_KEY: &str = "_monoize_chat_native_finish_r
 
 #[derive(Clone, Debug)]
 struct StreamedChatToolCall {
+    tool_type: urp::ToolCallType,
     call_id: String,
     name: String,
     index: usize,
+    legacy_function_call: bool,
     header_sent: bool,
     arguments_streamed: bool,
 }
@@ -52,6 +54,121 @@ fn native_chat_delta_extra(extra_body: &HashMap<String, Value>) -> Map<String, V
         .unwrap_or_default()
 }
 
+fn retain_chat_error_owner_fields(obj: &mut Map<String, Value>) {
+    obj.retain(|key, _| !key.starts_with("_monoize_"));
+}
+
+fn sanitize_chat_error_object(error: &mut Map<String, Value>) {
+    retain_chat_error_owner_fields(error);
+    if let Some(metadata) = error.get_mut("metadata").and_then(Value::as_object_mut) {
+        retain_chat_error_owner_fields(metadata);
+    }
+}
+
+fn sanitize_chat_error_replay_owners(payload: &mut Value) {
+    let Some(root) = payload.as_object_mut() else {
+        return;
+    };
+    retain_chat_error_owner_fields(root);
+    if let Some(error) = root.get_mut("error").and_then(Value::as_object_mut) {
+        sanitize_chat_error_object(error);
+    }
+    let Some(choices) = root.get_mut("choices").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for choice in choices {
+        let Some(choice) = choice.as_object_mut() else {
+            continue;
+        };
+        retain_chat_error_owner_fields(choice);
+        for key in ["delta", "message"] {
+            if let Some(owner) = choice.get_mut(key).and_then(Value::as_object_mut) {
+                retain_chat_error_owner_fields(owner);
+            }
+        }
+        if let Some(error) = choice.get_mut("error").and_then(Value::as_object_mut) {
+            sanitize_chat_error_object(error);
+        }
+    }
+}
+
+fn nonempty_json_scalar(value: Option<&Value>) -> bool {
+    matches!(value, Some(Value::Number(_)))
+        || matches!(value, Some(Value::String(value)) if !value.is_empty())
+}
+
+fn materialize_chat_error_fields(
+    error: &mut Map<String, Value>,
+    code: Option<&str>,
+    message: &str,
+    extra_body: &HashMap<String, Value>,
+) {
+    if error
+        .get("message")
+        .and_then(Value::as_str)
+        .is_none_or(|value| value.is_empty())
+    {
+        error.insert("message".to_string(), Value::String(message.to_string()));
+    }
+    if !nonempty_json_scalar(error.get("code")) {
+        if let Some(code) = code {
+            error.insert("code".to_string(), Value::String(code.to_string()));
+        }
+    }
+    if !nonempty_json_scalar(error.get("type")) {
+        let error_type = extra_body
+            .get("type")
+            .filter(|value| nonempty_json_scalar(Some(value)))
+            .cloned()
+            .unwrap_or_else(|| Value::String("server_error".to_string()));
+        error.insert("type".to_string(), error_type);
+    }
+    if !error.contains_key("param") {
+        if let Some(param) = extra_body.get("param") {
+            error.insert("param".to_string(), param.clone());
+        }
+    }
+}
+
+fn chat_error_payload(
+    original: Option<&Value>,
+    code: Option<&str>,
+    message: &str,
+    extra_body: &HashMap<String, Value>,
+) -> Value {
+    let mut payload = original.cloned().unwrap_or_else(|| json!({}));
+    sanitize_chat_error_replay_owners(&mut payload);
+
+    let Some(root) = payload.as_object_mut() else {
+        return chat_error_payload(None, code, message, extra_body);
+    };
+    if let Some(error) = root.get_mut("error").and_then(Value::as_object_mut) {
+        materialize_chat_error_fields(error, code, message, extra_body);
+        return payload;
+    }
+    if let Some(error) = root
+        .get_mut("choices")
+        .and_then(Value::as_array_mut)
+        .and_then(|choices| choices.first_mut())
+        .and_then(Value::as_object_mut)
+        .and_then(|choice| choice.get_mut("error"))
+        .and_then(Value::as_object_mut)
+    {
+        materialize_chat_error_fields(error, code, message, extra_body);
+        return payload;
+    }
+
+    let mut error = extra_body
+        .get("error")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    sanitize_chat_error_object(&mut error);
+    materialize_chat_error_fields(&mut error, code, message, extra_body);
+    root.insert("error".to_string(), Value::Object(error));
+    payload
+}
+
 fn chat_delta_with_extras(
     delta: Value,
     event_extra: &HashMap<String, Value>,
@@ -59,6 +176,38 @@ fn chat_delta_with_extras(
 ) -> Value {
     let mut event_delta_extra = native_chat_delta_extra(event_extra);
     chat_delta_with_raw_extras(delta, &mut event_delta_extra, pending_envelope_extra)
+}
+
+async fn emit_chat_choice_extra_chunk(
+    tx: &mpsc::Sender<Event>,
+    id: &str,
+    created: i64,
+    model: &str,
+    extra_body: &HashMap<String, Value>,
+) -> AppResult<()> {
+    let Some(choice_extra) = extra_body
+        .get(CHAT_CHOICE_EXTRA_BODY_KEY)
+        .and_then(Value::as_object)
+        .filter(|extra| !extra.is_empty())
+    else {
+        return Ok(());
+    };
+    let mut choice = json!({ "index": 0, "delta": {}, "finish_reason": Value::Null });
+    if let Some(choice) = choice.as_object_mut() {
+        for (key, value) in choice_extra {
+            if !key.starts_with("_monoize_") {
+                choice.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+    let chunk = json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [choice]
+    });
+    send_plain_sse_data(tx, chunk.to_string()).await
 }
 
 fn chat_delta_with_raw_extras(
@@ -94,6 +243,7 @@ pub(crate) async fn emit_synthetic_chat_stream(
     let id = format!("chatcmpl_{}", uuid::Uuid::new_v4());
     let created = now_ts();
     let mut saw_tool = false;
+    let mut saw_legacy_function_call = false;
     let mut tool_idx = 0usize;
     for node in &resp.output {
         match node {
@@ -200,12 +350,40 @@ pub(crate) async fn emit_synthetic_chat_stream(
                 }
             }
             Node::ToolCall {
+                tool_type,
                 call_id,
                 name,
                 arguments,
+                extra_body,
                 ..
             } => {
+                let legacy_function_call = *tool_type == urp::ToolCallType::Function
+                    && extra_body
+                        .get(urp::CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY)
+                        .and_then(Value::as_bool)
+                        == Some(true);
+                if legacy_function_call {
+                    saw_legacy_function_call = true;
+                    send_chat_chunk_string(
+                        &tx,
+                        &id,
+                        created,
+                        logical_model,
+                        json!({
+                            "function_call": { "name": name, "arguments": "" }
+                        }),
+                        arguments,
+                        chat_delta_path_function_call_arguments,
+                        sse_max_frame_length,
+                    )
+                    .await?;
+                    continue;
+                }
                 saw_tool = true;
+                let (wire_type, payload_key, argument_key) = match tool_type {
+                    urp::ToolCallType::Function => ("function", "function", "arguments"),
+                    urp::ToolCallType::Custom => ("custom", "custom", "input"),
+                };
                 let chunk = json!({
                     "id": id,
                     "object": "chat.completion.chunk",
@@ -217,8 +395,8 @@ pub(crate) async fn emit_synthetic_chat_stream(
                             "tool_calls": [{
                                 "index": tool_idx,
                                 "id": call_id,
-                                "type": "function",
-                                "function": { "name": name, "arguments": "" }
+                                "type": wire_type,
+                                (payload_key): { "name": name, (argument_key): "" }
                             }]
                         },
                         "finish_reason": Value::Null
@@ -232,7 +410,11 @@ pub(crate) async fn emit_synthetic_chat_stream(
                     logical_model,
                     chunk["choices"][0]["delta"].clone(),
                     arguments,
-                    chat_delta_path_tool_arguments,
+                    if *tool_type == urp::ToolCallType::Custom {
+                        chat_delta_path_custom_tool_input
+                    } else {
+                        chat_delta_path_tool_arguments
+                    },
                     sse_max_frame_length,
                 )
                 .await?;
@@ -287,6 +469,8 @@ pub(crate) async fn emit_synthetic_chat_stream(
         native_finish_reason.unwrap_or("error")
     } else if saw_tool {
         "tool_calls"
+    } else if saw_legacy_function_call {
+        "function_call"
     } else {
         finish_reason_to_chat(resp.finish_reason.unwrap_or(urp::FinishReason::Stop))
     };
@@ -370,6 +554,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
     let mut created = 0i64;
     let mut tool_idx = 0usize;
     let mut saw_tool = false;
+    let mut saw_legacy_function_call = false;
     let mut node_states: HashMap<u32, StreamedChatNodeState> = HashMap::new();
     let mut finished = false;
     let mut emitted_node_indices: HashSet<u32> = HashSet::new();
@@ -378,6 +563,9 @@ pub(crate) async fn encode_urp_stream_as_chat(
     while let Some(event) = rx.recv().await {
         if finished {
             continue;
+        }
+        if let UrpStreamEvent::NodeDelta { extra_body, .. } = &event {
+            emit_chat_choice_extra_chunk(&tx, &chat_id, created, logical_model, extra_body).await?;
         }
         match event {
             UrpStreamEvent::ResponseStart { extra_body, .. } => {
@@ -412,16 +600,33 @@ pub(crate) async fn encode_urp_stream_as_chat(
             }
             UrpStreamEvent::NodeStart {
                 node_index,
-                header: NodeHeader::ToolCall { call_id, name, .. },
+                header:
+                    NodeHeader::ToolCall {
+                        tool_type,
+                        call_id,
+                        name,
+                        ..
+                    },
                 extra_body,
             } => {
-                saw_tool = true;
+                let legacy_function_call = tool_type == urp::ToolCallType::Function
+                    && extra_body
+                        .get(urp::CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY)
+                        .and_then(Value::as_bool)
+                        == Some(true);
+                if legacy_function_call {
+                    saw_legacy_function_call = true;
+                } else {
+                    saw_tool = true;
+                }
                 let idx = tool_idx;
                 tool_idx += 1;
                 let mut tool_call = StreamedChatToolCall {
+                    tool_type,
                     call_id,
                     name,
                     index: idx,
+                    legacy_function_call,
                     header_sent: false,
                     arguments_streamed: false,
                 };
@@ -528,7 +733,11 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     continue;
                 };
 
-                saw_tool = true;
+                if tool_call.legacy_function_call {
+                    saw_legacy_function_call = true;
+                } else {
+                    saw_tool = true;
+                }
                 let header_emitted_from_this_delta = !tool_call.header_sent;
                 if !tool_call.header_sent {
                     emit_tool_call_header(
@@ -553,7 +762,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     &chat_id,
                     created,
                     logical_model,
-                    tool_call.index,
+                    tool_call,
                     &arguments,
                     arguments_delta_extra,
                     &mut pending_envelope_extra,
@@ -571,24 +780,41 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 let state = node_states.entry(node_index).or_default();
                 state.saw_node_done = true;
                 if let Node::ToolCall {
+                    tool_type,
                     call_id,
                     name,
                     arguments,
+                    extra_body,
                     ..
                 } = node
                 {
-                    saw_tool = true;
+                    let legacy_function_call = tool_type == urp::ToolCallType::Function
+                        && extra_body
+                            .get(urp::CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY)
+                            .and_then(Value::as_bool)
+                            == Some(true);
+                    if legacy_function_call {
+                        saw_legacy_function_call = true;
+                    } else {
+                        saw_tool = true;
+                    }
                     let tool_call = state.tool_call.get_or_insert_with(|| {
                         let idx = tool_idx;
                         tool_idx += 1;
                         StreamedChatToolCall {
+                            tool_type,
                             call_id,
                             name,
                             index: idx,
+                            legacy_function_call,
                             header_sent: false,
                             arguments_streamed: false,
                         }
                     });
+                    if tool_type == urp::ToolCallType::Custom {
+                        tool_call.tool_type = urp::ToolCallType::Custom;
+                    }
+                    tool_call.legacy_function_call |= legacy_function_call;
                     if !tool_call.header_sent {
                         emit_tool_call_header(
                             &tx,
@@ -607,7 +833,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             &chat_id,
                             created,
                             logical_model,
-                            tool_call.index,
+                            tool_call,
                             &arguments,
                             &HashMap::new(),
                             &mut pending_envelope_extra,
@@ -682,20 +908,33 @@ pub(crate) async fn encode_urp_stream_as_chat(
                             .await?;
                         }
                         Node::ToolCall {
+                            tool_type,
                             call_id,
                             name,
                             arguments,
+                            extra_body,
                             ..
                         } => {
+                            let legacy_function_call = *tool_type == urp::ToolCallType::Function
+                                && extra_body
+                                    .get(urp::CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY)
+                                    .and_then(Value::as_bool)
+                                    == Some(true);
                             let mut tool_call = StreamedChatToolCall {
+                                tool_type: *tool_type,
                                 call_id: call_id.clone(),
                                 name: name.clone(),
                                 index: tool_idx,
+                                legacy_function_call,
                                 header_sent: false,
                                 arguments_streamed: false,
                             };
                             tool_idx += 1;
-                            saw_tool = true;
+                            if legacy_function_call {
+                                saw_legacy_function_call = true;
+                            } else {
+                                saw_tool = true;
+                            }
                             emit_tool_call_header(
                                 &tx,
                                 &chat_id,
@@ -712,7 +951,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
                                     &chat_id,
                                     created,
                                     logical_model,
-                                    tool_call.index,
+                                    &tool_call,
                                     arguments,
                                     &HashMap::new(),
                                     &mut pending_envelope_extra,
@@ -795,6 +1034,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                     native_finish_reason.unwrap_or("error")
                 } else if saw_tool {
                     "tool_calls"
+                } else if saw_legacy_function_call {
+                    "function_call"
                 } else {
                     finish_reason_to_chat(finish_reason.unwrap_or(FinishReason::Stop))
                 };
@@ -818,32 +1059,12 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 message,
                 extra_body,
             } => {
-                let payload = if let Some(original) = extra_body.get(CHAT_ERROR_EVENT_EXTRA_KEY) {
-                    original.clone()
-                } else {
-                    let mut error = extra_body
-                        .get("error")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .unwrap_or_default();
-                    error
-                        .entry("message".to_string())
-                        .or_insert_with(|| Value::String(message));
-                    error
-                        .entry("type".to_string())
-                        .or_insert_with(|| Value::String("server_error".to_string()));
-                    if let Some(code) = code {
-                        error
-                            .entry("code".to_string())
-                            .or_insert_with(|| Value::String(code));
-                    }
-                    if let Some(param) = extra_body.get("param") {
-                        error
-                            .entry("param".to_string())
-                            .or_insert_with(|| param.clone());
-                    }
-                    json!({ "error": error })
-                };
+                let payload = chat_error_payload(
+                    extra_body.get(CHAT_ERROR_EVENT_EXTRA_KEY),
+                    code.as_deref(),
+                    &message,
+                    &extra_body,
+                );
                 send_plain_sse_data(&tx, payload.to_string()).await?;
                 send_plain_sse_data(&tx, "[DONE]".to_string()).await?;
                 finished = true;
@@ -912,14 +1133,33 @@ async fn emit_tool_call_header(
         return Ok(());
     }
     let delta = chat_delta_with_extras(
-        json!({
-            "tool_calls": [{
-                "index": tool_call.index,
-                "id": tool_call.call_id,
-                "type": "function",
-                "function": { "name": tool_call.name, "arguments": "" }
-            }]
-        }),
+        if tool_call.legacy_function_call {
+            json!({
+                "function_call": {
+                    "name": tool_call.name,
+                    "arguments": ""
+                }
+            })
+        } else {
+            match tool_call.tool_type {
+                urp::ToolCallType::Function => json!({
+                    "tool_calls": [{
+                        "index": tool_call.index,
+                        "id": tool_call.call_id,
+                        "type": "function",
+                        "function": { "name": tool_call.name, "arguments": "" }
+                    }]
+                }),
+                urp::ToolCallType::Custom => json!({
+                    "tool_calls": [{
+                        "index": tool_call.index,
+                        "id": tool_call.call_id,
+                        "type": "custom",
+                        "custom": { "name": tool_call.name, "input": "" }
+                    }]
+                }),
+            }
+        },
         event_extra,
         pending_envelope_extra,
     );
@@ -944,19 +1184,33 @@ async fn emit_tool_call_arguments_delta(
     chat_id: &str,
     created: i64,
     logical_model: &str,
-    tool_index: usize,
+    tool_call: &StreamedChatToolCall,
     arguments: &str,
     event_extra: &HashMap<String, Value>,
     pending_envelope_extra: &mut HashMap<String, Value>,
     sse_max_frame_length: Option<usize>,
 ) -> AppResult<()> {
     let delta = chat_delta_with_extras(
-        json!({
-            "tool_calls": [{
-                "index": tool_index,
-                "function": { "arguments": "" }
-            }]
-        }),
+        if tool_call.legacy_function_call {
+            json!({
+                "function_call": { "arguments": "" }
+            })
+        } else {
+            match tool_call.tool_type {
+                urp::ToolCallType::Function => json!({
+                    "tool_calls": [{
+                        "index": tool_call.index,
+                        "function": { "arguments": "" }
+                    }]
+                }),
+                urp::ToolCallType::Custom => json!({
+                    "tool_calls": [{
+                        "index": tool_call.index,
+                        "custom": { "input": "" }
+                    }]
+                }),
+            }
+        },
         event_extra,
         pending_envelope_extra,
     );
@@ -967,7 +1221,13 @@ async fn emit_tool_call_arguments_delta(
         logical_model,
         delta,
         arguments,
-        chat_delta_path_tool_arguments,
+        if tool_call.legacy_function_call {
+            chat_delta_path_function_call_arguments
+        } else if tool_call.tool_type == urp::ToolCallType::Custom {
+            chat_delta_path_custom_tool_input
+        } else {
+            chat_delta_path_tool_arguments
+        },
         sse_max_frame_length,
     )
     .await
@@ -1183,6 +1443,58 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn chat_raw_error_replay_materializes_metadata_fallbacks_and_filters_reserved_owners() {
+        let original = json!({
+            "id": "chatcmpl_error",
+            "vendor_frame": true,
+            "_monoize_frame_spoof": true,
+            "error": {
+                "message": "provider failed",
+                "metadata": {
+                    "provider_code": "P529",
+                    "error_type": "provider_error",
+                    "vendor_metadata": 7,
+                    "_monoize_metadata_spoof": true
+                },
+                "vendor_error": 8,
+                "_monoize_error_spoof": true
+            }
+        });
+        let extra_body = HashMap::from([
+            ("type".to_string(), json!("provider_error")),
+            ("param".to_string(), json!("route")),
+        ]);
+
+        let replay = chat_error_payload(Some(&original), Some("P529"), "fallback", &extra_body);
+        assert_eq!(replay["vendor_frame"], json!(true));
+        assert_eq!(replay["error"]["message"], json!("provider failed"));
+        assert_eq!(replay["error"]["code"], json!("P529"));
+        assert_eq!(replay["error"]["type"], json!("provider_error"));
+        assert_eq!(replay["error"]["param"], json!("route"));
+        assert_eq!(replay["error"]["vendor_error"], json!(8));
+        assert_eq!(replay["error"]["metadata"]["vendor_metadata"], json!(7));
+        assert!(!replay.to_string().contains("_monoize_"));
+
+        let direct = chat_error_payload(
+            Some(&json!({
+                "choices": [{
+                    "index": 0,
+                    "vendor_choice": 9,
+                    "_monoize_choice_spoof": true,
+                    "error": { "message": "native", "code": 503, "type": "native_error" }
+                }]
+            })),
+            Some("P529"),
+            "fallback",
+            &extra_body,
+        );
+        assert_eq!(direct["choices"][0]["error"]["code"], json!(503));
+        assert_eq!(direct["choices"][0]["error"]["type"], json!("native_error"));
+        assert_eq!(direct["choices"][0]["vendor_choice"], json!(9));
+        assert!(!direct.to_string().contains("_monoize_"));
+    }
+
     #[tokio::test]
     async fn chat_stream_provider_item_filters_nested_internal_metadata() {
         let (sse_tx, mut sse_rx) = mpsc::channel(4);
@@ -1287,6 +1599,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_stream_emits_choice_level_logprobs_on_token_frame() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (sse_tx, mut sse_rx) = mpsc::channel(8);
+        let frames = Arc::new(Mutex::new(Vec::new()));
+
+        event_tx
+            .send(UrpStreamEvent::ResponseStart {
+                id: "resp_logprobs".to_string(),
+                model: "deepseek-chat".to_string(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        event_tx
+            .send(UrpStreamEvent::NodeDelta {
+                node_index: 0,
+                delta: NodeDelta::Text {
+                    content: "A".to_string(),
+                },
+                usage: None,
+                extra_body: HashMap::from([(
+                    CHAT_CHOICE_EXTRA_BODY_KEY.to_string(),
+                    json!({ "logprobs": { "content": [{ "token": "A", "logprob": -0.1 }] } }),
+                )]),
+            })
+            .await
+            .unwrap();
+        event_tx
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                usage: None,
+                output: Vec::new(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        drop(event_tx);
+
+        with_sse_capture(frames.clone(), async {
+            encode_urp_stream_as_chat(event_rx, sse_tx, "deepseek-chat", None)
+                .await
+                .unwrap();
+        })
+        .await;
+        while sse_rx.recv().await.is_some() {}
+
+        let frames = frames.lock().await;
+        let json_frames = captured_chat_json_frames(&frames);
+        let logprobs_frame = json_frames
+            .iter()
+            .find(|frame| frame["choices"][0].get("logprobs").is_some())
+            .expect("choice-level logprobs frame");
+        assert_eq!(
+            logprobs_frame["choices"][0]["logprobs"]["content"][0]["token"],
+            json!("A")
+        );
+        assert_eq!(logprobs_frame["choices"][0]["delta"], json!({}));
+        assert!(
+            logprobs_frame["choices"][0]["delta"]
+                .get("logprobs")
+                .is_none()
+        );
+        assert_eq!(logprobs_frame["choices"][0]["finish_reason"], Value::Null);
+    }
+
+    #[tokio::test]
     async fn synthetic_chat_stream_emits_reasoning_content_inside_delta() {
         let (sse_tx, mut sse_rx) = mpsc::channel(16);
         let response = urp::UrpResponse {
@@ -1382,6 +1760,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_stream_terminal_usage_preserves_nested_unknown_details_and_typed_counters_win() {
+        let (event_tx, event_rx) = mpsc::channel(4);
+        let (sse_tx, mut sse_rx) = mpsc::channel(8);
+        let frames = Arc::new(Mutex::new(Vec::new()));
+
+        event_tx
+            .send(UrpStreamEvent::ResponseStart {
+                id: "resp_nested_usage".to_string(),
+                model: "gpt-5.4".to_string(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("response start");
+        event_tx
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                usage: Some(urp::Usage {
+                    input_tokens: 12,
+                    output_tokens: 8,
+                    input_details: Some(urp::InputDetails {
+                        cache_read_tokens: 3,
+                        ..urp::InputDetails::default()
+                    }),
+                    output_details: Some(urp::OutputDetails {
+                        reasoning_tokens: 5,
+                        ..urp::OutputDetails::default()
+                    }),
+                    extra_body: HashMap::from([
+                        (
+                            "prompt_tokens_details".to_string(),
+                            json!({
+                                "cached_tokens": 999,
+                                "future_prompt_detail": { "kind": "warm" },
+                                "_monoize_hidden": true
+                            }),
+                        ),
+                        (
+                            "completion_tokens_details".to_string(),
+                            json!({
+                                "reasoning_tokens": 999,
+                                "future_completion_detail": [1, 2]
+                            }),
+                        ),
+                    ]),
+                }),
+                output: Vec::new(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("response done");
+        drop(event_tx);
+
+        with_sse_capture(frames.clone(), async {
+            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+                .await
+                .expect("encode stream");
+        })
+        .await;
+        while sse_rx.recv().await.is_some() {}
+
+        let frames = frames.lock().await;
+        let json_frames = captured_chat_json_frames(&frames);
+        let usage = json_frames
+            .iter()
+            .find(|frame| frame["choices"] == json!([]))
+            .and_then(|frame| frame.get("usage"))
+            .expect("terminal Chat usage frame");
+        assert_eq!(usage["prompt_tokens_details"]["cached_tokens"], json!(3));
+        assert_eq!(
+            usage["prompt_tokens_details"]["future_prompt_detail"],
+            json!({ "kind": "warm" })
+        );
+        assert!(
+            usage["prompt_tokens_details"]
+                .get("_monoize_hidden")
+                .is_none()
+        );
+        assert_eq!(
+            usage["completion_tokens_details"]["reasoning_tokens"],
+            json!(5)
+        );
+        assert_eq!(
+            usage["completion_tokens_details"]["future_completion_detail"],
+            json!([1, 2])
+        );
+    }
+
+    #[tokio::test]
     async fn encode_chat_stream_maps_live_signature_delta_to_reasoning_encrypted_detail() {
         let (event_tx, event_rx) = mpsc::channel(16);
         let (sse_tx, mut sse_rx) = mpsc::channel(16);
@@ -1458,6 +1924,7 @@ mod tests {
                 node_index: 0,
                 header: NodeHeader::ToolCall {
                     id: None,
+                    tool_type: urp::ToolCallType::Function,
                     call_id: "call_a".to_string(),
                     name: "tool_a".to_string(),
                 },
@@ -1483,6 +1950,7 @@ mod tests {
                 output: vec![
                     Node::ToolCall {
                         id: None,
+                        tool_type: urp::ToolCallType::Function,
                         call_id: "call_a".to_string(),
                         name: "tool_a".to_string(),
                         arguments: "{\"a\":1}".to_string(),
@@ -1490,6 +1958,7 @@ mod tests {
                     },
                     Node::ToolCall {
                         id: None,
+                        tool_type: urp::ToolCallType::Function,
                         call_id: "call_b".to_string(),
                         name: "tool_b".to_string(),
                         arguments: "{\"b\":2}".to_string(),
@@ -1520,6 +1989,122 @@ mod tests {
             json_frames
                 .iter()
                 .filter(|frame| frame["choices"][0]["finish_reason"].as_str() == Some("tool_calls"))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_function_call_stream_replays_deprecated_shape_and_finish_reason() {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let (sse_tx, mut sse_rx) = mpsc::channel(32);
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let legacy_extra = HashMap::from([(
+            urp::CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY.to_string(),
+            Value::Bool(true),
+        )]);
+
+        event_tx
+            .send(UrpStreamEvent::ResponseStart {
+                id: "resp_legacy".to_string(),
+                model: "gpt-4".to_string(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        event_tx
+            .send(UrpStreamEvent::NodeStart {
+                node_index: 0,
+                header: NodeHeader::ToolCall {
+                    id: None,
+                    tool_type: urp::ToolCallType::Function,
+                    call_id: "legacy_function:lookup".to_string(),
+                    name: "lookup".to_string(),
+                },
+                extra_body: legacy_extra.clone(),
+            })
+            .await
+            .unwrap();
+        for arguments in ["{\"q\":", "1}"] {
+            event_tx
+                .send(UrpStreamEvent::NodeDelta {
+                    node_index: 0,
+                    delta: NodeDelta::ToolCallArguments {
+                        arguments: arguments.to_string(),
+                    },
+                    usage: None,
+                    extra_body: HashMap::new(),
+                })
+                .await
+                .unwrap();
+        }
+        let node = Node::ToolCall {
+            id: None,
+            tool_type: urp::ToolCallType::Function,
+            call_id: "legacy_function:lookup".to_string(),
+            name: "lookup".to_string(),
+            arguments: "{\"q\":1}".to_string(),
+            extra_body: legacy_extra,
+        };
+        event_tx
+            .send(UrpStreamEvent::NodeDone {
+                node_index: 0,
+                node: node.clone(),
+                usage: None,
+                extra_body: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        event_tx
+            .send(UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::ToolCalls),
+                usage: None,
+                output: vec![node],
+                extra_body: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        drop(event_tx);
+
+        with_sse_capture(frames.clone(), async {
+            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-4", None)
+                .await
+                .unwrap();
+        })
+        .await;
+        while sse_rx.recv().await.is_some() {}
+
+        let frames = frames.lock().await;
+        let json_frames = captured_chat_json_frames(&frames);
+        assert!(
+            json_frames
+                .iter()
+                .all(|frame| !frame.to_string().contains("tool_calls"))
+        );
+        assert_eq!(
+            json_frames
+                .iter()
+                .find_map(|frame| frame["choices"][0]["delta"]["function_call"]["name"].as_str()),
+            Some("lookup")
+        );
+        let arguments = json_frames
+            .iter()
+            .filter_map(|frame| frame["choices"][0]["delta"]["function_call"]["arguments"].as_str())
+            .collect::<String>();
+        assert_eq!(arguments, "{\"q\":1}");
+        assert_eq!(
+            json_frames
+                .iter()
+                .filter(|frame| {
+                    frame["choices"][0]["finish_reason"].as_str() == Some("function_call")
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|frame| frame.contains("[DONE]"))
                 .count(),
             1
         );

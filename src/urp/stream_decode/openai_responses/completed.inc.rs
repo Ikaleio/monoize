@@ -171,7 +171,7 @@ fn build_accumulated_output_entries(
     message_item_extra_by_output_index: &HashMap<u64, HashMap<String, Value>>,
     item_ids_by_output_index: &HashMap<u64, String>,
     call_order: &[String],
-    calls: &HashMap<String, (String, String)>,
+    calls: &HashMap<String, (ToolCallType, String, String)>,
     call_ids_by_output_index: &HashMap<u64, String>,
 ) -> Vec<AccumulatedOutputEntry> {
     #[derive(Clone, Debug)]
@@ -301,11 +301,12 @@ fn build_accumulated_output_entries(
                 });
             }
             FallbackOutputKind::ToolCall(output_index, call_id) => {
-                if let Some((name, arguments)) = calls.get(&call_id) {
+                if let Some((tool_type, name, arguments)) = calls.get(&call_id) {
                     entries.push(AccumulatedOutputEntry {
                         output_index,
                         nodes: vec![Node::ToolCall {
                             id: Some(crate::urp::synthetic_tool_call_id()),
+                            tool_type: *tool_type,
                             call_id: call_id.clone(),
                             name: name.clone(),
                             arguments: arguments.clone(),
@@ -329,7 +330,7 @@ fn build_accumulated_output_nodes_from_reasoning_slots(
     message_item_extra_by_output_index: &HashMap<u64, HashMap<String, Value>>,
     item_ids_by_output_index: &HashMap<u64, String>,
     call_order: &[String],
-    calls: &HashMap<String, (String, String)>,
+    calls: &HashMap<String, (ToolCallType, String, String)>,
     call_ids_by_output_index: &HashMap<u64, String>,
 ) -> Vec<Node> {
     build_accumulated_output_entries(
@@ -360,7 +361,7 @@ fn build_accumulated_output_nodes(
     message_item_extra_by_output_index: &HashMap<u64, HashMap<String, Value>>,
     item_ids_by_output_index: &HashMap<u64, String>,
     call_order: &[String],
-    calls: &HashMap<String, (String, String)>,
+    calls: &HashMap<String, (ToolCallType, String, String)>,
     call_ids_by_output_index: &HashMap<u64, String>,
 ) -> Vec<Node> {
     let mut reasoning_by_output_index = HashMap::new();
@@ -453,7 +454,9 @@ fn split_known_fields(value: Value, known_fields: &[&str]) -> HashMap<String, Va
     let mut out = HashMap::new();
     if let Some(obj) = value.as_object() {
         for (key, val) in obj {
-            if !known_fields.iter().any(|known| known == key) {
+            if !crate::urp::decode::is_internal_extra_key(key)
+                && !known_fields.iter().any(|known| known == key)
+            {
                 out.insert(key.clone(), val.clone());
             }
         }

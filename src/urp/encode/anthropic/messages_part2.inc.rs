@@ -132,7 +132,10 @@ fn insert_anthropic_disable_parallel(
     }
 }
 
-fn encode_anthropic_image(source: &ImageSource) -> Option<Value> {
+fn encode_anthropic_image(
+    source: &ImageSource,
+    extra_body: &HashMap<String, Value>,
+) -> Option<Value> {
     match source {
         ImageSource::Url { url, .. } => Some(json!({
             "type": "image",
@@ -142,11 +145,22 @@ fn encode_anthropic_image(source: &ImageSource) -> Option<Value> {
             "type": "image",
             "source": { "type": "base64", "media_type": media_type, "data": data }
         })),
+        ImageSource::FileId { file_id, .. }
+            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_MESSAGES) =>
+        {
+            Some(json!({
+                "type": "image",
+                "source": { "type": "file", "file_id": file_id }
+            }))
+        }
         ImageSource::FileId { .. } => None,
     }
 }
 
-fn encode_anthropic_file(source: &FileSource) -> Option<Value> {
+fn encode_anthropic_file(
+    source: &FileSource,
+    extra_body: &HashMap<String, Value>,
+) -> Option<Value> {
     match source {
         FileSource::Url { url } => Some(json!({
             "type": "document",
@@ -177,6 +191,14 @@ fn encode_anthropic_file(source: &FileSource) -> Option<Value> {
                 "content": content
             }
         })),
+        FileSource::FileId { file_id }
+            if file_id_origin_matches(extra_body, FILE_ID_ORIGIN_MESSAGES) =>
+        {
+            Some(json!({
+                "type": "document",
+                "source": { "type": "file", "file_id": file_id }
+            }))
+        }
         FileSource::FileId { .. } => None,
     }
 }

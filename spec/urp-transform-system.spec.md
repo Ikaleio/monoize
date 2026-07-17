@@ -71,10 +71,12 @@ XSTRIP-2. Cross-family nested passthrough stripping applies only to nested passt
 XSTRIP-3. When the downstream protocol family differs from the upstream provider type, and cross-family stripping is enabled for that provider attempt, the runtime MUST perform stripping after downstream request decoding and before provider request-phase transforms execute.
 
 XSTRIP-4. The stripping pass in XSTRIP-3 MUST do all of the following on `UrpRequestV2.input`:
-1. clear `extra_body` on every ordinary node;
-2. clear `extra_body` on every top-level `ToolResult` node;
-3. clear `extra_body` on every nested `ToolResultContent` entry; and
+1. remove every non-internal member from `extra_body` on every ordinary node;
+2. remove every non-internal member from `extra_body` on every top-level `ToolResult` node;
+3. remove every non-internal member from `extra_body` on every nested `ToolResultContent` entry; and
 4. remove every `next_downstream_envelope_extra` control node.
+
+A decoder-created or transform-created `_monoize_` member is internal semantic provenance under `spec/urp-v2-flat-structure.spec.md` XTRA-10, not nested wire passthrough. The stripping pass MUST retain it until the target adapter consumes or discards it. No target encoder may emit that reserved member as a wire field.
 
 XSTRIP-5. After XSTRIP-4, later provider request-phase transforms MAY add new target-family nested passthrough state.
 

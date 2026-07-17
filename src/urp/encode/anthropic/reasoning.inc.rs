@@ -1,5 +1,36 @@
 const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 64_000;
 
+fn apply_messages_response_format(obj: &mut Map<String, Value>, format: &ResponseFormat) {
+    match format {
+        ResponseFormat::JsonSchema { json_schema } => {
+            let mut output_config = obj
+                .remove("output_config")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            let mut messages_format = output_config
+                .remove("format")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            messages_format.insert("type".to_string(), json!("json_schema"));
+            messages_format.insert("schema".to_string(), json_schema.schema.clone());
+            output_config.insert("format".to_string(), Value::Object(messages_format));
+            obj.insert("output_config".to_string(), Value::Object(output_config));
+        }
+        ResponseFormat::Text | ResponseFormat::JsonObject => {
+            let Some(mut output_config) = obj
+                .remove("output_config")
+                .and_then(|value| value.as_object().cloned())
+            else {
+                return;
+            };
+            output_config.remove("format");
+            if !output_config.is_empty() {
+                obj.insert("output_config".to_string(), Value::Object(output_config));
+            }
+        }
+    }
+}
+
 /// Controls whether the Anthropic encoder should embed a sigil (`mz1.<id>.<sig>`) in
 /// `thinking.signature` / `redacted_thinking.data` to smuggle a reasoning item id through a
 /// downstream client that strips unknown fields. Upstream-facing encoding MUST use `StripSigil`
@@ -62,6 +93,78 @@ fn encoded_signature_value(
     } else {
         Some(Value::String(processed))
     }
+}
+
+fn chat_reasoning_detail_type(extra_body: &HashMap<String, Value>) -> Option<&str> {
+    extra_body
+        .get(CHAT_REASONING_DETAIL_EXTRA_KEY)
+        .and_then(Value::as_object)
+        .and_then(|detail| detail.get("type"))
+        .and_then(Value::as_str)
+}
+
+fn encrypted_reasoning_is_nonempty(encrypted: &Option<Value>) -> bool {
+    match encrypted {
+        None | Some(Value::Null) => false,
+        Some(Value::String(value)) => !value.is_empty(),
+        Some(_) => true,
+    }
+}
+
+fn merge_adjacent_chat_reasoning_for_messages(
+    plaintext_node: &Node,
+    encrypted_node: &Node,
+) -> Option<Node> {
+    let Node::Reasoning {
+        id: plaintext_id,
+        content: plaintext_content,
+        encrypted: plaintext_encrypted,
+        summary: plaintext_summary,
+        source: plaintext_source,
+        extra_body: plaintext_extra,
+    } = plaintext_node
+    else {
+        return None;
+    };
+    let Node::Reasoning {
+        id: encrypted_id,
+        content: encrypted_content,
+        encrypted,
+        summary: encrypted_summary,
+        source: encrypted_source,
+        extra_body: encrypted_extra,
+    } = encrypted_node
+    else {
+        return None;
+    };
+
+    if chat_reasoning_detail_type(plaintext_extra) != Some("reasoning.text")
+        || chat_reasoning_detail_type(encrypted_extra) != Some("reasoning.encrypted")
+        || plaintext_content.as_deref().is_none_or(str::is_empty)
+        || encrypted_reasoning_is_nonempty(plaintext_encrypted)
+        || encrypted_content.as_deref().is_some_and(|value| !value.is_empty())
+        || encrypted_summary.as_deref().is_some_and(|value| !value.is_empty())
+        || !encrypted_reasoning_is_nonempty(encrypted)
+        || reasoning_is_redacted(plaintext_extra)
+        || reasoning_is_redacted(encrypted_extra)
+    {
+        return None;
+    }
+
+    let mut extra_body = plaintext_extra.clone();
+    for (key, value) in encrypted_extra {
+        extra_body.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+    Some(Node::Reasoning {
+        id: encrypted_id.clone().or_else(|| plaintext_id.clone()),
+        content: plaintext_content.clone(),
+        encrypted: encrypted.clone(),
+        summary: plaintext_summary.clone(),
+        source: plaintext_source
+            .clone()
+            .or_else(|| encrypted_source.clone()),
+        extra_body,
+    })
 }
 
 // Invert the normalization performed in decode/anthropic.rs: internal `Usage.input_tokens`
@@ -166,7 +269,15 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     let mut pending_message: Option<AnthropicMessageEnvelope> = None;
     let mut pending_envelope_extra = HashMap::new();
 
-    for node in request_nodes {
+    let mut node_index = 0;
+    while node_index < request_nodes.len() {
+        let merged_reasoning = request_nodes.get(node_index + 1).and_then(|next| {
+            merge_adjacent_chat_reasoning_for_messages(&request_nodes[node_index], next)
+        });
+        let consumed_nodes = if merged_reasoning.is_some() { 2 } else { 1 };
+        let node = merged_reasoning
+            .as_ref()
+            .unwrap_or(&request_nodes[node_index]);
         match node {
             Node::NextDownstreamEnvelopeExtra { extra_body } => {
                 flush_pending_anthropic_message(&mut pending_message, &mut messages);
@@ -176,11 +287,16 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             }
             Node::ToolResult {
                 id: _,
+                tool_type,
                 call_id,
                 content,
                 is_error,
                 extra_body,
             } => {
+                if *tool_type == ToolCallType::Custom {
+                    node_index += consumed_nodes;
+                    continue;
+                }
                 append_tool_result_to_pending_anthropic_message(
                     &mut pending_message,
                     &mut messages,
@@ -193,6 +309,11 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             }
             Node::Text {
                 role: OrdinaryRole::System | OrdinaryRole::Developer,
+                ..
+            }
+            | Node::ProviderItem {
+                role: OrdinaryRole::System | OrdinaryRole::Developer,
+                origin_protocol: ProviderProtocol::Messages,
                 ..
             } => {
                 flush_pending_anthropic_message(&mut pending_message, &mut messages);
@@ -242,6 +363,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             }
             Node::Audio { .. } | Node::Refusal { .. } => {}
         }
+        node_index += consumed_nodes;
     }
     flush_pending_anthropic_message(&mut pending_message, &mut messages);
 
@@ -323,6 +445,31 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
             );
         }
     }
+    if let Some(stop) = &req.stop {
+        let stops = match stop {
+            StopControl::Single(stop) => vec![Value::String(stop.clone())],
+            StopControl::Multiple(stops) => stops
+                .iter()
+                .map(|stop| Value::String(stop.clone()))
+                .collect(),
+        };
+        obj.insert("stop_sequences".to_string(), Value::Array(stops));
+    }
     merge_extra(obj, &req.extra_body);
+    if let Some(user) = &req.user {
+        let metadata = obj
+            .entry("metadata".to_string())
+            .or_insert_with(|| json!({}));
+        if !metadata.is_object() {
+            *metadata = json!({});
+        }
+        metadata
+            .as_object_mut()
+            .expect("messages metadata object")
+            .insert("user_id".to_string(), Value::String(user.clone()));
+    }
+    if let Some(format) = &req.response_format {
+        apply_messages_response_format(obj, format);
+    }
     body
 }

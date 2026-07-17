@@ -40,13 +40,19 @@ fn map_output_item_done(
     let mut events = Vec::new();
 
     match item_type {
-        "function_call_output" => {
+        "function_call_output" | "custom_tool_call_output" => {
+            let tool_type = if item_type == "custom_tool_call_output" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            };
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolResult {
                 id: item
                     .get("id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| Some(crate::urp::synthetic_tool_result_id())),
+                tool_type,
                 call_id: item
                     .get("call_id")
                     .or_else(|| item.get("id"))
@@ -65,7 +71,7 @@ fn map_output_item_done(
                 extra_body: item_extra_body_from_value(item),
             });
         }
-        "reasoning" | "function_call" => {
+        "reasoning" | "function_call" | "custom_tool_call" => {
             let role = output_state_for(index_state, output_index)
                 .role
                 .unwrap_or(Role::Assistant);
@@ -546,6 +552,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
         (
             Node::ToolCall {
                 id: left_id,
+                tool_type: left_tool_type,
                 call_id: left_call_id,
                 name: left_name,
                 arguments: left_arguments,
@@ -553,6 +560,7 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
             },
             Node::ToolCall {
                 id: right_id,
+                tool_type: right_tool_type,
                 call_id: right_call_id,
                 name: right_name,
                 arguments: right_arguments,
@@ -560,6 +568,13 @@ fn merge_output_node(accumulated: &Node, terminal: &Node) -> Result<Node, String
             },
         ) => Ok(Node::ToolCall {
             id: right_id.clone().or_else(|| left_id.clone()),
+            tool_type: if *left_tool_type == ToolCallType::Custom
+                || *right_tool_type == ToolCallType::Custom
+            {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            },
             call_id: merge_string_field("function_call.call_id", left_call_id, right_call_id)?,
             name: merge_string_field("function_call.name", left_name, right_name)?,
             arguments: merge_string_field(

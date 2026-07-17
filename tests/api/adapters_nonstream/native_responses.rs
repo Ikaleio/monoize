@@ -39,6 +39,40 @@ async fn responses_upstream_auto_cache_openai_prompt_adds_top_level_cache_fields
 }
 
 #[tokio::test]
+async fn responses_structured_instructions_replay_exactly_without_input_duplication() {
+    let ctx = setup().await;
+    let instructions = json!([
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{ "type": "input_text", "text": "system policy" }],
+            "future_instruction_field": { "enabled": true }
+        },
+        { "type": "input_text", "text": "developer policy", "future_part_field": 7 }
+    ]);
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "instructions": instructions.clone(),
+            "input": "answer"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["instructions"], instructions);
+    let serialized_input = serde_json::to_string(&upstream["input"]).unwrap();
+    assert!(serialized_input.contains("answer"), "{upstream}");
+    assert!(!serialized_input.contains("system policy"), "{upstream}");
+    assert!(!serialized_input.contains("developer policy"), "{upstream}");
+    assert!(!upstream.to_string().contains("_monoize_"), "{upstream}");
+}
+
+#[tokio::test]
 async fn messages_nonstream_from_gemini_upstream_text() {
     let ctx = setup().await;
     let (status, body) = json_post(
@@ -168,7 +202,7 @@ async fn messages_nonstream_thinking_from_messages_upstream() {
         "/v1/messages",
         json!({
             "model": "gpt-5-mini-msg",
-            "max_tokens": 64,
+            "max_tokens": 4096,
             "thinking": { "type": "enabled", "budget_tokens": 2048 },
             "messages": [{ "role": "user", "content": [{ "type": "text", "text": "show reasoning" }] }]
         }),

@@ -21,7 +21,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
         Node::Image {
             source, extra_body, ..
         } => {
-            let mut block = encode_anthropic_image(source)?;
+            let mut block = encode_anthropic_image(source, extra_body)?;
             if let Some(obj) = block.as_object_mut() {
                 merge_extra(obj, extra_body);
             }
@@ -30,7 +30,7 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
         Node::File {
             source, extra_body, ..
         } => {
-            let mut block = encode_anthropic_file(source)?;
+            let mut block = encode_anthropic_file(source, extra_body)?;
             if let Some(obj) = block.as_object_mut() {
                 merge_extra(obj, extra_body);
             }
@@ -73,11 +73,15 @@ fn encode_regular_message_block(node: &Node, sigil_mode: ReasoningSigilMode) -> 
         }
         Node::ToolCall {
             id: _,
+            tool_type,
             call_id,
             name,
             arguments,
             extra_body,
         } => {
+            if *tool_type == ToolCallType::Custom {
+                return None;
+            }
             let input = serde_json::from_str::<Value>(arguments)
                 .unwrap_or_else(|_| json!({ "_raw": arguments }));
             let mut block = json!({
@@ -167,11 +171,15 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
         }
         Node::ToolCall {
             id: _,
+            tool_type,
             call_id,
             name,
             arguments,
             extra_body,
         } => {
+            if *tool_type == ToolCallType::Custom {
+                return None;
+            }
             let input = serde_json::from_str::<Value>(arguments)
                 .unwrap_or_else(|_| json!({ "_raw": arguments }));
             let mut block = json!({
@@ -191,7 +199,7 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             extra_body,
             ..
         } => {
-            let mut block = encode_anthropic_image(source)?;
+            let mut block = encode_anthropic_image(source, extra_body)?;
             if let Some(obj) = block.as_object_mut() {
                 merge_extra(obj, extra_body);
             }
@@ -203,7 +211,7 @@ fn encode_assistant_response_block(node: &Node) -> Option<Value> {
             extra_body,
             ..
         } => {
-            let mut block = encode_anthropic_file(source)?;
+            let mut block = encode_anthropic_file(source, extra_body)?;
             if let Some(obj) = block.as_object_mut() {
                 merge_extra(obj, extra_body);
             }
@@ -243,12 +251,12 @@ fn encode_tool_result_block(
                 Some(block)
             }
             ToolResultContent::Image { source, extra_body } => {
-                let mut block = encode_anthropic_image(source)?;
+                let mut block = encode_anthropic_image(source, extra_body)?;
                 merge_extra(block.as_object_mut()?, extra_body);
                 Some(block)
             }
             ToolResultContent::File { source, extra_body } => {
-                let mut block = encode_anthropic_file(source)?;
+                let mut block = encode_anthropic_file(source, extra_body)?;
                 merge_extra(block.as_object_mut()?, extra_body);
                 Some(block)
             }

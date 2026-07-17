@@ -598,11 +598,45 @@ pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> Provide
 
 pub(super) fn provider_extra_headers(
     provider_type: ProviderType,
+    body: &serde_json::Value,
 ) -> &'static [(&'static str, &'static str)] {
     match provider_type {
+        ProviderType::Messages if messages_body_uses_files_api(body) => &[
+            ("anthropic-version", "2023-06-01"),
+            ("anthropic-beta", "files-api-2025-04-14"),
+        ],
         ProviderType::Messages => &[("anthropic-version", "2023-06-01")],
         ProviderType::Replicate => &[("prefer", "wait=60")],
         _ => &[],
+    }
+}
+
+fn messages_body_uses_files_api(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(obj) => {
+            let block_type = obj.get("type").and_then(serde_json::Value::as_str);
+            let direct_container_upload = block_type == Some("container_upload")
+                && obj
+                    .get("file_id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|file_id| !file_id.is_empty());
+            let nested_file_source = matches!(block_type, Some("image" | "document"))
+                && obj
+                    .get("source")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|source| {
+                        source.get("type").and_then(serde_json::Value::as_str) == Some("file")
+                            && source
+                                .get("file_id")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|file_id| !file_id.is_empty())
+                    });
+            direct_container_upload
+                || nested_file_source
+                || obj.values().any(messages_body_uses_files_api)
+        }
+        serde_json::Value::Array(values) => values.iter().any(messages_body_uses_files_api),
+        _ => false,
     }
 }
 

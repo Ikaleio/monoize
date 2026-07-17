@@ -53,6 +53,8 @@ UrpRequest {
   tools: Option<Vec<ToolDefinition>>,
   tool_choice: Option<ToolChoice>,
   parallel_tool_calls: Option<bool>,
+  stop: Option<StopControl>,
+  verbosity: Option<String>,
   response_format: Option<ResponseFormat>,
   user: Option<String>,
   extra_body: HashMap<String, JsonValue>
@@ -179,6 +181,7 @@ Node =
   | ToolCall {
       id: Option<String>,
       role: OrdinaryRole::Assistant,
+      tool_type: ToolCallType,
       call_id: String,
       name: String,
       arguments: String,
@@ -194,6 +197,7 @@ Node =
     }
   | ToolResult {
       id: Option<String>,
+      tool_type: ToolCallType,
       call_id: String,
       is_error: bool,
       content: Vec<ToolResultContent>,
@@ -207,6 +211,8 @@ Node =
 RTYPE-6. `OrdinaryRole` in the Rust core layer MUST contain exactly `System`, `Developer`, `User`, and `Assistant`.
 
 RTYPE-6a. `ProviderProtocol` in the Rust core layer MUST contain exactly `Responses`, `ChatCompletion`, `Messages`, `Gemini`, `OpenaiImage`, and `Replicate`, serialized as `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, and `replicate`.
+
+RTYPE-6b. The Rust core layer MUST define `ToolCallType` with exactly `Function` and `Custom`, serialized as `function` and `custom`. Its serde default MUST be `Function` for legacy internal payloads that predate the discriminator.
 
 RTYPE-7. The Rust core role enum MUST NOT contain `Tool`.
 
@@ -311,6 +317,10 @@ MAP-20. For an OpenRouter Chat `reasoning_details[]` entry, `Node::Reasoning.id`
 
 MAP-21. A same-Chat encoder MUST reconstruct `reasoning_details[]` in node order, MUST preserve repeated detail types, and MUST NOT deduplicate equal or partially equal detail entries. Cross-family encoders MUST ignore provider-only detail payloads that have no typed semantic target.
 
+MAP-22. The Rust core layer MUST define `StopControl` as an untagged scalar-or-array string value with variants `Single(String)` and `Multiple(Vec<String>)`. `UrpRequest.stop` MUST use `Option<StopControl>`. `UrpRequest.verbosity` MUST use `Option<String>`. These fields are canonical request controls and MUST NOT be stored only in `extra_body`.
+
+MAP-23. Chat `stop` and Messages `stop_sequences` MUST map through `UrpRequest.stop` under `URPV2-8a`. Chat top-level `verbosity` and Responses `text.verbosity` MUST map through `UrpRequest.verbosity` under `URPV2-8b`. Chat/Responses `user` and Messages `metadata.user_id` MUST map through `UrpRequest.user` under `URPV2-8c`.
+
 ## 3. Node-family helper invariants
 
 ### 3.1 Ordinary role-bearing nodes
@@ -375,10 +385,12 @@ NH-25. Shared encode helpers MUST consume unknown fields from the ownership laye
 
 NH-26. The nested-passthrough stripping helper that replaces current grouped `strip_nested_extra_body` behavior MUST operate over `Vec<Node>` and MUST do exactly these actions on the target node sequence:
 
-1. clear `extra_body` on each ordinary node;
-2. clear `extra_body` on each `ToolResult` node;
-3. clear `extra_body` on each `ToolResultContent` entry; and
+1. remove each non-internal member from `extra_body` on each ordinary node;
+2. remove each non-internal member from `extra_body` on each `ToolResult` node;
+3. remove each non-internal member from `extra_body` on each `ToolResultContent` entry; and
 4. remove each `NextDownstreamEnvelopeExtra` node.
+
+A member whose key starts with `_monoize_` and was created after wire parsing is internal semantic provenance under XTRA-10. The helper MUST retain that member until the target adapter consumes or discards it. A target encoder MUST NOT emit the retained member as a wire field.
 
 NH-27. The stripping helper in NH-26 MUST NOT remove or mutate top-level request or response `extra_body`.
 
@@ -443,8 +455,8 @@ EGR-12a. A family-specific adapter MAY consume `ProviderItem` only when `origin_
 EGR-13. For target family `responses`, the grouping helper MUST obey all rules below:
 
 1. `Reasoning` is a distinct top-level Responses item and therefore always forces its own envelope.
-2. `ToolCall` is a distinct top-level Responses `function_call` item and therefore always forces its own envelope.
-3. `ToolResult` is a distinct top-level Responses `function_call_output` item and therefore always forces its own envelope.
+2. `ToolCall` is a distinct top-level Responses `function_call` or `custom_tool_call` item according to `tool_type` and therefore always forces its own envelope.
+3. `ToolResult` is a distinct top-level Responses `function_call_output` or `custom_tool_call_output` item according to `tool_type` and therefore always forces its own envelope.
 4. A Responses `message` item run may contain only `MessageCompatibleOrdinary` nodes.
 5. All nodes in one Responses `message` item run MUST share the same `role`.
 6. A change in `Text.phase` between two adjacent text nodes in a candidate run MUST force a new Responses `message` item.

@@ -137,3 +137,51 @@ mod image_generation_alias_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod reserved_wire_extra_tests {
+    use super::*;
+
+    #[test]
+    fn responses_stream_split_rejects_reserved_wire_keys_and_preserves_vendor_extras() {
+        let extra = split_known_fields(
+            json!({
+                "type": "response.output_item.added",
+                "vendor_event_counter": 7,
+                "_monoize_spoofed_event": true
+            }),
+            &["type"],
+        );
+        assert_eq!(extra.get("vendor_event_counter"), Some(&json!(7)));
+        assert!(!extra.contains_key("_monoize_spoofed_event"));
+    }
+
+    #[test]
+    fn unknown_responses_event_remains_canonical_provider_control_data() {
+        let canonical = json!({
+            "type": "response.vendor_control",
+            "vendor": {
+                "keep": 1,
+                "_monoize_nested": "canonical",
+                "rows": [{ "keep_row": true, "_monoize_row": "canonical" }]
+            },
+            "_monoize_top": "canonical"
+        });
+        let mut state = ResponsesStreamIndexState::default();
+        let events = map_responses_event_to_urp_events_with_state(
+            "response.vendor_control",
+            canonical.clone(),
+            &HashMap::new(),
+            &mut state,
+        );
+
+        assert!(matches!(events.as_slice(), [UrpStreamEvent::ProviderControl {
+            protocol,
+            event_name,
+            data,
+            ..
+        }] if protocol == "responses"
+            && event_name == "response.vendor_control"
+            && data == &canonical));
+    }
+}

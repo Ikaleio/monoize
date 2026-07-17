@@ -184,7 +184,6 @@ pub(super) fn calculate_charge_components(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 pub(super) fn calculate_charge_nano(
     usage: &urp::Usage,
     pricing: &ModelPricing,

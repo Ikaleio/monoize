@@ -33,12 +33,14 @@ fn nodes_from_item_value(item: &Value) -> Vec<Node> {
         }
         Item::ToolResult {
             id,
+            tool_type,
             call_id,
             is_error,
             content,
             extra_body,
         } => vec![Node::ToolResult {
             id,
+            tool_type,
             call_id,
             is_error,
             content,
@@ -77,9 +79,14 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
         Node::Refusal { id, .. } => NodeHeader::Refusal { id: id.clone() },
         Node::Reasoning { id, .. } => NodeHeader::Reasoning { id: id.clone() },
         Node::ToolCall {
-            id, call_id, name, ..
+            id,
+            tool_type,
+            call_id,
+            name,
+            ..
         } => NodeHeader::ToolCall {
             id: id.clone(),
+            tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
         },
@@ -95,8 +102,14 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role: *role,
             item_type: item_type.clone(),
         },
-        Node::ToolResult { id, call_id, .. } => NodeHeader::ToolResult {
+        Node::ToolResult {
+            id,
+            tool_type,
+            call_id,
+            ..
+        } => NodeHeader::ToolResult {
             id: id.clone(),
+            tool_type: *tool_type,
             call_id: call_id.clone(),
         },
         Node::NextDownstreamEnvelopeExtra { .. } => NodeHeader::NextDownstreamEnvelopeExtra,
@@ -239,13 +252,19 @@ fn map_output_item_added(
             output_state_for(index_state, output_index).emitted_any_node = true;
         }
         "message" => {}
-        "function_call" => {
+        "function_call" | "custom_tool_call" => {
+            let tool_type = if item_type == "custom_tool_call" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            };
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolCall {
                 id: item
                     .get("id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| Some(crate::urp::synthetic_tool_call_id())),
+                tool_type,
                 call_id: item
                     .get("call_id")
                     .and_then(|v| v.as_str())
@@ -257,7 +276,11 @@ fn map_output_item_added(
                     .unwrap_or_default()
                     .to_string(),
                 arguments: item
-                    .get("arguments")
+                    .get(if tool_type == ToolCallType::Custom {
+                        "input"
+                    } else {
+                        "arguments"
+                    })
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
@@ -272,13 +295,19 @@ fn map_output_item_added(
             });
             output_state_for(index_state, output_index).emitted_any_node = true;
         }
-        "function_call_output" => {
+        "function_call_output" | "custom_tool_call_output" => {
+            let tool_type = if item_type == "custom_tool_call_output" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            };
             let node = first_node_from_item_value(item).unwrap_or_else(|| Node::ToolResult {
                 id: item
                     .get("id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| Some(crate::urp::synthetic_tool_result_id())),
+                tool_type,
                 call_id: item
                     .get("call_id")
                     .or_else(|| item.get("id"))

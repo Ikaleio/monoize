@@ -1,15 +1,19 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, normalize_reasoning_effort, parse_file_part_from_obj,
-    parse_image_part_from_obj, parse_tool_call_part_from_obj, parse_tool_definition, split_extra,
-    value_to_text,
+    deserialize_u64ish_default, is_internal_extra_key, normalize_reasoning_effort,
+    parse_audio_part_from_obj, parse_file_part_from_obj, parse_image_part_from_obj,
+    parse_tool_call_part_from_obj, parse_tool_definition, remove_untrusted_internal_keys,
+    retain_wire_extra_fields, split_extra, value_to_text,
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
-    CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
+    CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY, CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY,
+    CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY, CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY,
+    CHAT_MESSAGE_AUDIO_EXTRA_KEY, CHAT_REASONING_CONFIG_EXTRA_KEY, CHAT_REASONING_DETAIL_EXTRA_KEY,
     CHAT_REASONING_SURFACE_EXTRA_KEY, CHAT_REASONING_SURFACE_REASONING,
     CHAT_REASONING_SURFACE_REASONING_CONTENT, CHAT_THINKING_CONFIG_EXTRA_KEY, FinishReason,
-    InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol, ReasoningConfig, ToolChoice,
-    ToolResultContent, UrpRequest, UrpResponse, Usage,
+    InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol, ReasoningConfig,
+    StopControl, ToolCallType, ToolChoice, ToolDefinition, ToolResultContent, UrpRequest,
+    UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -25,11 +29,13 @@ struct OpenAiChatUsage {
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     completion_tokens: u64,
     #[serde(default)]
-    #[serde(alias = "input_tokens_details")]
     prompt_tokens_details: Option<OpenAiChatInputDetails>,
     #[serde(default)]
-    #[serde(alias = "output_tokens_details")]
     completion_tokens_details: Option<OpenAiChatOutputDetails>,
+    #[serde(default)]
+    input_tokens_details: Option<OpenAiChatInputDetails>,
+    #[serde(default)]
+    output_tokens_details: Option<OpenAiChatOutputDetails>,
     #[serde(flatten)]
     extra: HashMap<String, Value>,
 }
@@ -81,56 +87,98 @@ impl From<OpenAiChatUsage> for Usage {
         let OpenAiChatUsage {
             prompt_tokens,
             completion_tokens,
-            prompt_tokens_details,
-            completion_tokens_details,
+            mut prompt_tokens_details,
+            mut completion_tokens_details,
+            mut input_tokens_details,
+            mut output_tokens_details,
             mut extra,
         } = value;
 
-        let input_details = prompt_tokens_details.clone().and_then(|details| {
-            let cache_creation_tokens = details
-                .cache_creation_tokens
-                .max(details.cache_write_tokens);
-            if details.cached_tokens > 0
-                || cache_creation_tokens > 0
-                || details.tool_prompt_tokens > 0
-            {
-                Some(InputDetails {
-                    standard_tokens: 0,
-                    cache_read_tokens: details.cached_tokens,
-                    cache_read_modality_breakdown: None,
-                    cache_creation_tokens,
-                    cache_creation_5m_tokens: 0,
-                    cache_creation_1h_tokens: 0,
-                    tool_prompt_tokens: details.tool_prompt_tokens,
-                    modality_breakdown: None,
-                })
-            } else {
-                None
-            }
-        });
-
-        let output_details = completion_tokens_details.clone().and_then(|details| {
-            if details.reasoning_tokens > 0
-                || details.accepted_prediction_tokens > 0
-                || details.rejected_prediction_tokens > 0
-            {
-                Some(OutputDetails {
-                    standard_tokens: 0,
-                    reasoning_tokens: details.reasoning_tokens,
-                    accepted_prediction_tokens: details.accepted_prediction_tokens,
-                    rejected_prediction_tokens: details.rejected_prediction_tokens,
-                    modality_breakdown: None,
-                })
-            } else {
-                None
-            }
-        });
-
-        if let Some(details) = prompt_tokens_details {
-            extra.extend(details.extra);
+        retain_wire_extra_fields(&mut extra);
+        for details in [&mut prompt_tokens_details, &mut input_tokens_details]
+            .into_iter()
+            .flatten()
+        {
+            retain_wire_extra_fields(&mut details.extra);
         }
-        if let Some(details) = completion_tokens_details {
-            extra.extend(details.extra);
+        for details in [&mut completion_tokens_details, &mut output_tokens_details]
+            .into_iter()
+            .flatten()
+        {
+            retain_wire_extra_fields(&mut details.extra);
+        }
+
+        let input_details = prompt_tokens_details
+            .as_ref()
+            .or(input_tokens_details.as_ref())
+            .and_then(|details| {
+                let cache_creation_tokens = details
+                    .cache_creation_tokens
+                    .max(details.cache_write_tokens);
+                if details.cached_tokens > 0
+                    || cache_creation_tokens > 0
+                    || details.tool_prompt_tokens > 0
+                {
+                    Some(InputDetails {
+                        standard_tokens: 0,
+                        cache_read_tokens: details.cached_tokens,
+                        cache_read_modality_breakdown: None,
+                        cache_creation_tokens,
+                        cache_creation_5m_tokens: 0,
+                        cache_creation_1h_tokens: 0,
+                        tool_prompt_tokens: details.tool_prompt_tokens,
+                        modality_breakdown: None,
+                    })
+                } else {
+                    None
+                }
+            });
+
+        let output_details = completion_tokens_details
+            .as_ref()
+            .or(output_tokens_details.as_ref())
+            .and_then(|details| {
+                if details.reasoning_tokens > 0
+                    || details.accepted_prediction_tokens > 0
+                    || details.rejected_prediction_tokens > 0
+                {
+                    Some(OutputDetails {
+                        standard_tokens: 0,
+                        reasoning_tokens: details.reasoning_tokens,
+                        accepted_prediction_tokens: details.accepted_prediction_tokens,
+                        rejected_prediction_tokens: details.rejected_prediction_tokens,
+                        modality_breakdown: None,
+                    })
+                } else {
+                    None
+                }
+            });
+
+        for (key, details) in [
+            ("prompt_tokens_details", prompt_tokens_details),
+            ("input_tokens_details", input_tokens_details),
+        ] {
+            if let Some(details) = details
+                && !details.extra.is_empty()
+            {
+                extra.insert(
+                    key.to_string(),
+                    Value::Object(details.extra.into_iter().collect()),
+                );
+            }
+        }
+        for (key, details) in [
+            ("completion_tokens_details", completion_tokens_details),
+            ("output_tokens_details", output_tokens_details),
+        ] {
+            if let Some(details) = details
+                && !details.extra.is_empty()
+            {
+                extra.insert(
+                    key.to_string(),
+                    Value::Object(details.extra.into_iter().collect()),
+                );
+            }
         }
 
         Usage {
@@ -172,6 +220,75 @@ fn push_message_nodes(
     }
 }
 
+fn legacy_function_call_id(name: &str) -> String {
+    format!("legacy_function:{name}")
+}
+
+fn parse_legacy_function_definition(value: &Value) -> Option<ToolDefinition> {
+    let mut wrapper = Map::new();
+    wrapper.insert("type".to_string(), Value::String("function".to_string()));
+    wrapper.insert("function".to_string(), value.clone());
+    let mut tool = parse_tool_definition(&Value::Object(wrapper))?;
+    tool.extra_body.insert(
+        CHAT_LEGACY_FUNCTION_DEFINITION_EXTRA_KEY.to_string(),
+        Value::Bool(true),
+    );
+    Some(tool)
+}
+
+fn legacy_function_choice_from_value(value: &Value) -> Option<ToolChoice> {
+    if let Some(mode) = value.as_str() {
+        return Some(ToolChoice::Mode(mode.to_string()));
+    }
+
+    let name = value.as_object()?.get("name")?.as_str()?.to_string();
+    Some(ToolChoice::Specific(serde_json::json!({
+        "type": "function",
+        "function": { "name": name }
+    })))
+}
+
+fn parse_legacy_function_call_part(value: &Value) -> Option<Part> {
+    let function_call = value.as_object()?;
+    let name = function_call.get("name")?.as_str()?.to_string();
+    let arguments = function_call
+        .get("arguments")
+        .map(|arguments| {
+            arguments
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| arguments.to_string())
+        })
+        .unwrap_or_default();
+    let mut extra_body = split_extra(function_call, &["name", "arguments"]);
+    extra_body.insert(
+        CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY.to_string(),
+        Value::Bool(true),
+    );
+    Some(Part::ToolCall {
+        id: None,
+        tool_type: ToolCallType::Function,
+        call_id: legacy_function_call_id(&name),
+        name,
+        arguments,
+        extra_body,
+    })
+}
+
+fn parse_chat_message_audio_part(value: &Value) -> Option<Part> {
+    let body = value.as_object()?.clone();
+    if body.is_empty() {
+        return None;
+    }
+    Some(Part::ProviderItem {
+        id: body.get("id").and_then(Value::as_str).map(str::to_string),
+        origin_protocol: ProviderProtocol::ChatCompletion,
+        item_type: "audio".to_string(),
+        body: Value::Object(body),
+        extra_body: HashMap::from([(CHAT_MESSAGE_AUDIO_EXTRA_KEY.to_string(), Value::Bool(true))]),
+    })
+}
+
 fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase: Option<&str>) {
     if let Some(s) = content.as_str() {
         if !s.is_empty() {
@@ -197,9 +314,7 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
         let mut recognized = false;
         if let Some(text) = item_obj.get("text").and_then(|v| v.as_str()) {
             let item_type = item_obj.get("type").and_then(|v| v.as_str());
-            if !text.is_empty()
-                && !matches!(item_type, Some("tool_call" | "function_call" | "tool_use"))
-            {
+            if !text.is_empty() && matches!(item_type, Some("text" | "output_text")) {
                 parts.push(text_part_with_phase(
                     text,
                     message_phase,
@@ -214,6 +329,10 @@ fn push_chat_content_parts(parts: &mut Vec<Part>, content: &Value, message_phase
         }
         if let Some(file_part) = parse_file_part_from_obj(item_obj) {
             parts.push(file_part);
+            recognized = true;
+        }
+        if let Some(audio_part) = parse_audio_part_from_obj(item_obj) {
+            parts.push(audio_part);
             recognized = true;
         }
         if let Some(tool_call_part) = parse_tool_call_part_from_obj(item_obj) {
@@ -245,6 +364,12 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .as_object()
         .ok_or_else(|| "chat request must be object".to_string())?;
 
+    if let Some(n) = obj.get("n")
+        && n.as_u64() != Some(1)
+    {
+        return Err("Chat Completions n must be the integer 1".to_string());
+    }
+
     let model = obj
         .get("model")
         .and_then(|v| v.as_str())
@@ -252,6 +377,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         .to_string();
 
     let mut input_nodes = Vec::new();
+    let mut tool_call_types = HashMap::new();
     for raw_msg in obj
         .get("messages")
         .and_then(|v| v.as_array())
@@ -261,11 +387,43 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             Some(v) => v,
             None => continue,
         };
-        let role = match msg_obj
+        let role_name = msg_obj
             .get("role")
             .and_then(|v| v.as_str())
-            .unwrap_or("user")
-        {
+            .unwrap_or("user");
+        if role_name == "function" {
+            let name = msg_obj
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let content = msg_obj.get("content").cloned().unwrap_or(Value::Null);
+            let text = value_to_text(&content);
+            let mut result_extra = split_extra(msg_obj, &["role", "name", "content"]);
+            result_extra.insert(
+                CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY.to_string(),
+                Value::String(name.clone()),
+            );
+            input_nodes.push(Node::ToolResult {
+                id: msg_obj
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                tool_type: ToolCallType::Function,
+                call_id: legacy_function_call_id(&name),
+                is_error: false,
+                content: (!text.is_empty())
+                    .then(|| ToolResultContent::Text {
+                        text,
+                        extra_body: HashMap::new(),
+                    })
+                    .into_iter()
+                    .collect(),
+                extra_body: result_extra,
+            });
+            continue;
+        }
+        let role = match role_name {
             "system" => Role::System,
             "developer" => Role::Developer,
             "assistant" => Role::Assistant,
@@ -293,6 +451,10 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     .get("id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
+                tool_type: tool_call_types
+                    .get(&call_id)
+                    .copied()
+                    .unwrap_or(ToolCallType::Function),
                 call_id,
                 is_error: false,
                 content: tool_result_content,
@@ -314,11 +476,21 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                 "reasoning_content",
                 "reasoning_opaque",
                 "refusal",
+                "function_call",
+                "audio",
                 "phase",
             ],
         );
 
         parse_chat_reasoning_fields(msg_obj, &mut parts);
+
+        if let Some(audio) = msg_obj
+            .get("audio")
+            .filter(|audio| !audio.is_null())
+            .and_then(parse_chat_message_audio_part)
+        {
+            parts.push(audio);
+        }
 
         if let Some(content) = msg_obj.get("content") {
             push_chat_content_parts(&mut parts, content, message_phase);
@@ -339,52 +511,109 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
                     Some(v) => v,
                     None => continue,
                 };
-                let call_id = tc_obj
-                    .get("id")
-                    .or_else(|| tc_obj.get("call_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let name = tc_obj
-                    .get("function")
-                    .and_then(|v| v.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let arguments = tc_obj
-                    .get("function")
-                    .and_then(|v| v.get("arguments"))
-                    .cloned()
-                    .unwrap_or(Value::String("{}".to_string()));
-                let arguments = if let Some(s) = arguments.as_str() {
-                    s.to_string()
-                } else {
-                    serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
-                };
-                if !call_id.is_empty() && !name.is_empty() {
-                    parts.push(Part::ToolCall {
-                        id: tc_obj
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        call_id,
-                        name,
-                        arguments,
-                        extra_body: split_extra(tc_obj, &["id", "type", "function", "call_id"]),
-                    });
+                if let Some(part) = parse_tool_call_part_from_obj(tc_obj) {
+                    if let Part::ToolCall {
+                        call_id, tool_type, ..
+                    } = &part
+                    {
+                        tool_call_types.insert(call_id.clone(), *tool_type);
+                    }
+                    parts.push(part);
                 }
             }
+        }
+
+        if let Some(function_call) = msg_obj
+            .get("function_call")
+            .filter(|function_call| !function_call.is_null())
+            .and_then(parse_legacy_function_call_part)
+        {
+            if let Part::ToolCall {
+                call_id, tool_type, ..
+            } = &function_call
+            {
+                tool_call_types.insert(call_id.clone(), *tool_type);
+            }
+            parts.push(function_call);
         }
 
         push_message_nodes(&mut input_nodes, role, parts, extra_body);
     }
 
     let reasoning = extract_reasoning(obj);
-    let tools = obj.get("tools").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter()
-            .filter_map(parse_tool_definition)
-            .collect::<Vec<_>>()
-    });
+    let modern_tools = obj.get("tools").and_then(Value::as_array);
+    let legacy_functions = obj.get("functions").and_then(Value::as_array);
+    let tools = if modern_tools.is_some() || legacy_functions.is_some() {
+        Some(
+            modern_tools
+                .into_iter()
+                .flatten()
+                .filter_map(parse_tool_definition)
+                .chain(
+                    legacy_functions
+                        .into_iter()
+                        .flatten()
+                        .filter_map(parse_legacy_function_definition),
+                )
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
+
+    let modern_tool_choice = obj
+        .get("tool_choice")
+        .filter(|choice| !choice.is_null())
+        .cloned();
+    let legacy_function_choice = if modern_tool_choice.is_none() {
+        obj.get("function_call")
+            .filter(|choice| !choice.is_null())
+            .and_then(legacy_function_choice_from_value)
+            .map(|choice| {
+                let mut raw = obj["function_call"].clone();
+                remove_untrusted_internal_keys(&mut raw);
+                (choice, raw)
+            })
+    } else {
+        None
+    };
+    let (tool_choice, legacy_function_choice_raw) = match modern_tool_choice {
+        Some(choice) => (Some(tool_choice_from_value(choice)), None),
+        None => {
+            legacy_function_choice.map_or((None, None), |(choice, raw)| (Some(choice), Some(raw)))
+        }
+    };
+
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "model",
+            "messages",
+            "stream",
+            "temperature",
+            "top_p",
+            "max_completion_tokens",
+            "max_tokens",
+            "reasoning_effort",
+            "reasoning",
+            "thinking",
+            "tools",
+            "functions",
+            "tool_choice",
+            "function_call",
+            "parallel_tool_calls",
+            "stop",
+            "verbosity",
+            "response_format",
+            "user",
+        ],
+    );
+    if let Some(raw_choice) = legacy_function_choice_raw {
+        extra_body.insert(
+            CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY.to_string(),
+            raw_choice,
+        );
+    }
 
     Ok(UrpRequest {
         model,
@@ -398,8 +627,22 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .and_then(|v| v.as_u64()),
         reasoning,
         tools,
-        tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
+        tool_choice,
         parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+        stop: obj.get("stop").and_then(|value| match value {
+            Value::String(stop) => Some(StopControl::Single(stop.clone())),
+            Value::Array(stops) => stops
+                .iter()
+                .map(Value::as_str)
+                .map(|stop| stop.map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .map(StopControl::Multiple),
+            _ => None,
+        }),
+        verbosity: obj
+            .get("verbosity")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         response_format: obj
             .get("response_format")
             .cloned()
@@ -408,26 +651,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .get("user")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        extra_body: split_extra(
-            obj,
-            &[
-                "model",
-                "messages",
-                "stream",
-                "temperature",
-                "top_p",
-                "max_completion_tokens",
-                "max_tokens",
-                "reasoning_effort",
-                "reasoning",
-                "thinking",
-                "tools",
-                "tool_choice",
-                "parallel_tool_calls",
-                "response_format",
-                "user",
-            ],
-        ),
+        extra_body,
     })
 }
 
@@ -477,12 +701,22 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
             "reasoning_opaque",
             "tool_calls",
             "refusal",
+            "function_call",
+            "audio",
             "phase",
         ],
     );
     let message_phase = msg_obj.get("phase").and_then(|v| v.as_str());
 
     parse_chat_reasoning_fields(msg_obj, &mut parts);
+
+    if let Some(audio) = msg_obj
+        .get("audio")
+        .filter(|audio| !audio.is_null())
+        .and_then(parse_chat_message_audio_part)
+    {
+        parts.push(audio);
+    }
 
     if let Some(content) = msg_obj.get("content") {
         push_chat_content_parts(&mut parts, content, message_phase);
@@ -494,41 +728,18 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
                 Some(v) => v,
                 None => continue,
             };
-            let call_id = tc_obj
-                .get("id")
-                .or_else(|| tc_obj.get("call_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let name = tc_obj
-                .get("function")
-                .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let arguments = tc_obj
-                .get("function")
-                .and_then(|v| v.get("arguments"))
-                .cloned()
-                .unwrap_or(Value::String("{}".to_string()));
-            let arguments = if let Some(s) = arguments.as_str() {
-                s.to_string()
-            } else {
-                serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string())
-            };
-            if !call_id.is_empty() && !name.is_empty() {
-                parts.push(Part::ToolCall {
-                    id: tc_obj
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    call_id,
-                    name,
-                    arguments,
-                    extra_body: split_extra(tc_obj, &["id", "type", "function", "call_id"]),
-                });
+            if let Some(part) = parse_tool_call_part_from_obj(tc_obj) {
+                parts.push(part);
             }
         }
+    }
+
+    if let Some(function_call) = msg_obj
+        .get("function_call")
+        .filter(|function_call| !function_call.is_null())
+        .and_then(parse_legacy_function_call_part)
+    {
+        parts.push(function_call);
     }
 
     if let Some(refusal) = msg_obj.get("refusal").and_then(|v| v.as_str()) {
@@ -637,15 +848,19 @@ fn extract_reasoning(obj: &Map<String, Value>) -> Option<ReasoningConfig> {
 
     let mut extra_body = HashMap::new();
     if let Some(reasoning) = reasoning_obj {
+        let mut reasoning = reasoning.clone();
+        reasoning.retain(|key, _| !is_internal_extra_key(key));
         extra_body.insert(
             CHAT_REASONING_CONFIG_EXTRA_KEY.to_string(),
-            Value::Object(reasoning.clone()),
+            Value::Object(reasoning),
         );
     }
     if let Some(thinking) = thinking_obj {
+        let mut thinking = thinking.clone();
+        thinking.retain(|key, _| !is_internal_extra_key(key));
         extra_body.insert(
             CHAT_THINKING_CONFIG_EXTRA_KEY.to_string(),
-            Value::Object(thinking.clone()),
+            Value::Object(thinking),
         );
     }
     Some(ReasoningConfig { effort, extra_body })
@@ -684,10 +899,12 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
                 .flatten()
                 .filter(|value| !value.is_null())
                 .cloned();
+            let mut raw_detail = detail_obj.clone();
+            raw_detail.retain(|key, _| !is_internal_extra_key(key));
             let mut extra_body = HashMap::new();
             extra_body.insert(
                 CHAT_REASONING_DETAIL_EXTRA_KEY.to_string(),
-                Value::Object(detail_obj.clone()),
+                Value::Object(raw_detail),
             );
             parts.push(Part::Reasoning {
                 id,
@@ -744,7 +961,8 @@ fn parse_chat_reasoning_fields(msg_obj: &Map<String, Value>, parts: &mut Vec<Par
     }
 }
 
-fn tool_choice_from_value(v: Value) -> ToolChoice {
+fn tool_choice_from_value(mut v: Value) -> ToolChoice {
+    remove_untrusted_internal_keys(&mut v);
     if let Some(s) = v.as_str() {
         ToolChoice::Mode(s.to_string())
     } else {
@@ -765,12 +983,7 @@ fn parse_response_format(v: Value) -> Option<crate::urp::ResponseFormat> {
                     .and_then(|x| x.as_str())
                     .map(|s| s.to_string());
                 let strict = schema_obj.get("strict").and_then(|x| x.as_bool());
-                let mut extra = HashMap::new();
-                for (k, v) in schema_obj {
-                    if !["name", "schema", "description", "strict"].contains(&k.as_str()) {
-                        extra.insert(k.clone(), v.clone());
-                    }
-                }
+                let extra = split_extra(schema_obj, &["name", "schema", "description", "strict"]);
                 return Some(crate::urp::ResponseFormat::JsonSchema {
                     json_schema: crate::urp::JsonSchemaDefinition {
                         name,
@@ -813,7 +1026,7 @@ fn parse_usage_from_chat(obj: &Map<String, Value>) -> Usage {
             output_tokens: 0,
             input_details: None,
             output_details: None,
-            extra_body: obj.clone().into_iter().collect(),
+            extra_body: split_extra(obj, &[]),
         })
 }
 
@@ -832,6 +1045,84 @@ mod tests {
                 Item::ToolResult { .. } => None,
             })
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn chat_usage_preserves_nested_unknown_details() {
+        let response = json!({
+            "id": "chatcmpl_usage_details",
+            "object": "chat.completion",
+            "model": "gpt-5.4",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "ok" },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 8,
+                "prompt_tokens_details": {
+                    "cached_tokens": 3,
+                    "vendor_prompt_detail": { "kind": "warm" },
+                    "_monoize_spoofed_prompt": true
+                },
+                "completion_tokens_details": {
+                    "reasoning_tokens": 5,
+                    "vendor_completion_detail": [1, 2],
+                    "_monoize_spoofed_completion": true
+                },
+                "vendor_usage_counter": 9,
+                "_monoize_spoofed_usage": true
+            }
+        });
+
+        let usage = decode_response(&response)
+            .expect("decode chat response")
+            .usage
+            .expect("chat usage");
+        assert_eq!(
+            usage
+                .input_details
+                .expect("input details")
+                .cache_read_tokens,
+            3
+        );
+        assert_eq!(
+            usage
+                .output_details
+                .expect("output details")
+                .reasoning_tokens,
+            5
+        );
+        assert_eq!(
+            usage.extra_body["prompt_tokens_details"],
+            json!({ "vendor_prompt_detail": { "kind": "warm" } })
+        );
+        assert_eq!(
+            usage.extra_body["completion_tokens_details"],
+            json!({ "vendor_completion_detail": [1, 2] })
+        );
+        assert_eq!(usage.extra_body["vendor_usage_counter"], json!(9));
+        assert!(!usage.extra_body.contains_key("vendor_prompt_detail"));
+        assert!(!usage.extra_body.contains_key("vendor_completion_detail"));
+        assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
+    }
+
+    #[test]
+    fn chat_usage_fallback_rejects_reserved_wire_keys() {
+        let usage = parse_usage_from_chat(
+            json!({
+                "prompt_tokens": 1,
+                "completion_tokens": 2,
+                "prompt_tokens_details": "invalid",
+                "vendor_usage_counter": 3,
+                "_monoize_spoofed_usage": true
+            })
+            .as_object()
+            .expect("usage object"),
+        );
+        assert_eq!(usage.extra_body["vendor_usage_counter"], json!(3));
+        assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
     }
 
     #[test]
@@ -1130,6 +1421,360 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|extra| extra.get("provider_marker")),
             Some(&json!("deepseek"))
+        );
+    }
+
+    #[test]
+    fn chat_file_and_audio_parts_decode_to_typed_media() {
+        let decoded = decode_request(&json!({
+            "model": "gpt-4o-audio-preview",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "file", "file": { "file_id": "file_openai_1" } },
+                    {
+                        "type": "file",
+                        "file": { "file_data": "ZmlsZQ==", "filename": "note.txt" }
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": { "data": "YXVkaW8=", "format": "mp3" }
+                    }
+                ]
+            }]
+        }))
+        .expect("chat request decodes");
+
+        assert!(matches!(
+            &decoded.input[0],
+            Node::File {
+                source: crate::urp::FileSource::FileId { file_id },
+                extra_body,
+                ..
+            } if file_id == "file_openai_1"
+                && extra_body.get(crate::urp::FILE_ID_ORIGIN_EXTRA_KEY)
+                    == Some(&json!(crate::urp::FILE_ID_ORIGIN_OPENAI))
+        ));
+        assert!(matches!(
+            &decoded.input[1],
+            Node::File {
+                source: crate::urp::FileSource::Base64 {
+                    filename: Some(filename),
+                    media_type,
+                    data,
+                },
+                ..
+            } if filename == "note.txt"
+                && media_type == "application/octet-stream"
+                && data == "ZmlsZQ=="
+        ));
+        assert!(matches!(
+            &decoded.input[2],
+            Node::Audio {
+                source: crate::urp::AudioSource::Base64 { media_type, data },
+                ..
+            } if media_type == "audio/mpeg" && data == "YXVkaW8="
+        ));
+    }
+
+    #[test]
+    fn chat_request_rejects_multiple_choices() {
+        let error = decode_request(&json!({
+            "model": "gpt-5",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "n": 2
+        }))
+        .expect_err("URP cannot represent multiple candidates");
+
+        assert_eq!(error, "Chat Completions n must be the integer 1");
+    }
+
+    #[test]
+    fn chat_request_decodes_typed_stop_shape_and_verbosity() {
+        let scalar = decode_request(&json!({
+            "model": "gpt-5.4",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "stop": "END",
+            "verbosity": "low"
+        }))
+        .expect("decode scalar stop");
+        assert_eq!(scalar.stop, Some(StopControl::Single("END".to_string())));
+        assert_eq!(scalar.verbosity.as_deref(), Some("low"));
+
+        let multiple = decode_request(&json!({
+            "model": "gpt-5.4",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "stop": ["ONE", "TWO"]
+        }))
+        .expect("decode array stop");
+        assert_eq!(
+            multiple.stop,
+            Some(StopControl::Multiple(vec![
+                "ONE".to_string(),
+                "TWO".to_string()
+            ]))
+        );
+    }
+
+    #[test]
+    fn unknown_typed_text_block_remains_provider_item_and_round_trips() {
+        let native_block = json!({
+            "type": "vendor_text",
+            "text": "must stay opaque",
+            "vendor": { "revision": 2 }
+        });
+        let decoded = decode_request(&json!({
+            "model": "openrouter/model",
+            "messages": [{
+                "role": "user",
+                "content": [native_block.clone()]
+            }]
+        }))
+        .expect("decode unknown Chat block");
+
+        assert!(matches!(
+            &decoded.input[0],
+            Node::ProviderItem {
+                origin_protocol: ProviderProtocol::ChatCompletion,
+                item_type,
+                body,
+                ..
+            } if item_type == "vendor_text" && body == &native_block
+        ));
+        let encoded = crate::urp::encode::openai_chat::encode_request(&decoded, "openrouter/model");
+        assert_eq!(encoded["messages"][0]["content"][0], native_block);
+    }
+
+    #[test]
+    fn chat_audio_only_response_replays_message_audio_and_null_content() {
+        let audio = json!({
+            "id": "audio_1",
+            "data": "YXVkaW8=",
+            "expires_at": 1_900_000_000,
+            "transcript": "hello",
+            "vendor": { "codec": "pcm16" }
+        });
+        let decoded = decode_response(&json!({
+            "id": "chatcmpl_audio",
+            "model": "gpt-4o-audio-preview",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "audio": audio.clone()
+                },
+                "finish_reason": "stop"
+            }]
+        }))
+        .expect("decode audio-only response");
+        assert!(matches!(
+            &decoded.output[0],
+            Node::ProviderItem {
+                origin_protocol: ProviderProtocol::ChatCompletion,
+                item_type,
+                body,
+                extra_body,
+                ..
+            } if item_type == "audio"
+                && body == &audio
+                && extra_body.get(crate::urp::CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+                    == Some(&Value::Bool(true))
+        ));
+
+        let encoded =
+            crate::urp::encode::openai_chat::encode_response(&decoded, "gpt-4o-audio-preview");
+        assert_eq!(encoded["choices"][0]["message"]["audio"], audio);
+        assert_eq!(encoded["choices"][0]["message"]["content"], Value::Null);
+    }
+
+    #[test]
+    fn chat_tool_choice_rejects_recursive_internal_key_spoofing() {
+        let decoded = decode_request(&json!({
+            "model": "gpt-5.4",
+            "messages": [{ "role": "user", "content": "lookup" }],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "parameters": { "type": "object" }
+                }
+            }],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "_monoize_outer_spoof": true,
+                "allowed_tools": {
+                    "mode": "required",
+                    "_monoize_wrapper_spoof": true,
+                    "tools": [{
+                        "type": "function",
+                        "_monoize_selector_spoof": true,
+                        "function": {
+                            "name": "lookup",
+                            "_monoize_nested_spoof": true
+                        }
+                    }]
+                }
+            }
+        }))
+        .expect("decode modern Chat selector");
+
+        let canonical = crate::urp::encode::tool_choice_to_value(
+            decoded.tool_choice.as_ref().expect("tool choice"),
+        );
+        assert_eq!(
+            canonical,
+            json!({
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{
+                        "type": "function",
+                        "function": { "name": "lookup" }
+                    }]
+                }
+            })
+        );
+
+        let chat = crate::urp::encode::openai_chat::encode_request(&decoded, "gpt-5.4");
+        let responses = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5.4");
+        assert!(!chat["tool_choice"].to_string().contains("_monoize_"));
+        assert!(!responses["tool_choice"].to_string().contains("_monoize_"));
+    }
+
+    #[test]
+    fn legacy_chat_function_choice_provenance_rejects_recursive_internal_key_spoofing() {
+        let mut decoded = decode_request(&json!({
+            "model": "gpt-4-0613",
+            "messages": [{ "role": "user", "content": "lookup" }],
+            "functions": [{
+                "name": "lookup",
+                "parameters": { "type": "object" }
+            }],
+            "function_call": {
+                "name": "lookup",
+                "_monoize_outer_spoof": true,
+                "vendor_selector": {
+                    "keep": 1,
+                    "_monoize_nested_spoof": true
+                }
+            }
+        }))
+        .expect("decode deprecated Chat selector");
+
+        let raw = decoded
+            .extra_body
+            .get_mut(CHAT_LEGACY_FUNCTION_CHOICE_EXTRA_KEY)
+            .expect("legacy selector provenance");
+        assert_eq!(
+            raw,
+            &json!({ "name": "lookup", "vendor_selector": { "keep": 1 } })
+        );
+        raw.as_object_mut().expect("legacy selector object").insert(
+            "encoder_probe".to_string(),
+            json!({ "keep": 2, "_monoize_encoder_spoof": true }),
+        );
+
+        let encoded = crate::urp::encode::openai_chat::encode_request(&decoded, "gpt-4-0613");
+        assert_eq!(
+            encoded["function_call"],
+            json!({
+                "name": "lookup",
+                "vendor_selector": { "keep": 1 },
+                "encoder_probe": { "keep": 2 }
+            })
+        );
+        assert!(!encoded["function_call"].to_string().contains("_monoize_"));
+        assert!(encoded.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn deprecated_function_call_and_function_result_round_trip_as_legacy_messages() {
+        let decoded = decode_request(&json!({
+            "model": "gpt-4-0613",
+            "messages": [
+                { "role": "user", "content": "weather" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "function_call": {
+                        "name": "lookup",
+                        "arguments": "{\"city\":\"Taipei\"}"
+                    }
+                },
+                {
+                    "role": "function",
+                    "name": "lookup",
+                    "content": "sunny"
+                }
+            ]
+        }))
+        .expect("decode deprecated function lifecycle");
+
+        assert!(decoded.input.iter().any(|node| matches!(
+            node,
+            Node::ToolCall { call_id, name, arguments, extra_body, .. }
+                if call_id == "legacy_function:lookup"
+                    && name == "lookup"
+                    && arguments == "{\"city\":\"Taipei\"}"
+                    && extra_body.get(CHAT_LEGACY_FUNCTION_CALL_EXTRA_KEY)
+                        == Some(&Value::Bool(true))
+        )));
+        assert!(decoded.input.iter().any(|node| matches!(
+            node,
+            Node::ToolResult { call_id, content, extra_body, .. }
+                if call_id == "legacy_function:lookup"
+                    && matches!(&content[0], ToolResultContent::Text { text, .. } if text == "sunny")
+                    && extra_body.get(CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY)
+                        == Some(&json!("lookup"))
+        )));
+
+        let encoded = crate::urp::encode::openai_chat::encode_request(&decoded, "gpt-4-0613");
+        assert_eq!(
+            encoded["messages"][1]["function_call"],
+            json!({ "name": "lookup", "arguments": "{\"city\":\"Taipei\"}" })
+        );
+        assert!(encoded["messages"][1].get("tool_calls").is_none());
+        assert_eq!(encoded["messages"][2]["role"], json!("function"));
+        assert_eq!(encoded["messages"][2]["name"], json!("lookup"));
+        assert_eq!(encoded["messages"][2]["content"], json!("sunny"));
+        assert!(encoded["messages"][2].get("tool_call_id").is_none());
+
+        let response = decode_response(&json!({
+            "id": "chatcmpl_legacy",
+            "model": "gpt-4-0613",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "function_call": {
+                        "name": "lookup",
+                        "arguments": "{\"city\":\"Taipei\"}"
+                    }
+                },
+                "finish_reason": "function_call"
+            }]
+        }))
+        .expect("decode deprecated function response");
+        let encoded_response =
+            crate::urp::encode::openai_chat::encode_response(&response, "gpt-4-0613");
+        assert_eq!(
+            encoded_response["choices"][0]["message"]["function_call"],
+            json!({ "name": "lookup", "arguments": "{\"city\":\"Taipei\"}" })
+        );
+        assert_eq!(
+            encoded_response["choices"][0]["finish_reason"],
+            json!("function_call")
+        );
+        assert_eq!(
+            encoded_response["choices"][0]["message"]["content"],
+            Value::Null
+        );
+        assert!(
+            encoded_response["choices"][0]["message"]
+                .get("tool_calls")
+                .is_none()
         );
     }
 }

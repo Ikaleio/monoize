@@ -1,16 +1,46 @@
+fn is_retained_responses_instruction_node(node: &Node) -> bool {
+    let extra_body = match node {
+        Node::Text { extra_body, .. }
+        | Node::Image { extra_body, .. }
+        | Node::Audio { extra_body, .. }
+        | Node::File { extra_body, .. }
+        | Node::Refusal { extra_body, .. }
+        | Node::Reasoning { extra_body, .. }
+        | Node::ToolCall { extra_body, .. }
+        | Node::ProviderItem { extra_body, .. }
+        | Node::ToolResult { extra_body, .. }
+        | Node::NextDownstreamEnvelopeExtra { extra_body } => extra_body,
+    };
+    extra_body
+        .get(RESPONSES_INSTRUCTION_NODE_EXTRA_KEY)
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    let request_items = nodes_to_items(&req.input);
+    let retained_instructions = req
+        .extra_body
+        .get(RESPONSES_INSTRUCTIONS_EXTRA_KEY)
+        .cloned();
+    let request_input = if retained_instructions.is_some() {
+        req.input
+            .iter()
+            .filter(|node| !is_retained_responses_instruction_node(node))
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        req.input.clone()
+    };
+    let request_items = nodes_to_items(&request_input);
     let mut input_items = Vec::new();
-    let mut instructions: Option<String> = None;
-    let mut consumed_instructions = false;
+    let mut instructions = retained_instructions;
 
     for item in &request_items {
-        if !consumed_instructions && can_use_responses_instructions(item) {
+        if instructions.is_none() && can_use_responses_instructions(item) {
             if let Item::Message { parts, .. } = item {
                 let text = text_parts(parts);
                 if !text.is_empty() {
-                    instructions = Some(text);
-                    consumed_instructions = true;
+                    instructions = Some(Value::String(text));
                     continue;
                 }
             }
@@ -25,8 +55,8 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     });
     let obj = body.as_object_mut().expect("responses request object");
 
-    if let Some(text) = instructions {
-        obj.insert("instructions".to_string(), Value::String(text));
+    if let Some(instructions) = instructions {
+        obj.insert("instructions".to_string(), instructions);
     }
     if let Some(stream) = req.stream {
         obj.insert("stream".to_string(), Value::Bool(stream));
@@ -61,7 +91,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     if let Some(choice) = &req.tool_choice {
         obj.insert(
             "tool_choice".to_string(),
-            tool_choice_to_openai_value(choice),
+            tool_choice_to_responses_value(choice),
         );
     }
     if let Some(parallel) = req.parallel_tool_calls {
@@ -72,6 +102,17 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     }
     if let Some(format) = &req.response_format {
         apply_response_format(obj, format);
+    }
+    if let Some(verbosity) = &req.verbosity {
+        let text = obj
+            .entry("text".to_string())
+            .or_insert_with(|| json!({}));
+        if !text.is_object() {
+            *text = json!({});
+        }
+        text.as_object_mut()
+            .expect("responses text object")
+            .insert("verbosity".to_string(), Value::String(verbosity.clone()));
     }
     merge_responses_text_config(obj, req.extra_body.get("text"));
     merge_extra(obj, &req.extra_body);
@@ -150,12 +191,14 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
             }
             Item::ToolResult {
                 id,
+                tool_type,
                 call_id,
                 content,
                 is_error,
                 extra_body,
             } => encode_tool_result_item(
                 id.as_deref(),
+                *tool_type,
                 call_id,
                 content,
                 *is_error,
@@ -237,13 +280,7 @@ pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
                 "tool_prompt_tokens": input_details.tool_prompt_tokens
             }
         });
-        if let Some(obj) = usage_value.as_object_mut() {
-            for (k, v) in &usage.extra_body {
-                if !k.starts_with("_monoize_") {
-                    obj.insert(k.clone(), v.clone());
-                }
-            }
-        }
+        merge_responses_usage_extra(&mut usage_value, &usage.extra_body);
         body["usage"] = usage_value;
     }
 
@@ -329,10 +366,19 @@ fn encode_message_to_input_items(item: &Item, out: &mut Vec<Value>) {
         }
         Item::ToolResult {
             id,
+            tool_type,
             call_id,
             content,
             is_error,
             extra_body,
-        } => encode_tool_result_item(id.as_deref(), call_id, content, *is_error, extra_body, out),
+        } => encode_tool_result_item(
+            id.as_deref(),
+            *tool_type,
+            call_id,
+            content,
+            *is_error,
+            extra_body,
+            out,
+        ),
     }
 }

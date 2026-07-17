@@ -1,13 +1,15 @@
 use crate::urp::decode::{
     deserialize_u64ish_default, normalize_reasoning_effort, parse_file_part_from_obj,
-    parse_image_part_from_obj, parse_tool_definition, split_extra, value_to_text,
+    parse_image_part_from_obj, parse_tool_definition, remove_untrusted_internal_keys,
+    retain_wire_extra_fields, split_extra, value_to_text,
 };
 use crate::urp::internal_legacy_bridge::{Part, Role};
 use crate::urp::{
     FinishReason, InputDetails, Node, OrdinaryRole, OutputDetails, ProviderProtocol,
-    RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_REASONING_CONTENT_EXTRA_KEY,
+    RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY, RESPONSES_INSTRUCTION_NODE_EXTRA_KEY,
+    RESPONSES_INSTRUCTIONS_EXTRA_KEY, RESPONSES_REASONING_CONTENT_EXTRA_KEY,
     RESPONSES_REASONING_SUMMARY_EXTRA_KEY, RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, ReasoningConfig,
-    ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
+    ToolCallType, ToolChoice, ToolResultContent, UrpRequest, UrpResponse, Usage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -29,7 +31,7 @@ fn decode_image_generation_call_node(item_obj: &Map<String, Value>) -> Option<No
     let mut extra_body = split_extra(item_obj, &["type", "id", "result", "output_format"]);
     extra_body.insert(
         RESPONSES_IMAGE_GENERATION_CALL_EXTRA_KEY.to_string(),
-        Value::Object(item_obj.clone()),
+        Value::Object(split_extra(item_obj, &[]).into_iter().collect()),
     );
     Some(Node::Image {
         id: item_obj
@@ -64,11 +66,13 @@ struct OpenAiResponsesUsage {
     )]
     output_tokens: u64,
     #[serde(default)]
-    #[serde(alias = "prompt_tokens_details")]
     input_tokens_details: Option<OpenAiResponsesInputDetails>,
     #[serde(default)]
-    #[serde(alias = "completion_tokens_details")]
     output_tokens_details: Option<OpenAiResponsesOutputDetails>,
+    #[serde(default)]
+    prompt_tokens_details: Option<OpenAiResponsesInputDetails>,
+    #[serde(default)]
+    completion_tokens_details: Option<OpenAiResponsesOutputDetails>,
     #[serde(flatten)]
     extra: HashMap<String, Value>,
 }
@@ -120,56 +124,98 @@ impl From<OpenAiResponsesUsage> for Usage {
         let OpenAiResponsesUsage {
             input_tokens,
             output_tokens,
-            input_tokens_details,
-            output_tokens_details,
+            mut input_tokens_details,
+            mut output_tokens_details,
+            mut prompt_tokens_details,
+            mut completion_tokens_details,
             mut extra,
         } = value;
 
-        let input_details = input_tokens_details.clone().and_then(|details| {
-            let cache_creation_tokens = details
-                .cache_creation_tokens
-                .max(details.cache_write_tokens);
-            if details.cached_tokens > 0
-                || cache_creation_tokens > 0
-                || details.tool_prompt_tokens > 0
-            {
-                Some(InputDetails {
-                    standard_tokens: 0,
-                    cache_read_tokens: details.cached_tokens,
-                    cache_read_modality_breakdown: None,
-                    cache_creation_tokens,
-                    cache_creation_5m_tokens: 0,
-                    cache_creation_1h_tokens: 0,
-                    tool_prompt_tokens: details.tool_prompt_tokens,
-                    modality_breakdown: None,
-                })
-            } else {
-                None
-            }
-        });
-
-        let output_details = output_tokens_details.clone().and_then(|details| {
-            if details.reasoning_tokens > 0
-                || details.accepted_prediction_tokens > 0
-                || details.rejected_prediction_tokens > 0
-            {
-                Some(OutputDetails {
-                    standard_tokens: 0,
-                    reasoning_tokens: details.reasoning_tokens,
-                    accepted_prediction_tokens: details.accepted_prediction_tokens,
-                    rejected_prediction_tokens: details.rejected_prediction_tokens,
-                    modality_breakdown: None,
-                })
-            } else {
-                None
-            }
-        });
-
-        if let Some(details) = input_tokens_details {
-            extra.extend(details.extra);
+        retain_wire_extra_fields(&mut extra);
+        for details in [&mut input_tokens_details, &mut prompt_tokens_details]
+            .into_iter()
+            .flatten()
+        {
+            retain_wire_extra_fields(&mut details.extra);
         }
-        if let Some(details) = output_tokens_details {
-            extra.extend(details.extra);
+        for details in [&mut output_tokens_details, &mut completion_tokens_details]
+            .into_iter()
+            .flatten()
+        {
+            retain_wire_extra_fields(&mut details.extra);
+        }
+
+        let input_details = input_tokens_details
+            .as_ref()
+            .or(prompt_tokens_details.as_ref())
+            .and_then(|details| {
+                let cache_creation_tokens = details
+                    .cache_creation_tokens
+                    .max(details.cache_write_tokens);
+                if details.cached_tokens > 0
+                    || cache_creation_tokens > 0
+                    || details.tool_prompt_tokens > 0
+                {
+                    Some(InputDetails {
+                        standard_tokens: 0,
+                        cache_read_tokens: details.cached_tokens,
+                        cache_read_modality_breakdown: None,
+                        cache_creation_tokens,
+                        cache_creation_5m_tokens: 0,
+                        cache_creation_1h_tokens: 0,
+                        tool_prompt_tokens: details.tool_prompt_tokens,
+                        modality_breakdown: None,
+                    })
+                } else {
+                    None
+                }
+            });
+
+        let output_details = output_tokens_details
+            .as_ref()
+            .or(completion_tokens_details.as_ref())
+            .and_then(|details| {
+                if details.reasoning_tokens > 0
+                    || details.accepted_prediction_tokens > 0
+                    || details.rejected_prediction_tokens > 0
+                {
+                    Some(OutputDetails {
+                        standard_tokens: 0,
+                        reasoning_tokens: details.reasoning_tokens,
+                        accepted_prediction_tokens: details.accepted_prediction_tokens,
+                        rejected_prediction_tokens: details.rejected_prediction_tokens,
+                        modality_breakdown: None,
+                    })
+                } else {
+                    None
+                }
+            });
+
+        for (key, details) in [
+            ("input_tokens_details", input_tokens_details),
+            ("prompt_tokens_details", prompt_tokens_details),
+        ] {
+            if let Some(details) = details
+                && !details.extra.is_empty()
+            {
+                extra.insert(
+                    key.to_string(),
+                    Value::Object(details.extra.into_iter().collect()),
+                );
+            }
+        }
+        for (key, details) in [
+            ("output_tokens_details", output_tokens_details),
+            ("completion_tokens_details", completion_tokens_details),
+        ] {
+            if let Some(details) = details
+                && !details.extra.is_empty()
+            {
+                extra.insert(
+                    key.to_string(),
+                    Value::Object(details.extra.into_iter().collect()),
+                );
+            }
         }
 
         Usage {
@@ -231,6 +277,82 @@ fn push_message_nodes_with_envelope_control(
     push_message_nodes(out, role, id, parts, HashMap::new());
 }
 
+fn mark_responses_instruction_node(node: &mut Node) {
+    node.extra_body_mut().insert(
+        RESPONSES_INSTRUCTION_NODE_EXTRA_KEY.to_string(),
+        Value::Bool(true),
+    );
+}
+
+fn decode_structured_instruction_item(item: &Value, out: &mut Vec<Node>) {
+    if let Some(text) = item.as_str() {
+        if !text.is_empty() {
+            let mut node = Node::text(OrdinaryRole::Developer, text);
+            mark_responses_instruction_node(&mut node);
+            out.push(node);
+        }
+        return;
+    }
+
+    let Some(source_obj) = item.as_object() else {
+        return;
+    };
+    let item_type = source_obj.get("type").and_then(Value::as_str).unwrap_or("");
+    let is_message = matches!(item_type, "" | "message") && source_obj.contains_key("content");
+    let is_content_part = matches!(item_type, "input_text" | "input_image" | "input_file");
+    if !is_message && !is_content_part {
+        return;
+    }
+
+    let target_role = if is_message {
+        match source_obj.get("role").and_then(Value::as_str) {
+            Some(role @ ("system" | "developer" | "user" | "assistant")) => role,
+            _ => "developer",
+        }
+    } else {
+        "developer"
+    };
+    let mut message = if is_message {
+        source_obj.clone()
+    } else {
+        let mut message = Map::new();
+        message.insert("type".to_string(), Value::String("message".to_string()));
+        message.insert(
+            "content".to_string(),
+            Value::Array(vec![Value::Object(source_obj.clone())]),
+        );
+        message
+    };
+    message.insert("role".to_string(), Value::String(target_role.to_string()));
+
+    let mut decoded = Vec::new();
+    decode_input_item_nodes(&message, &mut decoded);
+    for mut node in decoded {
+        if matches!(node, Node::NextDownstreamEnvelopeExtra { .. }) {
+            continue;
+        }
+        mark_responses_instruction_node(&mut node);
+        out.push(node);
+    }
+}
+
+fn decode_instructions_nodes(instructions: &Value, out: &mut Vec<Node>) {
+    if let Some(text) = instructions.as_str() {
+        if !text.is_empty() {
+            let mut node = Node::text(OrdinaryRole::Developer, text);
+            mark_responses_instruction_node(&mut node);
+            out.push(node);
+        }
+        return;
+    }
+
+    if let Some(items) = instructions.as_array() {
+        for item in items {
+            decode_structured_instruction_item(item, out);
+        }
+    }
+}
+
 pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     let obj = value
         .as_object()
@@ -244,10 +366,8 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
 
     let mut input_nodes = Vec::new();
 
-    if let Some(instructions) = obj.get("instructions").and_then(|v| v.as_str()) {
-        if !instructions.is_empty() {
-            input_nodes.push(Node::text(OrdinaryRole::Developer, instructions));
-        }
+    if let Some(instructions) = obj.get("instructions") {
+        decode_instructions_nodes(instructions, &mut input_nodes);
     }
 
     if let Some(input) = obj.get("input") {
@@ -274,6 +394,31 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .collect::<Vec<_>>()
     });
 
+    let mut extra_body = split_extra(
+        obj,
+        &[
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "temperature",
+            "top_p",
+            "max_output_tokens",
+            "reasoning",
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "response_format",
+            "user",
+        ],
+    );
+    if let Some(instructions) = obj.get("instructions") {
+        extra_body.insert(
+            RESPONSES_INSTRUCTIONS_EXTRA_KEY.to_string(),
+            instructions.clone(),
+        );
+    }
+
     Ok(UrpRequest {
         model,
         input: input_nodes,
@@ -285,6 +430,12 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
         tools,
         tool_choice: obj.get("tool_choice").cloned().map(tool_choice_from_value),
         parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+        stop: None,
+        verbosity: obj
+            .get("text")
+            .and_then(|value| value.get("verbosity"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         response_format: obj
             .get("text")
             .and_then(|value| value.get("format"))
@@ -295,23 +446,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
             .get("user")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        extra_body: split_extra(
-            obj,
-            &[
-                "model",
-                "input",
-                "stream",
-                "temperature",
-                "top_p",
-                "max_output_tokens",
-                "reasoning",
-                "tools",
-                "tool_choice",
-                "parallel_tool_calls",
-                "response_format",
-                "user",
-            ],
-        ),
+        extra_body,
     })
 }
 
@@ -340,7 +475,12 @@ fn decode_input_items_nodes(input: &Value, out: &mut Vec<Node>) {
 fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
     let item_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match item_type {
-        "function_call" => {
+        "function_call" | "custom_tool_call" => {
+            let tool_type = if item_type == "custom_tool_call" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            };
             let call_id = obj
                 .get("call_id")
                 .or_else(|| obj.get("id"))
@@ -353,7 +493,11 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                 .unwrap_or("")
                 .to_string();
             let arguments = obj
-                .get("arguments")
+                .get(if tool_type == ToolCallType::Custom {
+                    "input"
+                } else {
+                    "arguments"
+                })
                 .cloned()
                 .unwrap_or(Value::String("{}".to_string()));
             let arguments = if let Some(s) = arguments.as_str() {
@@ -367,13 +511,22 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| Some(crate::urp::synthetic_tool_call_id())),
+                tool_type,
                 call_id,
                 name,
                 arguments,
-                extra_body: split_extra(obj, &["type", "call_id", "id", "name", "arguments"]),
+                extra_body: split_extra(
+                    obj,
+                    &["type", "call_id", "id", "name", "arguments", "input"],
+                ),
             });
         }
-        "function_call_output" => {
+        "function_call_output" | "custom_tool_call_output" => {
+            let tool_type = if item_type == "custom_tool_call_output" {
+                ToolCallType::Custom
+            } else {
+                ToolCallType::Function
+            };
             let call_id = obj
                 .get("call_id")
                 .and_then(|v| v.as_str())
@@ -389,6 +542,7 @@ fn decode_input_item_nodes(obj: &Map<String, Value>, out: &mut Vec<Node>) {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .or_else(|| Some(crate::urp::synthetic_tool_result_id())),
+                tool_type,
                 call_id,
                 is_error: false,
                 content,
@@ -644,13 +798,13 @@ fn decode_reasoning_node(
     if let Some(summary) = item_obj.get("summary") {
         shared_extra.insert(
             RESPONSES_REASONING_SUMMARY_EXTRA_KEY.to_string(),
-            summary.clone(),
+            sanitized_reasoning_replay_value(summary),
         );
     }
     if let Some(content) = item_obj.get("content") {
         shared_extra.insert(
             RESPONSES_REASONING_CONTENT_EXTRA_KEY.to_string(),
-            content.clone(),
+            sanitized_reasoning_replay_value(content),
         );
     }
     let encrypted = item_obj.get("encrypted_content").map(|value| match value {
@@ -692,6 +846,24 @@ fn decode_reasoning_node(
             extra_body: shared_extra,
         }
     })
+}
+
+fn sanitized_reasoning_replay_value(value: &Value) -> Value {
+    let mut value = value.clone();
+    match &mut value {
+        Value::Object(object) => {
+            object.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
+        }
+        Value::Array(items) => {
+            for item in items {
+                if let Some(object) = item.as_object_mut() {
+                    object.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
+                }
+            }
+        }
+        _ => {}
+    }
+    value
 }
 
 fn reasoning_content_to_text(item_obj: &Map<String, Value>) -> Option<String> {
@@ -741,7 +913,12 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                         item_obj.get("content").and_then(|v| v.as_array()),
                     ));
                 }
-                "function_call" => {
+                "function_call" | "custom_tool_call" => {
+                    let tool_type = if item_type == "custom_tool_call" {
+                        ToolCallType::Custom
+                    } else {
+                        ToolCallType::Function
+                    };
                     let call_id = item_obj
                         .get("call_id")
                         .and_then(|v| v.as_str())
@@ -753,7 +930,11 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                         .unwrap_or("")
                         .to_string();
                     let arguments = item_obj
-                        .get("arguments")
+                        .get(if tool_type == ToolCallType::Custom {
+                            "input"
+                        } else {
+                            "arguments"
+                        })
                         .cloned()
                         .unwrap_or(Value::String("{}".to_string()));
                     let arguments = if let Some(s) = arguments.as_str() {
@@ -766,16 +947,22 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                             .get("id")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
+                        tool_type,
                         call_id,
                         name,
                         arguments,
                         extra_body: split_extra(
                             item_obj,
-                            &["type", "id", "call_id", "name", "arguments"],
+                            &["type", "id", "call_id", "name", "arguments", "input"],
                         ),
                     });
                 }
-                "function_call_output" => {
+                "function_call_output" | "custom_tool_call_output" => {
+                    let tool_type = if item_type == "custom_tool_call_output" {
+                        ToolCallType::Custom
+                    } else {
+                        ToolCallType::Function
+                    };
                     let call_id = item_obj
                         .get("call_id")
                         .or_else(|| item_obj.get("id"))
@@ -791,6 +978,7 @@ fn decode_response_nodes(obj: &Map<String, Value>) -> Vec<Node> {
                             .get("id")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
+                        tool_type,
                         call_id,
                         is_error: false,
                         content,
@@ -868,7 +1056,7 @@ pub fn decode_response(value: &Value) -> Result<UrpResponse, String> {
     );
     extra_body.insert(
         RESPONSES_RESPONSE_SOURCE_EXTRA_KEY.to_string(),
-        Value::Object(obj.clone()),
+        Value::Object(split_extra(obj, &[]).into_iter().collect()),
     );
 
     Ok(UrpResponse {
@@ -912,15 +1100,68 @@ fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
             output_tokens: 0,
             input_details: None,
             output_details: None,
-            extra_body: obj.clone().into_iter().collect(),
+            extra_body: split_extra(obj, &[]),
         })
 }
 
-fn tool_choice_from_value(v: Value) -> ToolChoice {
+fn responses_selector_to_urp(value: Value) -> Value {
+    let Value::Object(mut obj) = value else {
+        return value;
+    };
+    match obj.get("type").and_then(Value::as_str) {
+        Some(kind @ ("function" | "custom")) => {
+            let kind = kind.to_string();
+            let flat_name = obj.remove("name");
+            let mut nested = obj
+                .remove(&kind)
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            if let Some(name) = flat_name {
+                nested.insert("name".to_string(), name);
+            }
+            obj.remove(if kind == "function" {
+                "custom"
+            } else {
+                "function"
+            });
+            obj.insert("type".to_string(), Value::String(kind.clone()));
+            obj.insert(kind, Value::Object(nested));
+        }
+        Some("allowed_tools") => {
+            let flat_mode = obj.remove("mode");
+            let flat_tools = obj.remove("tools");
+            let mut allowed = obj
+                .remove("allowed_tools")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            if let Some(mode) = flat_mode {
+                allowed.insert("mode".to_string(), mode);
+            }
+            if let Some(mut tools) = flat_tools {
+                if let Some(tools) = tools.as_array_mut() {
+                    for selector in tools {
+                        *selector = responses_selector_to_urp(selector.take());
+                    }
+                }
+                allowed.insert("tools".to_string(), tools);
+            } else if let Some(tools) = allowed.get_mut("tools").and_then(Value::as_array_mut) {
+                for selector in tools {
+                    *selector = responses_selector_to_urp(selector.take());
+                }
+            }
+            obj.insert("allowed_tools".to_string(), Value::Object(allowed));
+        }
+        _ => {}
+    }
+    Value::Object(obj)
+}
+
+fn tool_choice_from_value(mut v: Value) -> ToolChoice {
+    remove_untrusted_internal_keys(&mut v);
     if let Some(s) = v.as_str() {
         ToolChoice::Mode(s.to_string())
     } else {
-        ToolChoice::Specific(v)
+        ToolChoice::Specific(responses_selector_to_urp(v))
     }
 }
 
@@ -1018,9 +1259,241 @@ mod tests {
             decoded.response_format,
             Some(crate::urp::ResponseFormat::JsonSchema { .. })
         ));
+        assert!(matches!(
+            decoded.input.first(),
+            Some(Node::Text {
+                role: OrdinaryRole::Developer,
+                content,
+                extra_body,
+                ..
+            }) if content == "be exact"
+                && extra_body
+                    .get(RESPONSES_INSTRUCTION_NODE_EXTRA_KEY)
+                    .and_then(Value::as_bool)
+                    == Some(true)
+        ));
         let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5.4");
         assert_eq!(encoded["text"], source["text"]);
         assert_eq!(encoded["instructions"], source["instructions"]);
+        assert_eq!(encoded["input"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn official_responses_tool_choice_variants_normalize_and_round_trip() {
+        let cases = [
+            (
+                json!({ "type": "function", "name": "lookup", "future": 1 }),
+                json!({
+                    "type": "function",
+                    "function": { "name": "lookup" },
+                    "future": 1
+                }),
+            ),
+            (
+                json!({ "type": "custom", "name": "grammar" }),
+                json!({ "type": "custom", "custom": { "name": "grammar" } }),
+            ),
+            (
+                json!({ "type": "file_search" }),
+                json!({ "type": "file_search" }),
+            ),
+            (
+                json!({ "type": "mcp", "server_label": "docs", "name": "search" }),
+                json!({ "type": "mcp", "server_label": "docs", "name": "search" }),
+            ),
+            (
+                json!({
+                    "type": "allowed_tools",
+                    "mode": "required",
+                    "tools": [
+                        { "type": "function", "name": "lookup" },
+                        { "type": "custom", "name": "grammar" },
+                        { "type": "mcp", "server_label": "docs" },
+                        { "type": "image_generation" }
+                    ],
+                    "future": true
+                }),
+                json!({
+                    "type": "allowed_tools",
+                    "allowed_tools": {
+                        "mode": "required",
+                        "tools": [
+                            { "type": "function", "function": { "name": "lookup" } },
+                            { "type": "custom", "custom": { "name": "grammar" } },
+                            { "type": "mcp", "server_label": "docs" },
+                            { "type": "image_generation" }
+                        ]
+                    },
+                    "future": true
+                }),
+            ),
+        ];
+
+        for (wire_choice, canonical_choice) in cases {
+            let source = json!({
+                "model": "gpt-5.4",
+                "input": "use a tool",
+                "tool_choice": wire_choice
+            });
+            let decoded = decode_request(&source).expect("decode Responses request");
+            assert_eq!(
+                decoded
+                    .tool_choice
+                    .as_ref()
+                    .map(crate::urp::encode::tool_choice_to_value),
+                Some(canonical_choice)
+            );
+            let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5.4");
+            assert_eq!(encoded["tool_choice"], source["tool_choice"]);
+        }
+    }
+
+    #[test]
+    fn responses_tool_choice_rejects_recursive_internal_key_spoofing() {
+        let source = json!({
+            "model": "gpt-5.4",
+            "input": "use a tool",
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "required",
+                "_monoize_outer_spoof": true,
+                "tools": [{
+                    "type": "function",
+                    "name": "lookup",
+                    "_monoize_inner_spoof": { "trusted": false }
+                }]
+            }
+        });
+
+        let decoded = decode_request(&source).expect("decode Responses request");
+        let canonical = decoded
+            .tool_choice
+            .as_ref()
+            .map(crate::urp::encode::tool_choice_to_value)
+            .expect("tool choice");
+        assert!(
+            !serde_json::to_string(&canonical)
+                .expect("canonical JSON")
+                .contains("_monoize_")
+        );
+
+        let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5.4");
+        assert!(
+            !serde_json::to_string(&encoded["tool_choice"])
+                .expect("wire JSON")
+                .contains("_monoize_")
+        );
+    }
+
+    #[test]
+    fn structured_instructions_map_to_chat_system_developer_and_media_content() {
+        let source = json!({
+            "model": "gpt-5.4",
+            "instructions": [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{ "type": "input_text", "text": "system policy" }]
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [
+                        { "type": "input_text", "text": "developer policy" },
+                        {
+                            "type": "input_image",
+                            "image_url": "https://example.com/policy.png",
+                            "detail": "high"
+                        }
+                    ]
+                }
+            ],
+            "input": "answer"
+        });
+
+        let decoded = decode_request(&source).expect("decode Responses request");
+        let encoded = crate::urp::encode::openai_chat::encode_request(&decoded, "gpt-5.4");
+        let messages = encoded["messages"].as_array().expect("chat messages");
+
+        assert_eq!(messages[0]["role"], json!("system"));
+        assert_eq!(messages[0]["content"], json!("system policy"));
+        assert_eq!(messages[1]["role"], json!("developer"));
+        assert_eq!(
+            messages[1]["content"],
+            json!([
+                { "type": "text", "text": "developer policy" },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/policy.png",
+                        "detail": "high"
+                    }
+                }
+            ])
+        );
+        assert_eq!(messages[2]["role"], json!("user"));
+        assert_eq!(messages[2]["content"], json!("answer"));
+    }
+
+    #[test]
+    fn structured_instructions_map_to_messages_system_text_blocks() {
+        let source = json!({
+            "model": "gpt-5.4",
+            "instructions": [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": "system policy"
+                },
+                { "type": "input_text", "text": "developer policy" }
+            ],
+            "input": "answer"
+        });
+
+        let decoded = decode_request(&source).expect("decode Responses request");
+        let encoded = crate::urp::encode::anthropic::encode_request(&decoded, "claude-sonnet");
+
+        assert_eq!(
+            encoded["system"],
+            json!([
+                { "type": "text", "text": "system policy" },
+                { "type": "text", "text": "developer policy" }
+            ])
+        );
+        assert_eq!(
+            encoded["messages"],
+            json!([{ "role": "user", "content": [{ "type": "text", "text": "answer" }] }])
+        );
+    }
+
+    #[test]
+    fn structured_instruction_message_roles_are_not_rewritten() {
+        let source = json!({
+            "model": "gpt-5.4",
+            "instructions": [
+                { "type": "message", "role": "user", "content": "user context" },
+                { "type": "message", "role": "assistant", "content": "assistant context" }
+            ],
+            "input": "answer"
+        });
+
+        let decoded = decode_request(&source).expect("decode Responses request");
+        assert!(matches!(
+            &decoded.input[0],
+            Node::Text {
+                role: OrdinaryRole::User,
+                content,
+                ..
+            } if content == "user context"
+        ));
+        assert!(matches!(
+            &decoded.input[1],
+            Node::Text {
+                role: OrdinaryRole::Assistant,
+                content,
+                ..
+            } if content == "assistant context"
+        ));
     }
 
     #[test]
@@ -1043,10 +1516,11 @@ mod tests {
 
         let mut decoded = decode_request(&source).expect("decode Responses request");
         decoded.response_format = Some(crate::urp::ResponseFormat::JsonObject);
+        decoded.verbosity = Some("high".to_string());
 
         let encoded = crate::urp::encode::openai_responses::encode_request(&decoded, "gpt-5.4");
         assert_eq!(encoded["text"]["format"], json!({ "type": "json_object" }));
-        assert_eq!(encoded["text"]["verbosity"], json!("low"));
+        assert_eq!(encoded["text"]["verbosity"], json!("high"));
         assert_eq!(
             encoded["text"]["future_text_field"],
             json!({ "enabled": true })
@@ -1124,6 +1598,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: HashMap::new(),
@@ -1175,6 +1651,82 @@ mod tests {
             .expect("input_details should be present");
         assert_eq!(details.cache_read_tokens, 0);
         assert_eq!(details.cache_creation_tokens, 98);
+    }
+
+    #[test]
+    fn responses_usage_preserves_nested_unknown_details() {
+        let response = json!({
+            "id": "resp_usage_details",
+            "object": "response",
+            "created_at": 0,
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 9,
+                "input_tokens_details": {
+                    "cached_tokens": 4,
+                    "vendor_input_detail": { "kind": "warm" },
+                    "_monoize_spoofed_input": true
+                },
+                "output_tokens_details": {
+                    "reasoning_tokens": 6,
+                    "vendor_output_detail": [3, 4],
+                    "_monoize_spoofed_output": true
+                },
+                "vendor_usage_counter": 10,
+                "_monoize_spoofed_usage": true
+            }
+        });
+
+        let usage = decode_response(&response)
+            .expect("decode Responses response")
+            .usage
+            .expect("Responses usage");
+        assert_eq!(
+            usage
+                .input_details
+                .expect("input details")
+                .cache_read_tokens,
+            4
+        );
+        assert_eq!(
+            usage
+                .output_details
+                .expect("output details")
+                .reasoning_tokens,
+            6
+        );
+        assert_eq!(
+            usage.extra_body["input_tokens_details"],
+            json!({ "vendor_input_detail": { "kind": "warm" } })
+        );
+        assert_eq!(
+            usage.extra_body["output_tokens_details"],
+            json!({ "vendor_output_detail": [3, 4] })
+        );
+        assert_eq!(usage.extra_body["vendor_usage_counter"], json!(10));
+        assert!(!usage.extra_body.contains_key("vendor_input_detail"));
+        assert!(!usage.extra_body.contains_key("vendor_output_detail"));
+        assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
+    }
+
+    #[test]
+    fn responses_usage_fallback_rejects_reserved_wire_keys() {
+        let usage = parse_usage_from_responses(
+            json!({
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "input_tokens_details": "invalid",
+                "vendor_usage_counter": 3,
+                "_monoize_spoofed_usage": true
+            })
+            .as_object()
+            .expect("usage object"),
+        );
+        assert_eq!(usage.extra_body["vendor_usage_counter"], json!(3));
+        assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
     }
 
     #[test]

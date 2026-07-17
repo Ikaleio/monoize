@@ -983,6 +983,66 @@ async fn messages_streaming_preserves_exact_messages_stop_reason() {
 }
 
 #[tokio::test]
+async fn messages_stream_native_server_tool_preserves_deltas_input_and_stop_sequence() {
+    let ctx = setup().await;
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "search natively" }] }],
+            "stream": true,
+            "stream_mode": "messages_server_tool_native"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "native Messages server tool stream");
+    assert_exactly_one_message_terminal_pair(&events, "native Messages server tool stream");
+    let block_start = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("content_block_start"))
+        .expect("server tool block start");
+    assert_eq!(
+        block_start["content_block"],
+        json!({
+            "type": "server_tool_use",
+            "id": "srvtoolu_1",
+            "name": "web_search",
+            "input": {}
+        })
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| { event["content_block"]["type"].as_str() != Some("tool_use") }),
+        "server_tool_use must remain opaque instead of becoming client tool_use: {events:?}"
+    );
+    let input_json_deltas: Vec<&str> = events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("input_json_delta"))
+        .filter_map(|event| event["delta"]["partial_json"].as_str())
+        .collect();
+    assert_eq!(
+        input_json_deltas,
+        vec!["{\"query\":\"mono", "ize\",\"max_uses\":2}"]
+    );
+
+    let message_delta = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("message_delta"))
+        .expect("terminal message_delta");
+    assert_eq!(
+        message_delta["delta"]["stop_reason"].as_str(),
+        Some("stop_sequence")
+    );
+    assert_eq!(
+        message_delta["delta"]["stop_sequence"].as_str(),
+        Some("<END>")
+    );
+}
+
+#[tokio::test]
 async fn messages_stream_passthrough_preserves_chunked_deltas_and_suppresses_upstream_ping() {
     let ctx = setup().await;
     let text = collect_messages_stream_text(
@@ -1853,6 +1913,117 @@ async fn messages_stream_response_done_output_does_not_replay_node_owned_surface
     );
 
     assert_non_interleaved_message_blocks(&events, "node-owned responses→msg mixed stream");
+}
+
+#[tokio::test]
+async fn messages_stream_response_done_output_drives_final_message_delta_and_stop() {
+    let ctx = setup().await;
+
+    let completed_only_events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "completed tool" }] }],
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }],
+            "stream": true,
+            "stream_mode": "completed_only_tool"
+        }),
+    )
+    .await;
+
+    assert_exactly_one_message_terminal_pair(
+        &completed_only_events,
+        "ResponseDone-only Messages stream",
+    );
+    assert_eq!(
+        completed_only_events
+            .iter()
+            .filter(|event| {
+                event["type"].as_str() == Some("content_block_start")
+                    && event["content_block"]["type"].as_str() == Some("tool_use")
+            })
+            .count(),
+        1,
+        "ResponseDone.output must reconstruct the terminal tool block"
+    );
+    let completed_only_delta = completed_only_events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("message_delta"))
+        .expect("completed-only terminal message_delta");
+    assert_eq!(
+        completed_only_delta["delta"]["stop_reason"].as_str(),
+        Some("tool_use"),
+        "the terminal finish reason derived from ResponseDone.output must drive message_delta"
+    );
+    assert_eq!(
+        completed_only_events.last().unwrap()["type"].as_str(),
+        Some("message_stop")
+    );
+
+    let node_owned_events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini",
+            "max_tokens": 64,
+            "thinking": { "type": "enabled", "budget_tokens": 2048 },
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "streamed tool" }] }],
+            "tools": [{ "name": "tool_a", "input_schema": { "type": "object", "additionalProperties": true } }],
+            "stream": true,
+            "stream_mode": "reasoning_text_tool"
+        }),
+    )
+    .await;
+
+    assert_exactly_one_message_terminal_pair(
+        &node_owned_events,
+        "node-owned ResponseDone Messages stream",
+    );
+    for surface in ["thinking", "text", "tool_use"] {
+        assert_eq!(
+            node_owned_events
+                .iter()
+                .filter(|event| {
+                    event["type"].as_str() == Some("content_block_start")
+                        && event["content_block"]["type"].as_str() == Some(surface)
+                })
+                .count(),
+            1,
+            "ResponseDone.output must not replay the already node-owned {surface} surface"
+        );
+    }
+    let text_deltas: Vec<&str> = node_owned_events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("text_delta"))
+        .filter_map(|event| event["delta"]["text"].as_str())
+        .collect();
+    assert_eq!(text_deltas, vec!["answer"]);
+    let thinking_deltas: Vec<&str> = node_owned_events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("thinking_delta"))
+        .filter_map(|event| event["delta"]["thinking"].as_str())
+        .collect();
+    assert_eq!(thinking_deltas, vec!["mock_reasoning"]);
+    let tool_deltas: Vec<&str> = node_owned_events
+        .iter()
+        .filter(|event| event["delta"]["type"].as_str() == Some("input_json_delta"))
+        .filter_map(|event| event["delta"]["partial_json"].as_str())
+        .collect();
+    assert_eq!(tool_deltas, vec!["{\"a\":1}"]);
+    let terminal_delta_index = node_owned_events
+        .iter()
+        .position(|event| event["type"].as_str() == Some("message_delta"))
+        .expect("node-owned terminal message_delta");
+    assert_eq!(
+        node_owned_events[terminal_delta_index]["delta"]["stop_reason"].as_str(),
+        Some("tool_use")
+    );
+    assert!(
+        node_owned_events[terminal_delta_index + 1..]
+            .iter()
+            .all(|event| event["type"].as_str() == Some("message_stop")),
+        "no content lifecycle may be replayed after the authoritative terminal delta"
+    );
 }
 
 #[tokio::test]

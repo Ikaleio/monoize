@@ -204,6 +204,7 @@ fn encode_tool_call_item(part: &Part) -> Option<Value> {
     match part {
         Part::ToolCall {
             id,
+            tool_type,
             call_id,
             name,
             arguments,
@@ -212,19 +213,39 @@ fn encode_tool_call_item(part: &Part) -> Option<Value> {
             let mut obj = Map::new();
             obj.insert(
                 "type".to_string(),
-                Value::String("function_call".to_string()),
+                Value::String(
+                    match tool_type {
+                        ToolCallType::Function => "function_call",
+                        ToolCallType::Custom => "custom_tool_call",
+                    }
+                    .to_string(),
+                ),
             );
             obj.insert(
                 "id".to_string(),
-                Value::String(normalize_openai_function_call_item_id(
-                    id.as_deref()
-                        .or_else(|| extra_body.get("id").and_then(Value::as_str)),
-                )),
+                Value::String(match tool_type {
+                    ToolCallType::Function => normalize_openai_function_call_item_id(
+                        id.as_deref()
+                            .or_else(|| extra_body.get("id").and_then(Value::as_str)),
+                    ),
+                    ToolCallType::Custom => id
+                        .as_deref()
+                        .or_else(|| extra_body.get("id").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("ctc_urp_{}", uuid::Uuid::new_v4().simple())),
+                }),
             );
             obj.insert("status".to_string(), Value::String("completed".to_string()));
             obj.insert("call_id".to_string(), Value::String(call_id.clone()));
             obj.insert("name".to_string(), Value::String(name.clone()));
-            obj.insert("arguments".to_string(), Value::String(arguments.clone()));
+            obj.insert(
+                match tool_type {
+                    ToolCallType::Function => "arguments",
+                    ToolCallType::Custom => "input",
+                }
+                .to_string(),
+                Value::String(arguments.clone()),
+            );
             merge_extra(&mut obj, extra_body);
             Some(Value::Object(obj))
         }

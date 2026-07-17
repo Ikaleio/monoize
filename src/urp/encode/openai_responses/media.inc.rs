@@ -41,6 +41,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -99,6 +101,8 @@ mod tests {
             }]),
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -172,6 +176,8 @@ mod tests {
             }]),
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -364,6 +370,7 @@ mod tests {
                     },
                     Part::ToolCall {
                         id: None,
+                        tool_type: ToolCallType::Function,
                         call_id: "call_1".to_string(),
                         name: "tool_a".to_string(),
                         arguments: "{}".to_string(),
@@ -563,6 +570,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -600,6 +609,7 @@ mod tests {
                     },
                     Part::ToolCall {
                         id: Some("fc_1".to_string()),
+                        tool_type: ToolCallType::Function,
                         call_id: "call_1".to_string(),
                         name: "lookup".to_string(),
                         arguments: "{}".to_string(),
@@ -616,6 +626,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -676,6 +688,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -730,6 +744,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -764,6 +780,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -811,6 +829,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: None,
             user: None,
             extra_body: empty_map(),
@@ -915,6 +935,68 @@ mod tests {
         assert_eq!(
             decoded_usage.extra_body.get("upstream_counter"),
             Some(&json!(42))
+        );
+    }
+
+    #[test]
+    fn responses_usage_nested_extra_preserves_siblings_and_typed_counters_win() {
+        let response = UrpResponse {
+            id: "resp_nested_usage".to_string(),
+            model: "gpt-5.4".to_string(),
+            created_at: None,
+            output: Vec::new(),
+            finish_reason: Some(FinishReason::Stop),
+            usage: Some(Usage {
+                input_tokens: 14,
+                output_tokens: 9,
+                input_details: Some(InputDetails {
+                    cache_read_tokens: 4,
+                    ..InputDetails::default()
+                }),
+                output_details: Some(OutputDetails {
+                    reasoning_tokens: 6,
+                    ..OutputDetails::default()
+                }),
+                extra_body: HashMap::from([
+                    (
+                        "input_tokens_details".to_string(),
+                        json!({
+                            "cached_tokens": 999,
+                            "vendor_input_detail": { "kind": "warm" },
+                            "_monoize_hidden": true
+                        }),
+                    ),
+                    (
+                        "output_tokens_details".to_string(),
+                        json!({
+                            "reasoning_tokens": 999,
+                            "vendor_output_detail": [3, 4]
+                        }),
+                    ),
+                ]),
+            }),
+            extra_body: empty_map(),
+        };
+
+        let encoded = encode_response(&response, "gpt-5.4");
+        assert_eq!(
+            encoded["usage"]["input_tokens_details"],
+            json!({
+                "cached_tokens": 4,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "tool_prompt_tokens": 0,
+                "vendor_input_detail": { "kind": "warm" }
+            })
+        );
+        assert_eq!(
+            encoded["usage"]["output_tokens_details"],
+            json!({
+                "reasoning_tokens": 6,
+                "accepted_prediction_tokens": 0,
+                "rejected_prediction_tokens": 0,
+                "vendor_output_detail": [3, 4]
+            })
         );
     }
 
@@ -1085,6 +1167,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            stop: None,
+            verbosity: None,
             response_format: Some(ResponseFormat::JsonObject),
             user: None,
             extra_body: empty_map(),

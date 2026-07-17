@@ -7,7 +7,7 @@ use crate::handlers::usage::{
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::{
     FinishReason, InputDetails, MESSAGES_STREAM_START_USAGE_EXTRA_KEY, Node, NodeDelta, NodeHeader,
-    OrdinaryRole, OutputDetails, ProviderProtocol, UrpStreamEvent, Usage,
+    OrdinaryRole, OutputDetails, ProviderProtocol, ToolCallType, UrpStreamEvent, Usage,
 };
 use axum::http::StatusCode;
 use eventsource_stream::Eventsource;
@@ -16,6 +16,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+
+const MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY: &str =
+    "_monoize_messages_provider_item_start_body";
 
 #[derive(Debug, Default)]
 struct AnthropicMessagesStreamState {
@@ -27,6 +30,7 @@ struct AnthropicMessagesStreamState {
     usage: AnthropicStreamUsageAccumulator,
     finish_reason: Option<FinishReason>,
     exact_stop_reason: Option<String>,
+    exact_stop_sequence: Option<Value>,
     saw_terminal_delta: bool,
     response_done_sent: bool,
 }
@@ -137,6 +141,7 @@ impl AnthropicStreamUsageAccumulator {
             );
             let mut unknown_output_details = output_details.clone();
             unknown_output_details.remove("thinking_tokens");
+            unknown_output_details.retain(|key, _| !crate::urp::decode::is_internal_extra_key(key));
             if !unknown_output_details.is_empty() {
                 let incoming = Value::Object(unknown_output_details);
                 match self.extra_body.get_mut("output_tokens_details") {
@@ -172,7 +177,9 @@ impl AnthropicStreamUsageAccumulator {
             "rejected_prediction_output_tokens",
         ];
         for (key, value) in usage {
-            if !KNOWN_USAGE_KEYS.contains(&key.as_str()) {
+            if !KNOWN_USAGE_KEYS.contains(&key.as_str())
+                && !crate::urp::decode::is_internal_extra_key(key)
+            {
                 match self.extra_body.get_mut(key) {
                     Some(existing) => merge_cumulative_usage_value(existing, value),
                     None => {
@@ -295,7 +302,41 @@ enum ActiveNodeKind {
         id: Option<String>,
         item_type: String,
         body: Value,
+        input_json: ProviderItemInputJsonAccumulator,
     },
+}
+
+#[derive(Debug, Clone)]
+struct ProviderItemInputJsonAccumulator {
+    assembled: String,
+    replace_on_next_delta: bool,
+    saw_delta: bool,
+}
+
+impl ProviderItemInputJsonAccumulator {
+    fn from_content_block(content_block: &Value) -> Self {
+        let input = content_block.get("input");
+        Self {
+            assembled: json_value_to_string(input),
+            replace_on_next_delta: tool_use_input_is_placeholder(input),
+            saw_delta: false,
+        }
+    }
+
+    fn merge_delta(&mut self, delta: &Value) {
+        if delta.get("type").and_then(Value::as_str) != Some("input_json_delta") {
+            return;
+        }
+        let Some(partial_json) = delta.get("partial_json").and_then(Value::as_str) else {
+            return;
+        };
+        if self.replace_on_next_delta {
+            self.assembled.clear();
+            self.replace_on_next_delta = false;
+        }
+        self.assembled.push_str(partial_json);
+        self.saw_delta = true;
+    }
 }
 
 pub(crate) async fn stream_messages_to_urp_events(
@@ -567,12 +608,19 @@ fn handle_content_block_start(
     }
     let node = node_from_active(&active_node);
     let extra_body = active_node.extra_body.clone();
+    let mut start_extra_body = extra_body.clone();
+    if let ActiveNodeKind::ProviderItem { body, .. } = &active_node.kind {
+        start_extra_body.insert(
+            MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY.to_string(),
+            body.clone(),
+        );
+    }
     state.active_nodes.insert(node_index, active_node);
 
     vec![UrpStreamEvent::NodeStart {
         node_index,
         header: node_header_from_node(&node),
-        extra_body,
+        extra_body: start_extra_body,
     }]
 }
 
@@ -663,6 +711,12 @@ fn handle_content_block_delta(
             arguments.push_str(arguments_delta);
             NodeDelta::ToolCallArguments {
                 arguments: arguments_delta.to_string(),
+            }
+        }
+        (ActiveNodeKind::ProviderItem { input_json, .. }, _) => {
+            input_json.merge_delta(&delta_value);
+            NodeDelta::ProviderItem {
+                data: delta_value.clone(),
             }
         }
         _ => return Vec::new(),
@@ -786,6 +840,7 @@ fn active_node_from_content_block(content_block: &Value) -> Option<ActiveNodeSta
                     .or_else(|| Some(crate::urp::synthetic_provider_item_id())),
                 item_type: content_type.to_string(),
                 body: content_block.clone(),
+                input_json: ProviderItemInputJsonAccumulator::from_content_block(content_block),
             },
             extra_body: HashMap::new(),
         }),
@@ -827,6 +882,7 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             ..
         } => Node::ToolCall {
             id: Some(call_id.clone()),
+            tool_type: ToolCallType::Function,
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),
@@ -836,12 +892,13 @@ fn node_from_active(active_node: &ActiveNodeState) -> Node {
             id,
             item_type,
             body,
+            input_json,
         } => Node::ProviderItem {
             id: id.clone(),
             origin_protocol: ProviderProtocol::Messages,
             role: OrdinaryRole::Assistant,
             item_type: item_type.clone(),
-            body: body.clone(),
+            body: provider_item_terminal_body(body, input_json),
             extra_body: active_node.extra_body.clone(),
         },
     }
@@ -857,8 +914,14 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
         Node::Reasoning { .. } => NodeHeader::Reasoning {
             id: node.id().cloned(),
         },
-        Node::ToolCall { call_id, name, .. } => NodeHeader::ToolCall {
+        Node::ToolCall {
+            tool_type,
+            call_id,
+            name,
+            ..
+        } => NodeHeader::ToolCall {
             id: node.id().cloned(),
+            tool_type: *tool_type,
             call_id: call_id.clone(),
             name: name.clone(),
         },
@@ -888,8 +951,11 @@ fn node_header_from_node(node: &Node) -> NodeHeader {
             role: *role,
             item_type: item_type.clone(),
         },
-        Node::ToolResult { call_id, .. } => NodeHeader::ToolResult {
+        Node::ToolResult {
+            tool_type, call_id, ..
+        } => NodeHeader::ToolResult {
             id: node.id().cloned(),
+            tool_type: *tool_type,
             call_id: call_id.clone(),
         },
         Node::NextDownstreamEnvelopeExtra { .. } => NodeHeader::NextDownstreamEnvelopeExtra,
@@ -918,6 +984,9 @@ fn take_response_done(
             "stop_reason".to_string(),
             Value::String(stop_reason.clone()),
         );
+    }
+    if let Some(stop_sequence) = state.exact_stop_sequence.as_ref() {
+        extra_body.insert("stop_sequence".to_string(), stop_sequence.clone());
     }
     Some(UrpStreamEvent::ResponseDone {
         finish_reason: state.finish_reason.clone(),
@@ -958,12 +1027,30 @@ fn tool_use_input_is_placeholder(value: Option<&Value>) -> bool {
             .is_some_and(|obj| obj.is_empty())
 }
 
+fn provider_item_terminal_body(
+    body: &Value,
+    input_json: &ProviderItemInputJsonAccumulator,
+) -> Value {
+    let mut terminal_body = body.clone();
+    if !input_json.saw_delta {
+        return terminal_body;
+    }
+    let input = serde_json::from_str(&input_json.assembled)
+        .unwrap_or_else(|_| Value::String(input_json.assembled.clone()));
+    if let Some(object) = terminal_body.as_object_mut() {
+        object.insert("input".to_string(), input);
+    }
+    terminal_body
+}
+
 fn object_without_keys(value: &Value, ignored: &[&str]) -> HashMap<String, Value> {
     let Some(obj) = value.as_object() else {
         return HashMap::new();
     };
     obj.iter()
-        .filter(|(key, _)| !ignored.contains(&key.as_str()))
+        .filter(|(key, _)| {
+            !crate::urp::decode::is_internal_extra_key(key) && !ignored.contains(&key.as_str())
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
@@ -1022,9 +1109,14 @@ fn messages_stream_error_parts(
 }
 
 fn merge_message_delta_state(state: &mut AnthropicMessagesStreamState, event: &Value) {
-    let Some(stop_reason) = event
-        .get("delta")
-        .and_then(|value| value.get("stop_reason"))
+    let Some(delta) = event.get("delta").and_then(Value::as_object) else {
+        return;
+    };
+    if let Some(stop_sequence) = delta.get("stop_sequence") {
+        state.exact_stop_sequence = Some(stop_sequence.clone());
+    }
+    let Some(stop_reason) = delta
+        .get("stop_reason")
         .and_then(Value::as_str)
         .filter(|reason| !reason.is_empty())
     else {
@@ -1260,6 +1352,91 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_provider_item_input_json_delta_preserves_terminal_input() {
+        let mut state = AnthropicMessagesStreamState::default();
+        let native_start = json!({
+            "type": "server_tool_use",
+            "id": "srvtoolu_1",
+            "name": "web_search",
+            "input": {}
+        });
+
+        let start_events = handle_content_block_start(0, native_start.clone(), &mut state);
+        assert!(matches!(
+            start_events.as_slice(),
+            [UrpStreamEvent::NodeStart {
+                header: NodeHeader::ProviderItem {
+                    origin_protocol: ProviderProtocol::Messages,
+                    item_type,
+                    ..
+                },
+                extra_body,
+                ..
+            }] if item_type == "server_tool_use"
+                && extra_body.get(MESSAGES_PROVIDER_ITEM_START_BODY_EXTRA_KEY) == Some(&native_start)
+        ));
+
+        let first_delta = json!({
+            "type": "input_json_delta",
+            "partial_json": "{\"query\":\"mono"
+        });
+        let second_delta = json!({
+            "type": "input_json_delta",
+            "partial_json": "ize\",\"max_uses\":2}"
+        });
+        let first_events = handle_content_block_delta(0, first_delta.clone(), &mut state);
+        let second_events = handle_content_block_delta(0, second_delta.clone(), &mut state);
+        assert!(matches!(
+            first_events.as_slice(),
+            [UrpStreamEvent::NodeDelta {
+                delta: NodeDelta::ProviderItem { data },
+                ..
+            }] if data == &first_delta
+        ));
+        assert!(matches!(
+            second_events.as_slice(),
+            [UrpStreamEvent::NodeDelta {
+                delta: NodeDelta::ProviderItem { data },
+                ..
+            }] if data == &second_delta
+        ));
+
+        let done_events = handle_content_block_stop(0, &mut state);
+        assert!(matches!(
+            done_events.as_slice(),
+            [UrpStreamEvent::NodeDone {
+                node: Node::ProviderItem {
+                    origin_protocol: ProviderProtocol::Messages,
+                    item_type,
+                    body,
+                    ..
+                },
+                ..
+            }] if item_type == "server_tool_use"
+                && body["input"] == json!({ "query": "monoize", "max_uses": 2 })
+        ));
+        assert!(matches!(
+            ordered_completed_nodes(&state).as_slice(),
+            [Node::ProviderItem { body, .. }]
+                if body["input"] == json!({ "query": "monoize", "max_uses": 2 })
+        ));
+        merge_message_delta_state(
+            &mut state,
+            &json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": "end_turn", "stop_sequence": Value::Null }
+            }),
+        );
+        let response_done = take_response_done(&mut state, &HashMap::new()).expect("response done");
+        assert!(matches!(
+            response_done,
+            UrpStreamEvent::ResponseDone { output, .. }
+                if matches!(output.as_slice(), [Node::ProviderItem { body, .. }]
+                    if body["input"] == json!({ "query": "monoize", "max_uses": 2 }))
+        ));
+    }
+
+    #[test]
     fn anthropic_partial_usage_is_merged_cumulatively() {
         let mut usage = AnthropicStreamUsageAccumulator::default();
 
@@ -1400,6 +1577,32 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_terminal_event_preserves_stop_sequence() {
+        let mut state = AnthropicMessagesStreamState::default();
+        merge_message_delta_state(
+            &mut state,
+            &json!({
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "stop_sequence",
+                    "stop_sequence": "<END>"
+                }
+            }),
+        );
+
+        let event = take_response_done(&mut state, &HashMap::new()).expect("terminal event");
+        assert!(matches!(
+            event,
+            UrpStreamEvent::ResponseDone {
+                finish_reason: Some(FinishReason::Stop),
+                extra_body,
+                ..
+            } if extra_body.get("stop_reason") == Some(&json!("stop_sequence"))
+                && extra_body.get("stop_sequence") == Some(&json!("<END>"))
+        ));
+    }
+
+    #[test]
     fn anthropic_tool_use_without_input_delta_keeps_non_placeholder_input() {
         let mut state = AnthropicMessagesStreamState::default();
 
@@ -1423,5 +1626,58 @@ mod tests {
                 ..
             } if arguments == "{\"a\":1}"
         ));
+    }
+
+    #[test]
+    fn messages_stream_rejects_reserved_wire_extras_but_keeps_decoder_markers() {
+        let extra = object_without_keys(
+            &json!({
+                "type": "text",
+                "vendor_block_counter": 7,
+                "_monoize_spoofed_block": true
+            }),
+            &["type"],
+        );
+        assert_eq!(extra.get("vendor_block_counter"), Some(&json!(7)));
+        assert!(!extra.contains_key("_monoize_spoofed_block"));
+
+        let mut usage = AnthropicStreamUsageAccumulator::default();
+        let usage = usage
+            .merge_event(&json!({
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 2,
+                    "vendor_usage_counter": 3,
+                    "_monoize_spoofed_usage": true,
+                    "output_tokens_details": {
+                        "thinking_tokens": 1,
+                        "vendor_detail": 4,
+                        "_monoize_spoofed_detail": true
+                    }
+                }
+            }))
+            .expect("usage");
+        assert_eq!(usage.extra_body["vendor_usage_counter"], json!(3));
+        assert_eq!(
+            usage.extra_body["output_tokens_details"],
+            json!({ "vendor_detail": 4 })
+        );
+        assert!(!usage.extra_body.contains_key("_monoize_spoofed_usage"));
+
+        let mut state = AnthropicMessagesStreamState::default();
+        handle_content_block_start(
+            0,
+            json!({ "type": "thinking", "thinking": "", "signature": "" }),
+            &mut state,
+        );
+        let events = handle_content_block_delta(
+            0,
+            json!({ "type": "thinking_delta", "thinking": "x" }),
+            &mut state,
+        );
+        assert!(
+            matches!(events.as_slice(), [UrpStreamEvent::NodeDelta { extra_body, .. }]
+            if extra_body.get("_monoize_summary_from_messages_thinking") == Some(&json!(true)))
+        );
     }
 }
