@@ -25,6 +25,7 @@ type StreamSummary = {
   finishCount: number;
   toolCallCount: number;
   toolResultCount: number;
+  toolResultOutputs: unknown[];
   rawFunctionCallItemCount: number;
   partTypes: string[];
 };
@@ -34,6 +35,16 @@ type FullStreamLike = {
 };
 
 const MAX_OUTPUT_TOKENS = 512;
+const REQUEST_TIMEOUT_MS = 120_000;
+
+function prepareLookupWeatherStep({ stepNumber }: { stepNumber: number }) {
+  return {
+    toolChoice:
+      stepNumber === 0
+        ? ({ type: "tool", toolName: "lookupWeather" } as const)
+        : ("auto" as const),
+  };
+}
 
 function printUsage(): void {
   console.log("Usage: bun run live-protocol-suite.ts <baseURL> <apiKey> <model>");
@@ -139,12 +150,21 @@ function collectToolResults(result: unknown): unknown[] {
   });
 }
 
+function serializedValueContains(value: unknown, expected: string): boolean {
+  try {
+    return JSON.stringify(value).includes(expected);
+  } catch {
+    return false;
+  }
+}
+
 async function collectFullStream(result: FullStreamLike): Promise<StreamSummary> {
   let text = "";
   let textDeltaCount = 0;
   let finishCount = 0;
   let toolCallCount = 0;
   let toolResultCount = 0;
+  const toolResultOutputs: unknown[] = [];
   let rawFunctionCallItemCount = 0;
   const partTypes: string[] = [];
 
@@ -164,6 +184,7 @@ async function collectFullStream(result: FullStreamLike): Promise<StreamSummary>
       toolCallCount += 1;
     } else if (type === "tool-result") {
       toolResultCount += 1;
+      toolResultOutputs.push(part.output);
     } else if (type === "raw") {
       const rawValue = part.rawValue as { item?: { type?: unknown } } | undefined;
       if (rawValue?.item?.type === "function_call") {
@@ -178,18 +199,20 @@ async function collectFullStream(result: FullStreamLike): Promise<StreamSummary>
     finishCount,
     toolCallCount,
     toolResultCount,
+    toolResultOutputs,
     rawFunctionCallItemCount,
     partTypes,
   };
 }
 
-function makeLookupWeatherTool(payload: string) {
+function makeLookupWeatherTool(verificationCode: string) {
   return tool({
     description: "Return deterministic weather data for a city.",
     inputSchema: z.object({
       city: z.string(),
     }),
-    execute: async ({ city }) => `${payload}:${city}:sunny:25c`,
+    execute: async ({ city }) =>
+      `Weather for ${city}: sunny, 25 C. Verification code: ${verificationCode}.`,
   });
 }
 
@@ -199,6 +222,7 @@ async function runBasicTextCheck(testCase: ProtocolCase): Promise<void> {
     model: testCase.model,
     prompt: `Reply with the exact token ${sentinel}. Do not add code fences.`,
     maxOutputTokens: MAX_OUTPUT_TOKENS,
+    timeout: REQUEST_TIMEOUT_MS,
     experimental_include: { responseBody: true },
   });
 
@@ -217,6 +241,7 @@ async function runStreamingTextCheck(testCase: ProtocolCase): Promise<void> {
     model: testCase.model,
     prompt: `Reply with the exact token ${sentinel}. Do not add code fences.`,
     maxOutputTokens: MAX_OUTPUT_TOKENS,
+    timeout: REQUEST_TIMEOUT_MS,
   });
   const stream = await collectFullStream(result);
 
@@ -235,19 +260,19 @@ async function runStreamingTextCheck(testCase: ProtocolCase): Promise<void> {
 
 async function runToolLoopCheck(testCase: ProtocolCase): Promise<void> {
   const sentinel = `LIVE_${testCase.protocol.toUpperCase()}_TOOL_OK`;
-  const payload = `${sentinel}_PAYLOAD`;
-  const expectedToolOutput = `${payload}:Taipei:sunny:25c`;
+  const expectedToolOutput = `Weather for Taipei: sunny, 25 C. Verification code: ${sentinel}.`;
   const result = await generateText({
     model: testCase.model,
     prompt:
       `Call lookupWeather for city Taipei. ` +
-      `After the tool result is available, reply with the exact tool payload ${expectedToolOutput}.`,
+      `After the tool result is available, reply with one sentence that includes its verification code exactly.`,
     tools: {
-      lookupWeather: makeLookupWeatherTool(payload),
+      lookupWeather: makeLookupWeatherTool(sentinel),
     },
-    toolChoice: { type: "tool", toolName: "lookupWeather" },
+    prepareStep: prepareLookupWeatherStep,
     stopWhen: stepCountIs(4),
     maxOutputTokens: MAX_OUTPUT_TOKENS,
+    timeout: REQUEST_TIMEOUT_MS,
     experimental_include: { responseBody: true },
   });
 
@@ -261,9 +286,13 @@ async function runToolLoopCheck(testCase: ProtocolCase): Promise<void> {
     throw new Error("result.steps did not contain a tool result");
   }
 
-  if (!result.text.includes(expectedToolOutput)) {
+  if (!serializedValueContains(toolResults, expectedToolOutput)) {
+    throw new Error("result.steps did not preserve the deterministic tool result output");
+  }
+
+  if (!result.text.includes(sentinel)) {
     throw new Error(
-      `final text did not contain ${expectedToolOutput}; text=${JSON.stringify(result.text)}`,
+      `final text did not contain ${sentinel}; text=${JSON.stringify(result.text)}`,
     );
   }
 
@@ -274,19 +303,19 @@ async function runToolLoopCheck(testCase: ProtocolCase): Promise<void> {
 
 async function runStreamingToolLoopCheck(testCase: ProtocolCase): Promise<void> {
   const sentinel = `LIVE_${testCase.protocol.toUpperCase()}_STREAM_TOOL_OK`;
-  const payload = `${sentinel}_PAYLOAD`;
-  const expectedToolOutput = `${payload}:Taipei:sunny:25c`;
+  const expectedToolOutput = `Weather for Taipei: sunny, 25 C. Verification code: ${sentinel}.`;
   const result = streamText({
     model: testCase.model,
     prompt:
       `Call lookupWeather for city Taipei. ` +
-      `After the tool result is available, reply with the exact tool payload ${expectedToolOutput}.`,
+      `After the tool result is available, reply with one sentence that includes its verification code exactly.`,
     tools: {
-      lookupWeather: makeLookupWeatherTool(payload),
+      lookupWeather: makeLookupWeatherTool(sentinel),
     },
-    toolChoice: { type: "tool", toolName: "lookupWeather" },
+    prepareStep: prepareLookupWeatherStep,
     stopWhen: stepCountIs(4),
     maxOutputTokens: MAX_OUTPUT_TOKENS,
+    timeout: REQUEST_TIMEOUT_MS,
     includeRawChunks: testCase.protocol === "responses",
   });
   const stream = await collectFullStream(result);
@@ -299,12 +328,16 @@ async function runStreamingToolLoopCheck(testCase: ProtocolCase): Promise<void> 
     throw new Error(`stream produced no tool-result events; partTypes=${stream.partTypes.join(",")}`);
   }
 
+  if (!stream.toolResultOutputs.some(output => serializedValueContains(output, expectedToolOutput))) {
+    throw new Error("stream tool-result events did not preserve the deterministic tool output");
+  }
+
   if (stream.finishCount !== 1) {
     throw new Error(`stream produced ${stream.finishCount} finish events; expected 1`);
   }
 
-  if (!stream.text.includes(expectedToolOutput)) {
-    throw new Error(`stream text did not contain ${expectedToolOutput}; text=${JSON.stringify(stream.text)}`);
+  if (!stream.text.includes(sentinel)) {
+    throw new Error(`stream text did not contain ${sentinel}; text=${JSON.stringify(stream.text)}`);
   }
 
   if (testCase.protocol === "responses" && stream.rawFunctionCallItemCount < 1) {

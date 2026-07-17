@@ -203,9 +203,9 @@ SDK59. The `lookupWeather` tool MUST accept an object containing `city: string` 
 
 SDK60. Each tool-loop check MUST use `stopWhen = stepCountIs(n)` for some integer `n >= 3`.
 
-SDK61. Each tool-loop check MUST require `result.steps` to contain at least one tool call and at least one tool result.
+SDK61. Each tool-loop check MUST require `result.steps` to contain at least one tool call and at least one tool result whose output contains the complete deterministic tool payload from SDK59.
 
-SDK62. Each tool-loop check MUST require the final generated text to contain the deterministic tool payload from SDK59.
+SDK62. Each tool-loop check MUST require the final generated text to contain the check-specific sentinel string from the deterministic tool payload in SDK59.
 
 SDK63. The Responses non-streaming text generation check MUST require the provider response body to contain an `output` array.
 
@@ -223,6 +223,10 @@ SDK69. `sdk-tests/live-protocol-suite.ts` MUST run one streaming tool-loop check
 
 SDK70. Each streaming tool-loop check MUST call `streamText` with the same deterministic `lookupWeather` contract as SDK58-SDK60.
 
-SDK71. Each streaming tool-loop check MUST consume `fullStream`, MUST require at least one `tool-call` event, MUST require at least one `tool-result` event, MUST require one finish event, and MUST require the aggregated text to contain the deterministic tool payload from SDK59.
+SDK71. Each streaming tool-loop check MUST consume `fullStream`, MUST require at least one `tool-call` event, MUST require at least one `tool-result` event whose output contains the complete deterministic tool payload from SDK59, MUST require one finish event, and MUST require the aggregated text to contain the check-specific sentinel string from that payload.
 
 SDK72. The Responses streaming tool-loop check MUST enable raw chunk inclusion and MUST require at least one raw Responses event whose item type is `function_call`.
+
+SDK73. Each tool-loop check MUST use `prepareStep` to force the named `lookupWeather` tool only when `stepNumber = 0`. For every later step, `prepareStep` MUST set `toolChoice = "auto"` so the model can emit the final assistant text after receiving the tool result. The runner MUST NOT apply a forced tool choice to every step.
+
+SDK74. Every `generateText` and `streamText` call in the live protocol suite MUST set a timeout of 120000 milliseconds. A request that exceeds this timeout MUST fail its check instead of waiting without a bound.
