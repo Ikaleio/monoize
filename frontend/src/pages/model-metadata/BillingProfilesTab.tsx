@@ -240,7 +240,7 @@ export function BillingProfilesTab() {
 		}
 	}
 
-	const deleteManualOverrides = async (profile: string, model: string, modelRates: BillingRateRecord[]) => {
+	const deleteManualOverrides = async (modelRates: BillingRateRecord[]) => {
 		const manual = modelRates.filter(rate => rate.source === 'manual')
 		for (const rate of manual) await deleteBillingRateOptimistic(rate.id, rates)
 		toast.success(c('已恢复 models.dev 价格', 'Restored models.dev pricing'))
@@ -294,7 +294,7 @@ export function BillingProfilesTab() {
 							return <div key={model} className='grid gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/30 md:grid-cols-[minmax(220px,1fr)_110px_110px_110px_90px] md:items-center'>
 								<div className='flex min-w-0 items-center gap-2'><ModelBadge model={model} provider={metadataItem?.models_dev_provider || selectedProfile} showDetails={false} /><div className='min-w-0'>{manual ? <Badge variant='default' className='mt-1 text-[10px]'>{c('手动覆盖', 'Manual')}</Badge> : null}</div></div>
 								{visibleUsageClasses.map(item => <div key={item.id} className='flex items-center justify-between gap-3 md:block'><span className='text-xs text-muted-foreground md:hidden'>{item.label}</span><span className='font-mono text-sm'>{nanoToPerMillion(effectiveRate(modelRates, item.id)?.unit_price_nano_usd)}</span></div>)}
-								<div className='flex justify-end gap-1'><Button size='sm' variant='ghost' onClick={() => openOverride(selectedProfile, model, modelRates)}>{c('编辑', 'Edit')}</Button>{manual ? <Button size='icon' variant='ghost' onClick={() => void deleteManualOverrides(selectedProfile, model, modelRates)} aria-label={c('删除手动覆盖', 'Delete manual override')}><Trash2 data-icon /></Button> : null}</div>
+								<div className='flex justify-end gap-1'><Button size='sm' variant='ghost' onClick={() => openOverride(selectedProfile, model, modelRates)}>{c('编辑', 'Edit')}</Button>{manual ? <Button size='icon' variant='ghost' onClick={() => void deleteManualOverrides(modelRates)} aria-label={c('删除手动覆盖', 'Delete manual override')}><Trash2 data-icon /></Button> : null}</div>
 							</div>
 						})}
 						{selectedModelRates.length === 0 ? <div className='rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground'>{c('这个 Profile 没有匹配的模型。', 'No models match this profile.')}</div> : null}

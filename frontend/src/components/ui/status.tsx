@@ -53,7 +53,7 @@ function StatusDot({ className, variant, ...props }: StatusDotProps) {
   return <span className={cn("inline-block h-2 w-2 rounded-full", statusClasses[variant].dot, className)} {...props} />;
 }
 
-export interface StatusAlertProps extends React.HTMLAttributes<HTMLDivElement> {
+export interface StatusAlertProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
   variant: StatusVariant;
   title?: React.ReactNode;
   description?: React.ReactNode;

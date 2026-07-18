@@ -3,7 +3,7 @@ import * as React from "react";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-export interface EmptyStateProps extends React.HTMLAttributes<HTMLDivElement> {
+export interface EmptyStateProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
   variant?: "card" | "inline";
   icon?: React.ReactNode;
   title: React.ReactNode;

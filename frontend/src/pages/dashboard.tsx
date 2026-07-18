@@ -191,7 +191,7 @@ export function DashboardPage() {
   const { data: analysisAnalytics, isLoading: analysisAnalyticsLoading } = useDashboardAnalytics(8, 24);
   const { data: publicSettings, isLoading: publicSettingsLoading } = usePublicSettings();
 
-  const rawLogs = requestLogsResponse?.data ?? [];
+  const rawLogs = useMemo(() => requestLogsResponse?.data ?? [], [requestLogsResponse?.data]);
   const totalRequests = requestLogsResponse?.total ?? 0;
 
   const perfStats = useMemo(() => {
@@ -201,8 +201,9 @@ export function DashboardPage() {
 
     for (const log of rawLogs) {
       if (log.status === "success") successCount++;
-      if (log.timing?.ttfb_ms != null && log.timing.ttfb_ms > 0) {
-        ttfbSum += log.timing.ttfb_ms;
+      const ttfbMs = Number(log.timing?.ttfb_ms);
+      if (Number.isFinite(ttfbMs) && ttfbMs > 0) {
+        ttfbSum += ttfbMs;
         ttfbCount++;
       }
     }

@@ -267,7 +267,7 @@ export function ProviderDialog({
 			}
 		}
 		const invalidTransform = findFirstInvalidTransformRule(form.transforms, transformRegistry)
-		if (invalidTransform) return invalidTransform.message
+		if (invalidTransform) return invalidTransform.errors[0]?.message ?? c('转换规则无效', 'Invalid transform rule')
 		return null
 	}
 

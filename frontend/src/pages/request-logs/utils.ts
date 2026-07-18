@@ -1,28 +1,74 @@
 import type { RequestLog } from '@/lib/api'
 
 type TimingValue = number | string | null | undefined
-type TpsSourceMode = 'exact' | 'estimated' | 'approx'
-
-const MIN_TPS_TOKENS = 8
-const MIN_TPS_DENOMINATOR_MS = 1000
 
 export type ComputedTps =
 	| {
 			state: 'display'
-			mode: TpsSourceMode | 'legacy'
 			value: number
 			tokens: number
 			denominatorMs: number
 	  }
 	| {
-			state: 'insufficient'
-			mode: TpsSourceMode | 'legacy'
-			tokens: number | null
-			denominatorMs: number | null
-	  }
-	| {
 			state: 'unavailable'
 	  }
+
+export type BillingValueDimension =
+	| 'usageClass'
+	| 'unit'
+	| 'modality'
+	| 'cacheTtl'
+	| 'contextTier'
+	| 'serviceTier'
+
+const BILLING_VALUE_TRANSLATION_KEYS: Record<
+	BillingValueDimension,
+	Record<string, string>
+> = {
+	usageClass: {
+		input_uncached: 'requestLogs.billingUsageInputUncached',
+		input_cached: 'requestLogs.billingUsageInputCached',
+		cache_read: 'requestLogs.billingUsageCacheRead',
+		cache_write_5m: 'requestLogs.billingUsageCacheWrite5m',
+		cache_write_1h: 'requestLogs.billingUsageCacheWrite1h',
+		output: 'requestLogs.billingUsageOutput',
+		reasoning_output: 'requestLogs.billingUsageReasoningOutput',
+		web_search: 'requestLogs.billingUsageWebSearch',
+		file_search_tool_call: 'requestLogs.billingUsageFileSearch',
+		x_search: 'requestLogs.billingUsageXSearch',
+		code_execution: 'requestLogs.billingUsageCodeExecution',
+		code_execution_duration: 'requestLogs.billingUsageCodeExecutionDuration',
+		code_interpreter_duration: 'requestLogs.billingUsageCodeExecutionDuration'
+	},
+	unit: {
+		token: 'requestLogs.billingUnitToken',
+		call: 'requestLogs.billingUnitCall',
+		request: 'requestLogs.billingUnitRequest',
+		billed_minute: 'requestLogs.billingUnitBilledMinute'
+	},
+	modality: {
+		text: 'requestLogs.billingModalityText',
+		image: 'requestLogs.billingModalityImage',
+		audio: 'requestLogs.billingModalityAudio',
+		video: 'requestLogs.billingModalityVideo'
+	},
+	cacheTtl: {
+		'5m': 'requestLogs.billingCacheTtl5m',
+		'1h': 'requestLogs.billingCacheTtl1h'
+	},
+	contextTier: {
+		default: 'requestLogs.billingTierDefault',
+		short: 'requestLogs.billingContextShort',
+		long: 'requestLogs.billingContextLong'
+	},
+	serviceTier: {
+		default: 'requestLogs.billingTierDefault',
+		standard: 'requestLogs.billingServiceStandard',
+		priority: 'requestLogs.billingServicePriority',
+		flex: 'requestLogs.billingServiceFlex',
+		batch: 'requestLogs.billingServiceBatch'
+	}
+}
 
 export type JsonObject = Record<string, unknown>
 
@@ -71,27 +117,12 @@ function parseTimingMs(value: TimingValue): number | null {
 	return null
 }
 
-function validTpsMode(value: unknown): TpsSourceMode | null {
-	return value === 'exact' || value === 'estimated' || value === 'approx' ?
-			value
-		:	null
-}
-
-function tpsFromBasis(
-	mode: TpsSourceMode | 'legacy',
-	tokens: number | null,
-	denominatorMs: number | null
-): ComputedTps {
-	if (tokens == null || denominatorMs == null) return { state: 'unavailable' }
-	if (tokens < MIN_TPS_TOKENS || denominatorMs < MIN_TPS_DENOMINATOR_MS) {
-		return { state: 'insufficient', mode, tokens, denominatorMs }
-	}
-	if (denominatorMs <= 0) {
-		return { state: 'insufficient', mode, tokens, denominatorMs }
+function tpsFromBasis(tokens: number | null, denominatorMs: number | null): ComputedTps {
+	if (tokens == null || tokens <= 0 || denominatorMs == null || denominatorMs <= 0) {
+		return { state: 'unavailable' }
 	}
 	return {
 		state: 'display',
-		mode,
 		value: tokens / (denominatorMs / 1000),
 		tokens,
 		denominatorMs
@@ -107,23 +138,28 @@ function legacyOutputTokens(log: RequestLog): number | null {
 }
 
 export function computeTps(log: RequestLog): ComputedTps {
+	const outputTokens = legacyOutputTokens(log)
 	const visibleTokens = readNumber(log.timing.visible_output_tokens)
 	const visibleGenerationMs = parseTimingMs(log.timing.visible_generation_ms)
-	if (visibleTokens != null && visibleGenerationMs != null) {
-		return tpsFromBasis(
-			validTpsMode(log.timing.tps_mode) ?? 'estimated',
-			visibleTokens,
-			visibleGenerationMs
-		)
-	}
-
 	const durationMs = getDurationMs(log)
 	const ttfbMs = getTtfbMs(log)
-	const legacyDenominatorMs =
+	const fallbackDenominatorMs =
 		durationMs == null ? null
 		: ttfbMs != null && durationMs > ttfbMs ? durationMs - ttfbMs
 		: durationMs
-	return tpsFromBasis('legacy', legacyOutputTokens(log), legacyDenominatorMs)
+	const denominatorMs =
+		visibleGenerationMs != null && visibleGenerationMs > 0 ?
+			visibleGenerationMs
+		: fallbackDenominatorMs
+	const tokens = outputTokens != null && outputTokens > 0 ? outputTokens : visibleTokens
+	return tpsFromBasis(tokens, denominatorMs)
+}
+
+export function billingValueTranslationKey(
+	dimension: BillingValueDimension,
+	value: string
+): string | null {
+	return BILLING_VALUE_TRANSLATION_KEYS[dimension][value] ?? null
 }
 
 export function getDurationMs(log: RequestLog): number | null {

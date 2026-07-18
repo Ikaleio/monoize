@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import {
 	Tooltip,
@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import type { RequestLog } from '@/lib/api'
 import {
 	asObject,
+	billingValueTranslationKey,
 	computeTps,
 	formatCost,
 	formatDuration,
@@ -39,6 +40,8 @@ export function LogRowCells({
 }: LogRowCellsProps) {
 	const rowTooltipIdsRef = useRef<Set<string>>(new Set())
 	const tooltipPrefix = log.request_id || log.id
+	const [durationTooltipOpen, setDurationTooltipOpen] = useState(false)
+	const [costTooltipOpen, setCostTooltipOpen] = useState(false)
 
 	const bindTooltipOpenChange = useCallback(
 		(suffix: string) => {
@@ -70,6 +73,14 @@ export function LogRowCells({
 	const inputTooltipOpenChange = bindTooltipOpenChange('input')
 	const outputTooltipOpenChange = bindTooltipOpenChange('output')
 	const costTooltipOpenChange = bindTooltipOpenChange('cost')
+	const handleDurationTooltipOpenChange = (open: boolean) => {
+		setDurationTooltipOpen(open)
+		durationTooltipOpenChange(open)
+	}
+	const handleCostTooltipOpenChange = (open: boolean) => {
+		setCostTooltipOpen(open)
+		costTooltipOpenChange(open)
+	}
 
 	const isConnectivityTest =
 		log.request_kind === 'active_probe_connectivity' && !log.api_key.name
@@ -90,10 +101,14 @@ export function LogRowCells({
 	const billingTier = asObject(billingSnapshot?.tier)
 	const multiplier = readNumber(billingSnapshot?.provider_multiplier)
 	const tokenLineItems = Array.isArray(billingSnapshot?.token_line_items) ?
-		billingSnapshot.token_line_items.map(asObject).filter(Boolean)
+		billingSnapshot.token_line_items
+			.map(asObject)
+			.filter((item): item is Record<string, unknown> => item != null)
 	:	[]
 	const meterLineItems = Array.isArray(billingSnapshot?.meter_line_items) ?
-		billingSnapshot.meter_line_items.map(asObject).filter(Boolean)
+		billingSnapshot.meter_line_items
+			.map(asObject)
+			.filter((item): item is Record<string, unknown> => item != null)
 	:	[]
 	const visibleTokenLineItems = tokenLineItems.filter((item) => {
 		const charge = readNanoString(item, 'charge_nano')
@@ -133,9 +148,19 @@ export function LogRowCells({
 			maximumFractionDigits: 6
 		})}/1M`
 	}
+	const localizeBillingValue = (
+		dimension: Parameters<typeof billingValueTranslationKey>[0],
+		value: unknown
+	) => {
+		if (typeof value !== 'string' || !value) return null
+		const translationKey = billingValueTranslationKey(dimension, value)
+		return translationKey ? t(translationKey) : value
+	}
 	const formatUnitRate = (nanoPerUnit: string | null, unit: unknown) => {
-		const unitLabel = typeof unit === 'string' && unit ? unit : 'unit'
-		return unitLabel === 'token' ?
+		const rawUnit = typeof unit === 'string' && unit ? unit : null
+		const unitLabel =
+			localizeBillingValue('unit', rawUnit) ?? t('requestLogs.billingUnitGeneric')
+		return rawUnit === 'token' ?
 				formatRatePerMillion(nanoPerUnit)
 			:	`${formatCost(nanoPerUnit)}/${unitLabel}`
 	}
@@ -159,14 +184,18 @@ export function LogRowCells({
 		return `${formatTokenCount(quantity)} × ${formatUnitRate(unitPrice, item.unit)} = ${formatCost(charge)}`
 	}
 	const lineItemLabel = (item: Record<string, unknown>) => {
+		const usageClass = localizeBillingValue('usageClass', item.usage_class)
+		const modality = localizeBillingValue('modality', item.modality)
+		const cacheTtl = localizeBillingValue('cacheTtl', item.cache_ttl)
+		const itemContextTier = localizeBillingValue('contextTier', item.context_tier)
+		const itemServiceTier = localizeBillingValue('serviceTier', item.service_tier)
 		const parts = [
-			item.usage_class,
-			item.modality,
-			item.cache_ttl,
-			item.context_tier,
-			item.service_tier
-		]
-			.filter((value): value is string => typeof value === 'string' && value.length > 0)
+			usageClass,
+			modality ? `${t('requestLogs.billingModality')}: ${modality}` : null,
+			cacheTtl ? `${t('requestLogs.billingCacheTtl')}: ${cacheTtl}` : null,
+			itemContextTier ? `${t('requestLogs.contextTier')}: ${itemContextTier}` : null,
+			itemServiceTier ? `${t('requestLogs.serviceTier')}: ${itemServiceTier}` : null
+		].filter((value): value is string => value != null)
 		return parts.join(' / ')
 	}
 
@@ -277,24 +306,12 @@ export function LogRowCells({
 		outputDetailRows.push([t('requestLogs.imageTokens'), formatTokenCount(outputImage)])
 	}
 
-	const tpsModeLabel = (mode: 'exact' | 'estimated' | 'approx' | 'legacy') => {
-		switch (mode) {
-			case 'exact':
-				return t('requestLogs.tpsExact')
-			case 'estimated':
-				return t('requestLogs.tpsEstimated')
-			case 'approx':
-				return t('requestLogs.tpsApprox')
-			case 'legacy':
-				return t('requestLogs.tpsLegacy')
-		}
-	}
 	const tpsValue =
 		computedTps.state === 'display' ?
-			`${computedTps.mode === 'exact' ? '' : '~'}${computedTps.value.toFixed(2)} t/s`
+			`~${computedTps.value.toFixed(2)} t/s`
 		:	null
 	const tpsDenominator =
-		computedTps.state === 'display' || computedTps.state === 'insufficient' ?
+		computedTps.state === 'display' ?
 			formatDuration(computedTps.denominatorMs)
 		:	null
 	const durationBadge =
@@ -345,24 +362,10 @@ export function LogRowCells({
 					<span className='font-mono'>{tpsValue}</span>
 				</div>
 			)}
-			{computedTps.state === 'insufficient' && (
-				<div className='flex items-center justify-between gap-3'>
-					<span className='text-muted-foreground'>{t('requestLogs.avgTps')}</span>
-					<span className='font-mono'>{t('requestLogs.tpsInsufficient')}</span>
-				</div>
-			)}
-			{computedTps.state !== 'unavailable' && (
-				<div className='flex items-center justify-between gap-3'>
-					<span className='text-muted-foreground'>{t('requestLogs.tpsBasis')}</span>
-					<span className='font-mono'>{tpsModeLabel(computedTps.mode)}</span>
-				</div>
-			)}
-			{tpsDenominator && computedTps.state !== 'unavailable' && (
+			{tpsDenominator && computedTps.state === 'display' && (
 				<div className='flex items-center justify-between gap-3'>
 					<span className='text-muted-foreground'>
-						{computedTps.mode === 'legacy' ?
-							t('requestLogs.tpsLegacyWindow')
-						:	t('requestLogs.tpsVisibleGeneration')}
+						{t('requestLogs.tpsGenerationWindow')}
 					</span>
 					<span className='font-mono'>{tpsDenominator}</span>
 				</div>
@@ -607,13 +610,21 @@ export function LogRowCells({
 
 			<td className='px-1 py-1 whitespace-nowrap align-middle'>
 				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={durationTooltipOpenChange}>
+					<Tooltip
+						open={durationTooltipOpen}
+						onOpenChange={handleDurationTooltipOpenChange}
+					>
 						<TooltipTrigger asChild>
-							<span className='inline-flex max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden whitespace-nowrap align-middle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+							<button
+								type='button'
+								aria-expanded={durationTooltipOpen}
+								onClick={() => handleDurationTooltipOpenChange(true)}
+								className='inline-flex max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden whitespace-nowrap border-0 bg-transparent p-0 align-middle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+							>
 								{durationBadge}
 								{ttfbBadge}
 								{streamBadge}
-							</span>
+							</button>
 						</TooltipTrigger>
 						<TooltipContent>{timingTooltipContent}</TooltipContent>
 					</Tooltip>
@@ -685,28 +696,38 @@ export function LogRowCells({
 			<td className='px-2 py-1 text-right whitespace-nowrap font-mono align-middle'>
 				{hasBreakdownContent ? (
 					<TooltipProvider delayDuration={200}>
-						<Tooltip onOpenChange={costTooltipOpenChange}>
+						<Tooltip
+							open={costTooltipOpen}
+							onOpenChange={handleCostTooltipOpenChange}
+						>
 							<TooltipTrigger asChild>
-								<span
-									className='inline-flex items-center whitespace-nowrap align-bottom cursor-default'
+								<button
+									type='button'
+									className='inline-flex items-center whitespace-nowrap border-0 bg-transparent p-0 align-bottom font-mono cursor-default'
 									title={costDisplay}
+									aria-expanded={costTooltipOpen}
+									onClick={() => handleCostTooltipOpenChange(true)}
 								>
 									{costDisplay}
-								</span>
+								</button>
 							</TooltipTrigger>
-							<TooltipContent>
-								<div className='text-xs space-y-0.5 min-w-[300px]'>
-									{contextTier && (
-										<div className='flex items-center justify-between gap-3'>
-											<span>{t('requestLogs.contextTier')}</span>
-											<span className='font-mono'>{contextTier}</span>
-										</div>
-									)}
-									{serviceTier && (
-										<div className='flex items-center justify-between gap-3'>
-											<span>{t('requestLogs.serviceTier')}</span>
-											<span className='font-mono'>{serviceTier}</span>
-										</div>
+							<TooltipContent className='max-w-[calc(100vw-1.5rem)] sm:max-w-xl'>
+								<div className='w-[32rem] max-w-full space-y-0.5 text-xs'>
+								{contextTier && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.contextTier')}</span>
+										<span className='font-mono'>
+											{localizeBillingValue('contextTier', contextTier)}
+										</span>
+									</div>
+								)}
+								{serviceTier && (
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.serviceTier')}</span>
+										<span className='font-mono'>
+											{localizeBillingValue('serviceTier', serviceTier)}
+										</span>
+									</div>
 									)}
 									{visibleTokenLineItems.map((item, index) => {
 										const detail = formatLineItemDetail(item)
@@ -714,10 +735,14 @@ export function LogRowCells({
 										return (
 											<div
 												key={`token-${index}`}
-												className='flex items-center justify-between gap-3'
+												className='grid gap-0.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3'
 											>
-												<span>{lineItemLabel(item)}</span>
-												<span className='font-mono'>{detail}</span>
+												<span className='min-w-0 break-words'>
+													{lineItemLabel(item)}
+												</span>
+												<span className='whitespace-nowrap font-mono sm:text-right'>
+													{detail}
+												</span>
 											</div>
 										)
 									})}
@@ -727,10 +752,14 @@ export function LogRowCells({
 										return (
 											<div
 												key={`meter-${index}`}
-												className='flex items-center justify-between gap-3'
+												className='grid gap-0.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3'
 											>
-												<span>{lineItemLabel(item)}</span>
-												<span className='font-mono'>{detail}</span>
+												<span className='min-w-0 break-words'>
+													{lineItemLabel(item)}
+												</span>
+												<span className='whitespace-nowrap font-mono sm:text-right'>
+													{detail}
+												</span>
 											</div>
 										)
 									})}

@@ -85,6 +85,7 @@ export function RequestLogsPage() {
 	const filterKey = useMemo(() => JSON.stringify(activeFilters), [activeFilters])
 
 	useEffect(() => {
+		// eslint-disable-next-line react-hooks/set-state-in-effect -- reset local pagination when the serialized filter input changes
 		setRequestOffset(0)
 		setLoadedLogs([])
 		setTotalCount(0)
@@ -262,6 +263,7 @@ export function RequestLogsPage() {
 			return
 		}
 
+		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SSE event with the local visible list
 		prependSSELogs(sseEvent.logs)
 	}, [sseEvent, mutate, mutateNewest, prependSSELogs])
 
@@ -282,6 +284,7 @@ export function RequestLogsPage() {
 			return
 		}
 
+		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SWR page response with tooltip-safe local rows
 		setTotalCount(pageData.total)
 		setTotalCharge(pageData.total_charge_nano_usd)
 		setLoadedLogs(prev => {
@@ -305,6 +308,7 @@ export function RequestLogsPage() {
 			return
 		}
 
+		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SWR refresh with tooltip-safe local rows
 		setTotalCount(newestPageData.total)
 		setTotalCharge(newestPageData.total_charge_nano_usd)
 		setLoadedLogs(prev => {
@@ -320,7 +324,6 @@ export function RequestLogsPage() {
 		pendingNewestDataRef.current = null
 	}, [newestPageData, requestOffset, preservePendingItems])
 
-	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
 		if (openTooltipIdsRef.current.size > 0) return
 
@@ -362,7 +365,7 @@ export function RequestLogsPage() {
 			pendingSSERef.current = []
 			prependSSELogs(bufferedSSE)
 		}
-	}, [flushSignal, requestOffset])
+	}, [flushSignal, prependSSELogs, preservePendingItems, requestOffset])
 
 	const isInitialLoading = isLoading && loadedLogs.length === 0
 	const hasMore = loadedLogs.length < totalCount
