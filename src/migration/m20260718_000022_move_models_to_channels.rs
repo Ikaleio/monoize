@@ -11,7 +11,7 @@ impl MigrationTrait for Migration {
         let backend = manager.get_database_backend();
 
         add_column_if_missing(conn, backend, "redirect", "TEXT").await?;
-        add_column_if_missing(conn, backend, "multiplier", "REAL NOT NULL DEFAULT 1.0").await?;
+        add_column_if_missing(conn, backend, "multiplier", multiplier_definition(backend)).await?;
 
         if manager.has_table("monoize_provider_models").await? {
             let sql = match backend {
@@ -57,6 +57,30 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
         Ok(())
+    }
+}
+
+fn multiplier_definition(backend: DbBackend) -> &'static str {
+    match backend {
+        DbBackend::Postgres => "DOUBLE PRECISION NOT NULL DEFAULT 1.0",
+        _ => "REAL NOT NULL DEFAULT 1.0",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn postgres_multiplier_uses_float8() {
+        assert_eq!(
+            multiplier_definition(DbBackend::Postgres),
+            "DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+        );
+        assert_eq!(
+            multiplier_definition(DbBackend::Sqlite),
+            "REAL NOT NULL DEFAULT 1.0"
+        );
     }
 }
 

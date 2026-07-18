@@ -28,6 +28,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260619_000020_default_pricing_profile::Migration),
             Box::new(m20260620_000021_pricing_profile_pattern_defaults::Migration),
             Box::new(m20260718_000022_move_models_to_channels::Migration),
+            Box::new(m20260718_000023_channel_model_multiplier_float8::Migration),
         ]
     }
 }
@@ -54,3 +55,4 @@ mod m20260619_000019_billing_rate_records;
 mod m20260619_000020_default_pricing_profile;
 mod m20260620_000021_pricing_profile_pattern_defaults;
 mod m20260718_000022_move_models_to_channels;
+mod m20260718_000023_channel_model_multiplier_float8;

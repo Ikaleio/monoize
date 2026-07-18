@@ -48,7 +48,7 @@ ISM3.2. Column type rules MUST be:
 
 - logical TEXT → `.text()`
 - logical INTEGER → `.integer()`
-- logical REAL → `.double()`
+- logical REAL → `.double()`; the physical type MUST be SQLite `REAL` and PostgreSQL `DOUBLE PRECISION` (`FLOAT8`)
 - logical BLOB → `.binary()`
 
 ISM3.3. Single-column primary keys MUST be declared inline on the column with `.primary_key()`.
@@ -268,6 +268,8 @@ ISM4.12. `monoize_channel_models` columns:
 - `multiplier` REAL NOT NULL DEFAULT 1.0
 - `created_at` TEXT NOT NULL
 - UNIQUE(`channel_id`, `model_name`)
+
+ISM4.12a. `monoize_channel_models.multiplier` MUST decode as Rust `f64` on both supported database backends. Migration `m20260718_000023_channel_model_multiplier_float8` MUST convert an existing PostgreSQL `REAL`/`FLOAT4` column to `DOUBLE PRECISION`/`FLOAT8` without changing stored numeric values. The migration MUST be a no-op on SQLite.
 
 ISM4.13. Legacy `providers`, `model_mappings`, and `group_members` tables MUST NOT be created.
 
