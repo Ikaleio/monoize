@@ -253,7 +253,9 @@ pub async fn list_marketplace_models(
     let offered: HashSet<String> = providers
         .into_iter()
         .filter(|p| p.enabled)
-        .flat_map(|p| p.models.into_keys())
+        .flat_map(|p| p.channels)
+        .filter(|channel| channel.enabled && channel.weight > 0)
+        .flat_map(|channel| channel.models.into_keys())
         .collect();
 
     let all_metadata: Vec<DbModelMetadataRecord> = state

@@ -380,7 +380,6 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "fisx-style-image-test".to_string(),
-            models,
             api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
                 pattern: "gpt-image-test".to_string(),
                 api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -398,7 +397,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-image-test".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,

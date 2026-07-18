@@ -49,9 +49,9 @@ CG-2. On create/update, provider `groups` MUST be canonicalized by trimming each
 
 CG-3. If a stored provider row has `groups` absent, null, empty string, or serialized empty array, routing and read models MUST treat it as `[]` for backward compatibility.
 
-### 2.2 Model Entry
+### 2.2 Channel Model Entry
 
-A provider model entry MUST include:
+A Channel model entry MUST include:
 
 - `redirect: string | null`
 - `multiplier: number` where `multiplier > 0`
@@ -68,7 +68,6 @@ A provider record MUST include:
 - `channel_retry_interval_ms: integer` default `0`
 - `circuit_breaker_enabled: boolean` default `true`
 - `per_model_circuit_break: boolean` default `false`
-- `models: Record<string, ModelEntry>`
 - `channels: Channel[]` where `length >= 1`
 - `groups: string[]` (default empty; provider-level group labels for routing eligibility)
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
@@ -76,7 +75,8 @@ A provider record MUST include:
 Implementation-specific extension:
 - A provider MUST NOT contain `provider_type`.
 - Each channel MUST contain `provider_type: enum("responses","chat_completion","messages","gemini","openai_image","replicate")`; this value determines the channel default upstream request shape.
-- Each channel MUST contain `supported_models: string[]`; every element MUST exist in the provider model map.
+- Each Channel MUST contain `models: Record<string, ModelEntry>`.
+- Provider MUST NOT contain a `models` field.
 - `api_type_overrides: ApiTypeOverride[]` (ordered, default empty) MAY be present at provider level. Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","replicate") }` where `pattern` uses glob syntax (`*` matches any sequence, `?` matches one character).
 
 ### 2.4 API Type Resolution
@@ -158,19 +158,19 @@ RTA-1. Iterate providers in configured order.
 RTA-2. Static filter rules for each provider:
 
 - skip if `provider.enabled == false`
-- skip if requested model does not exist in `provider.models`
-- skip if `max_multiplier` is present and `provider.models[model].multiplier > max_multiplier`
 - skip if provider is not group-eligible per RRP-1 through RRP-4
+- skip if no Channel has a model entry for the requested logical model that satisfies the request `max_multiplier`
 
 RTA-3. Availability pre-check:
 
-- candidate channels are those where `enabled == true`, `weight > 0`, `supported_models` contains the requested logical model, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
+- candidate channels are those where `enabled == true`, `weight > 0`, `models` contains the requested logical model, the Channel model multiplier does not exceed request `max_multiplier` when present, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
 - if `provider.circuit_breaker_enabled == false`, runtime health state MUST be ignored for normal routing eligibility. Disabled or zero-weight channels are still excluded.
 - if candidate channels are empty, skip provider.
 
 RTA-4. Execute provider with intra-provider retry:
 
-- rewritten model = `redirect ?? requested model`
+- rewritten model = the selected Channel model entry `redirect ?? requested model`
+- attempt multiplier = the selected Channel model entry `multiplier`
 - attempt ordering uses weighted randomization over candidate channels
 - total attempt budget:
   - if `max_retries == -1`: unlimited (try all channels × per-channel retries)
@@ -266,7 +266,7 @@ PHS-6. On successful attempts, the health state entry MUST be restored to health
 - `enabled` default `true`
 - `interval_seconds` default `30`
 - `method` default `completion`
-- `probe_model` default `null` (when null, use channel first supported provider model)
+- `probe_model` default `null` (when null, use the first Channel model key)
 - `success_threshold` default `1`
 
 AHS-1. Active probing MUST target unhealthy channels whose cooldown has elapsed.
@@ -275,7 +275,7 @@ AHS-1a. If `provider.circuit_breaker_enabled == false`, active probing MUST be s
 
 AHS-2. Channel MUST return to healthy only after reaching success threshold.
 
-AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using the resolved probe model. Resolution order is channel probe model override, provider probe model override, global probe model, then the first channel-supported provider model in lexicographic order. If no model can be resolved, probing for that provider/channel MUST be skipped.
+AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using the resolved probe model. Resolution order is Channel probe model override, Provider probe model override, global probe model, then the first Channel model key in lexicographic order. The upstream request uses that Channel entry's redirect when non-empty. If no Channel model can be resolved, probing for that Provider/Channel MUST be skipped.
 
 AHS-4. The completion probe request MUST use `max_tokens: 16` and a minimal single-user-message payload to minimize cost and latency.
 
@@ -298,8 +298,8 @@ UI-2. Provider list MUST support priority reordering.
 UI-3. Provider editor MUST include:
 
 - provider enable toggle
-- per-model redirect and multiplier table
-- channel table (name, type, base URL, weight, enabled, supported model count)
+- Channel master list (name, type, base URL, weight, enabled, model count)
+- selected Channel model redirect and multiplier editor
 - channel runtime indicator (healthy/probing/unhealthy)
 - max_retries setting
 - channel_max_retries setting
@@ -313,4 +313,4 @@ UI-5. Nullable boolean overrides MUST use a three-value selector (inherit / enab
 
 UI-6. Provider model fetching MUST NOT exist as a provider-level action. Each channel editor MUST expose model fetching using the channel's type, base URL, and API key.
 
-UI-7. A channel model fetch confirmation MUST add selected models to the provider model map with `redirect = null` and `multiplier = 1`, and MUST mark the selected models as supported by that channel only.
+UI-7. A Channel model fetch confirmation MUST add selected models to that Channel `models` object with `redirect = null` and `multiplier = 1`. It MUST preserve existing entries that remain selected and MUST NOT mutate sibling Channels.

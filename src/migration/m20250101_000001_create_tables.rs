@@ -495,53 +495,6 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(MonoizeProviderModels::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(MonoizeProviderModels::Id)
-                            .text()
-                            .not_null()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(MonoizeProviderModels::ProviderId)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(MonoizeProviderModels::ModelName)
-                            .text()
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(MonoizeProviderModels::Redirect).text())
-                    .col(
-                        ColumnDef::new(MonoizeProviderModels::Multiplier)
-                            .double()
-                            .not_null()
-                            .default(1.0),
-                    )
-                    .col(
-                        ColumnDef::new(MonoizeProviderModels::CreatedAt)
-                            .text()
-                            .not_null(),
-                    )
-                    .foreign_key(
-                        ForeignKey::create()
-                            .name("fk_mpm_provider_id")
-                            .from(
-                                MonoizeProviderModels::Table,
-                                MonoizeProviderModels::ProviderId,
-                            )
-                            .to(MonoizeProviders::Table, MonoizeProviders::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_table(
-                Table::create()
                     .table(MonoizeChannels::Table)
                     .if_not_exists()
                     .col(
@@ -625,6 +578,13 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(MonoizeChannelModels::ModelName)
                             .text()
                             .not_null(),
+                    )
+                    .col(ColumnDef::new(MonoizeChannelModels::Redirect).text())
+                    .col(
+                        ColumnDef::new(MonoizeChannelModels::Multiplier)
+                            .double()
+                            .not_null()
+                            .default(1.0),
                     )
                     .col(
                         ColumnDef::new(MonoizeChannelModels::CreatedAt)
@@ -796,29 +756,6 @@ impl MigrationTrait for Migration {
             .create_index(
                 Index::create()
                     .if_not_exists()
-                    .name("idx_mpm_provider_id")
-                    .table(MonoizeProviderModels::Table)
-                    .col(MonoizeProviderModels::ProviderId)
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("uq_mpm_provider_id_model_name")
-                    .table(MonoizeProviderModels::Table)
-                    .col(MonoizeProviderModels::ProviderId)
-                    .col(MonoizeProviderModels::ModelName)
-                    .unique()
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
                     .name("idx_mc_provider_id")
                     .table(MonoizeChannels::Table)
                     .col(MonoizeChannels::ProviderId)
@@ -876,14 +813,6 @@ impl MigrationTrait for Migration {
             .drop_table(
                 Table::drop()
                     .table(MonoizeChannels::Table)
-                    .if_exists()
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .drop_table(
-                Table::drop()
-                    .table(MonoizeProviderModels::Table)
                     .if_exists()
                     .to_owned(),
             )
@@ -1150,17 +1079,6 @@ enum MonoizeProviders {
 }
 
 #[derive(Iden)]
-enum MonoizeProviderModels {
-    Table,
-    Id,
-    ProviderId,
-    ModelName,
-    Redirect,
-    Multiplier,
-    CreatedAt,
-}
-
-#[derive(Iden)]
 enum MonoizeChannels {
     Table,
     Id,
@@ -1189,6 +1107,8 @@ enum MonoizeChannelModels {
     Id,
     ChannelId,
     ModelName,
+    Redirect,
+    Multiplier,
     CreatedAt,
 }
 

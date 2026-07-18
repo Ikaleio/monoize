@@ -675,7 +675,6 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-markdown-images".to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -690,7 +689,7 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-5-mini".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,

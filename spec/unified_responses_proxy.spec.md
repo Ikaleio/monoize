@@ -1355,7 +1355,7 @@ DM11. For downstream `POST /v1/messages`, flat canonical storage MUST NOT weaken
 
 DE1. Monoize MUST authenticate and apply pre-forward balance guard exactly as other forwarding endpoints.
 
-DE2. Monoize MUST route provider and channel candidates using the same provider model-map matching rules as chat completions.
+DE2. Monoize MUST route Provider and Channel candidates using the same Channel model-map matching rules as chat completions.
 
 DE3. Monoize MUST call upstream path `POST /v1/embeddings` for every selected provider attempt, regardless of provider type.
 
@@ -1401,7 +1401,7 @@ DMO3. The response body MUST be JSON with the shape:
 }
 ```
 
-DMO4. `data` MUST contain only logical model keys for which at least one enabled provider has at least one channel where `enabled == true`, `weight > 0`, and `supported_models` contains the logical model.
+DMO4. `data` MUST contain only logical model keys for which at least one enabled Provider has at least one Channel where `enabled == true`, `weight > 0`, and `models` contains the logical model.
 
 DMO5. If a logical model key appears in two or more providers, `data` MUST include exactly one item for that key.
 

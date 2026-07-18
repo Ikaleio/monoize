@@ -38,8 +38,8 @@ async fn provider_with_runtime(state: &AppState, mut provider: MonoizeProvider) 
         let now = chrono::Utc::now().timestamp();
         let states: Vec<ChannelHealthState> = if provider.per_model_circuit_break {
             channel
-                .supported_models
-                .iter()
+                .models
+                .keys()
                 .map(|model| {
                     health
                         .get(&health_key(&channel.id, Some(model)))
@@ -192,11 +192,12 @@ async fn dashboard_metadata_pricing_profile_for_model(
         .filter(|profile| !profile.is_empty()))
 }
 
-async fn provider_model_has_billable_rate_matrix(
+async fn channel_model_has_billable_rate_matrix(
     state: &AppState,
     pricing_patterns: &[crate::settings::PricingProfilePattern],
     cache: &mut HashMap<(String, String), bool>,
     provider: &MonoizeProvider,
+    channel: &MonoizeChannel,
     logical_model: &str,
     model_entry: &crate::monoize_routing::MonoizeModelEntry,
     reasoning_suffix_map: &HashMap<String, String>,
@@ -205,22 +206,12 @@ async fn provider_model_has_billable_rate_matrix(
     let normalized_upstream_model =
         normalize_pricing_model_key(upstream_model, reasoning_suffix_map);
     let normalized_logical_model = normalize_pricing_model_key(logical_model, reasoning_suffix_map);
-    let mut provider_types = HashSet::new();
-    for channel in provider.channels.iter().filter(|channel| {
-        channel
-            .supported_models
-            .iter()
-            .any(|supported| supported == logical_model)
-    }) {
-        let effective_type = crate::monoize_routing::resolve_effective_api_type(
-            &provider.api_type_overrides,
-            channel.provider_type,
-            logical_model,
-        );
-        provider_types.insert(effective_type.as_str());
-    }
-
-    for provider_type in provider_types {
+    let effective_type = crate::monoize_routing::resolve_effective_api_type(
+        &provider.api_type_overrides,
+        channel.provider_type,
+        logical_model,
+    );
+    for provider_type in [effective_type.as_str()] {
         if dashboard_billing_matrix_available_for_model(
             state,
             pricing_patterns,
@@ -276,23 +267,29 @@ pub async fn list_providers(
     let mut out = Vec::with_capacity(providers.len());
     for provider in providers {
         let mut unpriced_model_ids = Vec::new();
-        for (logical_model, model_entry) in &provider.models {
-            let has_pricing = provider_model_has_billable_rate_matrix(
-                &state,
-                &pricing_patterns,
-                &mut rate_matrix_cache,
-                &provider,
-                logical_model,
-                model_entry,
-                &reasoning_suffix_map,
-            )
-            .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-            if !has_pricing {
-                unpriced_model_ids.push(logical_model.clone());
+        for channel in &provider.channels {
+            for (logical_model, model_entry) in &channel.models {
+                let has_pricing = channel_model_has_billable_rate_matrix(
+                    &state,
+                    &pricing_patterns,
+                    &mut rate_matrix_cache,
+                    &provider,
+                    channel,
+                    logical_model,
+                    model_entry,
+                    &reasoning_suffix_map,
+                )
+                .await
+                .map_err(|e| {
+                    AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e)
+                })?;
+                if !has_pricing {
+                    unpriced_model_ids.push(logical_model.clone());
+                }
             }
         }
         unpriced_model_ids.sort();
+        unpriced_model_ids.dedup();
         let unpriced_count = unpriced_model_ids.len();
         let p = provider_with_runtime(&state, provider).await;
         let val = serde_json::to_value(&p).unwrap_or_default();
@@ -742,10 +739,7 @@ pub async fn test_channel(
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     if let Some(model) = requested_model.as_ref()
-        && !channel
-            .supported_models
-            .iter()
-            .any(|supported| supported == model)
+        && !channel.models.contains_key(model)
     {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -762,12 +756,7 @@ pub async fn test_channel(
         ));
     }
 
-    let first_supported_model = channel
-        .supported_models
-        .iter()
-        .filter(|model| provider.models.contains_key(*model))
-        .min()
-        .cloned();
+    let first_supported_model = channel.models.keys().min().cloned();
 
     let probe_model = requested_model
         .or_else(|| channel.active_probe_model_override.clone())
@@ -782,11 +771,7 @@ pub async fn test_channel(
             "no model available for testing; specify a model or add models to this provider",
         ));
     };
-    if !channel
-        .supported_models
-        .iter()
-        .any(|supported| supported == &model_name)
-    {
+    if !channel.models.contains_key(&model_name) {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -794,7 +779,7 @@ pub async fn test_channel(
         ));
     }
 
-    let upstream_model = provider
+    let upstream_model = channel
         .models
         .get(&model_name)
         .map(|entry| provider_pricing_model(&model_name, entry).to_string())
@@ -1010,13 +995,6 @@ mod tests {
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
-            models: HashMap::from([(
-                "alpha-model".to_string(),
-                MonoizeModelEntry {
-                    redirect: None,
-                    multiplier: 1.0,
-                },
-            )]),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "channel".to_string(),
@@ -1029,7 +1007,13 @@ mod tests {
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["alpha-model".to_string()],
+                models: HashMap::from([(
+                    "alpha-model".to_string(),
+                    MonoizeModelEntry {
+                        redirect: None,
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,

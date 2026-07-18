@@ -23,9 +23,9 @@ R-ORD-1. Router MUST iterate providers in stored order (waterfall).
 R-ORD-2. For each provider, static filtering MUST be applied in this order:
 
 1. `provider.enabled == true`
-2. `provider.models` contains requested model
-3. if `max_multiplier` exists, `provider.models[model].multiplier <= max_multiplier`
-4. provider is group-eligible under R-GRP-1
+2. provider is group-eligible under R-GRP-1
+3. at least one Channel contains the requested logical model in `channel.models`
+4. if `max_multiplier` exists, at least one such Channel satisfies `channel.models[model].multiplier <= max_multiplier`
 
 R-ORD-3. If any rule in R-ORD-2 fails, router MUST continue to next provider.
 
@@ -51,6 +51,8 @@ R-CH-1. Candidate channels are channels with:
 
 - `enabled == true`
 - `weight > 0`
+- `channel.models` contains the requested logical model
+- when `max_multiplier` exists, `channel.models[model].multiplier <= max_multiplier`
 - runtime health state is healthy or probing-eligible for the requested model (respecting per-model health keying when `per_model_circuit_break == true`)
 
 R-CH-2. If no candidate channels exist, router MUST continue to next provider.
@@ -80,10 +82,12 @@ R-CH-12. If `provider.circuit_breaker_enabled == false`, routing MUST ignore run
 
 ## 4. Model Rewriting
 
-R-MDL-1. For selected provider model entry:
+R-MDL-1. For the selected Channel model entry:
 
 - upstream model = `redirect` when non-null and non-empty
 - otherwise upstream model = requested model
+
+R-MDL-2. The attempt `model_multiplier` MUST equal the selected Channel model entry multiplier. Two Channels in one Provider MAY use different redirect and multiplier values for the same logical model.
 
 ## 5. Error Classification
 

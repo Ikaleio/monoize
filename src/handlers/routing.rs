@@ -109,9 +109,13 @@ pub(super) async fn normalized_logical_model_for_matching(
     };
 
     let model_exists = |model: &str| -> bool {
-        providers
-            .iter()
-            .any(|p| p.enabled && p.models.contains_key(model))
+        providers.iter().any(|provider| {
+            provider.enabled
+                && provider
+                    .channels
+                    .iter()
+                    .any(|channel| channel.models.contains_key(model))
+        })
     };
     if model_exists(requested_model) {
         return requested_model.to_string();
@@ -353,14 +357,6 @@ pub(super) async fn collect_provider_attempts(
     if !provider.enabled {
         return;
     }
-    let Some(model_entry) = provider.models.get(&urp.model) else {
-        return;
-    };
-    if let Some(max_multiplier) = urp.max_multiplier {
-        if model_entry.multiplier > max_multiplier {
-            return;
-        }
-    }
     if !crate::users::is_channel_group_eligible(&provider.groups, effective_groups) {
         return;
     }
@@ -368,10 +364,10 @@ pub(super) async fn collect_provider_attempts(
         .channels
         .iter()
         .filter(|channel| {
-            channel
-                .supported_models
-                .iter()
-                .any(|model| model == &urp.model)
+            channel.models.get(&urp.model).is_some_and(|entry| {
+                urp.max_multiplier
+                    .is_none_or(|maximum| entry.multiplier <= maximum)
+            })
         })
         .cloned()
         .collect();
@@ -397,9 +393,13 @@ pub(super) async fn collect_provider_attempts(
     let max_attempts = provider_attempt_limit
         .unwrap_or(ordered.len())
         .min(ordered.len());
-    let upstream_model = resolve_upstream_model(&urp.model, model_entry);
     let runtime = state.monoize_runtime.read().await;
     for channel in ordered.into_iter().take(max_attempts) {
+        let model_entry = channel
+            .models
+            .get(&urp.model)
+            .expect("eligible channel must retain its model entry");
+        let upstream_model = resolve_upstream_model(&urp.model, model_entry);
         let effective_provider_type = crate::monoize_routing::resolve_effective_api_type(
             &provider.api_type_overrides,
             channel.provider_type,
@@ -432,7 +432,7 @@ pub(super) async fn collect_provider_attempts(
             base_url: channel.base_url.clone(),
             api_key: channel.api_key.clone(),
             logical_model: urp.model.clone(),
-            upstream_model: upstream_model.clone(),
+            upstream_model,
             model_multiplier: model_entry.multiplier,
             server_tool_usage_classes: urp.server_tool_usage_classes.clone(),
             provider_transforms: provider.transforms.clone(),

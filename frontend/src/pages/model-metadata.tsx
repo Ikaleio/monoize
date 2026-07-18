@@ -72,6 +72,7 @@ import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { DataTableShell, TableToolbarSearch, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
 import { toast } from "sonner";
 import { TableVirtuoso } from "react-virtuoso";
+import { BillingProfilesTab } from "./model-metadata/BillingProfilesTab";
 
 function nanoToPerMillion(nano?: string | null): string {
   if (!nano) return "-";
@@ -545,18 +546,18 @@ export function ModelMetadataPage() {
       </AlertDialog>
 
       <Tabs defaultValue="models" className="space-y-4">
-        <TabsList>
+        <TabsList className="max-w-full justify-start overflow-x-auto">
           <TabsTrigger value="models">
             <Database className="mr-2 h-4 w-4" />
             {t("modelMetadata.tabs.modelDatabase", "Model Database")}
           </TabsTrigger>
-          <TabsTrigger value="billing-rates">
-            <TableProperties className="mr-2 h-4 w-4" />
-            {t("modelMetadata.tabs.billingRates", "Billing Rates")}
-          </TabsTrigger>
-          <TabsTrigger value="pricing-profiles">
+          <TabsTrigger value="billing-profiles">
             <SlidersHorizontal className="mr-2 h-4 w-4" />
-            {t("modelMetadata.tabs.pricingProfiles", "Pricing Profiles")}
+            {t("modelMetadata.tabs.billingProfiles", "Billing Profiles")}
+          </TabsTrigger>
+          <TabsTrigger value="advanced-rates">
+            <TableProperties className="mr-2 h-4 w-4" />
+            {t("modelMetadata.tabs.advancedRates", "Advanced Rates")}
           </TabsTrigger>
         </TabsList>
 
@@ -729,11 +730,11 @@ export function ModelMetadataPage() {
             )}
           </motion.div>
         </TabsContent>
-        <TabsContent value="billing-rates" className="mt-0">
-          <BillingRatesTab />
+        <TabsContent value="billing-profiles" className="mt-0">
+          <BillingProfilesTab />
         </TabsContent>
-        <TabsContent value="pricing-profiles" className="mt-0">
-          <PricingProfilesTab />
+        <TabsContent value="advanced-rates" className="mt-0">
+          <BillingRatesTab />
         </TabsContent>
       </Tabs>
     </PageWrapper>
@@ -1196,7 +1197,7 @@ function BillingRatesTab() {
   );
 }
 
-function PricingProfilesTab() {
+export function PricingProfilesTab() {
   const { t } = useTranslation();
   const { data: patterns = [], isLoading } = usePricingProfilePatterns();
   const [draft, setDraft] = useState<PricingProfilePattern[]>([]);

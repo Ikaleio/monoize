@@ -89,7 +89,7 @@ pub struct MonoizeChannel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
     #[serde(default)]
-    pub supported_models: Vec<String>,
+    pub models: HashMap<String, MonoizeModelEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_probe_enabled_override: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,7 +110,6 @@ pub struct MonoizeChannel {
 pub struct MonoizeProvider {
     pub id: String,
     pub name: String,
-    pub models: HashMap<String, MonoizeModelEntry>,
     pub channels: Vec<MonoizeChannel>,
     pub max_retries: i32,
     pub channel_max_retries: i32,
@@ -160,7 +159,7 @@ pub struct CreateMonoizeChannelInput {
     #[serde(default)]
     pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
     #[serde(default)]
-    pub supported_models: Vec<String>,
+    pub models: HashMap<String, MonoizeModelEntry>,
     pub active_probe_enabled_override: Option<bool>,
     pub active_probe_interval_seconds_override: Option<u64>,
     pub active_probe_success_threshold_override: Option<u32>,
@@ -171,7 +170,6 @@ pub struct CreateMonoizeChannelInput {
 #[serde(deny_unknown_fields)]
 pub struct CreateMonoizeProviderInput {
     pub name: String,
-    pub models: HashMap<String, MonoizeModelEntry>,
     pub channels: Vec<CreateMonoizeChannelInput>,
     #[serde(default = "default_max_retries")]
     pub max_retries: i32,
@@ -207,7 +205,6 @@ pub struct CreateMonoizeProviderInput {
 #[serde(deny_unknown_fields)]
 pub struct UpdateMonoizeProviderInput {
     pub name: Option<String>,
-    pub models: Option<HashMap<String, MonoizeModelEntry>>,
     pub channels: Option<Vec<CreateMonoizeChannelInput>>,
     pub max_retries: Option<i32>,
     pub channel_max_retries: Option<i32>,
@@ -488,12 +485,7 @@ impl MonoizeRoutingStore {
         &self,
         input: CreateMonoizeProviderInput,
     ) -> Result<MonoizeProvider, String> {
-        validate_provider_input(
-            &input.name,
-            &input.models,
-            &input.channels,
-            &input.api_type_overrides,
-        )?;
+        validate_provider_input(&input.name, &input.channels, &input.api_type_overrides)?;
         if let Some(v) = input.active_probe_interval_seconds_override {
             if !(1..=i32::MAX as u64).contains(&v) {
                 return Err(
@@ -600,7 +592,6 @@ impl MonoizeRoutingStore {
             .await
             .map_err(|e| e.to_string())?;
 
-        self.replace_models(&id, &input.models).await?;
         self.replace_channels(&id, &input.channels).await?;
 
         self.get_provider(&id)
@@ -618,12 +609,8 @@ impl MonoizeRoutingStore {
             .await?
             .ok_or_else(|| "provider not found".to_string())?;
 
-        if let Some(models) = &input.models {
-            validate_models(models)?;
-        }
-        let models_for_validation = input.models.as_ref().unwrap_or(&existing.models);
         if let Some(channels) = &input.channels {
-            validate_channels(channels, false, models_for_validation)?;
+            validate_channels(channels, false)?;
         }
         if let Some(Some(v)) = input.active_probe_interval_seconds_override {
             if !(1..=i32::MAX as u64).contains(&v) {
@@ -755,9 +742,6 @@ impl MonoizeRoutingStore {
         .await
         .map_err(|e| e.to_string())?;
 
-        if let Some(models) = &input.models {
-            self.replace_models_on(&*txn, id, models).await?;
-        }
         if let Some(channels) = &input.channels {
             self.replace_channels_on(&*txn, id, channels).await?;
         }
@@ -830,60 +814,6 @@ impl MonoizeRoutingStore {
         Ok(())
     }
 
-    async fn replace_models(
-        &self,
-        provider_id: &str,
-        models: &HashMap<String, MonoizeModelEntry>,
-    ) -> Result<(), String> {
-        let w = self.db.write().await;
-        self.replace_models_on(&*w, provider_id, models).await
-    }
-
-    async fn replace_models_on(
-        &self,
-        conn: &impl ConnectionTrait,
-        provider_id: &str,
-        models: &HashMap<String, MonoizeModelEntry>,
-    ) -> Result<(), String> {
-        conn.execute(self.db.stmt(
-            "DELETE FROM monoize_provider_models WHERE provider_id = $1",
-            vec![provider_id.into()],
-        ))
-        .await
-        .map_err(|e| e.to_string())?;
-
-        for (model_name, entry) in models {
-            conn.execute(self.db.stmt(
-                r#"INSERT INTO monoize_provider_models
-                       (id, provider_id, model_name, redirect, multiplier, created_at)
-                       VALUES ($1, $2, $3, $4, $5, $6)"#,
-                vec![
-                    format!("mono_model_{}", uuid::Uuid::new_v4().simple()).into(),
-                    provider_id.into(),
-                    model_name.as_str().into(),
-                    entry.redirect.clone().into(),
-                    SeaValue::Double(Some(entry.multiplier)),
-                    Utc::now().to_rfc3339().into(),
-                ],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-        conn.execute(self.db.stmt(
-            r#"DELETE FROM monoize_channel_models
-               WHERE channel_id IN (
-                   SELECT id FROM monoize_channels WHERE provider_id = $1
-               )
-               AND model_name NOT IN (
-                   SELECT model_name FROM monoize_provider_models WHERE provider_id = $1
-               )"#,
-            vec![provider_id.into()],
-        ))
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     async fn replace_channels(
         &self,
         provider_id: &str,
@@ -950,7 +880,7 @@ impl MonoizeRoutingStore {
                     })?,
             };
             let now_str = Utc::now().to_rfc3339();
-            let supported_models = canonicalize_supported_models(&input.supported_models);
+            let models = canonicalize_models(&input.models);
 
             conn.execute(self.db.stmt(
                     r#"INSERT INTO monoize_channels
@@ -987,15 +917,17 @@ impl MonoizeRoutingStore {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            for model in supported_models {
+            for (model, entry) in models {
                 conn.execute(self.db.stmt(
                     r#"INSERT INTO monoize_channel_models
-                       (id, channel_id, model_name, created_at)
-                       VALUES ($1, $2, $3, $4)"#,
+                       (id, channel_id, model_name, redirect, multiplier, created_at)
+                       VALUES ($1, $2, $3, $4, $5, $6)"#,
                     vec![
                         format!("mono_ch_model_{}", uuid::Uuid::new_v4().simple()).into(),
                         id.clone().into(),
                         model.into(),
+                        entry.redirect.into(),
+                        SeaValue::Double(Some(entry.multiplier)),
                         Utc::now().to_rfc3339().into(),
                     ],
                 ))
@@ -1008,32 +940,6 @@ impl MonoizeRoutingStore {
 
     async fn row_to_provider(&self, row: &QueryResult) -> Result<MonoizeProvider, String> {
         let id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
-        let model_rows = self
-            .db
-            .read()
-            .query_all(self.db.stmt(
-                r#"SELECT model_name, redirect, multiplier
-                   FROM monoize_provider_models
-                   WHERE provider_id = $1"#,
-                vec![id.clone().into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let mut models = HashMap::new();
-        for mr in &model_rows {
-            let model_name: String = mr.try_get("", "model_name").map_err(|e| e.to_string())?;
-            let redirect: Option<String> = mr.try_get("", "redirect").map_err(|e| e.to_string())?;
-            let multiplier: f64 = mr.try_get("", "multiplier").map_err(|e| e.to_string())?;
-            models.insert(
-                model_name,
-                MonoizeModelEntry {
-                    redirect,
-                    multiplier,
-                },
-            );
-        }
-
         let channel_rows = self
             .db
             .read()
@@ -1070,7 +976,7 @@ impl MonoizeRoutingStore {
                 .db
                 .read()
                 .query_all(self.db.stmt(
-                    r#"SELECT model_name
+                    r#"SELECT model_name, redirect, multiplier
                        FROM monoize_channel_models
                        WHERE channel_id = $1
                        ORDER BY model_name ASC"#,
@@ -1078,10 +984,23 @@ impl MonoizeRoutingStore {
                 ))
                 .await
                 .map_err(|e| e.to_string())?;
-            let supported_models = supported_rows
-                .iter()
-                .filter_map(|row| row.try_get::<String>("", "model_name").ok())
-                .collect();
+            let mut models = HashMap::new();
+            for model_row in supported_rows {
+                let model_name: String = model_row
+                    .try_get("", "model_name")
+                    .map_err(|e| e.to_string())?;
+                models.insert(
+                    model_name,
+                    MonoizeModelEntry {
+                        redirect: model_row
+                            .try_get("", "redirect")
+                            .map_err(|e| e.to_string())?,
+                        multiplier: model_row
+                            .try_get("", "multiplier")
+                            .map_err(|e| e.to_string())?,
+                    },
+                );
+            }
             channels.push(MonoizeChannel {
                 id: channel_id.clone(),
                 name: cr.try_get("", "name").map_err(|e| e.to_string())?,
@@ -1129,7 +1048,7 @@ impl MonoizeRoutingStore {
                         )
                     })
                     .transpose()?,
-                supported_models,
+                models,
                 active_probe_enabled_override: cr
                     .try_get::<Option<i32>>("", "active_probe_enabled_override")
                     .map_err(|e| format!("channel {channel_id} invalid active_probe_enabled_override: {e}"))?
@@ -1218,7 +1137,6 @@ impl MonoizeRoutingStore {
         Ok(MonoizeProvider {
             id: id.clone(),
             name: row.try_get("", "name").map_err(|e| e.to_string())?,
-            models,
             channels,
             max_retries: row.try_get("", "max_retries").map_err(|e| e.to_string())?,
             channel_max_retries: row
@@ -1288,22 +1206,32 @@ fn decode_positive_u64(provider_id: &str, field: &str, value: i64) -> Result<u64
         .ok_or_else(|| format!("provider {provider_id} invalid {field}: must be >= 1"))
 }
 
-fn canonicalize_supported_models(models: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = models
-        .iter()
-        .map(|model| model.trim().to_string())
-        .filter(|model| !model.is_empty())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    out.sort();
+fn canonicalize_models(
+    models: &HashMap<String, MonoizeModelEntry>,
+) -> HashMap<String, MonoizeModelEntry> {
+    let mut out = HashMap::new();
+    for (model, entry) in models {
+        let model = model.trim();
+        if model.is_empty() {
+            continue;
+        }
+        out.insert(
+            model.to_string(),
+            MonoizeModelEntry {
+                redirect: entry
+                    .redirect
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+                multiplier: entry.multiplier,
+            },
+        );
+    }
     out
 }
 
 fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), String> {
-    if models.is_empty() {
-        return Err("models must not be empty".to_string());
-    }
     for (model, entry) in models {
         if model.trim().is_empty() {
             return Err("model key must not be empty".to_string());
@@ -1318,10 +1246,12 @@ fn validate_models(models: &HashMap<String, MonoizeModelEntry>) -> Result<(), St
 fn validate_channels(
     channels: &[CreateMonoizeChannelInput],
     require_api_key: bool,
-    models: &HashMap<String, MonoizeModelEntry>,
 ) -> Result<(), String> {
     if channels.is_empty() {
         return Err("channels must not be empty".to_string());
+    }
+    if !channels.iter().any(|channel| !channel.models.is_empty()) {
+        return Err("at least one channel must define a model".to_string());
     }
     let mut ids = HashSet::new();
     for c in channels {
@@ -1384,21 +1314,16 @@ fn validate_channels(
                 );
             }
         }
-        let mut supported_seen = HashSet::new();
-        for model in &c.supported_models {
+        validate_models(&c.models)?;
+        let mut model_seen = HashSet::new();
+        for model in c.models.keys() {
             let model = model.trim();
             if model.is_empty() {
-                return Err("channel supported_models entries must not be empty".to_string());
+                return Err("channel model keys must not be empty".to_string());
             }
-            if !models.contains_key(model) {
+            if !model_seen.insert(model.to_string()) {
                 return Err(format!(
-                    "channel '{}' supports model '{}' that is not defined by provider",
-                    c.name, model
-                ));
-            }
-            if !supported_seen.insert(model.to_string()) {
-                return Err(format!(
-                    "channel '{}' has duplicate supported model '{}'",
+                    "channel '{}' has duplicate model '{}'",
                     c.name, model
                 ));
             }
@@ -1414,15 +1339,13 @@ fn validate_channels(
 
 fn validate_provider_input(
     name: &str,
-    models: &HashMap<String, MonoizeModelEntry>,
     channels: &[CreateMonoizeChannelInput],
     api_type_overrides: &[ApiTypeOverride],
 ) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("provider name must not be empty".to_string());
     }
-    validate_models(models)?;
-    validate_channels(channels, true, models)?;
+    validate_channels(channels, true)?;
     validate_api_type_overrides(api_type_overrides)?;
     Ok(())
 }

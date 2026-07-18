@@ -347,25 +347,15 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                         .clone()
                         .or(provider.active_probe_model_override.clone())
                         .or(rt_snap.active_probe_model.clone());
-                    let first_model = channel
-                        .supported_models
-                        .iter()
-                        .filter(|model| provider.models.contains_key(*model))
-                        .min()
-                        .cloned();
+                    let first_model = channel.models.keys().min().cloned();
                     let probe_model = configured_model.clone().or(first_model.clone());
                     let Some(ref model_name) = probe_model else {
                         continue;
                     };
-                    if !provider.models.contains_key(model_name)
-                        || !channel
-                            .supported_models
-                            .iter()
-                            .any(|supported| supported == model_name)
-                    {
+                    if !channel.models.contains_key(model_name) {
                         continue;
                     }
-                    let upstream_model = provider
+                    let upstream_model = channel
                         .models
                         .get(model_name)
                         .and_then(|entry| entry.redirect.as_deref())
@@ -392,10 +382,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
                         active_probe_user_id.clone(),
                         provider.id.clone(),
                         provider.name.clone(),
-                        provider
-                            .models
-                            .get(model_name)
-                            .map(|entry| entry.multiplier),
+                        channel.models.get(model_name).map(|entry| entry.multiplier),
                         channel.id.clone(),
                         channel.name.clone(),
                         model_name.to_string(),

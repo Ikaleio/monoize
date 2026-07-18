@@ -1408,7 +1408,6 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "alias-route-provider".to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -1423,7 +1422,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["alias-route-model".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1553,7 +1552,6 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "alias-fallback-provider".to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -1568,7 +1566,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["alias-fallback-model".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1698,7 +1696,6 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "suffix-pricing-provider".to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -1713,7 +1710,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-5-mini-thinking".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,

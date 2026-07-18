@@ -4305,7 +4305,6 @@ async fn create_test_provider(
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: name.to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -4320,7 +4319,7 @@ async fn create_test_provider(
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec![logical_model.to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,

@@ -100,8 +100,8 @@ export function ProviderCard({
 	)
 	const canDragCard = useFinePointer()
 	const modelEntries = useMemo(
-		() => Object.entries(provider.models).sort(([a], [b]) => a.localeCompare(b)),
-		[provider.models]
+		() => Array.from(new Set(provider.channels.flatMap(channel => Object.keys(channel.models)))).sort(),
+		[provider.channels]
 	)
 	const modelMetadataById = useMemo(() => {
 		const map = new Map<string, ModelMetadataRecord>()
@@ -397,7 +397,7 @@ export function ProviderCard({
 									</div>
 									<div className='mt-1 rounded-lg border overflow-hidden px-3 py-2'>
 										<BadgeOverflowList
-											items={modelEntries.map(([model, modelEntry]) => {
+											items={modelEntries.map(model => {
 												const meta = modelMetadataById.get(model)
 												const highlightUnpriced = unpricedModelIdSet.has(model)
 
@@ -407,8 +407,6 @@ export function ProviderCard({
 														<ModelBadge
 															model={model}
 															provider={meta?.models_dev_provider}
-															multiplier={modelEntry.multiplier}
-															redirect={modelEntry.redirect}
 															highlightUnpriced={highlightUnpriced}
 														/>
 													),
@@ -416,8 +414,6 @@ export function ProviderCard({
 														<ModelBadge
 															model={model}
 															provider={meta?.models_dev_provider}
-															multiplier={modelEntry.multiplier}
-															redirect={modelEntry.redirect}
 															highlightUnpriced={highlightUnpriced}
 															truncateModelText={false}
 															className='max-w-none'
@@ -482,7 +478,7 @@ export function ProviderCard({
 																	setTestDialogChannel({
 																		id: channel.id,
 																		name: channel.name,
-																		models: [...channel.supported_models].sort()
+																models: Object.keys(channel.models).sort()
 																	})
 																	setTestDialogOpen(true)
 																}}
@@ -491,7 +487,7 @@ export function ProviderCard({
 															</button>
 														</span>
 														<span className='text-xs text-muted-foreground'>
-															{channel.supported_models.length}M ·{' '}
+															{Object.keys(channel.models).length}M ·{' '}
 															W:{channel.weight}
 														</span>
 														<StatusBadge variant={channel.enabled ? 'success' : 'info'}>

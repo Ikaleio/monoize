@@ -98,18 +98,9 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
     let mut model_ids: Vec<String> = providers
         .into_iter()
         .filter(|provider| provider.enabled)
-        .flat_map(|provider| {
-            let supported: HashSet<String> = provider
-                .channels
-                .into_iter()
-                .filter(|channel| channel.enabled && channel.weight > 0)
-                .flat_map(|channel| channel.supported_models)
-                .collect();
-            provider
-                .models
-                .into_keys()
-                .filter(move |model| supported.contains(model))
-        })
+        .flat_map(|provider| provider.channels)
+        .filter(|channel| channel.enabled && channel.weight > 0)
+        .flat_map(|channel| channel.models.into_keys())
         .collect();
     model_ids.sort();
     model_ids.dedup();

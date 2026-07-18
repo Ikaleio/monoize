@@ -576,7 +576,6 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-summary-messages".to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -591,7 +590,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-5-mini".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1152,7 +1151,6 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-chunked-messages".to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -1167,7 +1165,7 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["chunked-msg-transform".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,

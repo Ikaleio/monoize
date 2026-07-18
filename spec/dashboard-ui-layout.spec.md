@@ -55,9 +55,11 @@ PL3. Provider list MUST support drag-and-drop reordering and persist order throu
 PL4. Provider detail/editor MUST display:
 
 - provider-level fields: `name`, `enabled`, `max_retries`
-- compact model editor list with per-row controls for: downstream model, redirect target, multiplier, delete
-- channel table: name, default type, base URL, weight, enabled, supported model count
+- channel master list: name, type, base URL, weight, enabled, model count, and runtime health
+- selected Channel detail editor with per-model controls for: logical model, redirect target, multiplier, and delete
 - channel runtime health indicator: healthy/probing/unhealthy
+
+PL4.0. Provider detail/editor MUST NOT render or maintain a Provider-level model selector or Provider-level model editor.
 
 PL4.1. Provider detail/editor MUST place the provider `enabled` switch in the top title row, right-aligned from the provider editor title.
 
@@ -113,7 +115,7 @@ PL12a. Provider list card header metadata badges MUST render through a collapsed
 - The preview row MUST NOT wrap.
 - The complete popover list MUST include channel type, enabled state, unpriced warning, and each provider group badge represented by the provider.
 
-PL13. Provider editor Channel dialog MUST include an explicit "Fetch Models" action that opens a model-diff selection dialog before insertion.
+PL13. The selected Channel model section MUST include an explicit "Fetch upstream" action that opens a model-diff selection dialog before insertion.
 
 - Dialog MUST fetch upstream model list from `POST /api/dashboard/fetch-channel-models` with the current Channel `provider_type` and `base_url`.
 - If the current Channel is an existing saved Channel and the API key input is empty, Dialog MUST pass `provider_id` and `channel_id` instead of requiring API key entry.
@@ -121,15 +123,17 @@ PL13. Provider editor Channel dialog MUST include an explicit "Fetch Models" act
 - If the API key input is non-empty, Dialog MUST pass that value so unsaved key edits are used for the fetch request.
 - Dialog MUST place the "Fetch Models" action in the Supported Models action row immediately before "Select All".
 - Dialog MUST split entries into `new` and `existing` tabs.
-- Dialog MUST initialize selection from the current Channel `supported_models`.
+- Dialog MUST initialize selection from the keys of the current Channel `models` object.
 - Dialog MUST allow selecting fetched models for the current Channel.
 - While the dialog remains open, a successful fetched model list MUST remain visible and MUST NOT be cleared by unrelated parent rerenders.
 - Dialog model list container MUST have a bounded positive height with internal scrolling so fetched rows are visible immediately after load.
 - Dialog model list items MUST render as compact stacked badges (wrapping rows), not forced single-column rows.
-- Confirming selection MUST append selected models absent from the Provider model table with default `{ redirect: "", multiplier: "1" }` while preserving existing rows.
-- Confirming selection MUST set only the current Channel `supported_models` to the selected model IDs.
+- Confirming selection MUST set only the current Channel `models` object.
+- Newly selected model IDs MUST receive default `{ redirect: null, multiplier: 1 }` entries.
+- Existing Channel model entries MUST preserve their redirect and multiplier values when the same logical model remains selected.
+- Removing a selected model MUST remove only that Channel model entry and MUST NOT mutate any sibling Channel.
 
-PL14. Provider model badges (overview and model-diff dialog) MUST display provider logo using model metadata (`models_dev_provider`) when available, with graceful fallback icon behavior when unavailable.
+PL14. Channel model badges (Provider overview and model-diff dialog) MUST display provider logo using model metadata (`models_dev_provider`) when available, with graceful fallback icon behavior when unavailable.
 
 PL14.1. Model-badge icon resolution MUST be deterministic for GLM series:
 
@@ -137,7 +141,7 @@ PL14.1. Model-badge icon resolution MUST be deterministic for GLM series:
 - If lowercase `model` contains `glm`, the badge MUST render the GLM-series icon (this rule has higher priority than provider-based mapping).
 - If normalized provider is `glm` or `chatglm`, the badge MUST render the GLM-series icon.
 
-PL15. In provider editor model section, each model row MUST be rendered as a compact clickable model tag.
+PL15. In the selected Channel model section, each model row MUST be rendered as a compact clickable model tag.
 
 - Tag text format MUST be `<(provider-logo) model-id [multiplier, target]>`.
 - Bracket details (`[multiplier, target]`) MUST use muted/gray text to indicate secondary information.
@@ -150,7 +154,7 @@ PL15. In provider editor model section, each model row MUST be rendered as a com
 - Editing an existing model row MUST operate on a draft copy. Closing/canceling the edit dialog without saving MUST leave the underlying row unchanged.
 - The provider editor UI MUST reject duplicate logical model names before save or final submit. It MUST NOT silently overwrite an earlier model row when two rows use the same trimmed model name.
 
-PL16. Model tag bracket details in provider card/editor MUST follow omission rules:
+PL16. Channel model tag bracket details in provider card/editor MUST follow omission rules:
 
 - multiplier fragment MUST be omitted when multiplier equals `1x`;
 - redirect fragment MUST be omitted when redirect target equals the model itself (or is empty);
@@ -188,12 +192,14 @@ PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-v
 - Channel list MUST render through `Virtuoso`.
 - Container MUST have bounded height and provide an internal vertical scrollbar.
 
-PL21. Unpriced models on the Providers page MUST be visually highlighted at model-badge level.
+PL21. Unpriced Channel model entries on the Providers page MUST be visually highlighted at model-badge level.
 
 - Unpriced check target MUST be `redirect` model when `redirect` is non-empty; otherwise the logical model key.
 - A model is treated as unpriced when pricing metadata does not provide both input and output token prices for that target model.
 - A pricing value of `0` MUST be treated as present pricing metadata, not as missing metadata.
 - Unpriced model badges MUST use a yellow warning style distinct from normal model badges.
+
+PL21a. `GET /api/dashboard/providers` MAY aggregate `unpriced_model_ids` across Channels for the Provider card. The count MUST deduplicate logical model IDs, while Channel detail highlighting MUST evaluate the selected Channel entry redirect independently.
 
 PL22. In the provider unsaved-changes confirmation dialog ("Save Changes?"), the "Discard" action MUST use destructive red hover styling.
 
@@ -221,6 +227,14 @@ PL24. While the provider editor dialog is open, interaction with a child dialog 
 - the channel edit dialog.
 
 Clicking an action button inside any such child dialog MUST execute only that child dialog action and MUST NOT open another unsaved-changes confirmation dialog through the parent provider editor outside-click handler.
+
+PL25. Provider editor MUST use an explicit workbench information architecture.
+
+- Desktop (`lg` and above) MUST render a Provider section rail, Channel master list, and selected Channel detail pane simultaneously.
+- Mobile (`< lg`) MUST render one pane at a time. Selecting a Channel MUST open a full-width Channel editor with an explicit back action.
+- Mobile save/cancel actions MUST remain reachable in a sticky bottom action bar.
+- Primary connection and model controls MUST appear before breaker, probe, retry, transform, and protocol override controls.
+- Advanced groups MUST be collapsed by default and MUST display a summary when closed.
 
 ## 3. Playground Page
 

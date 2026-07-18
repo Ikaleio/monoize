@@ -41,7 +41,9 @@ impl MigrationTrait for Migration {
             drop_column_if_exists(conn, backend, "monoize_providers", "provider_type").await?;
         }
 
-        populate_channel_models(conn, backend).await?;
+        if manager.has_table("monoize_provider_models").await? {
+            populate_channel_models(conn, backend).await?;
+        }
 
         for table in ["group_members", "model_mappings", "providers"] {
             conn.execute(Statement::from_string(

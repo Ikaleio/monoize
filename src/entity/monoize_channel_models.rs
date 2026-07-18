@@ -11,6 +11,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub model_name: String,
     #[sea_orm(column_type = "Text")]
+    pub redirect: Option<String>,
+    pub multiplier: f64,
+    #[sea_orm(column_type = "Text")]
     pub created_at: String,
 }
 

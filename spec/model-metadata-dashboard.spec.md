@@ -159,8 +159,8 @@ UI4. Page heading: "Model Database" (en) / "模型数据库" (zh).
 UI4a. The page MUST contain three tabs in this order:
 
 1. `Model Database`
-2. `Billing Rates`
-3. `Pricing Profiles`
+2. `Billing Profiles`
+3. `Advanced Rates`
 
 UI4b. Each tab MUST use SWR for data loading, skeleton fallback while loading, and optimistic updates for user-triggered mutations.
 
@@ -209,44 +209,38 @@ UI14. After any mutation, the model list MUST revalidate via SWR.
 
 UI15. Skeleton placeholders while loading.
 
-### 4.8 Billing Rates tab
+### 4.8 Billing Profiles tab
 
-UI17. The Billing Rates tab MUST list `billing_rate_records` in a table with at least these visible columns:
+UI17. The Billing Profiles tab MUST group models.dev rate records by `pricing_profile` and present a master-detail workbench.
 
-- `id`
-- `source`
-- `pricing_profile`
-- `model_pattern`
-- `provider_type`
-- `rate_kind`
-- `usage_class`
-- `unit`
-- `unit_price_nano_usd`
-- `context_tier`
-- `modality`
-- `cache_ttl`
-- `priority`
-- `enabled`
+UI17a. Desktop (`lg` and above) MUST render a left profile list and a right detail pane. The detail pane MUST show model ID plus input, cache-read, and output token prices formatted as USD per one million tokens.
 
-UI18. The Billing Rates tab MUST provide a search input filtering by `id`, `pricing_profile`, `model_pattern`, `usage_class`, `modality`, and `cache_ttl`.
+UI17b. Mobile (`< lg`) MUST render a horizontally scrollable profile selector and stacked model-price rows. No pricing table may require horizontal page scrolling.
 
-UI19. The Billing Rates tab MUST provide:
+UI18. Billing Profiles MUST provide model search and source/status filters without exposing nano-USD units or raw JSON in the primary flow.
 
-- a catalog sync button that calls `POST /api/dashboard/billing-rates/sync/catalog`;
-- an add button that opens a rate edit dialog;
-- row edit and delete actions.
+UI19. Billing Profiles MUST provide:
 
-UI20. The rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
+- a `Sync models.dev` action that calls `POST /api/dashboard/model-metadata/sync/models-dev`;
+- a visible last-sync/source status derived from synchronized records;
+- an ordered match-rule editor backed by `GET/PUT /api/dashboard/pricing-profile-patterns`;
+- a manual-override action that creates or updates manual `billing_rate_records` using human-readable USD-per-million inputs.
 
-### 4.9 Pricing Profiles tab
+UI19a. When metadata and billing rates have finished loading and no `models_dev` records exist, the UI MUST trigger at most one automatic models.dev sync for that mounted page instance. A failed automatic sync MUST show a retry action and MUST NOT loop.
 
-UI21. The Pricing Profiles tab MUST display the ordered `pricing_profile_model_patterns` list.
+UI19b. A successful models.dev sync MUST revalidate both model metadata and billing-rate SWR resources in the same interaction.
 
-UI22. The Pricing Profiles tab MUST allow adding, editing, deleting, and reordering patterns.
+UI20. Manual overrides MUST be visually separated from synchronized rates. Manual rows take precedence through the existing rate priority and source semantics; deleting a manual override MUST reveal the synchronized value after SWR revalidation.
 
-UI23. Saving the Pricing Profiles tab MUST send the entire ordered array to `PUT /api/dashboard/pricing-profile-patterns`.
+### 4.9 Advanced Rates tab
 
-UI24. Empty `pattern` or `pricing_profile` values MUST be blocked before submitting.
+UI21. The Advanced Rates tab MUST list `billing_rate_records` with every low-level mutable field, including nano-USD and JSON match fields.
+
+UI22. Advanced Rates MUST provide catalog sync, search, add, edit, and delete actions.
+
+UI23. The low-level rate edit dialog MUST allow editing every mutable field exposed by the Billing-rate CRUD API. JSON fields MUST be edited as JSON text and rejected client-side when not valid JSON.
+
+UI24. Empty pricing-profile match-rule `pattern` or `pricing_profile` values MUST be blocked before submitting.
 
 ### 4.8 Billing integration note
 
@@ -333,13 +327,13 @@ RE6a. The default provider-level suffix transform used for Anthropic/OpenRouter 
 
 ### 8.3 Model resolution algorithm
 
-RE7. When `collect_provider_attempts` looks up `urp.model` in `provider.models`:
-  1. **Exact match**: If `provider.models` contains `urp.model`, use it directly. No suffix processing.
+RE7. When `collect_provider_attempts` looks up `urp.model` in each `channel.models`:
+  1. **Exact match**: If `channel.models` contains `urp.model`, use it directly. No suffix processing.
   2. **Suffix resolution**: If no exact match, iterate `reasoning_suffix_map` entries (longest suffix first). For each suffix, check if `urp.model` ends with that suffix. If yes:
      - `base_model = urp.model` with the suffix removed.
-     - Look up `base_model` in `provider.models`.
-     - If found, use the base model entry AND set `reasoning_effort` to the mapped value.
-  3. **No match**: If neither exact nor suffix match, skip this provider (existing behavior).
+     - Look up `base_model` in `channel.models`.
+     - If found, use that Channel model entry AND set `reasoning_effort` to the mapped value.
+  3. **No match**: If neither exact nor suffix match, skip this Channel.
 
 RE8. When a suffix match resolves to a base model, the resolved `reasoning_effort` value MUST be injected into the URP request's `reasoning.effort` field (typed flow) before the request is encoded for the upstream provider. If the user already specified `reasoning_effort` explicitly in the request body, the explicit value takes precedence over the suffix-derived value.
 

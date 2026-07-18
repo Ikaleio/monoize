@@ -104,7 +104,6 @@ DBT2. On startup, the server MUST ensure the following model-registry tables exi
 DBT3. On startup, the server MUST ensure the following Monoize routing tables exist:
 
 - `monoize_providers`
-- `monoize_provider_models`
 - `monoize_channels`
 - `monoize_channel_models`
 
@@ -134,7 +133,9 @@ DBO2. `model_registry_records` is the persistent source of dashboard-managed mod
 
 DBO2.1. `model_metadata_records` is the persistent source of per-model pricing/capability metadata used by billing and dashboard diagnostics.
 
-DBO3. `monoize_providers`, `monoize_provider_models`, `monoize_channels`, and `monoize_channel_models` are the primary source of truth for provider/channel routing configuration.
+DBO3. `monoize_providers`, `monoize_channels`, and `monoize_channel_models` are the primary source of truth for provider/channel routing configuration.
+
+DBO3.0. `monoize_provider_models` MUST NOT exist after migration. Channel model rows are the only persistent owner of logical model, redirect, and multiplier configuration.
 
 DBO3.1. `billing_ledger` is append-only request charge / admin adjustment history.
 

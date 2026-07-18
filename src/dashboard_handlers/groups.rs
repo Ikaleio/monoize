@@ -143,13 +143,6 @@ mod tests {
                 channel_retry_interval_ms: 0,
                 circuit_breaker_enabled: true,
                 per_model_circuit_break: false,
-                models: std::collections::HashMap::from([(
-                    "gpt-5".to_string(),
-                    crate::monoize_routing::MonoizeModelEntry {
-                        redirect: None,
-                        multiplier: 1.0,
-                    },
-                )]),
                 groups: vec!["beta".to_string(), " delta ".to_string()],
                 channels: vec![crate::monoize_routing::CreateMonoizeChannelInput {
                     id: None,
@@ -163,7 +156,13 @@ mod tests {
                     passive_window_seconds_override: None,
                     passive_cooldown_seconds_override: None,
                     passive_rate_limit_cooldown_seconds_override: None,
-                    supported_models: vec!["gpt-5".to_string()],
+                    models: std::collections::HashMap::from([(
+                        "gpt-5".to_string(),
+                        crate::monoize_routing::MonoizeModelEntry {
+                            redirect: None,
+                            multiplier: 1.0,
+                        },
+                    )]),
                     active_probe_enabled_override: None,
                     active_probe_interval_seconds_override: None,
                     active_probe_success_threshold_override: None,

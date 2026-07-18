@@ -22,7 +22,6 @@ A provider object MUST include:
 - `channel_retry_interval_ms: integer` (default `0`)
 - `circuit_breaker_enabled: boolean` (default `true`)
 - `per_model_circuit_break: boolean` (default `false`)
-- `models: Record<string, { redirect: string | null, multiplier: number }>`
 - `channels: Channel[]`
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
 - `api_type_overrides: ApiTypeOverride[]` (ordered, default empty). Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","replicate") }`.
@@ -50,7 +49,7 @@ A channel object MUST include:
 - `api_key: string` (write-only: MUST NOT be returned by list/get APIs)
 - `weight: integer >= 0`
 - `enabled: boolean`
-- `supported_models: string[]` sorted ascending
+- `models: Record<string, { redirect: string | null, multiplier: number }>`
 
 Runtime projection fields MAY be returned by list/get APIs:
 
@@ -76,9 +75,9 @@ Channel-level active probe override fields MAY be present:
 
 CP-INV-1. `channels.length >= 1`.
 
-CP-INV-2. `models` MUST NOT be empty.
+CP-INV-2. At least one Channel MUST have a non-empty `models` object.
 
-CP-INV-3. Every model entry multiplier MUST satisfy `multiplier > 0`.
+CP-INV-3. Every Channel model entry multiplier MUST be finite and satisfy `multiplier > 0`.
 
 CP-INV-4. Every channel weight MUST satisfy `weight >= 0`.
 
@@ -88,11 +87,11 @@ CP-INV-6. Every `api_type_overrides[].pattern` MUST be a non-empty string.
 
 CP-INV-7. Every returned `provider.groups` value MUST be lowercase, trimmed, non-empty, deduplicated, and sorted ascending.
 
-CP-INV-8. Every `channel.supported_models[]` value MUST match a key in the same provider's `models` object.
+CP-INV-8. Channel model keys MUST be non-empty after trimming and unique within that Channel.
 
-CP-INV-9. A provider model MAY have zero supporting channels. The UI MUST warn. Routing MUST skip that provider for that model.
+CP-INV-9. Provider MUST NOT contain a `models` field. Provider-level model selection, redirect, and multiplier state are obsolete and MUST NOT be accepted or returned.
 
-CP-INV-10. A channel MAY have an empty `supported_models` list. The UI MUST warn. The channel MUST NOT be eligible for any model route until at least one model is supported.
+CP-INV-10. A Channel MAY have an empty `models` object. The UI MUST warn. The Channel MUST NOT be eligible for any model route until at least one model entry exists.
 
 Provider group routing semantics:
 
@@ -127,8 +126,7 @@ All endpoints require an authenticated dashboard admin session.
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `models: Record<string, { redirect: string | null, multiplier: number }>`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, supported_models?: string[], passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null }>`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: number }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null }>`
   - `groups?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -140,7 +138,8 @@ All endpoints require an authenticated dashboard admin session.
 - Method/Path: `PUT /api/dashboard/providers/{provider_id}`
 - Body: same schema as create except all fields are optional and `provider_type` is forbidden at provider level.
 - `id` MUST NOT be accepted in the update body.
-- `models` and `channels` are full replacements when present.
+- `channels` is a full replacement when present. Each Channel `models` object is a full replacement for that Channel.
+- `models` at Provider level is an unknown field and MUST be rejected.
 - Channel `api_key` behavior:
   - If `api_key` is omitted or empty for an existing channel id, preserve the stored key.
   - If `api_key` is omitted or empty for a new channel id, reject with `400 invalid_request`.
@@ -187,8 +186,9 @@ CP-DEL-1. After delete, runtime health entries for all deleted provider channel 
 
 - Method/Path: `POST /api/dashboard/providers/{provider_id}/channels/{channel_id}/test`
 - Body: `{ "model"?: string }`
-- If `model` is provided, it MUST be in the channel's `supported_models`.
-- If `model` is omitted, use the channel active probe model override, then provider active probe model override, then global probe model, then the first channel-supported provider model in lexicographic order.
+- If `model` is provided, it MUST be a key in the Channel `models` object.
+- If `model` is omitted, use the Channel active probe model override, then Provider active probe model override, then global probe model, then the first Channel model key in lexicographic order.
+- The upstream probe model MUST be the selected Channel model entry `redirect` when non-empty, otherwise the logical model key.
 - The effective API type is the first matching Provider `api_type_overrides[]` entry for the logical model, otherwise the Channel `provider_type`.
 - Replicate channels MUST be rejected for active completion probes.
 - On success, clear all health entries for the tested channel.

@@ -104,7 +104,7 @@ C1a. `model_metadata_records` MAY store legacy token prices and model limits. Me
 
 C1.1. Served upstream model resolution for request execution and billing metadata:
 
-- if provider model mapping has non-empty `redirect`, Monoize MUST send that `redirect` upstream and MUST record it as `upstream_model`;
+- if the selected Channel model mapping has non-empty `redirect`, Monoize MUST send that `redirect` upstream and MUST record it as `upstream_model`;
 - otherwise Monoize MUST use the requested logical model as `upstream_model`.
 
 C1.2. Pricing model resolution for billing:
@@ -170,10 +170,10 @@ output_charge =
 
 `output_tokens` in C4 MUST likewise be treated according to provider semantics. If a provider defines reasoning tokens as a subtype of the reported output total, Monoize MUST subtract them before applying the base output rate and then add the reasoning-rate subtotal. Monoize MUST NOT bill the same output token once at the base output rate and again at the reasoning rate.
 
-C5. Final charge MUST multiply by provider model multiplier and truncate toward zero:
+C5. Final charge MUST multiply by the selected Channel model multiplier and truncate toward zero:
 
 ```
-final_charge_nano = trunc(base_charge * provider_multiplier)
+final_charge_nano = trunc(base_charge * channel_model_multiplier)
 ```
 
 C6. If C1.2 yields no billable rates, Monoize MUST reject the request with HTTP `403` and code `model_pricing_required`.

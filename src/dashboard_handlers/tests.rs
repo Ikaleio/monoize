@@ -121,32 +121,46 @@ fn provider_dashboard_rate_matrix_requires_complete_tiered_billing_rates() {
 fn dashboard_create_provider_groups_default_to_public() {
     let body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
-        "models": {
-            "gpt-5": {
-                "redirect": null,
-                "multiplier": 1.0
-            }
-        },
         "channels": [
             {
                 "name": "public",
                 "provider_type": "responses",
                 "base_url": "https://example.com/public",
                 "api_key": "secret",
-                "supported_models": ["gpt-5"]
+                "models": { "gpt-5": { "redirect": null, "multiplier": 1.0 } }
             },
             {
                 "name": "restricted",
                 "provider_type": "responses",
                 "base_url": "https://example.com/restricted",
                 "api_key": "secret",
-                "supported_models": ["gpt-5"]
+                "models": { "gpt-5": { "redirect": null, "multiplier": 1.0 } }
             }
         ]
     }))
     .expect("payload deserializes");
 
     assert!(body.groups.is_empty());
+}
+
+#[test]
+fn dashboard_create_provider_rejects_obsolete_provider_models_field() {
+    let result = serde_json::from_value::<CreateMonoizeProviderInput>(json!({
+        "name": "OpenAI",
+        "models": { "gpt-5": { "redirect": null, "multiplier": 1.0 } },
+        "channels": [{
+            "name": "primary",
+            "provider_type": "responses",
+            "base_url": "https://example.com",
+            "api_key": "secret",
+            "models": { "gpt-5": { "redirect": null, "multiplier": 1.0 } }
+        }]
+    }));
+
+    assert!(
+        result.is_err(),
+        "provider-level models must not be accepted"
+    );
 }
 
 #[test]
@@ -180,7 +194,13 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         passive_cooldown_seconds_override: None,
         passive_window_seconds_override: None,
         passive_rate_limit_cooldown_seconds_override: None,
-        supported_models: vec!["gpt-5".to_string()],
+        models: HashMap::from([(
+            "gpt-5".to_string(),
+            crate::monoize_routing::MonoizeModelEntry {
+                redirect: None,
+                multiplier: 1.0,
+            },
+        )]),
         active_probe_enabled_override: None,
         active_probe_interval_seconds_override: None,
         active_probe_success_threshold_override: None,
@@ -193,7 +213,6 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
     let provider = MonoizeProvider {
         id: "mono_provider_123".to_string(),
         name: "provider".to_string(),
-        models: HashMap::new(),
         channels: vec![channel],
         max_retries: -1,
         channel_max_retries: 0,
@@ -244,19 +263,13 @@ async fn dashboard_provider_groups_round_trip_through_store_and_update_preserves
     let create_body: CreateMonoizeProviderInput = serde_json::from_value(json!({
         "name": "OpenAI",
         "groups": [" Beta ", "alpha", "ALPHA", ""],
-        "models": {
-            "gpt-5": {
-                "redirect": null,
-                "multiplier": 1.0
-            }
-        },
         "channels": [
             {
                 "name": "primary",
                 "provider_type": "responses",
                 "base_url": "https://example.com",
                 "api_key": "secret",
-                "supported_models": ["gpt-5"]
+                "models": { "gpt-5": { "redirect": null, "multiplier": 1.0 } }
             }
         ]
     }))
@@ -282,7 +295,7 @@ async fn dashboard_provider_groups_round_trip_through_store_and_update_preserves
                 "provider_type": "responses",
                 "base_url": "https://example.com",
                 "api_key": "",
-                "supported_models": ["gpt-5"]
+                "models": { "gpt-5": { "redirect": null, "multiplier": 1.0 } }
             }
         ]
     }))

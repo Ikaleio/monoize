@@ -107,7 +107,6 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "override-threshold-provider".to_string(),
-            models,
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -122,7 +121,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["override-threshold-model".to_string()],
+                models,
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -199,7 +198,6 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
 
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-transform-original-model-match".to_string(),
-        models,
         api_type_overrides: Vec::new(),
         groups: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -214,7 +212,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec!["normalized-transform-model".to_string()],
+            models,
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,
@@ -299,7 +297,6 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
 
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-provider-redirect-api-type-override".to_string(),
-        models,
         api_type_overrides: vec![monoize::monoize_routing::ApiTypeOverride {
             pattern: "gpt-5.4-fast".to_string(),
             api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
@@ -317,7 +314,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec!["gpt-5.4-fast".to_string()],
+            models,
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,

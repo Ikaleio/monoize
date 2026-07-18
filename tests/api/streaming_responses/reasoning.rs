@@ -84,13 +84,6 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
         .monoize_store
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-empty-reasoning-filter".to_string(),
-            models: HashMap::from([(
-                model.to_string(),
-                monoize::monoize_routing::MonoizeModelEntry {
-                    redirect: None,
-                    multiplier: 1.0,
-                },
-            )]),
             api_type_overrides: Vec::new(),
             groups: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -105,7 +98,13 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec![model.to_string()],
+                models: HashMap::from([(
+                    model.to_string(),
+                    monoize::monoize_routing::MonoizeModelEntry {
+                        redirect: None,
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -300,7 +299,6 @@ async fn responses_streaming_applies_response_transform_from_provider() {
     );
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-transform-strip".to_string(),
-        models,
         api_type_overrides: Vec::new(),
         groups: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -315,7 +313,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec!["gpt-5-mini".to_string()],
+            models,
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,
@@ -391,7 +389,6 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
     );
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-transform-sse-split".to_string(),
-        models,
         api_type_overrides: Vec::new(),
         groups: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
@@ -406,7 +403,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec!["gpt-5-mini".to_string()],
+            models,
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,

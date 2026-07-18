@@ -391,13 +391,6 @@ async fn seed_group_routing_provider(
             strip_cross_protocol_nested_extra: None,
             enabled: true,
             priority: Some(0),
-            models: std::collections::HashMap::from([(
-                GROUP_ROUTING_MODEL.to_string(),
-                MonoizeModelEntry {
-                    redirect: None,
-                    multiplier: 1.0,
-                },
-            )]),
             groups,
             channels,
         })
@@ -425,6 +418,82 @@ async fn seed_model_pricing(state: &AppState, model: &str) {
         )
         .await
         .expect("pricing seeded");
+}
+
+#[tokio::test]
+async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    seed_model_pricing(&state, "channel-owned-model").await;
+
+    let channel = |id: &str, multiplier: f64, redirect: &str| CreateMonoizeChannelInput {
+        id: Some(id.to_string()),
+        name: id.to_string(),
+        provider_type: MonoizeProviderType::Responses,
+        base_url: format!("https://{id}.example.com"),
+        api_key: Some("secret".to_string()),
+        weight: 1,
+        enabled: true,
+        passive_failure_count_threshold_override: None,
+        passive_cooldown_seconds_override: None,
+        passive_window_seconds_override: None,
+        passive_rate_limit_cooldown_seconds_override: None,
+        models: std::collections::HashMap::from([(
+            "channel-owned-model".to_string(),
+            MonoizeModelEntry {
+                redirect: Some(redirect.to_string()),
+                multiplier,
+            },
+        )]),
+        active_probe_enabled_override: None,
+        active_probe_interval_seconds_override: None,
+        active_probe_success_threshold_override: None,
+        active_probe_model_override: None,
+    };
+
+    state
+        .monoize_store
+        .create_provider(CreateMonoizeProviderInput {
+            name: "channel-owned-models".to_string(),
+            channels: vec![
+                channel("cheap", 1.0, "cheap-upstream"),
+                channel("expensive", 2.0, "expensive-upstream"),
+            ],
+            max_retries: -1,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: false,
+            per_model_circuit_break: false,
+            transforms: Vec::new(),
+            api_type_overrides: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: None,
+            strip_cross_protocol_nested_extra: None,
+            groups: Vec::new(),
+            enabled: true,
+            priority: Some(0),
+        })
+        .await
+        .expect("provider created");
+
+    let mut request = build_test_routing_request("channel-owned-model");
+    request.max_multiplier = Some(1.5);
+    let attempts = build_monoize_attempts(&state, &request, &build_test_auth(None))
+        .await
+        .expect("routing succeeds");
+
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].channel_id, "cheap");
+    assert_eq!(attempts[0].upstream_model, "cheap-upstream");
+    assert_eq!(attempts[0].model_multiplier, 1.0);
 }
 
 fn attempt_channel_ids(attempts: &[MonoizeAttempt]) -> BTreeSet<&str> {
@@ -1088,13 +1157,6 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
-            models: std::collections::HashMap::from([(
-                "gpt-5-mini".to_string(),
-                MonoizeModelEntry {
-                    redirect: None,
-                    multiplier: 1.0,
-                },
-            )]),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
@@ -1107,7 +1169,13 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-5-mini".to_string()],
+                models: std::collections::HashMap::from([(
+                    "gpt-5-mini".to_string(),
+                    MonoizeModelEntry {
+                        redirect: None,
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1185,13 +1253,6 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
-            models: std::collections::HashMap::from([(
-                "gpt-unpriced".to_string(),
-                MonoizeModelEntry {
-                    redirect: Some("gpt-unpriced-upstream".to_string()),
-                    multiplier: 1.0,
-                },
-            )]),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
@@ -1204,7 +1265,13 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-unpriced".to_string()],
+                models: std::collections::HashMap::from([(
+                    "gpt-unpriced".to_string(),
+                    MonoizeModelEntry {
+                        redirect: Some("gpt-unpriced-upstream".to_string()),
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1255,13 +1322,6 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
-            models: std::collections::HashMap::from([(
-                "gpt-unpriced".to_string(),
-                MonoizeModelEntry {
-                    redirect: Some("gpt-unpriced-upstream".to_string()),
-                    multiplier: 1.0,
-                },
-            )]),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
@@ -1274,7 +1334,13 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-unpriced".to_string()],
+                models: std::collections::HashMap::from([(
+                    "gpt-unpriced".to_string(),
+                    MonoizeModelEntry {
+                        redirect: Some("gpt-unpriced-upstream".to_string()),
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1324,13 +1390,6 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
-            models: std::collections::HashMap::from([(
-                "gpt-priced".to_string(),
-                MonoizeModelEntry {
-                    redirect: None,
-                    multiplier: 1.0,
-                },
-            )]),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
@@ -1343,7 +1402,13 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-priced".to_string()],
+                models: std::collections::HashMap::from([(
+                    "gpt-priced".to_string(),
+                    MonoizeModelEntry {
+                        redirect: None,
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1396,13 +1461,6 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
-            models: std::collections::HashMap::from([(
-                "gpt-fallback-src".to_string(),
-                MonoizeModelEntry {
-                    redirect: Some("gpt-fallback-dest".to_string()),
-                    multiplier: 1.0,
-                },
-            )]),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
@@ -1415,7 +1473,13 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["gpt-fallback-src".to_string()],
+                models: std::collections::HashMap::from([(
+                    "gpt-fallback-src".to_string(),
+                    MonoizeModelEntry {
+                        redirect: Some("gpt-fallback-dest".to_string()),
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1516,13 +1580,6 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
             groups: Vec::new(),
             enabled: true,
             priority: Some(0),
-            models: std::collections::HashMap::from([(
-                "claude-sonnet-4.6".to_string(),
-                MonoizeModelEntry {
-                    redirect: None,
-                    multiplier: 1.0,
-                },
-            )]),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
                 name: "primary".to_string(),
@@ -1535,7 +1592,13 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
                 passive_rate_limit_cooldown_seconds_override: None,
-                supported_models: vec!["claude-sonnet-4.6".to_string()],
+                models: std::collections::HashMap::from([(
+                    "claude-sonnet-4.6".to_string(),
+                    MonoizeModelEntry {
+                        redirect: None,
+                        multiplier: 1.0,
+                    },
+                )]),
                 active_probe_enabled_override: None,
                 active_probe_interval_seconds_override: None,
                 active_probe_success_threshold_override: None,
@@ -1601,7 +1664,13 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            models: std::collections::HashMap::from([(
+                GROUP_ROUTING_MODEL.to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,
@@ -1626,7 +1695,13 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            models: std::collections::HashMap::from([(
+                GROUP_ROUTING_MODEL.to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,
@@ -1651,7 +1726,13 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            models: std::collections::HashMap::from([(
+                GROUP_ROUTING_MODEL.to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,
@@ -1713,7 +1794,13 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
             passive_rate_limit_cooldown_seconds_override: None,
-            supported_models: vec![GROUP_ROUTING_MODEL.to_string()],
+            models: std::collections::HashMap::from([(
+                GROUP_ROUTING_MODEL.to_string(),
+                MonoizeModelEntry {
+                    redirect: None,
+                    multiplier: 1.0,
+                },
+            )]),
             active_probe_enabled_override: None,
             active_probe_interval_seconds_override: None,
             active_probe_success_threshold_override: None,

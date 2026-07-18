@@ -33,13 +33,12 @@ ISM2.2. `up()` MUST create tables in this dependency-safe order:
 7. `model_registry_records`
 8. `model_metadata_records`
 9. `monoize_providers`
-10. `monoize_provider_models`
-11. `monoize_channels`
-12. `monoize_channel_models`
-13. `state_records`
-14. `file_bytes`
+10. `monoize_channels`
+11. `monoize_channel_models`
+12. `state_records`
+13. `file_bytes`
 
-ISM2.3. `down()` MUST drop the same 14 tables in reverse dependency order.
+ISM2.3. `down()` MUST drop the same 13 tables in reverse dependency order.
 
 ## 3. Type mapping and key rules
 
@@ -231,15 +230,7 @@ ISM4.9. `monoize_providers` columns:
 - `created_at` TEXT NOT NULL
 - `updated_at` TEXT NOT NULL
 
-ISM4.10. `monoize_provider_models` columns:
-
-- `id` TEXT PK
-- `provider_id` TEXT NOT NULL
-- `model_name` TEXT NOT NULL
-- `redirect` TEXT NULL
-- `multiplier` REAL NOT NULL DEFAULT 1.0
-- `created_at` TEXT NOT NULL
-- UNIQUE(`provider_id`, `model_name`)
+ISM4.10. `monoize_provider_models` MUST NOT be created by the baseline migration and MUST NOT exist after all migrations complete.
 
 ISM4.11. `monoize_channels` columns:
 
@@ -273,6 +264,8 @@ ISM4.12. `monoize_channel_models` columns:
 - `id` TEXT PK
 - `channel_id` TEXT NOT NULL
 - `model_name` TEXT NOT NULL
+- `redirect` TEXT NULL
+- `multiplier` REAL NOT NULL DEFAULT 1.0
 - `created_at` TEXT NOT NULL
 - UNIQUE(`channel_id`, `model_name`)
 
@@ -301,7 +294,6 @@ ISM5.1. Required unique constraints:
 - `users.username`
 - `sessions.token`
 - `model_registry_records(logical_model, provider_id)`
-- `monoize_provider_models(provider_id, model_name)`
 - `monoize_channel_models(channel_id, model_name)`
 
 ISM5.2. Required indexes:
@@ -314,7 +306,6 @@ ISM5.2. Required indexes:
 - `idx_request_logs_user_id` on `request_logs(user_id)`
 - `idx_request_logs_created_at` on `request_logs(created_at)`
 - `idx_request_logs_model` on `request_logs(model)`
-- `idx_mpm_provider_id` on `monoize_provider_models(provider_id)`
 - `idx_mc_provider_id` on `monoize_channels(provider_id)`
 - `idx_mcm_channel_id` on `monoize_channel_models(channel_id)`
 
@@ -328,6 +319,5 @@ ISM6.2. If defined, foreign key edges SHOULD follow:
 - `api_keys.user_id -> users.id`
 - `billing_ledger.user_id -> users.id`
 - `request_logs.user_id -> users.id`
-- `monoize_provider_models.provider_id -> monoize_providers.id`
 - `monoize_channels.provider_id -> monoize_providers.id`
 - `monoize_channel_models.channel_id -> monoize_channels.id`

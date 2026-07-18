@@ -603,6 +603,7 @@ export async function syncModelMetadata(
   try {
     const result = await api.syncModelMetadataFromModelsDev();
     mutate(SWR_KEYS.MODEL_METADATA);
+    mutate(SWR_KEYS.BILLING_RATES);
     return result;
   } catch (error) {
     if (onError && error instanceof Error) {

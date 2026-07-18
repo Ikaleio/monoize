@@ -15,7 +15,6 @@ async fn set_messages_metadata_collision_transform(ctx: &TestContext) {
             &provider.id,
             monoize::monoize_routing::UpdateMonoizeProviderInput {
                 name: None,
-                models: None,
                 channels: None,
                 max_retries: None,
                 channel_max_retries: None,

@@ -24,15 +24,16 @@ export type ChannelRow = {
 	api_key: string
 	weight: string
 	enabled: boolean
+	models: ModelRow[]
 	passive_failure_count_threshold_override: string
 	passive_cooldown_seconds_override: string
 	passive_window_seconds_override: string
 	passive_rate_limit_cooldown_seconds_override: string
-	supported_models: string[]
 	active_probe_enabled_override: boolean | null
 	active_probe_interval_seconds_override: string
 	active_probe_success_threshold_override: string
 	active_probe_model_override: string
+	_health_status?: 'healthy' | 'probing' | 'unhealthy'
 }
 
 export type ProviderForm = {
@@ -53,7 +54,6 @@ export type ProviderForm = {
 	strip_cross_protocol_nested_extra: boolean | null
 	groups: string[]
 	priority?: number
-	models: ModelRow[]
 	channels: ChannelRow[]
 	transforms: TransformRuleConfig[]
 	api_type_overrides: ApiTypeOverride[]
@@ -61,38 +61,17 @@ export type ProviderForm = {
 
 export const PROVIDER_TYPE_CONFIG: Record<
 	ProviderType,
-	{
-		label: string
-		path: string
-		icon: ComponentType<{ className?: string }>
-	}
+	{ label: string; path: string; icon: ComponentType<{ className?: string }> }
 > = {
-	chat_completion: {
-		label: 'Chat Completion',
-		path: '/v1/chat/completions',
-		icon: OpenAI
-	},
+	chat_completion: { label: 'Chat Completion', path: '/v1/chat/completions', icon: OpenAI },
 	responses: { label: 'Responses', path: '/v1/responses', icon: OpenAI },
 	messages: { label: 'Messages', path: '/v1/messages', icon: Anthropic },
-	gemini: {
-		label: 'Gemini',
-		path: '/v1beta/models/{model}:generateContent',
-		icon: Google
-	},
-	openai_image: {
-		label: 'OpenAI Image',
-		path: '/v1/images/generations',
-		icon: OpenAI
-	},
-	replicate: {
-		label: 'Replicate',
-		path: '/v1/replicate/predictions',
-		icon: Box
-	}
+	gemini: { label: 'Gemini', path: '/v1beta/models/{model}:generateContent', icon: Google },
+	openai_image: { label: 'OpenAI Image', path: '/v1/images/generations', icon: OpenAI },
+	replicate: { label: 'Replicate', path: '/v1/replicate/predictions', icon: Box }
 }
 
 export const PROVIDER_CHANNEL_OVERVIEW_ROW_HEIGHT = 40
-export const PROVIDER_EDIT_CHANNEL_ROW_HEIGHT = 56
 export const DEFAULT_REASONING_SUFFIX_MAP: Record<string, string> = {
 	'-thinking': 'high',
 	'-reasoning': 'high',
@@ -100,14 +79,34 @@ export const DEFAULT_REASONING_SUFFIX_MAP: Record<string, string> = {
 }
 
 const BUILTIN_REASONING_SUFFIXES = [
-	'-none',
-	'-minimum',
-	'-low',
-	'-medium',
-	'-high',
-	'-xhigh',
-	'-max'
+	'-none', '-minimum', '-low', '-medium', '-high', '-xhigh', '-max'
 ]
+
+export function emptyModelRow(): ModelRow {
+	return { model: '', redirect: '', multiplier: '1' }
+}
+
+export function emptyChannelRow(): ChannelRow {
+	return {
+		id: '',
+		name: '',
+		provider_type: 'chat_completion',
+		base_url: '',
+		api_key: '',
+		weight: '1',
+		enabled: true,
+		models: [],
+		passive_failure_count_threshold_override: '',
+		passive_cooldown_seconds_override: '',
+		passive_window_seconds_override: '',
+		passive_rate_limit_cooldown_seconds_override: '',
+		active_probe_enabled_override: null,
+		active_probe_interval_seconds_override: '',
+		active_probe_success_threshold_override: '',
+		active_probe_model_override: '',
+		_health_status: undefined
+	}
+}
 
 export function emptyForm(): ProviderForm {
 	return {
@@ -128,44 +127,15 @@ export function emptyForm(): ProviderForm {
 		strip_cross_protocol_nested_extra: null,
 		groups: [],
 		priority: undefined,
-		models: [],
-		channels: [],
+		channels: [emptyChannelRow()],
 		transforms: [],
 		api_type_overrides: []
 	}
 }
 
-export function emptyModelRow(): ModelRow {
-	return {
-		model: '',
-		redirect: '',
-		multiplier: '1'
-	}
-}
-
-export function emptyChannelRow(): ChannelRow {
-	return {
-		id: '',
-		name: '',
-		provider_type: 'chat_completion',
-		base_url: '',
-		api_key: '',
-		weight: '1',
-		enabled: true,
-		passive_failure_count_threshold_override: '',
-		passive_cooldown_seconds_override: '',
-		passive_window_seconds_override: '',
-		passive_rate_limit_cooldown_seconds_override: '',
-		supported_models: [],
-		active_probe_enabled_override: null,
-		active_probe_interval_seconds_override: '',
-		active_probe_success_threshold_override: '',
-		active_probe_model_override: ''
-	}
-}
-
 export function fromProvider(provider: Provider): ProviderForm {
 	return {
+		...emptyForm(),
 		id: provider.id,
 		name: provider.name,
 		enabled: provider.enabled,
@@ -174,64 +144,37 @@ export function fromProvider(provider: Provider): ProviderForm {
 		channel_retry_interval_ms: provider.channel_retry_interval_ms ?? 0,
 		circuit_breaker_enabled: provider.circuit_breaker_enabled ?? true,
 		per_model_circuit_break: provider.per_model_circuit_break ?? false,
-		active_probe_enabled_override:
-			provider.active_probe_enabled_override ?? null,
-		active_probe_interval_seconds_override:
-			provider.active_probe_interval_seconds_override ?? null,
-		active_probe_success_threshold_override:
-			provider.active_probe_success_threshold_override ?? null,
+		active_probe_enabled_override: provider.active_probe_enabled_override ?? null,
+		active_probe_interval_seconds_override: provider.active_probe_interval_seconds_override ?? null,
+		active_probe_success_threshold_override: provider.active_probe_success_threshold_override ?? null,
 		active_probe_model_override: provider.active_probe_model_override ?? null,
-		request_timeout_ms_override:
-			provider.request_timeout_ms_override != null ?
-				String(provider.request_timeout_ms_override)
-			:	'',
-		extra_fields_whitelist:
-			provider.extra_fields_whitelist?.join(', ') ?? '',
-		strip_cross_protocol_nested_extra:
-			provider.strip_cross_protocol_nested_extra ?? null,
+		request_timeout_ms_override: provider.request_timeout_ms_override == null ? '' : String(provider.request_timeout_ms_override),
+		extra_fields_whitelist: provider.extra_fields_whitelist?.join(', ') ?? '',
+		strip_cross_protocol_nested_extra: provider.strip_cross_protocol_nested_extra ?? null,
 		groups: provider.groups ?? [],
 		priority: provider.priority,
-		models: Object.entries(provider.models).map(([model, entry]) => ({
-			model,
-			redirect: entry.redirect ?? '',
-			multiplier: String(entry.multiplier)
-		})),
 		channels: provider.channels.map(channel => ({
+			...emptyChannelRow(),
 			id: channel.id,
 			name: channel.name,
 			provider_type: channel.provider_type,
 			base_url: channel.base_url,
-			api_key: '',
 			weight: String(channel.weight),
 			enabled: channel.enabled,
-			passive_failure_count_threshold_override:
-				channel.passive_failure_count_threshold_override != null ?
-					String(channel.passive_failure_count_threshold_override)
-				:	'',
-			passive_cooldown_seconds_override:
-				channel.passive_cooldown_seconds_override != null ?
-					String(channel.passive_cooldown_seconds_override)
-				:	'',
-			passive_window_seconds_override:
-				channel.passive_window_seconds_override != null ?
-					String(channel.passive_window_seconds_override)
-				:	'',
-			passive_rate_limit_cooldown_seconds_override:
-				channel.passive_rate_limit_cooldown_seconds_override != null ?
-					String(channel.passive_rate_limit_cooldown_seconds_override)
-				:	'',
-			supported_models: channel.supported_models ?? [],
-			active_probe_enabled_override:
-				channel.active_probe_enabled_override ?? null,
-			active_probe_interval_seconds_override:
-				channel.active_probe_interval_seconds_override != null ?
-					String(channel.active_probe_interval_seconds_override)
-				:	'',
-			active_probe_success_threshold_override:
-				channel.active_probe_success_threshold_override != null ?
-					String(channel.active_probe_success_threshold_override)
-				:	'',
-			active_probe_model_override: channel.active_probe_model_override ?? ''
+			models: Object.entries(channel.models).map(([model, entry]) => ({
+				model,
+				redirect: entry.redirect ?? '',
+				multiplier: String(entry.multiplier)
+			})),
+			passive_failure_count_threshold_override: channel.passive_failure_count_threshold_override == null ? '' : String(channel.passive_failure_count_threshold_override),
+			passive_cooldown_seconds_override: channel.passive_cooldown_seconds_override == null ? '' : String(channel.passive_cooldown_seconds_override),
+			passive_window_seconds_override: channel.passive_window_seconds_override == null ? '' : String(channel.passive_window_seconds_override),
+			passive_rate_limit_cooldown_seconds_override: channel.passive_rate_limit_cooldown_seconds_override == null ? '' : String(channel.passive_rate_limit_cooldown_seconds_override),
+			active_probe_enabled_override: channel.active_probe_enabled_override ?? null,
+			active_probe_interval_seconds_override: channel.active_probe_interval_seconds_override == null ? '' : String(channel.active_probe_interval_seconds_override),
+			active_probe_success_threshold_override: channel.active_probe_success_threshold_override == null ? '' : String(channel.active_probe_success_threshold_override),
+			active_probe_model_override: channel.active_probe_model_override ?? '',
+			_health_status: channel._health_status
 		})),
 		transforms: provider.transforms ?? [],
 		api_type_overrides: provider.api_type_overrides ?? []
@@ -246,58 +189,25 @@ export function removeTrailingV1(baseUrl: string): string {
 	return baseUrl.trim().replace(/\/v1\/?$/i, '')
 }
 
-export function buildPricedModelIdSet(
-	modelMetadata: ModelMetadataRecord[]
-): Set<string> {
-	const set = new Set<string>()
-	for (const item of modelMetadata) {
-		if (
-			item.input_cost_per_token_nano != null &&
-			item.output_cost_per_token_nano != null
-		) {
-			set.add(item.model_id)
-		}
-	}
-	return set
+export function buildPricedModelIdSet(modelMetadata: ModelMetadataRecord[]): Set<string> {
+	return new Set(
+		modelMetadata
+			.filter(item => item.input_cost_per_token_nano != null && item.output_cost_per_token_nano != null)
+			.map(item => item.model_id)
+	)
 }
 
-function resolvePricingModelId(model: string, redirect?: string | null): string {
-	const redirectTarget = redirect?.trim()
-	return redirectTarget ? redirectTarget : model.trim()
-}
-
-export function normalizePricingModelId(
-	model: string,
-	reasoningSuffixMap: Record<string, string>
-): string {
+export function normalizePricingModelId(model: string, reasoningSuffixMap: Record<string, string>): string {
 	const trimmed = model.trim()
 	if (!trimmed) return ''
-	const suffixes = Array.from(
-		new Set([
-			...Object.keys(reasoningSuffixMap),
-			...BUILTIN_REASONING_SUFFIXES
-		])
-	).sort((a, b) => b.length - a.length || a.localeCompare(b))
+	const suffixes = Array.from(new Set([...Object.keys(reasoningSuffixMap), ...BUILTIN_REASONING_SUFFIXES]))
+		.sort((a, b) => b.length - a.length || a.localeCompare(b))
 	for (const suffix of suffixes) {
-		if (trimmed.endsWith(suffix)) {
-			const base = trimmed.slice(0, -suffix.length)
-			if (base) {
-				return base
-			}
+		if (trimmed.endsWith(suffix) && trimmed.length > suffix.length) {
+			return trimmed.slice(0, -suffix.length)
 		}
 	}
 	return trimmed
-}
-
-function resolveNormalizedPricingModelId(
-	model: string,
-	redirect: string | null | undefined,
-	reasoningSuffixMap: Record<string, string>
-): string {
-	return normalizePricingModelId(
-		resolvePricingModelId(model, redirect),
-		reasoningSuffixMap
-	)
 }
 
 export function hasBillablePricingModelId(
@@ -306,43 +216,17 @@ export function hasBillablePricingModelId(
 	redirect: string | null | undefined,
 	reasoningSuffixMap: Record<string, string>
 ): boolean {
-	const normalizedLogicalModelId = normalizePricingModelId(
-		model,
-		reasoningSuffixMap
-	)
-	const normalizedPricingModelId = resolveNormalizedPricingModelId(
-		model,
-		redirect,
-		reasoningSuffixMap
-	)
-	return (
-		pricedModelIdSet.has(normalizedPricingModelId) ||
-		(normalizedPricingModelId !== normalizedLogicalModelId &&
-			pricedModelIdSet.has(normalizedLogicalModelId))
-	)
+	const logical = normalizePricingModelId(model, reasoningSuffixMap)
+	const pricing = normalizePricingModelId(redirect?.trim() || model, reasoningSuffixMap)
+	return pricedModelIdSet.has(pricing) || (pricing !== logical && pricedModelIdSet.has(logical))
 }
 
 export function statusBadge(status?: string, t?: (key: string) => string) {
 	if (status === 'healthy') {
-		return (
-			<StatusBadge variant='success'>
-				<StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />
-				{t ? t('providers.statusHealthy') : 'Healthy'}
-			</StatusBadge>
-		)
+		return <StatusBadge variant='success'><StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t ? t('providers.statusHealthy') : 'Healthy'}</StatusBadge>
 	}
 	if (status === 'probing') {
-		return (
-			<StatusBadge variant='warning'>
-				<StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />
-				{t ? t('providers.statusProbing') : 'Probing'}
-			</StatusBadge>
-		)
+		return <StatusBadge variant='warning'><StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t ? t('providers.statusProbing') : 'Probing'}</StatusBadge>
 	}
-	return (
-		<StatusBadge variant='destructive'>
-			<StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />
-			{t ? t('providers.statusUnhealthy') : 'Unhealthy'}
-		</StatusBadge>
-	)
+	return <StatusBadge variant='destructive'><StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t ? t('providers.statusUnhealthy') : 'Unhealthy'}</StatusBadge>
 }
