@@ -531,6 +531,7 @@ pub(super) async fn forward_stream_typed(
                     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
                         ttfb_ms: None,
                         usage: None,
+                        response_id: None,
                         terminal: StreamTerminalDiagnostics::default(),
                         estimated_output_tokens: 0,
                         first_visible_output_ms: None,
@@ -681,6 +682,7 @@ pub(super) async fn forward_stream_typed(
                             is_estimated,
                             terminal_diagnostics,
                             visible_tps_basis,
+                            response_id,
                         ) = {
                             let guard = runtime_metrics.lock().await;
                             let actual_upstream_usage = guard.usage.clone();
@@ -713,6 +715,7 @@ pub(super) async fn forward_stream_typed(
                                 is_estimated,
                                 guard.terminal.clone(),
                                 guard.visible_tps_basis(),
+                                guard.response_id.clone(),
                             )
                         };
 
@@ -811,6 +814,18 @@ pub(super) async fn forward_stream_typed(
                             clear_channel_affinity(&state_for_log, &attempt_for_log).await;
                         } else {
                             refresh_channel_affinity(&state_for_log, &attempt_for_log).await;
+                            if attempt_for_log.provider_type == ProviderType::Responses
+                                && let Some(response_id) = response_id.as_deref()
+                            {
+                                refresh_response_id_affinity(
+                                    &state_for_log,
+                                    &auth_for_log,
+                                    &model_for_log,
+                                    response_id,
+                                    &attempt_for_log,
+                                )
+                                .await;
+                            }
                         }
 
                         spawn_request_log(

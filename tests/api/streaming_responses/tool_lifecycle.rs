@@ -1,5 +1,110 @@
 
 #[tokio::test]
+async fn responses_streaming_preserves_native_ptc_tool_search_and_compaction_items() {
+    let ctx = setup().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": "gpt-5-mini",
+                "input": "use native tools",
+                "tools": [
+                    { "type": "programmatic_tool_calling" },
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": { "type": "object", "properties": {} },
+                        "allowed_callers": ["programmatic"],
+                        "defer_loading": true
+                    },
+                    { "type": "tool_search", "execution": "server" }
+                ],
+                "context_management": [{ "type": "compaction", "compact_threshold": 120000 }],
+                "stream": true,
+                "stream_mode": "responses_native_ptc_tool_search"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let added_types = frames
+        .iter()
+        .filter(|(event, _)| event == "response.output_item.added")
+        .filter_map(|(_, payload)| payload["item"]["type"].as_str())
+        .collect::<Vec<_>>();
+    let done_types = frames
+        .iter()
+        .filter(|(event, _)| event == "response.output_item.done")
+        .filter_map(|(_, payload)| payload["item"]["type"].as_str())
+        .collect::<Vec<_>>();
+    let expected = vec![
+        "program",
+        "function_call",
+        "program_output",
+        "tool_search_call",
+        "tool_search_output",
+        "compaction",
+    ];
+    assert_eq!(added_types, expected, "{text}");
+    assert_eq!(done_types, expected, "{text}");
+
+    let function_call = frames
+        .iter()
+        .find(|(event, payload)| {
+            event == "response.output_item.done"
+                && payload["item"]["type"].as_str() == Some("function_call")
+        })
+        .map(|(_, payload)| &payload["item"])
+        .expect("function_call done item");
+    assert_eq!(
+        function_call["caller"],
+        json!({ "type": "programmatic", "caller_id": "prog_stream_1" })
+    );
+
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .expect("response.completed");
+    let output = completed["response"]["output"]
+        .as_array()
+        .expect("completed output");
+    assert_eq!(
+        output
+            .iter()
+            .filter_map(|item| item["type"].as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(
+        output[4]["tools"][0]["name"],
+        json!("lookup_docs")
+    );
+    assert_eq!(
+        output[5]["encrypted_content"],
+        json!("opaque_stream_compaction")
+    );
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["tools"][0]["type"], json!("programmatic_tool_calling"));
+    assert_eq!(upstream["tools"][1]["allowed_callers"], json!(["programmatic"]));
+    assert_eq!(upstream["tools"][1]["defer_loading"], json!(true));
+    assert_eq!(upstream["tools"][2]["type"], json!("tool_search"));
+    assert_eq!(
+        upstream["context_management"][0]["type"],
+        json!("compaction")
+    );
+}
+
+#[tokio::test]
 async fn responses_streaming_preserves_explicit_reasoning_source_from_chat_upstream() {
     let ctx = setup().await;
     let reasoning_source = "upstream-custom-reasoner";

@@ -51,6 +51,7 @@ A3. For requests authenticated by dashboard database API keys, Monoize MUST enfo
 Monoize MUST implement:
 
 - `POST /v1/responses`
+- `POST /v1/responses/compact`
 - `POST /v1/chat/completions` (adapter)
 - `POST /v1/messages` (adapter)
 - `POST /v1/embeddings` (pass-through)
@@ -104,7 +105,7 @@ C3. Monoize MUST resolve listen address from `MONOIZE_LISTEN`, default `0.0.0.0:
 
 C4. Monoize MUST resolve metrics endpoint path from `MONOIZE_METRICS_PATH`, default `/metrics`.
 
-C5. Monoize MUST accept downstream request bodies up to 50 MiB on forwarding endpoints (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`). Any framework-default extractor limit smaller than 50 MiB MUST be disabled so that the effective limit remains 50 MiB.
+C5. Monoize MUST accept downstream request bodies up to 50 MiB on forwarding endpoints (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`). Any framework-default extractor limit smaller than 50 MiB MUST be disabled so that the effective limit remains 50 MiB.
 
 ## 5. Forwarding pipeline (normative)
 
@@ -250,7 +251,7 @@ T0. For internal URP v2 requests, tool descriptors in `tools[]` MUST use Respons
 
 T1. When a downstream adapter receives non-Responses tool descriptor shapes, for example Chat Completions `{"type":"function","function":{...}}` or Messages `{ "name": "...", "input_schema": ... }`, Monoize MUST normalize them to the internal shape defined by T0 before forwarding.
 
-T1a. Internal URP v2 `tools[]` MAY also contain native Responses non-function tool descriptors. For `type = "image_generation"`, Monoize MUST preserve the tool descriptor as a non-function tool with its typed `type` plus any extra top-level fields carried in `ToolDefinition.extra_body`.
+T1a. Internal URP v2 `tools[]` MAY also contain native Responses non-function tool descriptors. The same-Responses native set includes at least `image_generation`, `namespace`, `tool_search`, and `programmatic_tool_calling`. Monoize MUST preserve each such descriptor as a non-function tool with its typed `type` plus any extra top-level fields carried in `ToolDefinition.extra_body`.
 
 #### 7.1.0a Tool definition compatibility
 
@@ -294,11 +295,27 @@ Stateful fields:
 
 S1. Monoize MUST reject `background=true` with `400` code `background_not_supported`.
 
-S2. Monoize MUST ignore `store` and treat it as absent.
+S2. For a downstream Responses request routed to a `type=responses` upstream, Monoize MUST forward `store` unchanged when it is present. For every cross-family attempt, Monoize MUST remove the downstream Responses `store` field before encoding the upstream request.
 
-S3. Monoize MUST ignore `conversation` and `previous_response_id` and treat them as absent.
+S3. For a downstream Responses request routed to a `type=responses` upstream, Monoize MUST forward `conversation` and `previous_response_id` unchanged when present. Monoize MUST NOT resolve either field locally. For every cross-family attempt, Monoize MUST remove both fields before encoding the upstream request.
+
+S3a. A successful non-streaming or streaming `type=responses` attempt with a non-empty upstream response id MUST bind that response id to the successful Provider+Channel in the process-memory affinity cache. A later request from the same authenticated tenant with the same logical model and `previous_response_id` MUST use that binding while it remains eligible and unexpired. The binding uses the same 30-minute idle expiration and invalidation rules as channel affinity.
 
 S4. Monoize MUST accept a Responses `input` item with `type = "item_reference"` as a same-Responses provider item. It MAY be forwarded only to a selected `type=responses` upstream. A cross-family attempt MUST remove the item before encoding because Chat Completions and Messages have no equivalent reference object. Monoize MUST NOT resolve the reference locally.
+
+### 7.1.0b Native Responses compaction endpoint
+
+CMP1. `POST /v1/responses/compact` accepts a JSON object with a non-empty string `model` and an `input` member. It MUST apply API-key model redirects, model allow-list checks, multiplier limits, Provider+Channel routing, balance guard, request logging, usage billing, retry policy, and passive health updates in the same order used by non-streaming forwarding requests.
+
+CMP2. A compact request MUST be eligible only for an effective upstream provider of `type=responses`. Monoize MUST call upstream path `POST /v1/responses/compact`. It MUST NOT adapt the compact request to Chat Completions, Messages, Gemini, image, or Replicate request shapes.
+
+CMP3. For the selected Responses attempt, Monoize MUST preserve the native compact request object and its ordered `input` items. It MAY change only `model` to the selected upstream model, remove proxy-only `max_multiplier`, and remove keys whose names begin with `_monoize_`. It MUST NOT remove or reinterpret native `message`, `reasoning`, `function_call`, `function_call_output`, `program`, `program_output`, `tool_search_call`, `tool_search_output`, `additional_tools`, or `compaction` input items.
+
+CMP4. On upstream success, Monoize MUST return the upstream JSON object without changing `id`, `object`, `created_at`, `output`, or `usage`. In particular, `object = "response.compaction"` and every opaque `type = "compaction"` output item MUST remain unchanged.
+
+CMP5. Compact requests are non-streaming. A request with `stream = true` MUST return `400` with code `invalid_request` before upstream dispatch.
+
+CMP6. On `POST /v1/responses`, a same-Responses attempt MUST forward the complete `context_management` array unchanged. A cross-family attempt MUST remove it. A native `compaction` item emitted by normal Responses create, in either non-streaming output or streaming output-item lifecycle, MUST remain an opaque same-Responses ProviderItem and MUST be replayable as later Responses input.
 
 ### 7.1.1 URP v2 tool-calling nodes
 
@@ -311,12 +328,20 @@ TCI2. Monoize MUST NOT execute tools locally. Tool execution is always performed
 
 TCI3. When Monoize forwards a request, Monoize MUST forward any tool-calling nodes present in `UrpRequestV2.input` by adapting them into the selected upstream provider's request format under §7.2 through §7.8.
 
-TCI4. Immediately before encoding any URP v2 request to an upstream provider, Monoize MUST remove incomplete stateless tool exchanges from `UrpRequestV2.input`:
+TCI4. Immediately before encoding a stateless URP v2 request to an upstream provider, Monoize MUST remove incomplete tool exchanges from `UrpRequestV2.input`:
 
 - remove every `ToolCall` node whose `call_id` does not appear in at least one `ToolResult` node in the same request;
 - remove every `ToolResult` node whose `call_id` does not appear in at least one `ToolCall` node in the same request.
 
-TCI5. The TCI4 filter exists because Monoize ignores `previous_response_id` and requires replayed tool history to be self-contained. A downstream client MAY interrupt a parallel tool-call batch by appending a user message before all tool results are available. In that case Monoize MUST forward only the completed `ToolCall`/`ToolResult` pairs and MUST drop incomplete or orphaned pairs before the upstream HTTP request is sent.
+TCI5. A request is stateless for TCI4 unless it is a downstream Responses request routed to a `type=responses` upstream and carries non-null `previous_response_id` or `conversation`. For a stateful same-Responses request, Monoize MUST skip TCI4 so that a `function_call_output` whose matching call exists in upstream state remains in the request.
+
+TCI6. For same-Responses programmatic tool calling, Monoize MUST preserve `type = "programmatic_tool_calling"` as a native tool descriptor. It MUST preserve function-tool `allowed_callers` and `output_schema` fields. It MUST preserve `program` and `program_output` items as Responses ProviderItems, and it MUST preserve the complete `caller` object on correlated `function_call` and `function_call_output` items. Monoize MUST NOT execute the program or the client-owned function call.
+
+TCI7. For same-Responses tool search, Monoize MUST preserve `defer_loading` on function and MCP tool descriptors, native `namespace` and `tool_search` descriptors, and native `tool_search_call`, `tool_search_output`, and `additional_tools` input or output items. These item types MUST use Responses ProviderItems when no typed URP node exists. Monoize MUST NOT execute client-owned tool search calls.
+
+TCI8. For same-Messages programmatic tool calling, Monoize MUST preserve the native versioned `code_execution_*` descriptor, function-tool `allowed_callers`, top-level `container`, `caller` on client `tool_use`, and opaque `server_tool_use` and `code_execution_tool_result` blocks. Monoize MUST NOT execute the code or the client-owned tool call.
+
+TCI9. For same-Messages tool search, Monoize MUST preserve native versioned `tool_search_tool_regex_*` and `tool_search_tool_bm25_*` descriptors, `defer_loading` on deferred tools, opaque `server_tool_use` and `tool_search_tool_result` blocks, and `tool_reference` blocks nested in client `tool_result.content`. Monoize MUST NOT convert a server tool block into a client `tool_use` block.
 
 ### 7.1.1a ToolResultContent type
 

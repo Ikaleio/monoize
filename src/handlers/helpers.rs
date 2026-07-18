@@ -360,6 +360,13 @@ fn affinity_value_from_json(value: &Value) -> Option<String> {
 }
 
 fn stable_affinity_field(req: &urp::UrpRequest) -> Option<String> {
+    if let Some(previous_response_id) = req
+        .extra_body
+        .get("previous_response_id")
+        .and_then(affinity_value_from_json)
+    {
+        return Some(format!("previous_response_id:{previous_response_id}"));
+    }
     if let Some(user) = req.user.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
         return Some(format!("user:{user}"));
     }
@@ -816,6 +823,7 @@ const RESPONSES_NATIVE_TOOL_TYPES: &[&str] = &[
     "mcp",
     "namespace",
     "tool_search",
+    "programmatic_tool_calling",
     "image_generation",
     "computer",
     "computer_use_preview",

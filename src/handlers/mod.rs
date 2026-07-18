@@ -1,4 +1,5 @@
 mod billing;
+mod compact;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
 mod nonstream;
@@ -41,6 +42,8 @@ use request_logging::*;
 use routing::*;
 use streaming::*;
 use usage::*;
+
+pub use compact::compact_response;
 
 #[allow(clippy::result_large_err)]
 fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {
@@ -134,10 +137,6 @@ pub async fn create_response(
     let raw_input = body.clone();
     let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
-    // S2/S3: stateful fields must not be forwarded upstream
-    req.extra_body.remove("previous_response_id");
-    req.extra_body.remove("store");
-    req.extra_body.remove("conversation");
     apply_model_redirects(&mut req, &auth);
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
@@ -857,6 +856,7 @@ pub(crate) struct StreamTerminalError {
 pub(crate) struct StreamRuntimeMetrics {
     ttfb_ms: Option<u64>,
     usage: Option<urp::Usage>,
+    response_id: Option<String>,
     terminal: StreamTerminalDiagnostics,
     pub(crate) estimated_output_tokens: u64,
     first_visible_output_ms: Option<u64>,

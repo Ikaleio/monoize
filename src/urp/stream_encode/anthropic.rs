@@ -39,6 +39,7 @@ enum AnthropicBlockPayload {
         call_id: String,
         name: String,
         arguments: String,
+        extra: HashMap<String, Value>,
     },
     ProviderItem {
         body: Value,
@@ -90,9 +91,21 @@ impl PendingAnthropicBlock {
                     })
                 }
             }
-            AnthropicBlockPayload::ToolUse { call_id, name, .. } => {
+            AnthropicBlockPayload::ToolUse {
+                call_id,
+                name,
+                extra,
+                ..
+            } => {
                 *saw_tool_use = true;
-                json!({ "type": "tool_use", "id": call_id, "name": name, "input": {} })
+                let mut block = Map::from_iter([
+                    ("type".to_string(), json!("tool_use")),
+                    ("id".to_string(), json!(call_id)),
+                    ("name".to_string(), json!(name)),
+                    ("input".to_string(), json!({})),
+                ]);
+                merge_json_extra_preserving_typed(&mut block, extra);
+                Value::Object(block)
             }
             AnthropicBlockPayload::ProviderItem { body, .. } => body.clone(),
         }
@@ -459,11 +472,13 @@ fn anthropic_block_from_node(node: &Node) -> Option<AnthropicBlockPayload> {
             call_id,
             name,
             arguments,
+            extra_body,
             ..
         } => (*tool_type == urp::ToolCallType::Function).then(|| AnthropicBlockPayload::ToolUse {
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),
+            extra: extra_body.clone(),
         }),
         Node::ProviderItem {
             origin_protocol: urp::ProviderProtocol::Messages,
@@ -506,6 +521,7 @@ fn anthropic_block_from_node_header(
             call_id: call_id.clone(),
             name: name.clone(),
             arguments: String::new(),
+            extra: extra_body.clone(),
         }),
         NodeHeader::ProviderItem {
             id,
@@ -848,14 +864,22 @@ fn merge_node_payload_with_terminal(payload: &mut AnthropicBlockPayload, node: &
             }
         }
         (
-            AnthropicBlockPayload::ToolUse { arguments, .. },
+            AnthropicBlockPayload::ToolUse {
+                arguments, extra, ..
+            },
             Node::ToolCall {
                 arguments: done_args,
+                extra_body,
                 ..
             },
         ) => {
             if !done_args.is_empty() {
                 *arguments = done_args.clone();
+            }
+            for (key, value) in extra_body {
+                if !key.starts_with("_monoize_") {
+                    extra.entry(key.clone()).or_insert_with(|| value.clone());
+                }
             }
         }
         (AnthropicBlockPayload::Text { content }, Node::Text { content: done, .. })

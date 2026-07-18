@@ -216,7 +216,7 @@ AFF-3. The affinity cache key MUST include:
 - explicit stable metadata field value if present
 - otherwise a hash of the normalized input prefix
 
-AFF-4. Explicit stable metadata fields are session, conversation, thread, and user-like fields from request metadata or extra body. Per-request ids, including `request_id`, MUST NOT be used as affinity keys.
+AFF-4. Explicit stable metadata fields are Responses `previous_response_id`, session, conversation, thread, and user-like fields from request metadata or extra body. `previous_response_id` takes precedence over other explicit fields. Per-request ids, including downstream `request_id`, MUST NOT be used as affinity keys.
 
 AFF-5. The fallback input-prefix hash MUST hash normalized request input only. It MUST consider at most the first 8 input nodes and at most 16384 bytes of normalized JSON/text material. Raw affinity material MUST NOT be persisted.
 
@@ -229,6 +229,8 @@ AFF-8. If the bound Provider+Channel is stale, disabled, zero weight, unhealthy,
 AFF-9. Retryable failures (`429`, `5xx`, timeout, and connection errors) MUST clear affinity. Non-retryable client errors MUST NOT clear affinity by themselves.
 
 AFF-10. Successful non-stream requests MUST write or refresh affinity after success.
+
+AFF-11. After a successful `type=responses` attempt, Monoize MUST write an additional affinity binding keyed by authenticated tenant, logical model, and the non-empty upstream response id. A subsequent Responses request that sends that id as `previous_response_id` MUST resolve the additional binding under AFF-7 through AFF-9. A successful Responses stream MUST write this binding only after successful terminal completion.
 
 ## 6. Health Check
 

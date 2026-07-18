@@ -470,3 +470,319 @@ async fn messages_request_roundtrips_omitted_thinking_block() {
         "encrypted_thinking is not part of the Anthropic wire contract: {omitted}"
     );
 }
+
+#[tokio::test]
+async fn responses_compact_is_native_same_protocol_passthrough() {
+    let ctx = setup().await;
+    let input = json!([
+        { "role": "user", "content": "build a site", "_monoize_drop": true },
+        {
+            "id": "prog_compact_1",
+            "type": "program",
+            "call_id": "program_compact_call_1",
+            "code": "return 1",
+            "fingerprint": "fp_compact"
+        },
+        {
+            "id": "msg_compact_1",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": "done" }]
+        }
+    ]);
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses/compact",
+        json!({
+            "model": "gpt-5-mini",
+            "input": input.clone(),
+            "max_multiplier": 2.0,
+            "future_compact_control": { "preserve": true },
+            "_monoize_top": "drop"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let response: Value = serde_json::from_str(&body).expect("compact response JSON");
+    assert_eq!(response["object"], json!("response.compaction"));
+    assert_eq!(response["id"], json!("resp_compact_mock"));
+    assert_eq!(response["output"][1]["type"], json!("compaction"));
+    assert_eq!(
+        response["output"][1]["encrypted_content"],
+        json!("opaque_compaction_payload")
+    );
+    assert_eq!(
+        response["output"][1]["vendor_compaction"],
+        json!({ "preserve": true })
+    );
+    assert_eq!(response["usage"]["total_tokens"], json!(577));
+    assert_eq!(
+        response["vendor_response"],
+        json!({ "preserve": true })
+    );
+
+    let upstream = last_captured_body(&ctx, "responses_compact");
+    assert_eq!(upstream["model"], json!("gpt-5-mini"));
+    assert_eq!(upstream["input"][1], input[1]);
+    assert_eq!(upstream["input"][2], input[2]);
+    assert!(upstream["input"][0].get("_monoize_drop").is_none());
+    assert!(upstream.get("max_multiplier").is_none());
+    assert!(upstream.get("_monoize_top").is_none());
+    assert_eq!(
+        upstream["future_compact_control"],
+        json!({ "preserve": true })
+    );
+}
+
+#[tokio::test]
+async fn responses_compact_rejects_streaming_before_upstream_dispatch() {
+    let ctx = setup().await;
+    let before = ctx
+        .captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .iter()
+        .filter(|(name, _)| name == "responses_compact")
+        .count();
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses/compact",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [{ "role": "user", "content": "compact" }],
+            "stream": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let error: Value = serde_json::from_str(&body).expect("compact error JSON");
+    assert_eq!(error["error"]["code"], json!("invalid_request"));
+    let after = ctx
+        .captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .iter()
+        .filter(|(name, _)| name == "responses_compact")
+        .count();
+    assert_eq!(after, before, "invalid compact request reached upstream");
+}
+
+#[tokio::test]
+async fn responses_programmatic_tool_calling_round_trips_and_stateful_result_survives() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": "use programmatic tools",
+            "tools": [
+                { "type": "programmatic_tool_calling" },
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Lookup data",
+                    "parameters": {
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"]
+                    },
+                    "allowed_callers": ["programmatic"],
+                    "output_schema": {
+                        "type": "object",
+                        "properties": { "answer": { "type": "string" } },
+                        "required": ["answer"]
+                    },
+                    "defer_loading": true
+                }
+            ],
+            "native_response_mode": "responses_ptc"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let response: Value = serde_json::from_str(&body).expect("PTC response JSON");
+    let output = response["output"].as_array().expect("PTC output");
+    assert_eq!(
+        output.iter().map(|item| item["type"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["program", "function_call", "program_output"]
+    );
+    assert_eq!(
+        output[1]["caller"],
+        json!({ "type": "programmatic", "caller_id": "prog_1" })
+    );
+    assert_eq!(output[0]["fingerprint"], json!("fp_ptc_1"));
+
+    let upstream = last_captured_body(&ctx, "responses");
+    let tools = upstream["tools"].as_array().expect("PTC tools");
+    assert_eq!(tools[0]["type"], json!("programmatic_tool_calling"));
+    assert_eq!(tools[1]["allowed_callers"], json!(["programmatic"]));
+    assert_eq!(tools[1]["output_schema"]["type"], json!("object"));
+    assert_eq!(tools[1]["defer_loading"], json!(true));
+    assert!(
+        ctx.state
+            .channel_affinity
+            .lock()
+            .await
+            .keys()
+            .any(|key| key.ends_with("previous_response_id:resp_ptc")),
+        "successful Responses ids must be affinity keys"
+    );
+
+    let caller = json!({ "type": "programmatic", "caller_id": "prog_1" });
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "previous_response_id": "resp_ptc",
+            "conversation": "conv_ptc_1",
+            "store": true,
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_ptc_1",
+                "output": "{\"answer\":\"ok\"}",
+                "caller": caller.clone()
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let continuation = last_captured_body(&ctx, "responses");
+    assert_eq!(continuation["previous_response_id"], json!("resp_ptc"));
+    assert_eq!(continuation["conversation"], json!("conv_ptc_1"));
+    assert_eq!(continuation["store"], json!(true));
+    let result = continuation["input"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["type"] == json!("function_call_output"))
+        })
+        .expect("stateful function result must survive");
+    assert_eq!(result["call_id"], json!("call_ptc_1"));
+    assert_eq!(result["caller"], caller);
+}
+
+#[tokio::test]
+async fn responses_tool_search_lifecycle_round_trips_same_family() {
+    let ctx = setup().await;
+    let native_input = json!([
+        {
+            "type": "tool_search_call",
+            "id": "tsc_input_1",
+            "call_id": "tool_search_input_call_1",
+            "arguments": { "query": "lookup docs" }
+        },
+        {
+            "type": "tool_search_output",
+            "id": "tso_input_1",
+            "call_id": "tool_search_input_call_1",
+            "tools": [{ "type": "function", "name": "lookup_docs" }]
+        },
+        {
+            "type": "additional_tools",
+            "id": "at_input_1",
+            "tools": [{ "type": "function", "name": "lookup_docs" }]
+        }
+    ]);
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": native_input.clone(),
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_docs",
+                    "parameters": { "type": "object", "properties": {} },
+                    "defer_loading": true
+                },
+                {
+                    "type": "mcp",
+                    "server_label": "docs",
+                    "server_url": "https://mcp.example.test",
+                    "defer_loading": true
+                },
+                {
+                    "type": "namespace",
+                    "name": "docs_namespace",
+                    "tools": [{ "name": "lookup_docs" }]
+                },
+                {
+                    "type": "tool_search",
+                    "description": "Search deferred tools",
+                    "execution": "server"
+                }
+            ],
+            "native_response_mode": "responses_tool_search"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["input"], native_input);
+    assert_eq!(upstream["tools"][0]["defer_loading"], json!(true));
+    assert_eq!(upstream["tools"][1]["defer_loading"], json!(true));
+    assert_eq!(upstream["tools"][2]["type"], json!("namespace"));
+    assert_eq!(upstream["tools"][3]["type"], json!("tool_search"));
+
+    let response: Value = serde_json::from_str(&body).expect("tool search response JSON");
+    let output = response["output"].as_array().expect("tool search output");
+    assert_eq!(
+        output.iter().map(|item| item["type"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["tool_search_call", "tool_search_output", "additional_tools"]
+    );
+    assert_eq!(output[1]["tools"][0]["name"], json!("lookup_docs"));
+}
+
+#[tokio::test]
+async fn responses_context_management_and_compaction_item_round_trip_same_family() {
+    let ctx = setup().await;
+    let context_management = json!([{
+        "type": "compaction",
+        "compact_threshold": 120000,
+        "vendor_policy": { "preserve": true }
+    }]);
+    let compaction_input = json!({
+        "type": "compaction",
+        "id": "cmp_input_1",
+        "encrypted_content": "opaque_input_compaction",
+        "vendor_compaction": { "preserve": true }
+    });
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/responses",
+        json!({
+            "model": "gpt-5-mini",
+            "input": [
+                { "role": "user", "content": "continue after compaction" },
+                compaction_input.clone()
+            ],
+            "context_management": context_management.clone(),
+            "native_response_mode": "responses_compaction_item"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let upstream = last_captured_body(&ctx, "responses");
+    assert_eq!(upstream["context_management"], context_management);
+    assert_eq!(upstream["input"][1], compaction_input);
+
+    let response: Value = serde_json::from_str(&body).expect("compaction response JSON");
+    assert_eq!(response["output"][0]["type"], json!("compaction"));
+    assert_eq!(
+        response["output"][0]["encrypted_content"],
+        json!("opaque_response_compaction")
+    );
+    assert_eq!(
+        response["output"][0]["vendor_compaction"],
+        json!({ "preserve": true })
+    );
+    assert_eq!(response["output"][1]["type"], json!("message"));
+}

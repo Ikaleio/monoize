@@ -27,6 +27,16 @@ pub(crate) fn strip_orphaned_tool_calls(req: &mut urp::UrpRequest) {
     });
 }
 
+fn has_responses_state_reference(req: &urp::UrpRequest) -> bool {
+    ["previous_response_id", "conversation"]
+        .into_iter()
+        .any(|key| {
+            req.extra_body
+                .get(key)
+                .is_some_and(|value| !value.is_null())
+        })
+}
+
 pub(super) async fn execute_nonstream_typed(
     state: &AppState,
     auth: &crate::auth::AuthResult,
@@ -290,6 +300,16 @@ pub(super) async fn execute_nonstream_typed(
                             }
                         },
                     };
+                    if attempt.provider_type == ProviderType::Responses {
+                        refresh_response_id_affinity(
+                            state,
+                            auth,
+                            &logical_model,
+                            &resp.id,
+                            &attempt,
+                        )
+                        .await;
+                    }
                     // Wrap newly produced encrypted reasoning payloads in mz2
                     // envelopes BEFORE any response-phase transform observes
                     // the response. Per spec/urp-transform-system.spec.md
@@ -655,9 +675,21 @@ pub(super) fn encode_request_for_provider(
     attempt: &MonoizeAttempt,
     downstream: DownstreamProtocol,
 ) -> AppResult<Value> {
+    if matches!(downstream, DownstreamProtocol::Responses)
+        && attempt.provider_type != ProviderType::Responses
+    {
+        req.extra_body.remove("store");
+        req.extra_body.remove("conversation");
+        req.extra_body.remove("previous_response_id");
+    }
     filter_extra_body_for_provider(req, attempt.provider_type, &attempt.extra_fields_whitelist);
     filter_tools_for_provider(req, attempt.provider_type, downstream);
-    strip_orphaned_tool_calls(req);
+    let stateful_same_responses = matches!(downstream, DownstreamProtocol::Responses)
+        && attempt.provider_type == ProviderType::Responses
+        && has_responses_state_reference(req);
+    if !stateful_same_responses {
+        strip_orphaned_tool_calls(req);
+    }
     let model = req.model.clone();
     let value = match attempt.provider_type {
         ProviderType::Responses => urp::encode::openai_responses::encode_request(req, &model),

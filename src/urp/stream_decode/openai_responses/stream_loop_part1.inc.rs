@@ -81,6 +81,15 @@ pub(crate) async fn stream_responses_to_urp_events(
                 return Ok(());
             }
         };
+        if let Some(native_response_id) = data_val
+            .get("response")
+            .and_then(|response| response.get("id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            response_id = native_response_id.to_string();
+            record_stream_response_id(&runtime_metrics, native_response_id).await;
+        }
         let native_start_event = matches!(ev.event.as_str(), "response.created" | "response.in_progress");
         let terminal_response_event = matches!(
             ev.event.as_str(),

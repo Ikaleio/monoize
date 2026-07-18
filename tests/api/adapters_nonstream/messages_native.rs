@@ -809,3 +809,146 @@ async fn messages_nonstream_from_chat_upstream_text() {
     let text = v["content"][0]["text"].as_str().unwrap_or("");
     assert!(text.contains("hello chat"));
 }
+
+#[tokio::test]
+async fn messages_programmatic_tool_calling_round_trips_same_family() {
+    let ctx = setup().await;
+    let container = json!({ "id": "container_existing", "skills": ["javascript"] });
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 256,
+            "container": container.clone(),
+            "messages": [{ "role": "user", "content": "use code execution" }],
+            "tools": [
+                { "type": "code_execution_20260120", "name": "code_execution" },
+                {
+                    "name": "lookup",
+                    "description": "Lookup data",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"]
+                    },
+                    "allowed_callers": ["code_execution_20260120"],
+                    "defer_loading": true
+                }
+            ],
+            "native_response_mode": "messages_ptc"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(upstream["container"], container);
+    assert_eq!(upstream["tools"][0]["type"], json!("code_execution_20260120"));
+    assert_eq!(
+        upstream["tools"][1]["allowed_callers"],
+        json!(["code_execution_20260120"])
+    );
+    assert_eq!(upstream["tools"][1]["defer_loading"], json!(true));
+
+    let response: Value = serde_json::from_str(&body).expect("Messages PTC response JSON");
+    assert_eq!(response["container"]["id"], json!("container_ptc_1"));
+    let content = response["content"].as_array().expect("Messages PTC content");
+    assert_eq!(
+        content.iter().map(|block| block["type"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["server_tool_use", "tool_use", "code_execution_tool_result"]
+    );
+    assert_eq!(
+        content[1]["caller"],
+        json!({ "type": "code_execution_20260120", "tool_id": "srvtoolu_code_1" })
+    );
+    assert_eq!(content[2]["content"]["return_code"], json!(0));
+}
+
+#[tokio::test]
+async fn messages_tool_search_lifecycle_round_trips_same_family() {
+    let ctx = setup().await;
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 256,
+            "messages": [{ "role": "user", "content": "search deferred tools" }],
+            "tools": [
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex"
+                },
+                {
+                    "type": "tool_search_tool_bm25_20251119",
+                    "name": "tool_search_tool_bm25"
+                },
+                {
+                    "name": "lookup_docs",
+                    "input_schema": { "type": "object", "properties": {} },
+                    "defer_loading": true
+                }
+            ],
+            "native_response_mode": "messages_tool_search"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let upstream = last_captured_body(&ctx, "messages");
+    assert_eq!(
+        upstream["tools"][0]["type"],
+        json!("tool_search_tool_regex_20251119")
+    );
+    assert_eq!(
+        upstream["tools"][1]["type"],
+        json!("tool_search_tool_bm25_20251119")
+    );
+    assert_eq!(upstream["tools"][2]["defer_loading"], json!(true));
+
+    let response: Value = serde_json::from_str(&body).expect("Messages tool search response");
+    let content = response["content"].as_array().expect("Messages tool search content");
+    assert_eq!(content[0]["type"], json!("server_tool_use"));
+    assert_eq!(content[1]["type"], json!("tool_search_tool_result"));
+    assert_eq!(content[1]["content"][0]["type"], json!("tool_reference"));
+
+    let caller = json!({ "type": "direct" });
+    let (status, continuation_body) = json_post(
+        &ctx,
+        "/v1/messages",
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 256,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        content[0].clone(),
+                        content[1].clone(),
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_search_client_1",
+                            "name": "lookup_docs",
+                            "input": {},
+                            "caller": caller
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_search_client_1",
+                        "content": [{ "type": "tool_reference", "tool_name": "lookup_docs" }]
+                    }]
+                }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{continuation_body}");
+    let continuation = last_captured_body(&ctx, "messages");
+    let wire = serde_json::to_string(&continuation).expect("Messages continuation JSON");
+    assert!(wire.contains("tool_search_tool_result"), "{continuation}");
+    assert!(wire.contains("tool_reference"), "{continuation}");
+    assert!(wire.contains("lookup_docs"), "{continuation}");
+}

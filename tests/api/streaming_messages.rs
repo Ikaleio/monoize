@@ -35,6 +35,17 @@ async fn collect_messages_stream_text(ctx: &TestContext, body: Value) -> String 
     String::from_utf8_lossy(&bytes).to_string()
 }
 
+fn last_captured_messages_body(ctx: &TestContext) -> Value {
+    ctx.captured_bodies
+        .lock()
+        .expect("captured bodies lock")
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "messages")
+        .map(|(_, body)| body.clone())
+        .expect("captured Messages body")
+}
+
 fn message_block_event_sequence(events: &[Value]) -> Vec<(u64, String)> {
     events
         .iter()
@@ -1039,6 +1050,99 @@ async fn messages_stream_native_server_tool_preserves_deltas_input_and_stop_sequ
         message_delta["delta"]["stop_sequence"].as_str(),
         Some("<END>")
     );
+}
+
+#[tokio::test]
+async fn messages_stream_preserves_native_ptc_and_tool_search_lifecycles() {
+    let ctx = setup().await;
+    let request_container = json!({ "id": "container_existing_stream" });
+    let events = collect_messages_stream_events(
+        &ctx,
+        json!({
+            "model": "gpt-5-mini-msg",
+            "max_tokens": 256,
+            "container": request_container.clone(),
+            "messages": [{ "role": "user", "content": "use native tools" }],
+            "tools": [
+                { "type": "code_execution_20260120", "name": "code_execution" },
+                {
+                    "name": "lookup",
+                    "input_schema": { "type": "object", "properties": {} },
+                    "allowed_callers": ["code_execution_20260120"],
+                    "defer_loading": true
+                },
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex"
+                },
+                {
+                    "name": "lookup_docs",
+                    "input_schema": { "type": "object", "properties": {} },
+                    "defer_loading": true
+                }
+            ],
+            "stream": true,
+            "stream_mode": "messages_native_ptc_tool_search"
+        }),
+    )
+    .await;
+
+    assert_messages_stream_invariants(&events, "native Messages PTC/tool search stream");
+    assert_exactly_one_message_terminal_pair(&events, "native Messages PTC/tool search stream");
+    let starts = events
+        .iter()
+        .filter(|event| event["type"].as_str() == Some("content_block_start"))
+        .map(|event| &event["content_block"])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts
+            .iter()
+            .filter_map(|block| block["type"].as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "server_tool_use",
+            "tool_use",
+            "code_execution_tool_result",
+            "server_tool_use",
+            "tool_search_tool_result"
+        ]
+    );
+    assert_eq!(
+        starts[1]["caller"],
+        json!({
+            "type": "code_execution_20260120",
+            "tool_id": "srvtoolu_code_stream_1"
+        })
+    );
+    assert_eq!(starts[2]["content"]["return_code"], json!(0));
+    assert_eq!(starts[4]["content"][0]["type"], json!("tool_reference"));
+    assert_eq!(starts[4]["content"][0]["tool_name"], json!("lookup_docs"));
+
+    let message_start = events
+        .iter()
+        .find(|event| event["type"].as_str() == Some("message_start"))
+        .expect("message_start");
+    assert_eq!(
+        message_start["message"]["container"]["id"],
+        json!("container_ptc_stream_1")
+    );
+
+    let upstream = last_captured_messages_body(&ctx);
+    assert_eq!(upstream["container"], request_container);
+    assert_eq!(
+        upstream["tools"][0]["type"],
+        json!("code_execution_20260120")
+    );
+    assert_eq!(
+        upstream["tools"][1]["allowed_callers"],
+        json!(["code_execution_20260120"])
+    );
+    assert_eq!(upstream["tools"][1]["defer_loading"], json!(true));
+    assert_eq!(
+        upstream["tools"][2]["type"],
+        json!("tool_search_tool_regex_20251119")
+    );
+    assert_eq!(upstream["tools"][3]["defer_loading"], json!(true));
 }
 
 #[tokio::test]

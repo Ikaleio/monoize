@@ -85,6 +85,105 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             // If tools are present and no tool outputs were provided yet, stream a tool call.
             let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9p4N2VwAAAAASUVORK5CYII=";
             if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("responses_native_ptc_tool_search")
+            {
+                let output = vec![
+                    json!({
+                        "type": "program",
+                        "id": "prog_stream_1",
+                        "call_id": "program_stream_call_1",
+                        "code": "const result = await lookup({ query: 'monoize' });",
+                        "fingerprint": "fp_stream_1"
+                    }),
+                    json!({
+                        "type": "function_call",
+                        "id": "fc_stream_1",
+                        "call_id": "call_stream_1",
+                        "name": "lookup",
+                        "arguments": "{\"query\":\"monoize\"}",
+                        "status": "completed",
+                        "caller": { "type": "programmatic", "caller_id": "prog_stream_1" }
+                    }),
+                    json!({
+                        "type": "program_output",
+                        "id": "po_stream_1",
+                        "call_id": "program_stream_call_1",
+                        "status": "completed",
+                        "output": "lookup complete"
+                    }),
+                    json!({
+                        "type": "tool_search_call",
+                        "id": "tsc_stream_1",
+                        "call_id": "tool_search_stream_call_1",
+                        "arguments": { "query": "lookup docs" },
+                        "status": "completed"
+                    }),
+                    json!({
+                        "type": "tool_search_output",
+                        "id": "tso_stream_1",
+                        "call_id": "tool_search_stream_call_1",
+                        "status": "completed",
+                        "tools": [{ "type": "function", "name": "lookup_docs" }]
+                    }),
+                    json!({
+                        "type": "compaction",
+                        "id": "cmp_stream_1",
+                        "encrypted_content": "opaque_stream_compaction"
+                    }),
+                ];
+                let mut events = vec![Ok::<_, Infallible>(
+                    Event::default().event("response.created").data(
+                        json!({
+                            "type": "response.created",
+                            "response": {
+                                "id": "resp_native_stream",
+                                "object": "response",
+                                "created_at": 0,
+                                "model": model,
+                                "status": "in_progress",
+                                "output": []
+                            }
+                        })
+                        .to_string(),
+                    ),
+                )];
+                for (output_index, item) in output.iter().enumerate() {
+                    events.push(Ok(Event::default().event("response.output_item.added").data(
+                        json!({
+                            "type": "response.output_item.added",
+                            "output_index": output_index,
+                            "item": item
+                        })
+                        .to_string(),
+                    )));
+                    events.push(Ok(Event::default().event("response.output_item.done").data(
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": output_index,
+                            "item": item
+                        })
+                        .to_string(),
+                    )));
+                }
+                events.push(Ok(Event::default().event("response.completed").data(
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_native_stream",
+                            "object": "response",
+                            "created_at": 0,
+                            "model": model,
+                            "status": "completed",
+                            "output": output
+                        }
+                    })
+                    .to_string(),
+                )));
+                events.push(Ok(Event::default().data("[DONE]")));
+                return Sse::new(futures_util::stream::iter(events)).into_response();
+            }
+
+            if body.get("stream_mode").and_then(|v| v.as_str())
                 == Some("image_generation_completed")
                 && tool_outputs.is_empty()
                 && (image_generation_tool || !tools_present)
@@ -1929,6 +2028,104 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             .into_response();
         }
 
+        if body.get("native_response_mode").and_then(Value::as_str) == Some("responses_ptc") {
+            return Json(json!({
+                "id": "resp_ptc",
+                "object": "response",
+                "created_at": 0,
+                "model": model,
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "program",
+                        "id": "prog_1",
+                        "call_id": "program_call_1",
+                        "code": "const result = await lookup({ query: 'monoize' });",
+                        "fingerprint": "fp_ptc_1"
+                    },
+                    {
+                        "type": "function_call",
+                        "id": "fc_ptc_1",
+                        "call_id": "call_ptc_1",
+                        "name": "lookup",
+                        "arguments": "{\"query\":\"monoize\"}",
+                        "status": "completed",
+                        "caller": { "type": "programmatic", "caller_id": "prog_1" }
+                    },
+                    {
+                        "type": "program_output",
+                        "id": "po_1",
+                        "call_id": "program_call_1",
+                        "status": "completed",
+                        "output": "lookup complete"
+                    }
+                ]
+            }))
+            .into_response();
+        }
+
+        if body.get("native_response_mode").and_then(Value::as_str)
+            == Some("responses_tool_search")
+        {
+            return Json(json!({
+                "id": "resp_tool_search",
+                "object": "response",
+                "created_at": 0,
+                "model": model,
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "tool_search_call",
+                        "id": "tsc_1",
+                        "call_id": "tool_search_call_1",
+                        "arguments": { "query": "lookup docs" },
+                        "status": "completed"
+                    },
+                    {
+                        "type": "tool_search_output",
+                        "id": "tso_1",
+                        "call_id": "tool_search_call_1",
+                        "status": "completed",
+                        "tools": [{ "type": "function", "name": "lookup_docs" }]
+                    },
+                    {
+                        "type": "additional_tools",
+                        "id": "at_1",
+                        "tools": [{ "type": "function", "name": "lookup_docs" }]
+                    }
+                ]
+            }))
+            .into_response();
+        }
+
+        if body.get("native_response_mode").and_then(Value::as_str)
+            == Some("responses_compaction_item")
+        {
+            return Json(json!({
+                "id": "resp_compaction_item",
+                "object": "response",
+                "created_at": 0,
+                "model": model,
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "compaction",
+                        "id": "cmp_response_1",
+                        "encrypted_content": "opaque_response_compaction",
+                        "vendor_compaction": { "preserve": true }
+                    },
+                    {
+                        "type": "message",
+                        "id": "msg_after_compaction",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{ "type": "output_text", "text": "continued" }]
+                    }
+                ]
+            }))
+            .into_response();
+        }
+
         if body.get("stream_mode").and_then(|v| v.as_str()) == Some("nested_usage_details") {
             return Json(json!({
                 "id": "resp_nested_usage",
@@ -2053,6 +2250,51 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             obj.insert("service_tier".to_string(), service_tier);
         }
         Json(response).into_response()
+    }
+
+    async fn responses_compact(
+        axum::extract::State((_captured_headers, captured_bodies)): axum::extract::State<(
+            CapturedHeaders,
+            CapturedBodies,
+        )>,
+        Json(body): Json<Value>,
+    ) -> impl axum::response::IntoResponse {
+        if let Ok(mut lock) = captured_bodies.lock() {
+            lock.push(("responses_compact".to_string(), body.clone()));
+        }
+        if let Some(resp) = maybe_forced_upstream_error(&body) {
+            return resp;
+        }
+        maybe_forced_upstream_delay(&body).await;
+        Json(json!({
+            "id": "resp_compact_mock",
+            "object": "response.compaction",
+            "created_at": 1764967971,
+            "output": [
+                {
+                    "id": "msg_compact_mock",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "compacted context" }]
+                },
+                {
+                    "id": "cmp_mock",
+                    "type": "compaction",
+                    "encrypted_content": "opaque_compaction_payload",
+                    "vendor_compaction": { "preserve": true }
+                }
+            ],
+            "usage": {
+                "input_tokens": 139,
+                "input_tokens_details": { "cached_tokens": 0 },
+                "output_tokens": 438,
+                "output_tokens_details": { "reasoning_tokens": 64 },
+                "total_tokens": 577
+            },
+            "vendor_response": { "preserve": true }
+        }))
+        .into_response()
     }
 
     async fn chat(
@@ -3582,6 +3824,92 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 return Sse::new(stream).into_response();
             }
 
+            if body.get("stream_mode").and_then(|v| v.as_str())
+                == Some("messages_native_ptc_tool_search")
+            {
+                let blocks = vec![
+                    json!({
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_code_stream_1",
+                        "name": "code_execution",
+                        "input": { "code": "await lookup({query: 'monoize'})" }
+                    }),
+                    json!({
+                        "type": "tool_use",
+                        "id": "toolu_ptc_stream_1",
+                        "name": "lookup",
+                        "input": { "query": "monoize" },
+                        "caller": {
+                            "type": "code_execution_20260120",
+                            "tool_id": "srvtoolu_code_stream_1"
+                        }
+                    }),
+                    json!({
+                        "type": "code_execution_tool_result",
+                        "tool_use_id": "srvtoolu_code_stream_1",
+                        "content": { "stdout": "done", "stderr": "", "return_code": 0 }
+                    }),
+                    json!({
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_search_stream_1",
+                        "name": "tool_search_tool_regex",
+                        "input": { "query": "lookup_.*" }
+                    }),
+                    json!({
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_search_stream_1",
+                        "content": [{ "type": "tool_reference", "tool_name": "lookup_docs" }]
+                    }),
+                ];
+                let mut events = vec![Ok::<_, Infallible>(
+                    Event::default().event("message_start").data(
+                        json!({
+                            "type": "message_start",
+                            "message": {
+                                "id": "msg_native_ptc_tool_search_stream",
+                                "type": "message",
+                                "role": "assistant",
+                                "model": model,
+                                "container": {
+                                    "id": "container_ptc_stream_1",
+                                    "expires_at": "2099-01-01T00:00:00Z"
+                                },
+                                "content": [],
+                                "stop_reason": Value::Null,
+                                "stop_sequence": Value::Null,
+                                "usage": { "input_tokens": 9, "output_tokens": 0 }
+                            }
+                        })
+                        .to_string(),
+                    ),
+                )];
+                for (index, block) in blocks.iter().enumerate() {
+                    events.push(Ok(Event::default().event("content_block_start").data(
+                        json!({
+                            "type": "content_block_start",
+                            "index": index,
+                            "content_block": block
+                        })
+                        .to_string(),
+                    )));
+                    events.push(Ok(Event::default().event("content_block_stop").data(
+                        json!({ "type": "content_block_stop", "index": index }).to_string(),
+                    )));
+                }
+                events.push(Ok(Event::default().event("message_delta").data(
+                    json!({
+                        "type": "message_delta",
+                        "delta": { "stop_reason": "end_turn", "stop_sequence": Value::Null },
+                        "usage": { "output_tokens": 7 }
+                    })
+                    .to_string(),
+                )));
+                events.push(Ok(Event::default()
+                    .event("message_stop")
+                    .data(json!({ "type": "message_stop" }).to_string())));
+                return Sse::new(futures_util::stream::iter(events)).into_response();
+            }
+
             if body.get("stream_mode").and_then(|v| v.as_str()) == Some("messages_chunked_ping") {
                 let stream = futures_util::stream::iter(vec![
                     Ok::<_, Infallible>(Event::default().event("message_start").data(json!({
@@ -3914,6 +4242,66 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
             .into_response();
         }
 
+        if body.get("native_response_mode").and_then(Value::as_str) == Some("messages_ptc") {
+            return Json(json!({
+                "id": "msg_ptc",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "container": { "id": "container_ptc_1", "expires_at": "2099-01-01T00:00:00Z" },
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_code_1",
+                        "name": "code_execution",
+                        "input": { "code": "await lookup({query: 'monoize'})" }
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_ptc_1",
+                        "name": "lookup",
+                        "input": { "query": "monoize" },
+                        "caller": { "type": "code_execution_20260120", "tool_id": "srvtoolu_code_1" }
+                    },
+                    {
+                        "type": "code_execution_tool_result",
+                        "tool_use_id": "srvtoolu_code_1",
+                        "content": { "stdout": "done", "stderr": "", "return_code": 0 }
+                    }
+                ],
+                "stop_reason": "tool_use",
+                "usage": { "input_tokens": 8, "output_tokens": 5 }
+            }))
+            .into_response();
+        }
+
+        if body.get("native_response_mode").and_then(Value::as_str)
+            == Some("messages_tool_search")
+        {
+            return Json(json!({
+                "id": "msg_tool_search",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_search_1",
+                        "name": "tool_search_tool_regex",
+                        "input": { "query": "lookup_.*" }
+                    },
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_search_1",
+                        "content": [{ "type": "tool_reference", "tool_name": "lookup_docs" }]
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "usage": { "input_tokens": 7, "output_tokens": 3 }
+            }))
+            .into_response();
+        }
+
         if tools_present && tool_results.is_empty() {
             let blocks = if parallel {
                 vec![
@@ -4137,6 +4525,7 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
 
     let router = Router::new()
         .route("/v1/responses", post(responses))
+        .route("/v1/responses/compact", post(responses_compact))
         .route("/v1/images/generations", post(image_generations))
         .route("/v1/images/edits", post(image_edits))
         .route("/v1/chat/completions", post(chat))
@@ -4423,6 +4812,7 @@ async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
         "force_upstream_error_message".to_string(),
         "force_upstream_error_status".to_string(),
         "message_phase".to_string(),
+        "native_response_mode".to_string(),
         "omit_reasoning_source".to_string(),
         "reasoning_source_override".to_string(),
         "require_assistant_output_content_types".to_string(),

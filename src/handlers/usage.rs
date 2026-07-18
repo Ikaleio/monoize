@@ -45,6 +45,20 @@ pub(crate) async fn record_stream_usage_if_present(
     }
 }
 
+pub(crate) async fn record_stream_response_id(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    response_id: &str,
+) {
+    let response_id = response_id.trim();
+    if response_id.is_empty() {
+        return;
+    }
+    let Some(runtime_metrics) = runtime_metrics.as_ref() else {
+        return;
+    };
+    runtime_metrics.lock().await.response_id = Some(response_id.to_string());
+}
+
 pub(crate) async fn record_cumulative_stream_usage_snapshot(
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     usage: Option<urp::Usage>,

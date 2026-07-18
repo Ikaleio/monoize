@@ -2,8 +2,8 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::routing::now_ts;
 use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, parse_usage_from_responses_object, record_stream_done_sentinel,
-    record_stream_terminal_error, record_stream_terminal_event, record_stream_usage_if_present,
-    record_visible_stream_event_delta,
+    record_stream_response_id, record_stream_terminal_error, record_stream_terminal_event,
+    record_stream_usage_if_present, record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 #[cfg(test)]

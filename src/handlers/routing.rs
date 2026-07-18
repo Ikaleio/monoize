@@ -154,6 +154,15 @@ pub(super) async fn build_monoize_attempts(
     urp: &UrpRequest,
     auth: &crate::auth::AuthResult,
 ) -> AppResult<Vec<MonoizeAttempt>> {
+    build_monoize_attempts_for_provider_type(state, urp, auth, None).await
+}
+
+pub(super) async fn build_monoize_attempts_for_provider_type(
+    state: &AppState,
+    urp: &UrpRequest,
+    auth: &crate::auth::AuthResult,
+    required_provider_type: Option<ProviderType>,
+) -> AppResult<Vec<MonoizeAttempt>> {
     let providers =
         state.monoize_store.list_providers().await.map_err(|e| {
             AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e)
@@ -162,6 +171,9 @@ pub(super) async fn build_monoize_attempts(
     for provider in providers {
         collect_provider_attempts(state, urp, &auth.effective_groups, &provider, &mut attempts)
             .await;
+    }
+    if let Some(required_provider_type) = required_provider_type {
+        attempts.retain(|attempt| attempt.provider_type == required_provider_type);
     }
     if attempts.is_empty() {
         return Ok(attempts);
@@ -274,6 +286,17 @@ fn affinity_key_for_request(
     Some((key, key_hash))
 }
 
+fn response_id_affinity_key(
+    logical_model: &str,
+    response_id: &str,
+    auth: &crate::auth::AuthResult,
+) -> Option<String> {
+    let tenant = affinity_tenant(auth)?;
+    Some(format!(
+        "v1|{tenant}|model:{logical_model}|explicit:previous_response_id:{response_id}"
+    ))
+}
+
 async fn apply_channel_affinity(
     state: &AppState,
     urp: &UrpRequest,
@@ -332,6 +355,30 @@ pub(super) async fn refresh_channel_affinity(state: &AppState, attempt: &Monoize
     let mut guard = state.channel_affinity.lock().await;
     guard.insert(
         key.clone(),
+        crate::monoize_routing::ChannelAffinityBinding {
+            provider_id: attempt.provider_id.clone(),
+            channel_id: attempt.channel_id.clone(),
+            updated_at: now_ts(),
+        },
+    );
+}
+
+pub(super) async fn refresh_response_id_affinity(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+    logical_model: &str,
+    response_id: &str,
+    attempt: &MonoizeAttempt,
+) {
+    let response_id = response_id.trim();
+    if response_id.is_empty() {
+        return;
+    }
+    let Some(key) = response_id_affinity_key(logical_model, response_id, auth) else {
+        return;
+    };
+    state.channel_affinity.lock().await.insert(
+        key,
         crate::monoize_routing::ChannelAffinityBinding {
             provider_id: attempt.provider_id.clone(),
             channel_id: attempt.channel_id.clone(),

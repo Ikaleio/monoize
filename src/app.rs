@@ -896,6 +896,10 @@ fn build_v1_router() -> Router<AppState> {
         .route("/v1/models", get(crate::handlers::list_models))
         .route("/v1/responses", post(crate::handlers::create_response))
         .route(
+            "/v1/responses/compact",
+            post(crate::handlers::compact_response),
+        )
+        .route(
             "/v1/chat/completions",
             post(crate::handlers::create_chat_completions),
         )

@@ -26,7 +26,7 @@ URPTF-5. Transform-visible payload surfaces are only these surfaces:
 
 URPTF-6. A transform MUST operate on URP v2 values only. A transform MUST NOT require access to raw downstream wire payloads, raw upstream wire payloads, or decoder-private grouped helper state.
 
-URPTF-7. Server behavior MUST remain stateless. Transform execution MUST NOT depend on persisted conversation state or on `previous_response_id` lookups.
+URPTF-7. Transform execution MUST remain stateless. A transform MUST NOT resolve persisted conversation state or `previous_response_id`; same-Responses forwarding and routing affinity may carry those native fields under `spec/unified_responses_proxy.spec.md` S2 through S3a without exposing resolved conversation state to transforms.
 
 ## 2. Decode and encode requirements for transforms
 
