@@ -349,10 +349,10 @@ export function ProviderDialog({
 		<>
 			<Dialog open={open} onOpenChange={next => { if (!next) requestClose() }}>
 				<DialogContent
-					className='flex h-[calc(100dvh-2rem)] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-[94vh] sm:w-[96vw] sm:max-w-[1500px] sm:rounded-xl sm:border [&>div:first-child]:flex-1 [&>div:first-child]:gap-0'
+					className='flex h-[calc(100dvh-2rem)] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:h-[94vh] sm:w-[96vw] sm:max-w-[1500px] sm:rounded-xl sm:border [&>button:last-child]:right-2 [&>button:last-child]:top-2 [&>button:last-child]:flex [&>button:last-child]:size-10 [&>button:last-child]:items-center [&>button:last-child]:justify-center [&>div:first-child]:flex-1 [&>div:first-child]:gap-0'
 					onPointerDownOutside={event => event.preventDefault()}
 				>
-					<DialogHeader className='shrink-0 border-b bg-background px-4 py-3 text-left sm:px-6'>
+					<DialogHeader className='shrink-0 border-b bg-background py-3 pl-4 pr-16 text-left sm:pl-6 sm:pr-16'>
 						<div className='flex min-w-0 items-center justify-between gap-3'>
 							<div className='min-w-0'>
 								<DialogTitle className='truncate text-base sm:text-lg'>

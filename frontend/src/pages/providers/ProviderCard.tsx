@@ -396,36 +396,22 @@ export function ProviderCard({
 										</Badge>
 									</div>
 									<div className='mt-1 rounded-lg border overflow-hidden px-3 py-2'>
-										<BadgeOverflowList
-											items={modelEntries.map(model => {
+										<div className='flex max-h-[220px] flex-wrap content-start gap-1.5 overflow-y-auto'>
+											{modelEntries.map(model => {
 												const meta = modelMetadataById.get(model)
 												const highlightUnpriced = unpricedModelIdSet.has(model)
 
-												return {
-													key: model,
-													collapsed: (
+												return (
+													<div key={model} className='min-w-0 max-w-full shrink-0'>
 														<ModelBadge
 															model={model}
 															provider={meta?.models_dev_provider}
 															highlightUnpriced={highlightUnpriced}
 														/>
-													),
-													full: (
-														<ModelBadge
-															model={model}
-															provider={meta?.models_dev_provider}
-															highlightUnpriced={highlightUnpriced}
-															truncateModelText={false}
-															className='max-w-none'
-														/>
-													)
-												}
+													</div>
+												)
 											})}
-											visibleCount={3}
-											popoverOnSingle
-											ariaLabel={`${t('providers.modelsSection')}: ${modelEntries.length}`}
-											contentClassName='max-w-[min(44rem,calc(100vw-2rem))]'
-										/>
+										</div>
 									</div>
 								</div>
 

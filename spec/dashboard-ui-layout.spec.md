@@ -63,6 +63,8 @@ PL4.0. Provider detail/editor MUST NOT render or maintain a Provider-level model
 
 PL4.1. Provider detail/editor MUST place the provider `enabled` switch in the top title row, right-aligned from the provider editor title.
 
+PL4.2. At mobile widths, the Provider editor title row MUST reserve a dedicated right-side touch area for the dialog close button. The Provider `enabled` switch and the close button hit areas MUST NOT overlap, and each control MUST remain independently clickable.
+
 PL5. API keys/secrets for channels MUST never be shown after save (write-only behavior).
 
 PL6. Provider detail/editor MUST include an upstream transform editor bound to provider `transforms`.
@@ -172,20 +174,12 @@ PL18. In expanded provider card overview, channel runtime list row spacing MUST 
 - Virtual list container height MUST be computed as `min(channel_count * 40, 190)`.
 - The row height constant used by the virtual list and the row element style MUST be the same value to prevent visible trailing blank space.
 
-PL19. Model badge lists on the Providers page MUST use a collapsed badge collection.
+PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge layout and MUST NOT hide model badges behind a `+N` overflow badge or popover.
 
-- Expanded provider-card model lists MUST render no more than 3 preview model badges before a `+N` overflow badge.
-- Provider edit dialog model lists MUST render direct clickable model tags when the model count is at most 3.
-- Provider edit dialog model lists MUST render a collapsed badge collection when the model count is greater than 3.
-- The collapsed preview row MUST NOT wrap.
-- Long model badge text in the collapsed preview MUST truncate with an ellipsis.
-- Hovering, focusing, or clicking the collapsed preview MUST open a small popover containing the complete model badge list.
-- Complete model badges in the popover MUST expose the same unpriced highlighting as the preview badges.
-- Complete model badges in the provider edit dialog popover MUST keep edit and delete controls available for each model row.
-- Complete model badge popovers SHOULD use a width up to `min(44rem, viewport width minus 2rem)` before horizontal scrolling is required.
-- If a complete model badge popover contains more than 8 items, it MUST show at most 8 items per page and render previous/next page controls.
-- Page controls MUST clamp at the first and last page and MUST NOT close the popover when clicked.
-- The provider overview and provider edit dialog model list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
+- Expanded provider-card model lists MUST render every model badge in a bounded, vertically scrollable, wrapping container.
+- The selected Channel model editor MUST render every model configuration row directly and MUST NOT collapse rows behind an overflow control.
+- Provider overview model badges and Channel model rows MUST preserve unpriced highlighting.
+- Model-list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
 
 PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-virtuoso`) with embedded scrolling.
 
