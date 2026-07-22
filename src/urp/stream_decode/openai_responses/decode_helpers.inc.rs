@@ -412,6 +412,76 @@ mod tests {
     }
 
     #[test]
+    fn completed_snapshot_missing_id_does_not_borrow_from_shifted_reasoning_position() {
+        let accumulated = vec![
+            AccumulatedOutputEntry {
+                output_index: 0,
+                nodes: vec![Node::Reasoning {
+                    id: Some("rs_1".to_string()),
+                    content: None,
+                    encrypted: Some(json!("sig_1")),
+                    summary: None,
+                    source: None,
+                    extra_body: HashMap::new(),
+                }],
+            },
+            AccumulatedOutputEntry {
+                output_index: 1,
+                nodes: vec![Node::Text {
+                    id: Some("msg_1".to_string()),
+                    role: OrdinaryRole::Assistant,
+                    content: "answer".to_string(),
+                    phase: None,
+                    extra_body: HashMap::new(),
+                }],
+            },
+        ];
+        let mut state = ResponsesStreamIndexState::default();
+        state.output_state_by_index.insert(
+            0,
+            OutputItemStreamState {
+                item_type: Some("reasoning".to_string()),
+                item_id: Some("rs_1".to_string()),
+                ..Default::default()
+            },
+        );
+        state.output_state_by_index.insert(
+            1,
+            OutputItemStreamState {
+                item_type: Some("message".to_string()),
+                item_id: Some("msg_1".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let events = map_response_completed_with_accumulated(
+            json!({
+                "response": {
+                    "id": "resp_shifted",
+                    "object": "response",
+                    "created_at": 1,
+                    "model": "gpt-5.6-sol",
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{ "type": "output_text", "text": "answer" }]
+                    }]
+                }
+            }),
+            &mut state,
+            &accumulated,
+        );
+
+        assert!(matches!(
+            events.as_slice(),
+            [UrpStreamEvent::ResponseDone { output, .. }]
+                if matches!(&output[0], Node::Reasoning { id: Some(id), .. } if id == "rs_1")
+                    && matches!(&output[1], Node::Text { id: Some(id), content, .. } if id == "msg_1" && content == "answer")
+        ));
+    }
+
+    #[test]
     fn completed_snapshot_typed_field_conflict_is_terminal_error_state() {
         let accumulated = vec![AccumulatedOutputEntry {
             output_index: 0,

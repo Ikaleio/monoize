@@ -420,6 +420,17 @@ enum OutputEntryKind {
     ProviderItem,
 }
 
+fn response_output_item_type_kind(item_type: &str) -> Option<OutputEntryKind> {
+    match item_type {
+        "" => None,
+        "reasoning" => Some(OutputEntryKind::Reasoning),
+        "message" | "image_generation_call" => Some(OutputEntryKind::Message),
+        "function_call" | "custom_tool_call" => Some(OutputEntryKind::ToolCall),
+        "function_call_output" | "custom_tool_call_output" => Some(OutputEntryKind::ToolResult),
+        _ => Some(OutputEntryKind::ProviderItem),
+    }
+}
+
 fn entries_have_compatible_output_kind(
     left: &AccumulatedOutputEntry,
     right: &AccumulatedOutputEntry,

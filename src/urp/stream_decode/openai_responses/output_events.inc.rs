@@ -28,7 +28,20 @@ fn map_response_completed_with_accumulated(
                         .get("id")
                         .and_then(Value::as_str)
                         .is_none_or(str::is_empty);
+                    let terminal_item_kind = item
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .and_then(response_output_item_type_kind);
+                    let streamed_item_kind = index_state
+                        .output_state_by_index
+                        .get(&output_index)
+                        .and_then(|state| state.item_type.as_deref())
+                        .and_then(response_output_item_type_kind);
+                    let position_has_compatible_kind = terminal_item_kind.is_some()
+                        && terminal_item_kind == streamed_item_kind;
+                    let mut borrowed_streamed_id = false;
                     if terminal_id_missing
+                        && position_has_compatible_kind
                         && let Some(streamed_id) = index_state
                             .output_state_by_index
                             .get(&output_index)
@@ -37,10 +50,17 @@ fn map_response_completed_with_accumulated(
                         && let Some(item_obj) = item.as_object_mut()
                     {
                         item_obj.insert("id".to_string(), Value::String(streamed_id.to_string()));
+                        borrowed_streamed_id = true;
+                    }
+                    let mut nodes = nodes_from_item_value(&item);
+                    if terminal_id_missing && !borrowed_streamed_id {
+                        for node in &mut nodes {
+                            node.set_id(None);
+                        }
                     }
                     AccumulatedOutputEntry {
                         output_index,
-                        nodes: nodes_from_item_value(&item),
+                        nodes,
                     }
                 })
                 .collect::<Vec<_>>()
