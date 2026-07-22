@@ -6,6 +6,7 @@ mod nonstream;
 #[cfg(test)]
 pub(crate) use nonstream::strip_orphaned_tool_calls;
 mod request_logging;
+mod responses_websocket;
 pub(crate) mod routing;
 mod streaming;
 pub(crate) mod usage;
@@ -44,6 +45,7 @@ use streaming::*;
 use usage::*;
 
 pub use compact::compact_response;
+pub use responses_websocket::responses_websocket;
 
 #[allow(clippy::result_large_err)]
 fn ensure_model_allowed(auth: &crate::auth::AuthResult, logical_model: &str) -> AppResult<()> {

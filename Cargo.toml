@@ -9,7 +9,7 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(embed_frontend)'] }
 
 [dependencies]
 async-trait = "0.1.89"
-axum = { version = "0.8.8", features = ["macros", "multipart"] }
+axum = { version = "0.8.8", features = ["macros", "multipart", "ws"] }
 base64 = "0.22.1"
 bytes = "1.11.0"
 chrono = { version = "0.4.42", features = ["serde"] }

@@ -51,6 +51,7 @@ A3. For requests authenticated by dashboard database API keys, Monoize MUST enfo
 Monoize MUST implement:
 
 - `POST /v1/responses`
+- `GET /v1/responses` when the request is a WebSocket upgrade
 - `POST /v1/responses/compact`
 - `POST /v1/chat/completions` (adapter)
 - `POST /v1/messages` (adapter)
@@ -60,6 +61,52 @@ Monoize MUST implement:
 Alias:
 
 AP1. For every endpoint above, Monoize MUST also accept the same request at `/api` + endpoint path, with identical semantics.
+
+### 2.2.1 Responses WebSocket downstream
+
+WS1. Monoize MUST accept a WebSocket upgrade at `GET /v1/responses` and `GET /api/v1/responses`. The upgrade request MUST use the same API-key authentication and IP-whitelist checks as `POST /v1/responses`. An unauthenticated or unauthorized upgrade MUST fail as an HTTP response before status `101` is sent.
+
+WS2. The WebSocket connection is a downstream transport only. Every generated response MUST use the existing HTTP upstream selection, request adaptation, retry, transform, billing, request-log, and Responses streaming pipeline. Monoize MUST NOT require or open an upstream WebSocket connection.
+
+WS3. Each client message MUST be one UTF-8 JSON object in one WebSocket text message. Monoize MUST accept the Codex Responses WebSocket v1 beta header `OpenAI-Beta: responses_websockets=2026-02-04`, the Codex Responses WebSocket v2 beta header `OpenAI-Beta: responses_websockets=2026-02-06`, and an upgrade request without either header. The selected behavior is determined by the client event type and fields, not by requiring one header value.
+
+WS4. Monoize MUST process at most one response generation at a time per connection. The connection MAY receive multiple requests sequentially. Monoize MUST send every downstream Responses stream event as one JSON WebSocket text message. Monoize MUST NOT wrap the JSON in SSE `event:` or `data:` lines and MUST NOT send the SSE `[DONE]` sentinel over WebSocket.
+
+WS5. Monoize MUST accept `response.create`. Its fields have the same semantics as `POST /v1/responses`, except:
+
+- `type` is a transport discriminator and MUST NOT be forwarded upstream;
+- streaming is implicit and Monoize MUST execute the generated response as a streaming request regardless of the supplied `stream` value;
+- `client_metadata` is transport metadata and MUST NOT be forwarded upstream;
+- `background=true` MUST produce a WebSocket error event with code `background_not_supported` and MUST NOT call an upstream;
+- `generate` is governed by WS6 and MUST NOT be forwarded upstream.
+
+WS6. A `response.create` event with `generate=false` is a v2 warmup request. Monoize MUST NOT call an upstream, create a request log, or charge the tenant. Monoize MUST send a `response.created` event followed by a `response.completed` event. Both events MUST identify one synthetic response whose id begins with `resp_`, whose output is empty, and whose model equals the request model. Monoize MUST retain the normalized warmup request as the connection's most recent request state.
+
+WS7. After a successful `response.completed` event, Monoize MUST retain, for that connection only:
+
+- the full normalized request input used for that generation;
+- the terminal response id;
+- the terminal response output array.
+
+Failed, incomplete, or cancelled responses MUST NOT replace this successful continuation state. Closing the WebSocket MUST delete the state.
+
+WS8. For a v2 `response.create` whose non-null `previous_response_id` equals the response id retained by WS7, Monoize MUST construct a stateless full request input in this order:
+
+1. the retained full request input;
+2. the retained terminal response output;
+3. the new `input` items in the client event.
+
+Monoize MUST remove `previous_response_id` before upstream encoding. The upstream therefore MUST NOT need to implement WebSocket state, `generate=false`, or the client's synthetic response id.
+
+WS9. If a `response.create` carries a non-null `previous_response_id` that does not equal the response id retained by WS7, Monoize MUST send an error event with status `400`, code `previous_response_not_found`, and param `previous_response_id`. Monoize MUST NOT call an upstream and MUST keep the WebSocket open for a later request.
+
+WS10. Monoize MUST accept the v1 `response.append` event. The event MUST contain `input`. Monoize MUST construct the full request input using the WS8 ordering, with the append event's `input` as step 3. The remaining request controls MUST come from the retained request. If WS7 state is absent, Monoize MUST send the WS9 error and MUST NOT call an upstream.
+
+WS11. Before sending a generated request through the existing handler, Monoize MUST remove `type`, `generate`, `client_metadata`, and any locally consumed `previous_response_id`, and MUST set `stream=true`.
+
+WS12. A valid client Ping MUST receive the WebSocket protocol Pong behavior supplied by the WebSocket implementation. A Close message MUST close the connection. A binary data message or a JSON value that is not an object MUST produce a WebSocket error event with status `400` and code `invalid_websocket_event`.
+
+WS13. The WebSocket message limit MUST be 50 MiB, equal to the forwarding HTTP body limit in C5.
 
 ### 2.3 Dashboard API
 

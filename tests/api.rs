@@ -18,6 +18,9 @@ mod adapters_nonstream;
 #[path = "api/streaming_responses.rs"]
 mod streaming_responses;
 
+#[path = "api/responses_websocket.rs"]
+mod responses_websocket;
+
 #[path = "api/streaming_chat.rs"]
 mod streaming_chat;
 
