@@ -6,7 +6,6 @@ import {
 	Braces,
 	ChevronRight,
 	CircleGauge,
-	CloudDownload,
 	Copy,
 	GitBranch,
 	Layers3,
@@ -17,10 +16,8 @@ import {
 	Trash2
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { ModelBadge } from '@/components/ModelBadge'
 import { TransformChainEditor } from '@/components/transforms/transform-chain-editor'
 import { findFirstInvalidTransformRule } from '@/components/transforms/transform-schema'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -70,13 +67,13 @@ import {
 	updateProviderOptimistic
 } from '@/lib/swr'
 import { cn } from '@/lib/utils'
+import { ChannelModelEditor } from './ChannelModelEditor'
 import { ModelPickerDialog } from './ModelPickerDialog'
 import {
 	buildPricedModelIdSet,
 	emptyChannelRow,
 	emptyForm,
 	fromProvider,
-	hasBillablePricingModelId,
 	hasTrailingV1,
 	type ChannelRow,
 	type ModelRow,
@@ -238,13 +235,6 @@ export function ProviderDialog({
 		}))
 	}
 
-	const updateModel = (modelIndex: number, patch: Partial<ModelRow>) => {
-		if (!activeChannel) return
-		updateChannel(selectedChannel, {
-			models: activeChannel.models.map((model, index) => index === modelIndex ? { ...model, ...patch } : model)
-		})
-	}
-
 	const validate = () => {
 		if (!form.name.trim()) return c('请输入 Provider 名称', 'Enter a provider name')
 		if (!form.channels.length) return c('至少需要一个 Channel', 'At least one channel is required')
@@ -403,7 +393,6 @@ export function ProviderDialog({
 											setMobileChannelOpen={setMobileChannelOpen}
 											setSelectedChannel={setSelectedChannel}
 											updateChannel={updateChannel}
-											updateModel={updateModel}
 											setForm={setForm}
 											addChannel={addChannel}
 											duplicateChannel={duplicateChannel}
@@ -501,7 +490,6 @@ type WorkbenchProps = {
 	setMobileChannelOpen: (value: boolean) => void
 	setSelectedChannel: (index: number) => void
 	updateChannel: (index: number, patch: Partial<ChannelRow>) => void
-	updateModel: (index: number, patch: Partial<ModelRow>) => void
 	setForm: React.Dispatch<React.SetStateAction<ProviderForm>>
 	addChannel: () => void
 	duplicateChannel: () => void
@@ -534,9 +522,8 @@ function ChannelsWorkbench(props: WorkbenchProps) {
 	</div>
 }
 
-function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, updateModel, duplicateChannel, removeChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
+function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelOpen, updateChannel, duplicateChannel, removeChannel, openPicker, pricedModels, metadataProvider, reasoningSuffixMap, settings, c, onBaseUrlBlur }: WorkbenchProps) {
 	if (!activeChannel) return null
-	const addModel = () => updateChannel(selectedChannel, { models: [...activeChannel.models, { model: '', redirect: '', multiplier: '1' }] })
 	return <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-8 sm:p-6'>
 		<div className='flex items-start justify-between gap-3'>
 			<div className='flex min-w-0 items-start gap-2'><Button size='icon' variant='ghost' className='-ml-2 lg:hidden' onClick={() => setMobileChannelOpen(false)} aria-label={c('返回 Channel 列表', 'Back to channels')}><ArrowLeft data-icon /></Button><div className='min-w-0'><h3 className='truncate text-lg font-semibold'>{activeChannel.name || c('未命名 Channel', 'Untitled channel')}</h3><div className='mt-1'>{activeChannel._health_status ? statusBadge(activeChannel._health_status) : <Badge variant='secondary'>{c('未保存', 'Unsaved')}</Badge>}</div></div></div>
@@ -554,23 +541,16 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 			</div>
 		</section>
 
-		<section className='flex flex-col gap-4 rounded-xl border bg-card p-4 sm:p-5'>
-			<div className='flex flex-wrap items-center justify-between gap-3'><div><div className='flex items-center gap-2'><Layers3 className='size-4 text-primary' /><h4 className='font-medium'>{c('支持的模型', 'Supported models')}</h4><Badge variant='secondary'>{activeChannel.models.length}</Badge></div><p className='mt-1 text-xs text-muted-foreground'>{c('逻辑模型、上游重定向和计费倍率都只作用于当前 Channel。', 'Logical model, upstream redirect, and billing multiplier apply only to this channel.')}</p></div><div className='flex items-center gap-2'><Button variant='outline' size='sm' onClick={openPicker}><CloudDownload data-icon />{c('从上游获取', 'Fetch upstream')}</Button><Button size='sm' onClick={addModel}><Plus data-icon />{c('手动添加', 'Add manually')}</Button></div></div>
-			{activeChannel.models.length === 0 ? <Alert><Layers3 className='size-4' /><AlertTitle>{c('当前 Channel 不会接收请求', 'This channel will not receive traffic')}</AlertTitle><AlertDescription>{c('从上游获取模型，或手动添加一个逻辑模型。', 'Fetch models from the upstream or add a logical model manually.')}</AlertDescription></Alert> : null}
-			<div className='flex flex-col gap-2'>
-				<div className='hidden grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_100px_36px] gap-2 px-2 text-xs font-medium text-muted-foreground md:grid'><span>{c('逻辑模型', 'Logical model')}</span><span>{c('上游模型（可选）', 'Upstream model (optional)')}</span><span>{c('倍率', 'Multiplier')}</span><span /></div>
-				{activeChannel.models.map((model, index) => {
-					const unpriced = model.model.trim() && !hasBillablePricingModelId(pricedModels, model.model, model.redirect, reasoningSuffixMap)
-					return <div key={`${model.model}-${index}`} className={cn('grid gap-2 rounded-lg border p-3 md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_100px_36px] md:items-center md:p-2', unpriced && 'border-status-warning/40 bg-status-warning/5')}>
-						<div className='flex min-w-0 items-center gap-2'><ModelBadge model={model.model || c('新模型', 'New model')} provider={metadataProvider.get(model.model)} highlightUnpriced={Boolean(unpriced)} /><Input aria-label={c('逻辑模型', 'Logical model')} value={model.model} onChange={event => updateModel(index, { model: event.target.value })} className='min-w-0 font-mono md:hidden' /></div>
-						<Input aria-label={c('逻辑模型', 'Logical model')} value={model.model} onChange={event => updateModel(index, { model: event.target.value })} className='hidden min-w-0 font-mono md:block' />
-						<Input aria-label={c('上游模型', 'Upstream model')} value={model.redirect} onChange={event => updateModel(index, { redirect: event.target.value })} placeholder={c('同逻辑模型', 'Same as logical')} className='min-w-0 font-mono' />
-						<Input aria-label={c('倍率', 'Multiplier')} type='number' min='0.0001' step='0.1' value={model.multiplier} onChange={event => updateModel(index, { multiplier: event.target.value })} />
-						<Button size='icon' variant='ghost' onClick={() => updateChannel(selectedChannel, { models: activeChannel.models.filter((_, modelIndex) => modelIndex !== index) })} aria-label={c('删除模型', 'Delete model')}><Trash2 data-icon /></Button>
-					</div>
-				})}
-			</div>
-		</section>
+		<ChannelModelEditor
+			key={activeChannel.id || `channel-${selectedChannel}`}
+			models={activeChannel.models}
+			onChange={models => updateChannel(selectedChannel, { models })}
+			onOpenPicker={openPicker}
+			pricedModels={pricedModels}
+			metadataProvider={metadataProvider}
+			reasoningSuffixMap={reasoningSuffixMap}
+			c={c}
+		/>
 
 		<details className='group rounded-xl border bg-card'>
 			<summary className='flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5'><div className='flex items-center gap-3'><CircleGauge className='size-4 text-muted-foreground' /><div><h4 className='font-medium'>{c('健康检查与熔断', 'Health and circuit breaker')}</h4><p className='mt-0.5 text-xs text-muted-foreground'>{c('默认继承全局设置', 'Inherits global settings by default')}</p></div></div><ChevronRight className='size-4 transition-transform group-open:rotate-90' /></summary>

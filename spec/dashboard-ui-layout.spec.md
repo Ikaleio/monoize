@@ -147,6 +147,8 @@ PL15. In the selected Channel model section, each model row MUST be rendered as 
 
 - Tag text format MUST be `<(provider-logo) model-id [multiplier, target]>`.
 - Bracket details (`[multiplier, target]`) MUST use muted/gray text to indicate secondary information.
+- The model section MUST render all model tags in a wrapping `flex` collection with a bounded vertical scroll area.
+- The model section MUST NOT render logical-model, redirect, multiplier, or delete controls inline before a model tag is clicked.
 - Clicking a model tag MUST open an edit dialog for that row.
 - Edit dialog MUST allow updating at least: `model`, `redirect`, `multiplier`.
 - Edit dialog MUST include delete action for the selected model row.
@@ -177,7 +179,7 @@ PL18. In expanded provider card overview, channel runtime list row spacing MUST 
 PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge layout and MUST NOT hide model badges behind a `+N` overflow badge or popover.
 
 - Expanded provider-card model lists MUST render every model badge in a bounded, vertically scrollable, wrapping container.
-- The selected Channel model editor MUST render every model configuration row directly and MUST NOT collapse rows behind an overflow control.
+- The selected Channel model editor MUST render every clickable model tag directly and MUST NOT collapse tags behind an overflow control.
 - Provider overview model badges and Channel model rows MUST preserve unpriced highlighting.
 - Model-list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
 
