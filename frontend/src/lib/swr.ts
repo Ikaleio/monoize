@@ -375,17 +375,58 @@ export async function deleteUserOptimistic(
   }
 }
 
+const NANO_PER_USD = 1_000_000_000n;
+
+function formatNanoToUsd(nano: bigint): string {
+  const negative = nano < 0n;
+  const abs = negative ? -nano : nano;
+  const whole = abs / NANO_PER_USD;
+  const frac = abs % NANO_PER_USD;
+  if (frac === 0n) {
+    return `${negative ? "-" : ""}${whole.toString()}`;
+  }
+  const fracStr = frac.toString().padStart(9, "0").replace(/0+$/, "");
+  return `${negative ? "-" : ""}${whole.toString()}.${fracStr}`;
+}
+
+function optimisticGrantFields(input: BillingPlanInput): {
+  grant_amount_nano_usd: string;
+  grant_amount_usd: string;
+} {
+  if (input.grant_amount_nano_usd !== undefined) {
+    let usd = input.grant_amount_usd;
+    if (usd === undefined) {
+      try {
+        usd = formatNanoToUsd(BigInt(input.grant_amount_nano_usd));
+      } catch {
+        usd = "0";
+      }
+    }
+    return {
+      grant_amount_nano_usd: input.grant_amount_nano_usd,
+      grant_amount_usd: usd,
+    };
+  }
+  if (input.grant_amount_usd !== undefined) {
+    return {
+      grant_amount_nano_usd: "0",
+      grant_amount_usd: input.grant_amount_usd,
+    };
+  }
+  return { grant_amount_nano_usd: "0", grant_amount_usd: "0" };
+}
+
 export async function createBillingPlanOptimistic(
   input: BillingPlanInput,
   currentPlans: BillingPlan[],
   onError?: (error: Error) => void
 ) {
-  // Optimistic placeholder; the server assigns id/timestamps.
+  const amounts = optimisticGrantFields(input);
   const tempPlan: BillingPlan = {
     id: `temp-${Date.now()}`,
     name: input.name,
-    grant_amount_nano_usd: input.grant_amount_nano_usd ?? "0",
-    grant_amount_usd: input.grant_amount_usd ?? "0",
+    grant_amount_nano_usd: amounts.grant_amount_nano_usd,
+    grant_amount_usd: amounts.grant_amount_usd,
     period_seconds: input.period_seconds,
     allowed_groups: input.allowed_groups ?? [],
     enabled: input.enabled ?? true,
@@ -413,8 +454,20 @@ export async function updateBillingPlanOptimistic(
   currentPlans: BillingPlan[],
   onError?: (error: Error) => void
 ) {
+  const amounts = optimisticGrantFields(input);
+  const hasAmount =
+    input.grant_amount_nano_usd !== undefined ||
+    input.grant_amount_usd !== undefined;
   const updatedPlans = currentPlans.map((p) =>
-    p.id === planId ? { ...p, ...input } : p
+    p.id === planId
+      ? {
+          ...p,
+          ...input,
+          ...(hasAmount ? amounts : {}),
+          allowed_groups: input.allowed_groups ?? p.allowed_groups,
+          enabled: input.enabled ?? p.enabled,
+        }
+      : p
   );
   mutate(SWR_KEYS.BILLING_PLANS, updatedPlans, false);
 

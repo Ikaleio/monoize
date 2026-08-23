@@ -111,7 +111,7 @@ export function BillingPlansPage() {
   const buildInput = () => {
     const amount = parseUsdToNanoBigInt(form.amount_usd);
     const period = Number(form.period_seconds.trim());
-    if (!amount || amount < 0n) {
+    if (amount === null || amount < 0n) {
       toast.error(t("billingPlans.invalidAmount"));
       return null;
     }

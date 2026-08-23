@@ -376,7 +376,10 @@ export function UsersPage() {
       if (!allowedGroupsEqual(nextAllowedGroups, editUser.allowed_groups)) {
         updates.allowed_groups = nextAllowedGroups;
       }
-      const nextPlanId = formData.billingPlanId || null;
+      const nextPlanId =
+        !formData.billingPlanId || formData.billingPlanId === "none"
+          ? null
+          : formData.billingPlanId;
       if (nextPlanId !== (editUser.billing_plan_id ?? null)) {
         updates.billing_plan_id = nextPlanId;
       }
@@ -671,9 +674,12 @@ export function UsersPage() {
                 <div className="space-y-2">
                   <Label htmlFor="edit-billing-plan">{t("billingPlans.title")}</Label>
                   <Select
-                    value={formData.billingPlanId}
+                    value={formData.billingPlanId || "none"}
                     onValueChange={(value) =>
-                      setFormData({ ...formData, billingPlanId: value })
+                      setFormData({
+                        ...formData,
+                        billingPlanId: value === "none" ? "" : value,
+                      })
                     }
                   >
                     <SelectTrigger id="edit-billing-plan" className="w-full">
@@ -681,11 +687,15 @@ export function UsersPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">{t("billingPlans.none")}</SelectItem>
-                      {billingPlans.filter((p) => p.enabled).map((plan) => (
-                        <SelectItem key={plan.id} value={plan.id}>
-                          {plan.name} · ${plan.grant_amount_usd}/{formatPeriodShort(plan.period_seconds)}
-                        </SelectItem>
-                      ))}
+                      {billingPlans
+                        .filter((p) => p.enabled || p.id === editUser?.billing_plan_id)
+                        .map((plan) => (
+                          <SelectItem key={plan.id} value={plan.id}>
+                            {plan.name} · ${plan.grant_amount_usd}/
+                            {formatPeriodShort(plan.period_seconds)}
+                            {!plan.enabled ? ` (${t("common.disabled")})` : ""}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                   {(() => {

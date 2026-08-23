@@ -13,7 +13,8 @@ impl MigrationTrait for Migration {
         match backend {
             DbBackend::Sqlite => {
                 for sql in [
-                    "CREATE TABLE IF NOT EXISTS billing_plans (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL UNIQUE, grant_amount_nano_usd TEXT NOT NULL, period_seconds BIGINT NOT NULL, allowed_groups TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS billing_plans (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, grant_amount_nano_usd TEXT NOT NULL, period_seconds BIGINT NOT NULL, allowed_groups TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_plans_name_lower ON billing_plans (lower(name))",
                     "ALTER TABLE users ADD COLUMN billing_plan_id TEXT",
                     "ALTER TABLE users ADD COLUMN next_grant_at TEXT",
                     "CREATE INDEX IF NOT EXISTS idx_users_billing_plan_id ON users (billing_plan_id)",
@@ -24,7 +25,8 @@ impl MigrationTrait for Migration {
             }
             DbBackend::Postgres => {
                 for sql in [
-                    "CREATE TABLE IF NOT EXISTS billing_plans (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL UNIQUE, grant_amount_nano_usd TEXT NOT NULL, period_seconds BIGINT NOT NULL, allowed_groups TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS billing_plans (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, grant_amount_nano_usd TEXT NOT NULL, period_seconds BIGINT NOT NULL, allowed_groups TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_plans_name_lower ON billing_plans (lower(name))",
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_plan_id TEXT",
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS next_grant_at TEXT",
                     "CREATE INDEX IF NOT EXISTS idx_users_billing_plan_id ON users (billing_plan_id)",
@@ -47,6 +49,7 @@ impl MigrationTrait for Migration {
             DbBackend::Sqlite => {
                 for sql in [
                     "DROP INDEX IF EXISTS idx_users_billing_plan_id",
+                    "DROP INDEX IF EXISTS uq_billing_plans_name_lower",
                     "UPDATE users SET billing_plan_id = NULL, next_grant_at = NULL WHERE billing_plan_id IS NOT NULL",
                     "DROP TABLE billing_plans",
                 ] {
@@ -60,6 +63,7 @@ impl MigrationTrait for Migration {
             DbBackend::Postgres => {
                 for sql in [
                     "DROP INDEX IF EXISTS idx_users_billing_plan_id",
+                    "DROP INDEX IF EXISTS uq_billing_plans_name_lower",
                     "ALTER TABLE users DROP COLUMN IF EXISTS billing_plan_id",
                     "ALTER TABLE users DROP COLUMN IF EXISTS next_grant_at",
                     "DROP TABLE IF EXISTS billing_plans",

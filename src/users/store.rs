@@ -916,13 +916,15 @@ impl UserStore {
         if let Some(plan_assignment) = billing_plan_id {
             match plan_assignment {
                 Some(plan_id) => {
-                    // Validate inside the transaction so the assignment and its
-                    // anchor are consistent with an existing plan row (BP-S1/BP-S3).
+                    // Lock the plan row so assignment cannot race delete (BP-D3)
+                    // and the anchor matches a surviving plan (BP-S1/BP-S3).
+                    let plan_lock_sql = if self.db.is_postgres() {
+                        "SELECT period_seconds FROM billing_plans WHERE id = $1 FOR UPDATE"
+                    } else {
+                        "SELECT period_seconds FROM billing_plans WHERE id = $1"
+                    };
                     let plan_row = tx
-                        .query_one(self.db.stmt(
-                            "SELECT period_seconds FROM billing_plans WHERE id = $1",
-                            vec![plan_id.clone().into()],
-                        ))
+                        .query_one(self.db.stmt(plan_lock_sql, vec![plan_id.clone().into()]))
                         .await
                         .map_err(|e| e.to_string())?
                         .ok_or_else(|| "billing plan not found".to_string())?;

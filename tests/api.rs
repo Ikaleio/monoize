@@ -12,6 +12,9 @@ mod billing_request_logs;
 #[path = "api/billing_rates_dashboard.rs"]
 mod billing_rates_dashboard;
 
+#[path = "api/billing_plans_dashboard.rs"]
+mod billing_plans_dashboard;
+
 #[path = "api/adapters_nonstream.rs"]
 mod adapters_nonstream;
 

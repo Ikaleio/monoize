@@ -42,7 +42,7 @@ pub struct BillingPlanInput {
     pub grant_amount_usd: Option<String>,
     pub period_seconds: i64,
     #[serde(default)]
-    pub allowed_groups: Vec<String>,
+    pub allowed_groups: Option<Vec<String>>,
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -51,8 +51,10 @@ struct ValidatedPlan {
     name: String,
     amount: i128,
     period_seconds: i64,
-    allowed_groups: Vec<String>,
-    enabled: bool,
+}
+
+fn map_grant_amount_error(_: String) -> String {
+    "invalid_grant_amount".to_string()
 }
 
 fn validate_plan_input(input: &BillingPlanInput) -> Result<ValidatedPlan, String> {
@@ -64,13 +66,13 @@ fn validate_plan_input(input: &BillingPlanInput) -> Result<ValidatedPlan, String
         return Err("invalid_period".to_string());
     }
     let amount = if let Some(raw) = input.grant_amount_nano_usd.as_deref() {
-        let parsed = parse_nano_usd(raw)?;
+        let parsed = parse_nano_usd(raw).map_err(map_grant_amount_error)?;
         if raw.trim() != parsed.to_string() || parsed < 0 {
             return Err("invalid_grant_amount".to_string());
         }
         parsed
     } else if let Some(raw) = input.grant_amount_usd.as_deref() {
-        let parsed = super::utils::parse_usd_to_nano(raw)?;
+        let parsed = super::utils::parse_usd_to_nano(raw).map_err(map_grant_amount_error)?;
         if parsed < 0 {
             return Err("invalid_grant_amount".to_string());
         }
@@ -83,9 +85,21 @@ fn validate_plan_input(input: &BillingPlanInput) -> Result<ValidatedPlan, String
         name: name.to_string(),
         amount,
         period_seconds: input.period_seconds,
-        allowed_groups: canonicalize_groups(&input.allowed_groups),
-        enabled: input.enabled.unwrap_or(true),
     })
+}
+
+fn is_plan_name_unique_violation(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    (lower.contains("unique") || lower.contains("duplicate"))
+        && (lower.contains("name") || lower.contains("uq_billing_plans_name_lower"))
+}
+
+fn plan_lock_sql(is_postgres: bool) -> &'static str {
+    if is_postgres {
+        "SELECT id, name, grant_amount_nano_usd, period_seconds, allowed_groups, enabled, created_at, updated_at FROM billing_plans WHERE id = $1 FOR UPDATE"
+    } else {
+        "SELECT id, name, grant_amount_nano_usd, period_seconds, allowed_groups, enabled, created_at, updated_at FROM billing_plans WHERE id = $1"
+    }
 }
 
 fn sql_err<E: std::fmt::Display>(error: E) -> String {
@@ -152,27 +166,45 @@ impl UserStore {
         &self,
         input: BillingPlanInput,
     ) -> Result<Result<BillingPlan, String>, String> {
-        let plan = validate_plan_input(&input)?;
-        if self.plan_name_exists(None, &plan.name).await? {
-            return Ok(Err("plan_name_exists".to_string()));
-        }
+        let plan = match validate_plan_input(&input) {
+            Ok(plan) => plan,
+            Err(code) => return Ok(Err(code)),
+        };
+        let allowed_groups = canonicalize_groups(input.allowed_groups.as_deref().unwrap_or(&[]));
+        let enabled = input.enabled.unwrap_or(true);
+        let groups_json = serialize_allowed_groups_json(&allowed_groups)?;
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
-        self.db.write().await.execute(self.db.stmt(
-            "INSERT INTO billing_plans (id, name, grant_amount_nano_usd, period_seconds, allowed_groups, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
-            vec![
-                id.clone().into(),
-                plan.name.into(),
-                plan.amount.to_string().into(),
-                SeaValue::BigInt(Some(plan.period_seconds)),
-                serialize_allowed_groups_json(&plan.allowed_groups)?.into(),
-                SeaValue::Int(Some(if plan.enabled { 1 } else { 0 })),
-                now.into(),
-            ],
-        ))
-        .await
-        .map_err(|e| e.to_string())?;
+        {
+            let write = self.db.write().await;
+            let tx = write.begin().await.map_err(|e| e.to_string())?;
+            if self.plan_name_exists_on(&tx, None, &plan.name).await? {
+                return Ok(Err("plan_name_exists".to_string()));
+            }
+            if let Err(error) = tx
+                .execute(self.db.stmt(
+                    "INSERT INTO billing_plans (id, name, grant_amount_nano_usd, period_seconds, allowed_groups, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
+                    vec![
+                        id.clone().into(),
+                        plan.name.into(),
+                        plan.amount.to_string().into(),
+                        SeaValue::BigInt(Some(plan.period_seconds)),
+                        groups_json.into(),
+                        SeaValue::Int(Some(if enabled { 1 } else { 0 })),
+                        now.into(),
+                    ],
+                ))
+                .await
+            {
+                let msg = error.to_string();
+                if is_plan_name_unique_violation(&msg) {
+                    return Ok(Err("plan_name_exists".to_string()));
+                }
+                return Err(msg);
+            }
+            tx.commit().await.map_err(|e| e.to_string())?;
+        }
 
         Ok(Ok(self
             .get_billing_plan_by_id(&id)
@@ -185,29 +217,64 @@ impl UserStore {
         plan_id: &str,
         input: BillingPlanInput,
     ) -> Result<Result<(), String>, String> {
-        self.get_billing_plan_by_id(plan_id)
-            .await?
-            .ok_or_else(|| "not_found".to_string())?;
-        let plan = validate_plan_input(&input)?;
-        if self.plan_name_exists(Some(plan_id), &plan.name).await? {
-            return Ok(Err("plan_name_exists".to_string()));
-        }
+        let plan = match validate_plan_input(&input) {
+            Ok(plan) => plan,
+            Err(code) => return Ok(Err(code)),
+        };
 
-        // Plan edits affect only future evaluations; existing next_grant_at anchors stay.
-        self.db.write().await.execute(self.db.stmt(
-            "UPDATE billing_plans SET name = $1, grant_amount_nano_usd = $2, period_seconds = $3, allowed_groups = $4, enabled = $5, updated_at = $6 WHERE id = $7",
-            vec![
-                plan.name.into(),
-                plan.amount.to_string().into(),
-                SeaValue::BigInt(Some(plan.period_seconds)),
-                serialize_allowed_groups_json(&plan.allowed_groups)?.into(),
-                SeaValue::Int(Some(if plan.enabled { 1 } else { 0 })),
-                Utc::now().to_rfc3339().into(),
-                plan_id.into(),
-            ],
-        ))
-        .await
-        .map_err(|e| e.to_string())?;
+        {
+            let write = self.db.write().await;
+            let tx = write.begin().await.map_err(|e| e.to_string())?;
+            let existing_row = tx
+                .query_one(
+                    self.db
+                        .stmt(plan_lock_sql(self.db.is_postgres()), vec![plan_id.into()]),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            let existing = match existing_row {
+                Some(row) => row_to_plan(&row)?,
+                None => return Err("not_found".to_string()),
+            };
+            if self
+                .plan_name_exists_on(&tx, Some(plan_id), &plan.name)
+                .await?
+            {
+                return Ok(Err("plan_name_exists".to_string()));
+            }
+
+            let allowed_groups = input
+                .allowed_groups
+                .as_ref()
+                .map(|groups| canonicalize_groups(groups))
+                .unwrap_or(existing.allowed_groups);
+            let enabled = input.enabled.unwrap_or(existing.enabled);
+            let groups_json = serialize_allowed_groups_json(&allowed_groups)?;
+
+            // Plan edits affect only future evaluations; existing next_grant_at anchors stay.
+            if let Err(error) = tx
+                .execute(self.db.stmt(
+                    "UPDATE billing_plans SET name = $1, grant_amount_nano_usd = $2, period_seconds = $3, allowed_groups = $4, enabled = $5, updated_at = $6 WHERE id = $7",
+                    vec![
+                        plan.name.into(),
+                        plan.amount.to_string().into(),
+                        SeaValue::BigInt(Some(plan.period_seconds)),
+                        groups_json.into(),
+                        SeaValue::Int(Some(if enabled { 1 } else { 0 })),
+                        Utc::now().to_rfc3339().into(),
+                        plan_id.into(),
+                    ],
+                ))
+                .await
+            {
+                let msg = error.to_string();
+                if is_plan_name_unique_violation(&msg) {
+                    return Ok(Err("plan_name_exists".to_string()));
+                }
+                return Err(msg);
+            }
+            tx.commit().await.map_err(|e| e.to_string())?;
+        }
 
         // Cached auth results embed the plan's group restriction layer.
         self.api_key_cache.invalidate_all();
@@ -215,29 +282,45 @@ impl UserStore {
     }
 
     pub async fn delete_billing_plan(&self, plan_id: &str) -> Result<Result<(), String>, String> {
-        let count = self.count_users_with_plan(plan_id).await?;
+        let write = self.db.write().await;
+        let tx = write.begin().await.map_err(|e| e.to_string())?;
+        let existing = tx
+            .query_one(
+                self.db
+                    .stmt(plan_lock_sql(self.db.is_postgres()), vec![plan_id.into()]),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        if existing.is_none() {
+            return Err("not_found".to_string());
+        }
+
+        let count_row = tx
+            .query_one(self.db.stmt(
+                "SELECT COUNT(*) AS count FROM users WHERE billing_plan_id = $1",
+                vec![plan_id.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no count row".to_string())?;
+        let count: i64 = count_row.try_get("", "count").map_err(|e| e.to_string())?;
         if count > 0 {
             return Ok(Err("plan_in_use".to_string()));
         }
 
-        let result = self
-            .db
-            .write()
-            .await
-            .execute(self.db.stmt(
-                "DELETE FROM billing_plans WHERE id = $1",
-                vec![plan_id.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?;
-        if result.rows_affected() == 0 {
-            return Err("not_found".to_string());
-        }
+        tx.execute(self.db.stmt(
+            "DELETE FROM billing_plans WHERE id = $1",
+            vec![plan_id.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(Ok(()))
     }
 
-    pub(crate) async fn plan_name_exists(
+    async fn plan_name_exists_on<C: ConnectionTrait>(
         &self,
+        conn: &C,
         exclude_id: Option<&str>,
         name: &str,
     ) -> Result<bool, String> {
@@ -251,27 +334,11 @@ impl UserStore {
                 vec![name.into()],
             ),
         };
-        let row = self
-            .db
-            .read()
+        let row = conn
             .query_one(self.db.stmt(sql, values))
             .await
             .map_err(|e| e.to_string())?;
         Ok(row.is_some())
-    }
-
-    pub(crate) async fn count_users_with_plan(&self, plan_id: &str) -> Result<i64, String> {
-        let row = self
-            .db
-            .read()
-            .query_one(self.db.stmt(
-                "SELECT COUNT(*) AS count FROM users WHERE billing_plan_id = $1",
-                vec![plan_id.into()],
-            ))
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no count row".to_string())?;
-        row.try_get::<i64>("", "count").map_err(|e| e.to_string())
     }
 
     pub fn spawn_plan_grant_scheduler(&self) {
@@ -353,7 +420,6 @@ impl UserStore {
             return Ok(false);
         }
 
-        // Absolute reset per BP-G3.
         let new_balance = amount;
         let delta = new_balance
             .checked_sub(old_balance)
@@ -418,7 +484,7 @@ mod tests {
             grant_amount_nano_usd: None,
             grant_amount_usd: Some(amount_usd.to_string()),
             period_seconds,
-            allowed_groups: Vec::new(),
+            allowed_groups: None,
             enabled: None,
         }
     }
@@ -453,6 +519,18 @@ mod tests {
             validate_plan_input(&input).err(),
             Some("invalid_grant_amount".to_string())
         );
+        input.grant_amount_usd = None;
+        input.grant_amount_nano_usd = Some("abc".to_string());
+        assert_eq!(
+            validate_plan_input(&input).err(),
+            Some("invalid_grant_amount".to_string())
+        );
+        input.grant_amount_nano_usd = None;
+        assert_eq!(
+            validate_plan_input(&input).err(),
+            Some("invalid_grant_amount".to_string())
+        );
+        assert!(validate_plan_input(&plan_input("zero", "0", 60)).is_ok());
     }
 
     #[test]
@@ -584,6 +662,93 @@ mod tests {
                 .expect("delete runs")
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn create_plan_maps_validation_errors_as_inner_err() {
+        let store = make_store().await;
+        match store.create_billing_plan(plan_input("p", "1", 0)).await {
+            Ok(Err(code)) if code == "invalid_period" => {}
+            other => panic!("expected inner invalid_period, got {other:?}"),
+        }
+        match store
+            .create_billing_plan(BillingPlanInput {
+                name: "p".to_string(),
+                grant_amount_nano_usd: Some("abc".to_string()),
+                grant_amount_usd: None,
+                period_seconds: 60,
+                allowed_groups: None,
+                enabled: None,
+            })
+            .await
+        {
+            Ok(Err(code)) if code == "invalid_grant_amount" => {}
+            other => panic!("expected inner invalid_grant_amount, got {other:?}"),
+        }
+        let zero = store
+            .create_billing_plan(plan_input("zero", "0", 60))
+            .await
+            .expect("create runs")
+            .expect("zero grant is valid");
+        assert_eq!(zero.grant_amount_nano_usd, "0");
+    }
+
+    #[tokio::test]
+    async fn plan_name_is_unique_case_insensitively() {
+        let store = make_store().await;
+        store
+            .create_billing_plan(plan_input("Starter", "1", 60))
+            .await
+            .expect("create runs")
+            .expect("name is unique");
+        match store
+            .create_billing_plan(plan_input("starter", "2", 60))
+            .await
+            .expect("create runs")
+        {
+            Ok(_) => panic!("case-insensitive duplicate must be rejected"),
+            Err(error) if error == "plan_name_exists" => {}
+            Err(other) => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_omits_leave_enabled_and_groups() {
+        let store = make_store().await;
+        let plan = store
+            .create_billing_plan(BillingPlanInput {
+                name: "restricted".to_string(),
+                grant_amount_nano_usd: None,
+                grant_amount_usd: Some("1".to_string()),
+                period_seconds: 60,
+                allowed_groups: Some(vec!["team-a".to_string()]),
+                enabled: Some(false),
+            })
+            .await
+            .expect("create runs")
+            .expect("unique");
+        store
+            .update_billing_plan(
+                &plan.id,
+                BillingPlanInput {
+                    name: plan.name.clone(),
+                    grant_amount_nano_usd: Some(plan.grant_amount_nano_usd.clone()),
+                    grant_amount_usd: None,
+                    period_seconds: plan.period_seconds,
+                    allowed_groups: None,
+                    enabled: None,
+                },
+            )
+            .await
+            .expect("update runs")
+            .expect("valid");
+        let after = store
+            .get_billing_plan_by_id(&plan.id)
+            .await
+            .expect("reads")
+            .expect("exists");
+        assert!(!after.enabled);
+        assert_eq!(after.allowed_groups, vec!["team-a".to_string()]);
     }
 
     #[tokio::test]
@@ -761,7 +926,7 @@ mod tests {
                 grant_amount_nano_usd: None,
                 grant_amount_usd: Some("1".to_string()),
                 period_seconds: 60,
-                allowed_groups: vec!["team-a".to_string()],
+                allowed_groups: Some(vec!["team-a".to_string()]),
                 enabled: None,
             })
             .await

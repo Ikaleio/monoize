@@ -13,7 +13,7 @@ subscriber may use. A plan is a named record; users reference at most one plan.
 | Column                   | Type    | Constraints                                    |
 | ------------------------ | ------- | ---------------------------------------------- |
 | `id`                     | TEXT    | PRIMARY KEY, UUID v4 string                    |
-| `name`                   | TEXT    | NOT NULL, UNIQUE, 1..100 chars after trimming   |
+| `name`                   | TEXT    | NOT NULL, unique after `lower(trim(name))`, 1..100 chars after trimming |
 | `grant_amount_nano_usd`  | TEXT    | NOT NULL, canonical signed i128 decimal, >= 0   |
 | `period_seconds`         | BIGINT  | NOT NULL, > 0                                   |
 | `allowed_groups`         | TEXT    | NOT NULL, JSON array of strings, default `[]`   |
@@ -37,7 +37,9 @@ BP-D2. For every persisted user row, `next_grant_at IS NOT NULL` if and only if
 consistent in the same transaction.
 
 BP-D3. No database-level foreign key constraint is created between `users.billing_plan_id`
-and `billing_plans.id`; referential integrity MUST be enforced by write paths.
+and `billing_plans.id`; referential integrity MUST be enforced by write paths. Plan delete
+and plan assignment MUST serialize on the plan row so a concurrent assign cannot observe a
+deleted plan id (and a concurrent delete cannot drop a plan that just gained an assignee).
 
 ## 2. Plan administration API
 
@@ -49,17 +51,23 @@ the user management endpoints.
 - `PUT /api/dashboard/billing-plans/{plan_id}` — update a plan.
 - `DELETE /api/dashboard/billing-plans/{plan_id}` — delete a plan.
 
-Create/update request body fields: `name: string`, one of `grant_amount_nano_usd: string` or
+Create request body fields: `name: string`, one of `grant_amount_nano_usd: string` or
 `grant_amount_usd: string` (if both are provided, the nano value wins), `period_seconds: integer`,
-`allowed_groups: string[]`, optional `enabled: boolean` (default `true` on create).
+optional `allowed_groups: string[]` (omitted = `[]`), optional `enabled: boolean` (omitted = `true`).
 
-BP-A1. If `name` (trimmed) already exists on another plan, the server MUST return HTTP `409`
-with code `plan_name_exists`.
+Update (`PUT`) request body fields: `name`, `period_seconds`, and a grant amount are required
+(same amount rules as create). Omitted `allowed_groups` and omitted `enabled` leave the stored
+values unchanged (BP-A8).
+
+BP-A1. If `name` (trimmed) already exists on another plan when compared case-insensitively,
+the server MUST return HTTP `409` with code `plan_name_exists`. Unique-constraint races MUST
+map to the same code, never HTTP `500`.
 
 BP-A2. If `period_seconds <= 0`, the server MUST return HTTP `400` with code `invalid_period`.
 Non-integer values are rejected at deserialization.
 
-BP-A3. Invalid amounts MUST return HTTP `400` with code `invalid_grant_amount`.
+BP-A3. Invalid amounts (missing, non-canonical nano string, unparsable USD, negative, overflow)
+MUST return HTTP `400` with code `invalid_grant_amount`.
 
 BP-A4. Delete of a plan referenced by at least one user MUST return HTTP `409` with code
 `plan_in_use`. Delete of zero-reference plans MUST succeed and leave user balances unchanged.
@@ -68,6 +76,13 @@ BP-A5. Update of a nonexistent plan MUST return HTTP `404` with code `not_found`
 
 BP-A6. Editing any plan field affects only future grant evaluations. Existing
 `users.next_grant_at` anchors MUST NOT be shifted by plan edits.
+
+BP-A7. If `name` (trimmed) is empty or longer than 100 characters, the server MUST return
+HTTP `400` with code `invalid_plan_name`.
+
+BP-A8. On `PUT`, omitted `enabled` MUST leave the stored enabled flag unchanged, and omitted
+`allowed_groups` MUST leave the stored group list unchanged. On `POST`, omitted
+`allowed_groups` is `[]` and omitted `enabled` is `true`.
 
 ## 3. Plan assignment
 

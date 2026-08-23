@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::error::{AppError, AppResult};
-use crate::users::{BillingPlan, BillingPlanInput, format_nano_to_usd, parse_usd_to_nano};
+use crate::users::{BillingPlan, BillingPlanInput, format_nano_to_usd};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -15,7 +15,7 @@ pub struct CreateBillingPlanRequest {
     pub grant_amount_usd: Option<String>,
     pub period_seconds: i64,
     #[serde(default)]
-    pub allowed_groups: Vec<String>,
+    pub allowed_groups: Option<Vec<String>>,
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -27,7 +27,7 @@ pub struct UpdateBillingPlanRequest {
     pub grant_amount_usd: Option<String>,
     pub period_seconds: i64,
     #[serde(default)]
-    pub allowed_groups: Vec<String>,
+    pub allowed_groups: Option<Vec<String>>,
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -65,24 +65,41 @@ impl From<BillingPlan> for BillingPlanResponse {
     }
 }
 
-fn plan_input(request: CreateBillingPlanRequest) -> Result<BillingPlanInput, AppError> {
-    if let Some(ref usd) = request.grant_amount_usd
-        && parse_usd_to_nano(usd).is_err()
-    {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_grant_amount",
-            "invalid grant_amount_usd",
-        ));
+fn plan_input(
+    name: String,
+    grant_amount_nano_usd: Option<String>,
+    grant_amount_usd: Option<String>,
+    period_seconds: i64,
+    allowed_groups: Option<Vec<String>>,
+    enabled: Option<bool>,
+) -> BillingPlanInput {
+    BillingPlanInput {
+        name,
+        grant_amount_nano_usd,
+        grant_amount_usd,
+        period_seconds,
+        allowed_groups,
+        enabled,
     }
-    Ok(BillingPlanInput {
-        name: request.name,
-        grant_amount_nano_usd: request.grant_amount_nano_usd,
-        grant_amount_usd: request.grant_amount_usd,
-        period_seconds: request.period_seconds,
-        allowed_groups: request.allowed_groups,
-        enabled: request.enabled,
-    })
+}
+
+fn map_plan_inner_error(error: String) -> AppError {
+    match error.as_str() {
+        "plan_name_exists" => AppError::new(
+            StatusCode::CONFLICT,
+            "plan_name_exists",
+            "a billing plan with this name already exists",
+        ),
+        "invalid_period" | "invalid_grant_amount" | "invalid_plan_name" => {
+            AppError::new(StatusCode::BAD_REQUEST, error.clone(), error)
+        }
+        "plan_in_use" => AppError::new(
+            StatusCode::CONFLICT,
+            "plan_in_use",
+            "billing plan is assigned to at least one user",
+        ),
+        _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error),
+    }
 }
 
 pub async fn list_billing_plans(
@@ -110,22 +127,19 @@ pub async fn create_billing_plan(
 
     match state
         .user_store
-        .create_billing_plan(plan_input(body)?)
+        .create_billing_plan(plan_input(
+            body.name,
+            body.grant_amount_nano_usd,
+            body.grant_amount_usd,
+            body.period_seconds,
+            body.allowed_groups,
+            body.enabled,
+        ))
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
     {
         Ok(plan) => Ok((StatusCode::CREATED, Json(BillingPlanResponse::from(plan)))),
-        Err(error) => Err(match error.as_str() {
-            "plan_name_exists" => AppError::new(
-                StatusCode::CONFLICT,
-                "plan_name_exists",
-                "a billing plan with this name already exists",
-            ),
-            "invalid_period" | "invalid_grant_amount" | "invalid_plan_name" => {
-                AppError::new(StatusCode::BAD_REQUEST, error.clone(), error)
-            }
-            _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error),
-        }),
+        Err(error) => Err(map_plan_inner_error(error)),
     }
 }
 
@@ -137,14 +151,14 @@ pub async fn update_billing_plan(
 ) -> AppResult<impl IntoResponse> {
     crate::dashboard_handlers::session_helpers::require_admin(&headers, &state).await?;
 
-    let input = plan_input(CreateBillingPlanRequest {
-        name: body.name,
-        grant_amount_nano_usd: body.grant_amount_nano_usd,
-        grant_amount_usd: body.grant_amount_usd,
-        period_seconds: body.period_seconds,
-        allowed_groups: body.allowed_groups,
-        enabled: body.enabled,
-    })?;
+    let input = plan_input(
+        body.name,
+        body.grant_amount_nano_usd,
+        body.grant_amount_usd,
+        body.period_seconds,
+        body.allowed_groups,
+        body.enabled,
+    );
 
     match state
         .user_store
@@ -158,17 +172,7 @@ pub async fn update_billing_plan(
             }
         })? {
         Ok(()) => Ok(Json(json!({ "success": true }))),
-        Err(error) => Err(match error.as_str() {
-            "plan_name_exists" => AppError::new(
-                StatusCode::CONFLICT,
-                "plan_name_exists",
-                "a billing plan with this name already exists",
-            ),
-            "invalid_period" | "invalid_grant_amount" | "invalid_plan_name" => {
-                AppError::new(StatusCode::BAD_REQUEST, error.clone(), error)
-            }
-            _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error),
-        }),
+        Err(error) => Err(map_plan_inner_error(error)),
     }
 }
 
@@ -191,13 +195,6 @@ pub async fn delete_billing_plan(
             }
         })? {
         Ok(()) => Ok(Json(json!({ "success": true }))),
-        Err(error) => Err(match error.as_str() {
-            "plan_in_use" => AppError::new(
-                StatusCode::CONFLICT,
-                "plan_in_use",
-                "billing plan is assigned to at least one user",
-            ),
-            _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error),
-        }),
+        Err(error) => Err(map_plan_inner_error(error)),
     }
 }

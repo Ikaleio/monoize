@@ -248,10 +248,10 @@ pub async fn update_user(
         )
         .await
         .map_err(|e| {
-            if e.contains("not found") {
-                AppError::new(StatusCode::NOT_FOUND, "not_found", e)
-            } else if e.contains("billing plan not found") {
+            if e == "billing plan not found" {
                 AppError::new(StatusCode::BAD_REQUEST, "invalid_billing_plan", e)
+            } else if e.contains("not found") {
+                AppError::new(StatusCode::NOT_FOUND, "not_found", e)
             } else if e.contains("invalid") {
                 AppError::new(StatusCode::BAD_REQUEST, "invalid_balance", e)
             } else {
