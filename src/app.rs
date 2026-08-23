@@ -1745,6 +1745,16 @@ fn build_dashboard_api_router() -> Router<AppState> {
             axum::routing::delete(crate::dashboard_handlers::delete_user),
         )
         .route(
+            "/dashboard/billing-plans",
+            get(crate::dashboard_handlers::list_billing_plans)
+                .post(crate::dashboard_handlers::create_billing_plan),
+        )
+        .route(
+            "/dashboard/billing-plans/{plan_id}",
+            put(crate::dashboard_handlers::update_billing_plan)
+                .delete(crate::dashboard_handlers::delete_billing_plan),
+        )
+        .route(
             "/dashboard/tokens",
             get(crate::dashboard_handlers::list_my_api_keys),
         )

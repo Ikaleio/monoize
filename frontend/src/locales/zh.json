@@ -55,7 +55,8 @@
 		"admin": "管理",
 		"logs": "日志",
 		"models": "模型数据库",
-		"marketplace": "模型广场"
+		"marketplace": "模型广场",
+		"billingPlans": "订阅套餐"
 	},
 	"roles": {
 		"super_admin": "超级管理员",
@@ -802,5 +803,28 @@
 		"timeRangeFrom": "起: yyyy-MM-dd HH:mm:ss",
 		"timeRangeTo": "止: yyyy-MM-dd HH:mm:ss",
 		"toggleFilters": "展开/收起筛选"
+	},
+	"billingPlans": {
+		"title": "订阅套餐",
+		"description": "周期性重置订阅用户余额的套餐计划",
+		"create": "新建套餐",
+		"edit": "编辑套餐",
+		"name": "名称",
+		"namePlaceholder": "例如：入门版",
+		"amount": "发放额度（美元）",
+		"amountHelp": "每个周期开始时，余额将重置为该金额。",
+		"period": "周期（秒）",
+		"periodHelp": "86400 = 每天。每个周期只重置一次；错过的周期不会叠加发放。",
+		"groupsHelp": "该套餐允许使用的分组，逗号分隔。留空表示不限制分组。",
+		"enabled": "启用",
+		"invalidAmount": "发放额度无效",
+		"invalidPeriod": "周期必须为正整数秒",
+		"nameRequired": "请填写套餐名称",
+		"emptyTitle": "还没有订阅套餐",
+		"emptyDescription": "创建一个套餐，为用户提供周期性余额。",
+		"deleteTitle": "删除订阅套餐？",
+		"deleteDescription": "将永久删除 {{name}}。已分配给用户的套餐无法删除。",
+		"none": "不绑定套餐",
+		"nextReset": "{{name}} — 下次重置 {{time}}"
 	}
 }

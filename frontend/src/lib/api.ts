@@ -12,6 +12,29 @@ export interface User {
   balance_unlimited: boolean;
   email?: string | null;
   allowed_groups: string[];
+  billing_plan_id?: string | null;
+  next_grant_at?: string | null;
+}
+
+export interface BillingPlan {
+  id: string;
+  name: string;
+  grant_amount_nano_usd: string;
+  grant_amount_usd: string;
+  period_seconds: number;
+  allowed_groups: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BillingPlanInput {
+  name: string;
+  grant_amount_nano_usd?: string;
+  grant_amount_usd?: string;
+  period_seconds: number;
+  allowed_groups?: string[];
+  enabled?: boolean;
 }
 
 export interface AuthResponse {
@@ -646,12 +669,37 @@ class ApiClient {
       balance_unlimited?: boolean;
       email?: string | null;
       allowed_groups?: string[];
+      billing_plan_id?: string | null;
     }
   ): Promise<User> {
     return this.request(`/users/${id}`, {
       method: "PUT",
       body: JSON.stringify(updates),
     });
+  }
+
+  // Billing plans
+  async listBillingPlans(): Promise<BillingPlan[]> {
+    return this.request("/billing-plans");
+  }
+
+  async createBillingPlan(input: BillingPlanInput): Promise<BillingPlan> {
+    return this.request("/billing-plans", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async updateBillingPlan(id: string, input: BillingPlanInput): Promise<{ success: boolean }> {
+    return this.request(`/billing-plans/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteBillingPlan(id: string): Promise<{ success: boolean }> {
+    await this.request(`/billing-plans/${id}`, { method: "DELETE" });
+    return { success: true };
   }
 
   async updateMe(updates: { email?: string | null }): Promise<User> {

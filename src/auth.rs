@@ -1,6 +1,6 @@
 use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
-use crate::users::{RequestCaptureMode, UserStore, compute_effective_groups};
+use crate::users::{RequestCaptureMode, UserStore, compute_effective_groups_with_plan};
 
 /// Result of authentication containing the tenant_id and optionally the user_id
 /// if authenticated via database API key.
@@ -50,9 +50,12 @@ impl AuthState {
         if token.starts_with("sk-") && token.len() >= 12 {
             if let Some(store) = user_store {
                 match store.validate_api_key(token).await {
-                    Ok(Some((api_key, user))) => {
-                        let effective_groups =
-                            compute_effective_groups(&user.allowed_groups, &api_key.allowed_groups);
+                    Ok(Some((api_key, user, plan_allowed_groups))) => {
+                        let effective_groups = compute_effective_groups_with_plan(
+                            &user.allowed_groups,
+                            plan_allowed_groups.as_deref(),
+                            &api_key.allowed_groups,
+                        );
                         return Some(AuthResult {
                             tenant_id: user.id.clone(),
                             user_id: Some(user.id),

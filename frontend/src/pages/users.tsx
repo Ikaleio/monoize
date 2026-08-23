@@ -37,8 +37,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/use-auth";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   useUsers,
   useDashboardGroups,
+  useBillingPlans,
   createUserOptimistic,
   updateUserOptimistic,
   deleteUserOptimistic,
@@ -92,6 +100,13 @@ const roleIcons = {
   admin: Shield,
   user: UserIcon,
 };
+
+function formatPeriodShort(seconds: number): string {
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`;
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
 
 const roleVariants = {
   super_admin: "destructive" as const,
@@ -268,6 +283,7 @@ export function UsersPage() {
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useUsers();
   const { data: groupSuggestions = [], isLoading: groupsLoading } = useDashboardGroups();
+  const { data: billingPlans = [] } = useBillingPlans();
   const [createOpen, setCreateOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
   const [formData, setFormData] = useState({
@@ -278,6 +294,7 @@ export function UsersPage() {
     balanceUnlimited: false,
     email: "",
     allowedGroups: [] as string[],
+    billingPlanId: "" as string,
   });
   const [balanceMode, setBalanceMode] = useState<"set" | "add">("set");
   const [balanceAddAmount, setBalanceAddAmount] = useState("");
@@ -305,6 +322,7 @@ export function UsersPage() {
         balanceUnlimited: false,
         email: "",
         allowedGroups: [],
+        billingPlanId: "",
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("users.failedCreate"));
@@ -326,6 +344,7 @@ export function UsersPage() {
         balance_unlimited?: boolean;
         email?: string | null;
         allowed_groups?: string[];
+        billing_plan_id?: string | null;
       } = {};
       if (formData.username.trim() && formData.username !== editUser.username) {
         updates.username = formData.username.trim();
@@ -357,6 +376,10 @@ export function UsersPage() {
       if (!allowedGroupsEqual(nextAllowedGroups, editUser.allowed_groups)) {
         updates.allowed_groups = nextAllowedGroups;
       }
+      const nextPlanId = formData.billingPlanId || null;
+      if (nextPlanId !== (editUser.billing_plan_id ?? null)) {
+        updates.billing_plan_id = nextPlanId;
+      }
       await updateUserOptimistic(
         editUser.id,
         updates,
@@ -373,6 +396,7 @@ export function UsersPage() {
         balanceUnlimited: false,
         email: "",
         allowedGroups: [],
+        billingPlanId: "",
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("users.failedUpdate"));
@@ -423,6 +447,7 @@ export function UsersPage() {
       balanceUnlimited: user.balance_unlimited,
       email: user.email ?? "",
       allowedGroups: user.allowed_groups,
+      billingPlanId: user.billing_plan_id ?? "",
     });
   };
 
@@ -643,6 +668,39 @@ export function UsersPage() {
                   t={t}
                   onChange={(allowedGroups) => setFormData({ ...formData, allowedGroups })}
                 />
+                <div className="space-y-2">
+                  <Label htmlFor="edit-billing-plan">{t("billingPlans.title")}</Label>
+                  <Select
+                    value={formData.billingPlanId}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, billingPlanId: value })
+                    }
+                  >
+                    <SelectTrigger id="edit-billing-plan" className="w-full">
+                      <SelectValue placeholder={t("billingPlans.none")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">{t("billingPlans.none")}</SelectItem>
+                      {billingPlans.filter((p) => p.enabled).map((plan) => (
+                        <SelectItem key={plan.id} value={plan.id}>
+                          {plan.name} · ${plan.grant_amount_usd}/{formatPeriodShort(plan.period_seconds)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {(() => {
+                    const assigned = billingPlans.find((p) => p.id === editUser?.billing_plan_id);
+                    if (!assigned || !editUser?.next_grant_at) return null;
+                    return (
+                      <p className="text-xs text-muted-foreground">
+                        {t("billingPlans.nextReset", {
+                          name: assigned.name,
+                          time: new Date(editUser.next_grant_at).toLocaleString(),
+                        })}
+                      </p>
+                    );
+                  })()}
+                </div>
                 {currentUser?.role && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">

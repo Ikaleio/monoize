@@ -55,7 +55,8 @@
 		"admin": "Admin",
 		"logs": "Logs",
 		"models": "Models",
-		"marketplace": "Models"
+		"marketplace": "Models",
+		"billingPlans": "Plans"
 	},
 	"roles": {
 		"super_admin": "Super Admin",
@@ -802,5 +803,28 @@
 		"timeRangeFrom": "From: yyyy-MM-dd HH:mm:ss",
 		"timeRangeTo": "To: yyyy-MM-dd HH:mm:ss",
 		"toggleFilters": "Toggle Filters"
+	},
+	"billingPlans": {
+		"title": "Billing Plans",
+		"description": "Subscription plans that periodically reset subscriber balances",
+		"create": "Create Plan",
+		"edit": "Edit Plan",
+		"name": "Name",
+		"namePlaceholder": "e.g. Starter",
+		"amount": "Grant Amount (USD)",
+		"amountHelp": "Balance is reset to this amount at the start of every period.",
+		"period": "Period (seconds)",
+		"periodHelp": "86400 = daily. The reset happens once per period; missed periods are not multiplied.",
+		"groupsHelp": "Comma-separated channel groups this plan grants access to. Empty means all groups.",
+		"enabled": "Enabled",
+		"invalidAmount": "Invalid grant amount",
+		"invalidPeriod": "Period must be a positive integer number of seconds",
+		"nameRequired": "Plan name is required",
+		"emptyTitle": "No billing plans yet",
+		"emptyDescription": "Create a plan to give users a recurring balance.",
+		"deleteTitle": "Delete billing plan?",
+		"deleteDescription": "This will permanently delete {{name}}. Plans assigned to users cannot be deleted.",
+		"none": "No plan",
+		"nextReset": "{{name}} — next reset {{time}}"
 	}
 }

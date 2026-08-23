@@ -55,7 +55,8 @@
 		"admin": "管理",
 		"logs": "ログ",
 		"models": "モデルデータベース",
-		"marketplace": "モデルマーケット"
+		"marketplace": "モデルマーケット",
+		"billingPlans": "プラン"
 	},
 	"roles": {
 		"super_admin": "スーパー管理者",
@@ -798,5 +799,28 @@
 		"timeRangeFrom": "開始: yyyy-MM-dd HH:mm:ss",
 		"timeRangeTo": "終了: yyyy-MM-dd HH:mm:ss",
 		"toggleFilters": "フィルターの表示/非表示"
+	},
+	"billingPlans": {
+		"title": "課金プラン",
+		"description": "サブスクライバーの残高を定期的にリセットするプラン",
+		"create": "プランを作成",
+		"edit": "プランを編集",
+		"name": "名前",
+		"namePlaceholder": "例：スターター",
+		"amount": "付与額（USD）",
+		"amountHelp": "各期間の開始時に残高はこの金額にリセットされます。",
+		"period": "期間（秒）",
+		"periodHelp": "86400 = 毎日。1期間に1回だけリセットされます。逃した期間は繰り返されません。",
+		"groupsHelp": "このプランで利用できるチャネルグループ（カンマ区切り）。空の場合はすべてのグループを利用できます。",
+		"enabled": "有効",
+		"invalidAmount": "付与額が無効です",
+		"invalidPeriod": "期間は正の整数秒である必要があります",
+		"nameRequired": "プラン名は必須です",
+		"emptyTitle": "課金プランはまだありません",
+		"emptyDescription": "プランを作成して、ユーザーに定期的な残高を提供しましょう。",
+		"deleteTitle": "課金プランを削除しますか？",
+		"deleteDescription": "{{name}} を完全に削除します。ユーザーに割り当てられているプランは削除できません。",
+		"none": "プランなし",
+		"nextReset": "{{name}} — 次回リセット {{time}}"
 	}
 }

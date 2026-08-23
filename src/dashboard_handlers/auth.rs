@@ -43,6 +43,8 @@ pub struct UserResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     pub allowed_groups: Vec<String>,
+    pub billing_plan_id: Option<String>,
+    pub next_grant_at: Option<String>,
 }
 
 impl From<User> for UserResponse {
@@ -63,6 +65,8 @@ impl From<User> for UserResponse {
             balance_unlimited: u.balance_unlimited,
             email: u.email,
             allowed_groups: u.allowed_groups,
+            billing_plan_id: u.billing_plan_id,
+            next_grant_at: u.next_grant_at.map(|d| d.to_rfc3339()),
         }
     }
 }

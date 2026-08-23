@@ -188,7 +188,10 @@ where
     serde_json::from_str(raw).map_err(|error| format!("invalid persisted {column}: {error}"))
 }
 
-fn parse_allowed_groups_json(raw: Option<&str>, column: &str) -> Result<Vec<String>, String> {
+pub(crate) fn parse_allowed_groups_json(
+    raw: Option<&str>,
+    column: &str,
+) -> Result<Vec<String>, String> {
     let Some(raw) = raw else {
         return Ok(Vec::new());
     };
@@ -202,7 +205,7 @@ fn parse_allowed_groups_json(raw: Option<&str>, column: &str) -> Result<Vec<Stri
     Ok(canonicalize_groups(&groups))
 }
 
-fn decode_required_bool(row: &QueryResult, column: &str) -> Result<bool, String> {
+pub(crate) fn decode_required_bool(row: &QueryResult, column: &str) -> Result<bool, String> {
     let value = row
         .try_get::<i32>("", column)
         .map_err(|error| format!("invalid persisted {column}: {error}"))?;
@@ -236,7 +239,7 @@ impl UserStore {
     }
 }
 
-fn serialize_allowed_groups_json(groups: &[String]) -> Result<String, String> {
+pub(crate) fn serialize_allowed_groups_json(groups: &[String]) -> Result<String, String> {
     serde_json::to_string(&canonicalize_groups(groups)).map_err(|e| e.to_string())
 }
 
@@ -550,6 +553,7 @@ impl UserStore {
                 }
             }
         });
+        self.spawn_plan_grant_scheduler();
     }
 
     pub async fn flush_all_batchers(&self) {
@@ -628,6 +632,8 @@ impl UserStore {
             balance_unlimited: false,
             email: None,
             allowed_groups,
+            billing_plan_id: None,
+            next_grant_at: None,
         })
     }
 
@@ -666,7 +672,7 @@ impl UserStore {
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups FROM users WHERE id = $1",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups, billing_plan_id, next_grant_at FROM users WHERE id = $1",
                 vec![id.into()],
             ))
             .await
@@ -682,7 +688,7 @@ impl UserStore {
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups FROM users WHERE username = $1",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups, billing_plan_id, next_grant_at FROM users WHERE username = $1",
                 vec![username.into()],
             ))
             .await
@@ -698,7 +704,7 @@ impl UserStore {
     pub async fn list_users(&self) -> Result<Vec<User>, String> {
         let rows = self.db.read()
             .query_all(self.db.stmt(
-                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
+                "SELECT id, username, password_hash, role, created_at, updated_at, last_login_at, enabled, balance_nano_usd, balance_unlimited, email, allowed_groups, billing_plan_id, next_grant_at FROM users WHERE substr(lower(username), 1, 9) != '_monoize_' ORDER BY created_at DESC",
                 vec![],
             ))
             .await
@@ -819,8 +825,10 @@ impl UserStore {
             balance_unlimited,
             email,
             allowed_groups,
+            billing_plan_id,
         } = input;
         let has_balance_change = balance_nano_usd.is_some() || balance_unlimited.is_some();
+        let has_plan_change = billing_plan_id.is_some();
         if username.is_none()
             && password.is_none()
             && role.is_none()
@@ -828,6 +836,7 @@ impl UserStore {
             && !has_balance_change
             && email.is_none()
             && allowed_groups.is_none()
+            && billing_plan_id.is_none()
         {
             return Ok(());
         }
@@ -904,6 +913,41 @@ impl UserStore {
             values.push(allowed_groups_json.into());
             idx += 1;
         }
+        if let Some(plan_assignment) = billing_plan_id {
+            match plan_assignment {
+                Some(plan_id) => {
+                    // Validate inside the transaction so the assignment and its
+                    // anchor are consistent with an existing plan row (BP-S1/BP-S3).
+                    let plan_row = tx
+                        .query_one(self.db.stmt(
+                            "SELECT period_seconds FROM billing_plans WHERE id = $1",
+                            vec![plan_id.clone().into()],
+                        ))
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| "billing plan not found".to_string())?;
+                    let period_seconds: i64 = plan_row
+                        .try_get("", "period_seconds")
+                        .map_err(|e| e.to_string())?;
+                    let anchor_ts = Utc::now()
+                        .timestamp()
+                        .checked_add(period_seconds)
+                        .ok_or_else(|| "next_grant_at overflow".to_string())?;
+                    let anchor = DateTime::from_timestamp(anchor_ts, 0)
+                        .ok_or_else(|| "next_grant_at overflow".to_string())?;
+                    set_clauses.push(format!("billing_plan_id = ${idx}"));
+                    values.push(plan_id.into());
+                    idx += 1;
+                    set_clauses.push(format!("next_grant_at = ${idx}"));
+                    values.push(anchor.to_rfc3339().into());
+                    idx += 1;
+                }
+                None => {
+                    set_clauses.push("billing_plan_id = NULL".to_string());
+                    set_clauses.push("next_grant_at = NULL".to_string());
+                }
+            }
+        }
         set_clauses.push(format!("updated_at = ${idx}"));
         values.push(now.clone().into());
         idx += 1;
@@ -945,6 +989,10 @@ impl UserStore {
         self.api_key_cache.invalidate_by_user_id(id);
         if has_balance_change {
             self.balance_cache.invalidate(id);
+        }
+        if has_plan_change {
+            // Cached auth results embed the plan's group restriction layer.
+            self.api_key_cache.invalidate_by_user_id(id);
         }
         Ok(())
     }
@@ -1340,7 +1388,7 @@ impl UserStore {
     async fn get_api_key_auth_candidate(
         &self,
         key: &str,
-    ) -> Result<Option<(ApiKey, User)>, String> {
+    ) -> Result<Option<(ApiKey, User, Option<Vec<String>>)>, String> {
         let row = self
             .db
             .read()
@@ -1359,11 +1407,15 @@ impl UserStore {
                         u.last_login_at AS owner_last_login_at, u.enabled AS owner_enabled,
                         u.balance_nano_usd AS owner_balance_nano_usd,
                         u.balance_unlimited AS owner_balance_unlimited,
-                        u.email AS owner_email, u.allowed_groups AS owner_allowed_groups
-                 FROM api_keys a
-                 JOIN users u ON u.id = a.user_id
-                 WHERE a.key_hash = $1 AND a.key = $2
-                 LIMIT 1",
+                        u.email AS owner_email, u.allowed_groups AS owner_allowed_groups,
+                        u.billing_plan_id AS owner_billing_plan_id,
+                        u.next_grant_at AS owner_next_grant_at,
+                        p.allowed_groups AS plan_allowed_groups
+                  FROM api_keys a
+                  JOIN users u ON u.id = a.user_id
+                  LEFT JOIN billing_plans p ON p.id = u.billing_plan_id AND p.enabled = 1
+                  WHERE a.key_hash = $1 AND a.key = $2
+                  LIMIT 1",
                 vec![api_key_lookup_hash(key).into(), key.into()],
             ))
             .await
@@ -1422,8 +1474,25 @@ impl UserStore {
                 owner_allowed_groups_raw.as_deref(),
                 "users.allowed_groups",
             )?,
+            billing_plan_id: row
+                .try_get::<Option<String>>("", "owner_billing_plan_id")
+                .map_err(|e| e.to_string())?,
+            next_grant_at: row
+                .try_get::<Option<String>>("", "owner_next_grant_at")
+                .map_err(|e| e.to_string())?
+                .map(|value| DateTime::parse_from_rfc3339(&value).map(|v| v.with_timezone(&Utc)))
+                .transpose()
+                .map_err(|e| e.to_string())?,
         };
-        Ok(Some((api_key, user)))
+        // A disabled or missing plan contributes no restriction (BP-R2).
+        let plan_allowed_groups = row
+            .try_get::<Option<String>>("", "plan_allowed_groups")
+            .map_err(|e| e.to_string())?
+            .map(|raw| {
+                parse_allowed_groups_json(Some(raw.as_str()), "billing_plans.allowed_groups")
+            })
+            .transpose()?;
+        Ok(Some((api_key, user, plan_allowed_groups)))
     }
 
     pub async fn list_user_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>, String> {
@@ -1870,13 +1939,17 @@ impl UserStore {
         Ok(())
     }
 
-    pub async fn validate_api_key(&self, key: &str) -> Result<Option<(ApiKey, User)>, String> {
+    pub async fn validate_api_key(
+        &self,
+        key: &str,
+    ) -> Result<Option<(ApiKey, User, Option<Vec<String>>)>, String> {
         if key.len() < 12 || key.len() > MAX_FORWARDING_API_KEY_BYTES {
             return Ok(None);
         }
 
         loop {
-            if let Some((cached_key, cached_user)) = self.api_key_cache.get(key) {
+            if let Some((cached_key, cached_user, cached_plan_groups)) = self.api_key_cache.get(key)
+            {
                 let now = Utc::now();
                 let not_expired = cached_key
                     .expires_at
@@ -1887,17 +1960,18 @@ impl UserStore {
                     && key == cached_key.key;
                 if is_valid {
                     self.last_used_batcher.record(cached_key.id.clone(), now);
-                    return Ok(Some((cached_key, cached_user)));
+                    return Ok(Some((cached_key, cached_user, cached_plan_groups)));
                 }
 
                 self.api_key_cache.invalidate(key);
             }
 
             let generation = self.api_key_cache.current_generation();
-            let (api_key, user) = match self.get_api_key_auth_candidate(key).await? {
-                Some(candidate) => candidate,
-                None => return Ok(None),
-            };
+            let (api_key, user, plan_allowed_groups) =
+                match self.get_api_key_auth_candidate(key).await? {
+                    Some(candidate) => candidate,
+                    None => return Ok(None),
+                };
 
             if !api_key.enabled {
                 return Ok(None);
@@ -1922,6 +1996,7 @@ impl UserStore {
                 generation,
                 api_key.clone(),
                 user.clone(),
+                plan_allowed_groups.clone(),
             ) {
                 continue;
             }
@@ -1929,7 +2004,7 @@ impl UserStore {
             self.last_used_batcher
                 .record(api_key.id.clone(), Utc::now());
 
-            return Ok(Some((api_key, user)));
+            return Ok(Some((api_key, user, plan_allowed_groups)));
         }
     }
 
@@ -1949,6 +2024,22 @@ impl UserStore {
             .map_err(|error| format!("invalid persisted users.allowed_groups: {error}"))?;
         let allowed_groups =
             parse_allowed_groups_json(allowed_groups_raw.as_deref(), "users.allowed_groups")?;
+        let billing_plan_id: Option<String> = row
+            .try_get("", "billing_plan_id")
+            .map_err(|e| e.to_string())?;
+        let next_grant_at: Option<String> = row
+            .try_get("", "next_grant_at")
+            .map_err(|e| e.to_string())?;
+        let next_grant_at = next_grant_at
+            .map(|s| DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&Utc)))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        if billing_plan_id.is_some() != next_grant_at.is_some() {
+            return Err(
+                "invalid persisted user: billing_plan_id and next_grant_at must be set together"
+                    .to_string(),
+            );
+        }
         let balance_nano_usd: String = row
             .try_get("", "balance_nano_usd")
             .map_err(|e| e.to_string())?;
@@ -1985,6 +2076,8 @@ impl UserStore {
                 .try_get::<Option<String>>("", "email")
                 .map_err(|e| e.to_string())?,
             allowed_groups,
+            billing_plan_id,
+            next_grant_at,
         })
     }
 
@@ -3075,7 +3168,7 @@ mod tests {
             .await
             .expect("key creates");
 
-        let (_, cached_user) = store
+        let (_, cached_user, _) = store
             .validate_api_key(&token)
             .await
             .expect("initial validation succeeds")
@@ -3088,7 +3181,7 @@ mod tests {
             .await
             .expect("last login updates");
         assert!(store.api_key_cache.get(&token).is_none());
-        let (_, refreshed_user) = store
+        let (_, refreshed_user, _) = store
             .validate_api_key(&token)
             .await
             .expect("refreshed validation succeeds")

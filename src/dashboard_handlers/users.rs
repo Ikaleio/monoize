@@ -32,6 +32,9 @@ pub struct UpdateUserRequest {
     pub balance_unlimited: Option<bool>,
     pub email: Option<Option<String>>,
     pub allowed_groups: Option<Vec<String>>,
+    /// Absent = no change; null = unassign; string = assign plan (BP-S1..S4).
+    #[serde(default)]
+    pub billing_plan_id: Option<Option<String>>,
 }
 
 pub(super) fn canonicalize_dashboard_user_allowed_groups(groups: &mut Vec<String>) {
@@ -239,6 +242,7 @@ pub async fn update_user(
                 balance_unlimited: body.balance_unlimited,
                 email: body.email,
                 allowed_groups: body.allowed_groups,
+                billing_plan_id: body.billing_plan_id,
             },
             &current_user.id,
         )
@@ -246,6 +250,8 @@ pub async fn update_user(
         .map_err(|e| {
             if e.contains("not found") {
                 AppError::new(StatusCode::NOT_FOUND, "not_found", e)
+            } else if e.contains("billing plan not found") {
+                AppError::new(StatusCode::BAD_REQUEST, "invalid_billing_plan", e)
             } else if e.contains("invalid") {
                 AppError::new(StatusCode::BAD_REQUEST, "invalid_balance", e)
             } else {

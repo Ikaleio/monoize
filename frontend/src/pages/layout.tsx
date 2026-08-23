@@ -16,6 +16,7 @@ import {
   ScrollText,
   Database,
   Store,
+  CalendarClock,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -141,6 +142,7 @@ function Sidebar({
   const adminNavItems = [
     { to: "/dashboard/providers", icon: Server, label: t("nav.providers") },
     { to: "/dashboard/models", icon: Database, label: t("nav.models") },
+    { to: "/dashboard/plans", icon: CalendarClock, label: t("nav.billingPlans") },
     { to: "/dashboard/users", icon: Users, label: t("nav.users") },
     { to: "/dashboard/admin-settings", icon: Settings, label: t("nav.settings") },
   ];

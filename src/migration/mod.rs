@@ -38,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260809_000029_sessions_expires_at_index::Migration),
             Box::new(m20260809_000030_normalize_billing_json_nulls::Migration),
             Box::new(m20260809_000031_request_logs_without_user_fk::Migration),
+            Box::new(m20260823_000032_billing_plan_subscriptions::Migration),
         ]
     }
 }
@@ -166,6 +167,7 @@ mod m20260809_000028_channel_model_name_index;
 mod m20260809_000029_sessions_expires_at_index;
 mod m20260809_000030_normalize_billing_json_nulls;
 mod m20260809_000031_request_logs_without_user_fk;
+mod m20260823_000032_billing_plan_subscriptions;
 
 #[cfg(test)]
 mod tests {

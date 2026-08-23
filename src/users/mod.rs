@@ -1,6 +1,9 @@
+mod plans;
 mod request_logs;
 mod store;
 mod utils;
+
+pub use plans::{BillingPlan, BillingPlanInput};
 
 use crate::db::DbPool;
 use crate::exact_decimal::Multiplier;
@@ -75,6 +78,12 @@ pub struct User {
     pub email: Option<String>,
     #[serde(default)]
     pub allowed_groups: Vec<String>,
+    /// Assigned billing plan, if any. Referential integrity is enforced by write paths.
+    #[serde(default)]
+    pub billing_plan_id: Option<String>,
+    /// Scheduled next balance grant time; present iff billing_plan_id is present.
+    #[serde(default)]
+    pub next_grant_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +276,8 @@ pub struct AdminUpdateUserInput {
     pub balance_unlimited: Option<bool>,
     pub email: Option<Option<String>>,
     pub allowed_groups: Option<Vec<String>>,
+    /// Outer Option = field present in the request; inner Option = target plan (None clears).
+    pub billing_plan_id: Option<Option<String>>,
 }
 
 fn default_true() -> bool {
@@ -316,29 +327,43 @@ pub fn compute_effective_groups(
     user_groups: &[String],
     key_groups: &[String],
 ) -> Option<Vec<String>> {
+    compute_effective_groups_with_plan(user_groups, None, key_groups)
+}
+
+/// Three-layer group composition: user ∩ billing plan ∩ API key.
+/// Each layer's empty list means "unrestricted at this layer"; `None` for the
+/// plan layer means no plan is assigned. The result is `None` only when every
+/// provided layer is unrestricted.
+pub fn compute_effective_groups_with_plan(
+    user_groups: &[String],
+    plan_groups: Option<&[String]>,
+    key_groups: &[String],
+) -> Option<Vec<String>> {
     let user_groups = canonicalize_groups(user_groups);
     let key_groups = canonicalize_groups(key_groups);
 
-    if user_groups.is_empty() && key_groups.is_empty() {
+    let mut restricting: Vec<BTreeSet<String>> = Vec::new();
+    if !user_groups.is_empty() {
+        restricting.push(user_groups.into_iter().collect());
+    }
+    if let Some(plan_groups) = plan_groups.map(canonicalize_groups) {
+        if !plan_groups.is_empty() {
+            restricting.push(plan_groups.into_iter().collect());
+        }
+    }
+    if !key_groups.is_empty() {
+        restricting.push(key_groups.into_iter().collect());
+    }
+
+    if restricting.is_empty() {
         return None;
     }
 
-    if key_groups.is_empty() {
-        return if user_groups.is_empty() {
-            None
-        } else {
-            Some(user_groups)
-        };
+    let mut intersection = restricting.remove(0);
+    for layer in restricting {
+        intersection = intersection.intersection(&layer).cloned().collect();
     }
-
-    if user_groups.is_empty() {
-        return Some(key_groups);
-    }
-
-    let user_groups: BTreeSet<_> = user_groups.into_iter().collect();
-    let key_groups: BTreeSet<_> = key_groups.into_iter().collect();
-
-    Some(user_groups.intersection(&key_groups).cloned().collect())
+    Some(intersection.into_iter().collect())
 }
 
 /// Exclusive group routing: when effective_groups is non-empty, only providers

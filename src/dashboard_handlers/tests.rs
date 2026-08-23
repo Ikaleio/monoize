@@ -586,6 +586,8 @@ fn user_response_serializes_allowed_groups() {
         balance_unlimited: false,
         email: None,
         allowed_groups: vec!["alpha".to_string(), "beta".to_string()],
+        billing_plan_id: None,
+        next_grant_at: None,
     };
 
     let value = serde_json::to_value(UserResponse::from(user)).expect("response serializes");

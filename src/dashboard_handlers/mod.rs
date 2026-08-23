@@ -1,6 +1,7 @@
 mod analytics_request_logs;
 mod api_keys;
 mod auth;
+mod billing_plans;
 mod billing_rates;
 mod groups;
 mod model_registry;
@@ -25,6 +26,10 @@ pub use api_keys::{
 pub use auth::{
     AuthResponse, LoginRequest, RegisterRequest, UpdateMeRequest, UserResponse, get_me, login,
     logout, register, update_me,
+};
+pub use billing_plans::{
+    BillingPlanResponse, CreateBillingPlanRequest, UpdateBillingPlanRequest, create_billing_plan,
+    delete_billing_plan, list_billing_plans, update_billing_plan,
 };
 pub use billing_rates::{
     PricingProfilePatternsResponse, UpdatePricingProfilePatternsRequest, delete_billing_rate,

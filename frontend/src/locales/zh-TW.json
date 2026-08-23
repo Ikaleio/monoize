@@ -55,7 +55,8 @@
 		"admin": "管理",
 		"logs": "日誌",
 		"models": "模型資料庫",
-		"marketplace": "模型廣場"
+		"marketplace": "模型廣場",
+		"billingPlans": "訂閱方案"
 	},
 	"roles": {
 		"super_admin": "超級管理員",
@@ -799,5 +800,28 @@
 		"timeRangeFrom": "起: yyyy-MM-dd HH:mm:ss",
 		"timeRangeTo": "止: yyyy-MM-dd HH:mm:ss",
 		"toggleFilters": "展開/收起篩選"
+	},
+	"billingPlans": {
+		"title": "訂閱方案",
+		"description": "週期性重置訂閱使用者餘額的方案計畫",
+		"create": "建立方案",
+		"edit": "編輯方案",
+		"name": "名稱",
+		"namePlaceholder": "例如：入門版",
+		"amount": "發放額度（美元）",
+		"amountHelp": "每個週期開始時，餘額將重置為該金額。",
+		"period": "週期（秒）",
+		"periodHelp": "86400 = 每天。每個週期只重置一次；錯過的週期不會疊加發放。",
+		"groupsHelp": "該方案允許使用的分組，逗號分隔。留空表示不限制分組。",
+		"enabled": "啟用",
+		"invalidAmount": "發放額度無效",
+		"invalidPeriod": "週期必須為正整數秒",
+		"nameRequired": "請填寫方案名稱",
+		"emptyTitle": "還沒有訂閱方案",
+		"emptyDescription": "建立一個方案，為使用者提供週期性餘額。",
+		"deleteTitle": "刪除訂閱方案？",
+		"deleteDescription": "將永久刪除 {{name}}。已指派給使用者的方案無法刪除。",
+		"none": "不綁定方案",
+		"nextReset": "{{name}} — 下次重置 {{time}}"
 	}
 }

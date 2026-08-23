@@ -22,6 +22,8 @@ import type {
   BillingRateRecord,
   UpsertBillingRateInput,
   PricingProfilePattern,
+  BillingPlan,
+  BillingPlanInput,
 } from "./api";
 
 // SWR fetcher functions
@@ -38,6 +40,7 @@ const fetchers = {
   transformRegistry: () => api.getTransformRegistry(),
   modelMetadata: () => api.listModelMetadata(),
   billingRates: () => api.listBillingRates(),
+  billingPlans: () => api.listBillingPlans(),
   pricingProfilePatterns: async () => (await api.getPricingProfilePatterns()).patterns,
   marketplaceModels: () => api.listMarketplaceModels(),
 };
@@ -58,6 +61,7 @@ export const SWR_KEYS = {
   BILLING_RATES: "/dashboard/billing-rates",
   PRICING_PROFILE_PATTERNS: "/dashboard/pricing-profile-patterns",
   MARKETPLACE_MODELS: "/dashboard/marketplace/models",
+  BILLING_PLANS: "/dashboard/billing-plans",
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
 } as const;
@@ -93,6 +97,14 @@ export function useUsers(config?: SWRConfiguration) {
 // API keys hook
 export function useApiKeys(config?: SWRConfiguration) {
   return useSWR<ApiKey[]>(SWR_KEYS.API_KEYS, fetchers.apiKeys, {
+    ...defaultConfig,
+    ...config,
+  });
+}
+
+// Billing plans hook (admin only)
+export function useBillingPlans(config?: SWRConfiguration) {
+  return useSWR<BillingPlan[]>(SWR_KEYS.BILLING_PLANS, fetchers.billingPlans, {
     ...defaultConfig,
     ...config,
   });
@@ -356,6 +368,82 @@ export async function deleteUserOptimistic(
   } catch (error) {
     // Rollback on error
     mutate(SWR_KEYS.USERS, currentUsers, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function createBillingPlanOptimistic(
+  input: BillingPlanInput,
+  currentPlans: BillingPlan[],
+  onError?: (error: Error) => void
+) {
+  // Optimistic placeholder; the server assigns id/timestamps.
+  const tempPlan: BillingPlan = {
+    id: `temp-${Date.now()}`,
+    name: input.name,
+    grant_amount_nano_usd: input.grant_amount_nano_usd ?? "0",
+    grant_amount_usd: input.grant_amount_usd ?? "0",
+    period_seconds: input.period_seconds,
+    allowed_groups: input.allowed_groups ?? [],
+    enabled: input.enabled ?? true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  mutate(SWR_KEYS.BILLING_PLANS, [...currentPlans, tempPlan], false);
+
+  try {
+    await api.createBillingPlan(input);
+    mutate(SWR_KEYS.BILLING_PLANS);
+    mutate(SWR_KEYS.USERS);
+  } catch (error) {
+    mutate(SWR_KEYS.BILLING_PLANS, currentPlans, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function updateBillingPlanOptimistic(
+  planId: string,
+  input: BillingPlanInput,
+  currentPlans: BillingPlan[],
+  onError?: (error: Error) => void
+) {
+  const updatedPlans = currentPlans.map((p) =>
+    p.id === planId ? { ...p, ...input } : p
+  );
+  mutate(SWR_KEYS.BILLING_PLANS, updatedPlans, false);
+
+  try {
+    await api.updateBillingPlan(planId, input);
+    mutate(SWR_KEYS.BILLING_PLANS);
+    mutate(SWR_KEYS.USERS);
+  } catch (error) {
+    mutate(SWR_KEYS.BILLING_PLANS, currentPlans, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function deleteBillingPlanOptimistic(
+  planId: string,
+  currentPlans: BillingPlan[],
+  onError?: (error: Error) => void
+) {
+  const filteredPlans = currentPlans.filter((p) => p.id !== planId);
+  mutate(SWR_KEYS.BILLING_PLANS, filteredPlans, false);
+
+  try {
+    await api.deleteBillingPlan(planId);
+    mutate(SWR_KEYS.BILLING_PLANS);
+  } catch (error) {
+    mutate(SWR_KEYS.BILLING_PLANS, currentPlans, false);
     if (onError && error instanceof Error) {
       onError(error);
     }

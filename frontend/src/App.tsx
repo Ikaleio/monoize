@@ -9,6 +9,7 @@ import { DashboardPage } from "@/pages/dashboard";
 import { ProvidersPage } from "@/pages/providers";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { UsersPage } from "@/pages/users";
+import { BillingPlansPage } from "@/pages/billing-plans";
 import { SettingsPage } from "@/pages/settings";
 import { UserSettingsPage } from "@/pages/user-settings";
 import { PlaygroundPage } from "@/pages/playground";
@@ -40,6 +41,7 @@ function App() {
             <Route path="marketplace" element={<ModelMarketplacePage />} />
             <Route path="models" element={<ModelMetadataPage />} />
             <Route path="users" element={<UsersPage />} />
+            <Route path="plans" element={<BillingPlansPage />} />
             <Route path="admin-settings" element={<SettingsPage />} />
           </Route>
           {/* User settings routes */}

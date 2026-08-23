@@ -1278,6 +1278,7 @@ use crate::users::{ApiKey, User};
 struct CachedApiKeyEntry {
     api_key: ApiKey,
     user: User,
+    plan_allowed_groups: Option<Vec<String>>,
     cached_at: Instant,
     generation: u64,
 }
@@ -1324,7 +1325,7 @@ impl ApiKeyCache {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<(ApiKey, User)> {
+    pub fn get(&self, key: &str) -> Option<(ApiKey, User, Option<Vec<String>>)> {
         let entry = self.cache.get(key)?;
         if entry.cached_at.elapsed() > self.ttl {
             drop(entry);
@@ -1341,7 +1342,11 @@ impl ApiKeyCache {
             }
             return None;
         }
-        Some((entry.api_key.clone(), entry.user.clone()))
+        Some((
+            entry.api_key.clone(),
+            entry.user.clone(),
+            entry.plan_allowed_groups.clone(),
+        ))
     }
 
     pub(crate) fn current_generation(&self) -> u64 {
@@ -1354,6 +1359,7 @@ impl ApiKeyCache {
         generation: u64,
         api_key: ApiKey,
         user: User,
+        plan_allowed_groups: Option<Vec<String>>,
     ) -> bool {
         if self.current_generation() != generation {
             return false;
@@ -1382,6 +1388,7 @@ impl ApiKeyCache {
             CachedApiKeyEntry {
                 api_key,
                 user,
+                plan_allowed_groups,
                 cached_at: Instant::now(),
                 generation,
             },
@@ -2028,6 +2035,8 @@ mod tests {
             balance_unlimited: false,
             email: None,
             allowed_groups: Vec::new(),
+            billing_plan_id: None,
+            next_grant_at: None,
         }
     }
 
@@ -2129,12 +2138,14 @@ mod tests {
             0,
             cached_api_key("key-1", "user-1", "token-1"),
             cached_user("user-1"),
+            None,
         ));
         assert!(cache.insert_if_current(
             "token-2".to_string(),
             0,
             cached_api_key("key-2", "user-2", "token-2"),
             cached_user("user-2"),
+            None,
         ));
         assert_eq!(cache.len(), 1);
         assert!(cache.get("token-2").is_some());
