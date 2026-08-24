@@ -21,6 +21,8 @@ RA-T4. The release tag MUST equal the literal character `v` followed by the `[pa
 
 RA-T5. Build jobs MUST have `contents: read` permission. Only the asset-publishing job MAY have `contents: write` permission.
 
+RA-T5a. Native build jobs MAY have `actions: write` solely to restore and save the GitHub Actions caches defined by RA-M8. They MUST NOT have `contents: write`.
+
 RA-T6. Every third-party or GitHub-provided action reference MUST use a full commit SHA. A comment on the same line MUST identify the corresponding release tag or major version.
 
 ## 2. Native build matrix
@@ -47,6 +49,15 @@ RA-M5. A row MUST run `bun install --frozen-lockfile` in `frontend/` before the 
 RA-M6. A row MUST run `cargo build --locked --release --target <target>`.
 
 RA-M7. A build failure, lockfile mutation requirement, frontend dependency mismatch, or packaging failure MUST fail that matrix row.
+
+RA-M8. After installing the toolchain and Bun, and before `cargo build`, each native build row MUST restore GitHub Actions caches for:
+
+1. the Bun package download cache, keyed by runner OS, runner architecture, and `frontend/bun.lock`;
+2. the Cargo registry, git, and target directories, keyed by runner OS, runner architecture, the row's Rust target, and `Cargo.lock`.
+
+A cache miss MUST continue the job. A cache hit MUST NOT skip `bun install --frozen-lockfile` or `cargo build --locked --release --target <target>`. Restored caches MUST NOT rewrite `Cargo.lock` or `frontend/bun.lock`.
+
+RA-M9. After a native build row finishes compiling, the workflow MUST save the caches in RA-M8. A cache save failure MUST NOT fail the job.
 
 ## 3. Package contents and names
 

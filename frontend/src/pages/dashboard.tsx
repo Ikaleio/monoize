@@ -149,7 +149,7 @@ function PaginatedChartLegend({
           >
             <ChevronUp className="h-3.5 w-3.5" />
           </button>
-          <span className="text-[10px] tabular-nums leading-none">
+          <span className="text-xs tabular-nums leading-none">
             {page + 1}/{totalPages}
           </span>
           <button
@@ -412,7 +412,7 @@ export function DashboardPage() {
         className="shrink-0"
       >
         <PageHeader
-          title={tt("dashboard.greeting", "👋 Good afternoon, {{username}}", { username: user?.username ?? "User" })}
+          title={tt("dashboard.greeting", "Good afternoon, {{username}}", { username: user?.username ?? "User" })}
           description={tt("dashboard.subtitle", "Realtime overview of account status, usage and routing data")}
         />
       </motion.header>

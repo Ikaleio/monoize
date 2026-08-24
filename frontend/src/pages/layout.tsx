@@ -182,7 +182,7 @@ function Sidebar({
           {!collapsed && (
             <div className="flex flex-col leading-none">
               <span className="font-display text-sm font-semibold tracking-tight">Monoize</span>
-              <span className="mt-0.5 text-[11px] text-muted-foreground">Console</span>
+              <span className="mt-0.5 text-xs text-muted-foreground">Console</span>
             </div>
           )}
         </Link>

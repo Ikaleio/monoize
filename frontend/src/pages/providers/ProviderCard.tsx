@@ -19,6 +19,7 @@ import { toast } from 'sonner'
 import { mutate } from 'swr'
 import { ModelBadge } from '@/components/ModelBadge'
 import { BadgeOverflowList } from '@/components/BadgeOverflowList'
+import { StackedModelList } from '@/components/StackedModelList'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -259,13 +260,9 @@ export function ProviderCard({
 							>
 								<ChevronRight className='h-4 w-4 text-muted-foreground' />
 							</motion.div>
-							<motion.div
-								whileHover={{ rotate: 10 }}
-								transition={{ type: 'spring', stiffness: 300 }}
-								className='flex h-8 w-8 items-center justify-center rounded-lg bg-secondary shrink-0'
-							>
+							<div className='flex h-8 w-8 items-center justify-center rounded-lg bg-secondary shrink-0'>
 								<Server className='h-4 w-4' />
-							</motion.div>
+							</div>
 							<div className='flex items-center gap-2 min-w-0 flex-wrap'>
 								<CardTitle className='text-base leading-normal -translate-y-px'>
 									{provider.name}
@@ -395,24 +392,22 @@ export function ProviderCard({
 											{modelEntries.length}
 										</Badge>
 									</div>
-									<div className='mt-1 rounded-lg border overflow-hidden px-3 py-2'>
-										<div className='flex max-h-[220px] flex-wrap content-start gap-1.5 overflow-y-auto'>
-											{modelEntries.map(model => {
-												const meta = modelMetadataById.get(model)
-												const highlightUnpriced = unpricedModelIdSet.has(model)
+									<StackedModelList className='mt-1'>
+										{modelEntries.map(model => {
+											const meta = modelMetadataById.get(model)
+											const highlightUnpriced = unpricedModelIdSet.has(model)
 
-												return (
-													<div key={model} className='min-w-0 max-w-full shrink-0'>
-														<ModelBadge
-															model={model}
-															provider={meta?.models_dev_provider}
-															highlightUnpriced={highlightUnpriced}
-														/>
-													</div>
-												)
-											})}
-										</div>
-									</div>
+											return (
+												<div key={model} className='min-w-0 max-w-full shrink-0'>
+													<ModelBadge
+														model={model}
+														provider={meta?.models_dev_provider}
+														highlightUnpriced={highlightUnpriced}
+													/>
+												</div>
+											)
+										})}
+									</StackedModelList>
 								</div>
 
 								<div>

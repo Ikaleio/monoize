@@ -707,6 +707,8 @@ export function ModelMetadataPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
+                          aria-label={t("common.edit")}
                           onClick={(e) => {
                             e.stopPropagation();
                             openEdit(record);
@@ -717,7 +719,8 @@ export function ModelMetadataPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="text-destructive hover:text-destructive"
+                          className="size-11 touch-manipulation sm:size-9 text-destructive hover:text-destructive"
+                          aria-label={t("common.delete")}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDelete(record.model_id);
@@ -1185,10 +1188,10 @@ function BillingRatesTab() {
               </VirtualTableCell>
               <VirtualTableCell>
                 <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="icon" onClick={() => openEdit(rate)}>
+                  <Button variant="ghost" size="icon" className="size-11 touch-manipulation sm:size-9" aria-label="Edit" onClick={() => openEdit(rate)}>
                     <Pencil className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeleteTargetId(rate.id)}>
+                  <Button variant="ghost" size="icon" className="size-11 touch-manipulation sm:size-9 text-destructive hover:text-destructive" aria-label="Delete" onClick={() => setDeleteTargetId(rate.id)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
@@ -1313,6 +1316,8 @@ export function PricingProfilesTab() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      className="size-11 touch-manipulation sm:size-9"
+                      aria-label="Move up"
                       disabled={index === 0}
                       onClick={() => {
                         const next = [...draft];
@@ -1325,6 +1330,8 @@ export function PricingProfilesTab() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      className="size-11 touch-manipulation sm:size-9"
+                      aria-label="Move down"
                       disabled={index === draft.length - 1}
                       onClick={() => {
                         const next = [...draft];
@@ -1337,7 +1344,8 @@ export function PricingProfilesTab() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="text-destructive hover:text-destructive"
+                      className="size-11 touch-manipulation sm:size-9 text-destructive hover:text-destructive"
+                      aria-label="Delete"
                       onClick={() => updateDraft(draft.filter((_p, i) => i !== index))}
                     >
                       <Trash2 className="h-4 w-4" />

@@ -146,8 +146,8 @@ export function usePublicSettings(config?: SWRConfiguration) {
 }
 
 // Providers hook (admin only)
-export function useProviders(config?: SWRConfiguration) {
-  return useSWR<Provider[]>(SWR_KEYS.PROVIDERS, fetchers.providers, {
+export function useProviders(config?: SWRConfiguration, enabled = true) {
+  return useSWR<Provider[]>(enabled ? SWR_KEYS.PROVIDERS : null, fetchers.providers, {
     ...defaultConfig,
     ...config,
   });

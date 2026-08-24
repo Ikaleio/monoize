@@ -430,11 +430,11 @@ FL7a. The filter-control area MUST display the total charge sum for the current 
 
 FL7b. `/dashboard/logs` MUST read the optional `username` query parameter. For an admin viewer, a non-empty `username` value MUST initialize the username filter to that exact string. An absent or empty `username` query parameter MUST initialize the filter to empty (all users). Non-admin viewers MUST ignore the query parameter.
 
-FL8. Column order (left to right): merged `created_at/request_id`, merged `model/[channel]`, `api_key_name`, `[username]` (admin), `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
+FL8. Column order (left to right): merged `created_at/request_id`, merged `model/[channel]`, merged `[username/]api_key_name`, `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
 
 FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping visible lines in one column. The first line MUST render `created_at` per FL2. The second line MUST render the first 8 characters of `request_id` followed immediately by the FL36 status indicator. If `request_id` is absent, the second line MUST render `-`. The request tooltip behavior defined by FL28 and FL29 MUST remain attached to the second line.
 
-FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
+FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells, the admin-visible merged User/Token cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
 
 FL9. The merged `model/[channel]` cell MUST use exactly two non-wrapping layout lines in one column:
 
@@ -457,7 +457,9 @@ FL9b. Channel tooltip:
 
 - If `tried_providers` is non-empty, the tooltip MUST first render a localized retry-chain heading, then one row per stored `tried_providers` entry in chronological order. Each row MUST show the hop label from FL9a.3, `duration_ms` when present, `upstream_status` when present, and `error`.
 - After those failed-attempt rows, if a terminal hop identity exists and either (a) it differs from the last `tried_providers` identity, or (b) row `status` is `success` or `client_gone` and the last `tried_providers` identity equals the terminal identity, the tooltip MUST append one terminal row with the terminal hop label and a localized served marker. When `status` is `error` and the last `tried_providers` identity already equals the terminal identity, the tooltip MUST NOT append a duplicate terminal row.
-- The tooltip MUST then show `provider_name` (or `provider_id` as fallback) when available, `channel_name` (or `channel_id` as fallback) when available, a localized affinity hit/miss label when `affinity_hit` is non-null, `affinity_target` when present, `session_affinity_value` when present, and upstream model when it differs from the requested model.
+- The tooltip MUST then show `provider_name` (or `provider_id` as fallback) when available, `channel_name` (or `channel_id` as fallback) when available, `affinity_target` when present, `session_affinity_value` when present, and upstream model when it differs from the requested model. `affinity_hit = false` MUST NOT render a miss label or any other standalone affinity-status row.
+- When `affinity_hit = true`, the localized affinity-hit badge MUST appear immediately after the Channel value on the same tooltip row (for example, `Channel: input-im [Sticky hit]`). The tooltip MUST NOT render a separate affinity-hit row.
+- The visible affinity-target value MUST NOT render the stored `provider_id/channel_id` string. The frontend MUST resolve that exact identity to human-readable Provider and Channel names from the current admin Provider list, the terminal request-log names, or the matching `tried_providers` name snapshot, in that order. When both names are available, it MUST render `<provider_name>/<channel_name>` (for example, `codex/input-im`). When the target cannot be resolved to a non-empty human-readable name, the affinity-target row MUST be omitted.
 
 FL10. The request logs table body MUST use virtualized rendering via `react-virtuoso` (`TableVirtuoso`) instead of rendering all loaded rows as plain DOM rows.
 
@@ -479,7 +481,7 @@ FL15. The table MUST use compact column spacing:
 - Header and body cells MUST use reduced horizontal/vertical padding suitable for dense log browsing.
 - Columns MUST use content-oriented widths (instead of evenly stretched wide columns) to avoid large unused horizontal gaps between adjacent fields.
 
-FL16. The Input column MUST use a minimum width of 8 rem so its two non-wrapping lines fit common values. The Output column MUST keep a compact width suitable for short integer values (commonly up to 7 digits). Both columns SHOULD avoid consuming excess horizontal space from adjacent columns.
+FL16. The Input column MUST use a minimum width of 8 rem so its two non-wrapping lines fit common values. The Output column MUST use a minimum width of 6 rem. Its visible token count MUST use the same font size, font weight, and tabular-number treatment as the first line of the Input column. The width removed by merging the admin User and Token columns MUST be allocated to the Output column instead of becoming unused inter-column space.
 
 FL17. The `duration/ttfb/stream` merged column MUST use compact inline-badge spacing and width so that token-count columns remain visually closer to it (reduced horizontal gap).
 
@@ -489,7 +491,7 @@ FL19. The first visible merged `created_at/request_id` column MUST keep a small 
 
 FL20. The status indicator MUST be rendered directly adjacent to the request ID text on the second line of the merged `created_at/request_id` cell (near-zero gap), and columns to the right SHOULD use reduced left padding to keep the layout left-compacted.
 
-FL21. The `api_key_name` (Token) column MUST use a narrow width and truncated text display to avoid occupying excessive horizontal space.
+FL21. For an admin viewer, `username` and `api_key_name` MUST share one fixed two-line, non-wrapping column with a minimum width of 6 rem. The first line MUST show `username` as the primary value. The second line MUST show the Token display value from FL30 in smaller muted text. Each line MUST truncate independently when its content exceeds the available width. For a non-admin viewer, the same column MUST show only the Token display value and MUST NOT repeat the viewer's username.
 
 FL22. The merged `duration/ttfb/stream` column MUST remain narrowly sized with minimal horizontal cell padding and a compact inline badge row, and MUST NOT reserve excess blank width when values are short.
 
@@ -521,7 +523,7 @@ FL27b. If neither the usage-breakdown totals nor the scalar token columns are av
 
 FL27c. When FL27b applies, hovering the Input or Output cell MUST show the standard token-detail tooltip shell with a localized unavailable message rather than an empty numeric breakdown.
 
-FL27d. The visible Input cell MUST reserve exactly two non-wrapping lines. The first line MUST always render the total input count selected by FL27a; it MUST NOT substitute the uncached-input count. When the cached-input count selected from `usage_breakdown_json.input.cached_tokens` or scalar `cache_read_tokens` is positive and total input is positive, the second line MUST render `<formatted cached count> / <integer percentage>%`, where `integer percentage = round(cached input / total input * 100)`. For example, total input `32000` and cached input `16000` render as first line `32,000` and second line `16,000 / 50%`. The second line MUST use smaller muted text and MUST NOT use a success/status color. When cached input is absent or not positive, or total input is absent or not positive, the second line MUST remain visually empty. It MUST NOT render `0`, `-`, or a percentage. The complete two-line cell remains the FL27 hover surface.
+FL27d. The visible Input cell MUST always render the total input count selected by FL27a; it MUST NOT substitute the uncached-input count. When the cached-input count selected from `usage_breakdown_json.input.cached_tokens` or scalar `cache_read_tokens` is positive and total input is positive, the cell MUST use exactly two non-wrapping lines and the second line MUST render `<formatted cached count> / <integer percentage>%`, where `integer percentage = round(cached input / total input * 100)`. For example, total input `32000` and cached input `16000` render as first line `32,000` and second line `16,000 / 50%`. The second line MUST use smaller muted text and MUST NOT use a success/status color. When cached input is absent or not positive, or total input is absent or not positive, the cell MUST render only the total-input line and vertically center that line within the 44-pixel body row. It MUST NOT reserve an empty second line or render `0`, `-`, or a percentage. The complete visible cell remains the FL27 hover surface.
 
 FL28. For rows with `status = "error"` or `status = "client_gone"`, hovering the request-id/status indicator MUST show error details from `error_code`, `error_message`, and `error_http_status` when present.
 
@@ -573,6 +575,13 @@ FL43. Time-range selection MUST be bidirectionally synchronized:
 - selecting calendar range or committing manual inputs MUST activate the matching fixed preset (`today`, `yesterday`, `this_month`, `last_month`) when and only when the selected range matches that preset, otherwise no preset is active.
 
 FL44. Active preset buttons (including `All Time`) MUST use a high-contrast foreground/background pair so text remains legible in both light and dark themes.
+
+FL58. Request-logs table typography MUST be uniform across sibling cells:
+
+- All body cells MUST use the table base font size (`text-xs`); cells MUST NOT apply smaller arbitrary sizes such as `text-[10px]` or `text-[11px]`.
+- The visible Input and Output token values MUST use identical font size, weight, and numeric styling (`font-mono` + `tabular-nums`).
+- Compact badges inside table cells (timing, stream, hop-count, sticky-session, model) MUST keep the badge base font size (`text-xs`) with compact height (`h-5`) and reduced horizontal padding, and MUST use the `rounded-md` badge shape per design-system rule DS40f.
+- Secondary lines inside a cell (cached-input line, retry-chain line) MUST use the table base font size with muted or semantic color for hierarchy.
 
 ## 6. SSE Real-Time Updates
 

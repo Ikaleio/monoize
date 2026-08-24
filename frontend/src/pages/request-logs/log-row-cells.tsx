@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Info, Zap } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
 	Tooltip,
@@ -27,12 +28,14 @@ import {
 	readNanoString,
 	readNumber,
 	readTokenCount,
+	readableAffinityTarget,
 	retryAttemptRows,
 	triedProvidersOf,
 	type RetryAttemptRow
 } from './utils'
 
 interface LogRowCellsProps {
+	affinityTargetNames: ReadonlyMap<string, string>
 	log: RequestLog
 	isAdmin: boolean
 	showIp: boolean
@@ -41,6 +44,7 @@ interface LogRowCellsProps {
 }
 
 export function LogRowCells({
+	affinityTargetNames,
 	log,
 	isAdmin,
 	showIp,
@@ -93,6 +97,8 @@ export function LogRowCells({
 
 	const isConnectivityTest =
 		log.request_kind === 'active_probe_connectivity' && !log.api_key.name
+	const tokenDisplay =
+		isConnectivityTest ? t('requestLogs.connectivityTest') : log.api_key.name || '-'
 	const durationMs = getDurationMs(log)
 	const ttfbMs = getTtfbMs(log)
 	const duration = formatDuration(durationMs)
@@ -104,6 +110,7 @@ export function LogRowCells({
 	const triedProviders = triedProvidersOf(log)
 	const hasTriedProviders = triedProviders.length > 0
 	const attemptRows = hasTriedProviders ? retryAttemptRows(log) : []
+	const affinityTargetDisplay = readableAffinityTarget(log, affinityTargetNames)
 	const costDisplay = formatCost(log.billing.charge_nano_usd)
 	const usageSnapshot = asObject(log.usage)
 	const usageInput = asObject(usageSnapshot?.input)
@@ -325,7 +332,7 @@ export function LogRowCells({
 			<Badge
 				variant='secondary'
 				className={cn(
-					'text-[10px] h-5 px-1 font-mono rounded-full border-0 cursor-default',
+					'h-5 cursor-default border-0 px-1 font-mono',
 					'bg-muted text-muted-foreground'
 				)}
 			>
@@ -336,7 +343,7 @@ export function LogRowCells({
 		ttfb ?
 			<Badge
 				variant='secondary'
-				className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
+				className='h-5 border-info-border bg-info-soft px-1 font-mono text-info-foreground'
 			>
 				{ttfb}
 			</Badge>
@@ -345,7 +352,7 @@ export function LogRowCells({
 		hasTriedProviders ?
 			<Badge
 				variant='secondary'
-				className='text-[10px] h-5 px-1 font-mono rounded-full border-warning-border bg-warning-soft text-warning-foreground'
+				className='h-5 border-warning-border bg-warning-soft px-1 font-mono text-warning-foreground'
 			>
 				{t('requestLogs.retryHopCount', { count: triedProviders.length })}
 			</Badge>
@@ -353,13 +360,13 @@ export function LogRowCells({
 	const streamBadge = log.is_stream ?
 		<Badge
 			variant='secondary'
-			className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
+			className='h-5 border-info-border bg-info-soft px-1 font-mono text-info-foreground'
 		>
 			{t('requestLogs.streamBadge')}
 		</Badge>
 	:	<Badge
 			variant='secondary'
-			className='text-[10px] h-5 px-1 font-mono rounded-full border-warning-border bg-warning-soft text-warning-foreground'
+			className='h-5 border-warning-border bg-warning-soft px-1 font-mono text-warning-foreground'
 		>
 			{t('requestLogs.nonStreamBadge')}
 		</Badge>
@@ -506,7 +513,7 @@ export function LogRowCells({
 										multiplier={log.provider.multiplier}
 										showDetails={false}
 										truncateModelText={false}
-										className='h-5 min-w-max px-1.5 text-[10px]'
+										className='h-5 min-w-max px-1.5'
 									/>
 								</span>
 							</TooltipTrigger>
@@ -551,12 +558,12 @@ export function LogRowCells({
 						<TooltipProvider delayDuration={200}>
 							<Tooltip onOpenChange={channelTooltipOpenChange}>
 								<TooltipTrigger asChild>
-									<span className='inline-flex h-4 cursor-default items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground'>
+									<span className='inline-flex h-5 cursor-default items-center gap-1 whitespace-nowrap text-muted-foreground'>
 										<span>{channelDisplay ?? '-'}</span>
 										{affinityHit ?
 											<Badge
 												variant='secondary'
-												className='h-4 shrink-0 rounded-full border-info-border bg-info-soft px-1 text-[10px] font-normal text-info-foreground'
+												className='h-5 shrink-0 border-info-border bg-info-soft px-1 font-normal text-info-foreground'
 											>
 												{t('requestLogs.stickySession')}
 											</Badge>
@@ -574,19 +581,23 @@ export function LogRowCells({
 											</div>
 										)}
 										{channelDisplay && (
-											<div>
-												{t('requestLogs.channel')}: {channelDisplay}
+											<div className='flex items-center gap-1'>
+												<span>
+													{t('requestLogs.channel')}: {channelDisplay}
+												</span>
+												{log.affinity?.hit === true && (
+													<Badge
+														variant='secondary'
+														className='h-5 px-1 font-normal'
+													>
+														{t('requestLogs.affinityHit')}
+													</Badge>
+												)}
 											</div>
 										)}
-										{log.affinity?.hit === true && (
-											<div>{t('requestLogs.affinityHit')}</div>
-										)}
-										{log.affinity?.hit === false && (
-											<div>{t('requestLogs.affinityMiss')}</div>
-										)}
-										{log.affinity?.target && (
+										{affinityTargetDisplay && (
 											<div>
-												{t('requestLogs.affinityTarget')}: {log.affinity.target}
+												{t('requestLogs.affinityTarget')}: {affinityTargetDisplay}
 											</div>
 										)}
 										{log.session_affinity_value && (
@@ -607,34 +618,29 @@ export function LogRowCells({
 				</span>
 			</td>
 
-			<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
-				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={tokenTooltipOpenChange}>
-						<TooltipTrigger asChild>
-							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
-								{isConnectivityTest ?
-									t('requestLogs.connectivityTest')
-								: log.api_key.name || '-'}
-							</span>
-						</TooltipTrigger>
-						<TooltipContent>
-							<span className='text-xs'>
-								{isConnectivityTest ?
-									t('requestLogs.connectivityTest')
-								: log.api_key.name || '-'}
-							</span>
-						</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
+			<td className='min-w-24 whitespace-nowrap px-2 py-1 align-middle leading-4'>
+				<span className='inline-flex max-w-24 flex-col items-start'>
+					{isAdmin && (
+						<span className='h-4 max-w-full truncate text-xs font-medium text-foreground'>
+							{log.user.username || '-'}
+						</span>
+					)}
+					<TooltipProvider delayDuration={200}>
+						<Tooltip onOpenChange={tokenTooltipOpenChange}>
+							<TooltipTrigger asChild>
+								<span
+									className='h-4 max-w-full cursor-default truncate text-muted-foreground'
+								>
+									{tokenDisplay}
+								</span>
+							</TooltipTrigger>
+							<TooltipContent>
+								<span className='text-xs'>{tokenDisplay}</span>
+							</TooltipContent>
+						</Tooltip>
+					</TooltipProvider>
+				</span>
 			</td>
-
-			{isAdmin && (
-				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
-					<span className='inline-flex h-4 items-center max-w-[5rem] truncate'>
-						{log.user.username || '-'}
-					</span>
-				</td>
-			)}
 
 			<td className='px-1 py-1 whitespace-nowrap align-middle'>
 				<TooltipProvider delayDuration={200}>
@@ -664,15 +670,22 @@ export function LogRowCells({
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={inputTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='inline-flex cursor-default flex-col items-end leading-4'>
-								<span className='h-4 whitespace-nowrap text-sm font-medium tabular-nums'>
+							<span
+								className={cn(
+									'inline-flex cursor-default leading-4',
+									inputCached != null && inputCachePercentage ?
+										'flex-col items-end'
+									: 'items-center'
+								)}
+							>
+								<span className='h-4 whitespace-nowrap tabular-nums'>
 									{formatTokenCount(inputTokensForDisplay)}
 								</span>
 								{inputCached != null && inputCachePercentage ?
-									<span className='h-4 whitespace-nowrap text-[10px] text-muted-foreground tabular-nums'>
+									<span className='h-4 whitespace-nowrap text-muted-foreground tabular-nums'>
 										{formatTokenCount(inputCached)} / {inputCachePercentage}
 									</span>
-								: <span aria-hidden='true' className='h-4' />}
+								: null}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>
@@ -698,11 +711,11 @@ export function LogRowCells({
 				</TooltipProvider>
 			</td>
 
-			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
+			<td className='min-w-24 whitespace-nowrap px-2 py-1 text-right align-middle font-mono text-muted-foreground'>
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={outputTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='cursor-default'>
+							<span className='cursor-default tabular-nums'>
 								{formatTokenCount(outputTokensForDisplay)}
 							</span>
 						</TooltipTrigger>
@@ -870,12 +883,14 @@ export function LogRowCells({
 								)}
 								{isEstimatedBilling && (
 									<div className='text-warning text-xs flex items-center gap-1'>
-										⚡ {t('requestLogs.estimatedBilling')}
+										<Zap className='h-3 w-3 shrink-0' />
+										{t('requestLogs.estimatedBilling')}
 									</div>
 								)}
 								{isAdminUnpricedExemption && (
 									<div className='text-warning text-xs flex items-center gap-1'>
-										ℹ {t('requestLogs.adminUnpricedExemption')}
+										<Info className='h-3 w-3 shrink-0' />
+										{t('requestLogs.adminUnpricedExemption')}
 									</div>
 								)}
 									<div className='border-t border-muted pt-2 mt-2'>
@@ -902,7 +917,7 @@ export function LogRowCells({
 				)}
 			</td>
 
-			<td className='pl-2 pr-2 py-1 whitespace-nowrap font-mono text-muted-foreground text-[11px] align-middle'>
+			<td className='whitespace-nowrap py-1 pl-2 pr-2 align-middle font-mono text-muted-foreground'>
 				<span
 					className={cn(
 						'inline-block align-bottom transition-[filter] duration-150',

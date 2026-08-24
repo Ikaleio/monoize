@@ -152,7 +152,19 @@ DS33. When reduced motion is enabled, shared motion helpers MUST NOT animate x-o
 
 DS34. When reduced motion is enabled, shared motion helpers MAY animate opacity or render without animation.
 
-DS34a. Existing dashboard motion effects are part of the product interaction model. Vercel/shadcn visual alignment work MUST preserve existing motion timing, transforms, and layout animations unless a separate motion specification change requires modification.
+DS34a. Existing dashboard motion effects are part of the product interaction model. Vercel/shadcn visual alignment work MUST preserve existing motion timing, transforms, and layout animations unless a separate motion specification change requires modification. DS34b and DS34c are such motion specification changes.
+
+DS34b. Non-interactive form rows (a label/description block paired with a control such as a switch, input, or select) MUST NOT apply hover-triggered offset or scale transforms. Hover feedback on such rows is limited to color changes.
+
+DS34c. Hover/press scale affordance on action buttons MUST be applied through the shared `AnimatedButton` wrapper from `components/ui/motion.tsx`:
+
+- hover scale MUST be `1.02`;
+- tap scale MUST be `0.98`;
+- the wrapper MUST respect reduced motion per DS32-DS34.
+
+Pages MUST NOT wrap buttons in ad-hoc `motion.div` elements with `whileHover`/`whileTap` scale handlers.
+
+DS34d. Hover-triggered scale or offset transforms MUST NOT be applied to non-interactive decorative elements (for example, a static brand mark that is not a link or button).
 
 ## 10. Internationalized Copy
 
@@ -195,6 +207,23 @@ DS40d-1. A collapsed badge collection MUST call its `onOpenChange` callback only
 
 DS40e. Editable chip inputs and selectable option lists MAY render all badges directly when hiding entries would remove direct edit, delete, or selection controls.
 
+DS40f. Badge-shaped containers MUST use the `rounded-md` corner radius. This rule applies to:
+
+- the base `Badge` component;
+- `StatusBadge`;
+- `ModelBadge`;
+- overflow-count (`+N`) badges in collapsed badge collections;
+- compact timing/state badges inside tables;
+- group-suggestion chip buttons and other badge-shaped filter chips;
+- clickable wrappers whose visible surface is a badge (for example, a ghost button wrapping a model badge);
+- skeleton placeholders that stand in for any of the above.
+
+Badge-shaped containers MUST NOT use `rounded-full`.
+
+DS40g. Fully circular (`rounded-full`) shapes are reserved for non-badge elements: status dots, avatars, switch tracks and thumbs, segmented-control indicators, and loading/ping indicators.
+
+DS40h. Table body cells within one table MUST share the table's base font size. Adjacent sibling cells MUST NOT mix arbitrary smaller sizes (for example `text-[10px]` or `text-[11px]`) with the base size. Secondary detail text nested inside a badge (for example the `ModelBadge` bracket details) MAY be one visual step smaller than the badge label.
+
 ## 12. Sidebar and Navigation
 
 DS41. Sidebar active navigation items SHOULD use a low-emphasis surface (`accent` or `muted`) rather than a solid primary background.
@@ -213,7 +242,15 @@ DS45. Sidebar motion and floating-card layout MUST be preserved unless a separat
 
 DS46. Selected filter presets SHOULD use `accent` surface and `accent-foreground` text instead of solid primary background.
 
-## 14. Tooltip and Touch Actions
+## 14. Iconography
+
+DS50. Icons MUST come from `lucide-react` or the existing `@lobehub/icons` provider icon set.
+
+DS51. Emoji characters MUST NOT be used as icons or icon substitutes in dashboard UI.
+
+DS52. The only permitted hand-authored inline SVG is the Monoize brand mark governed by DS43a.
+
+## 15. Tooltip and Touch Actions
 
 DS47. On coarse-pointer devices, shared tooltip triggers that do not contain an interactive element MUST open the tooltip on tap and close it on outside tap.
 

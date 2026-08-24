@@ -56,7 +56,7 @@ import type { User } from "@/lib/api";
 import { formatNanoUsd, formatUsdDecimal, isSignedIntegerString } from "@/lib/exact-decimal";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { getGravatarUrl } from "@/lib/utils";
-import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { DataTableShell, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
@@ -249,9 +249,9 @@ function AllowedGroupsInput({
       )}
       {suggestionsLoading ? (
         <div className="flex flex-wrap gap-2">
-          <Skeleton className="h-7 w-20 rounded-full" />
-          <Skeleton className="h-7 w-24 rounded-full" />
-          <Skeleton className="h-7 w-16 rounded-full" />
+          <Skeleton className="h-7 w-20 rounded-md" />
+          <Skeleton className="h-7 w-24 rounded-md" />
+          <Skeleton className="h-7 w-16 rounded-md" />
         </div>
       ) : filteredSuggestions.length > 0 ? (
         <div className="flex flex-wrap gap-2">
@@ -261,7 +261,7 @@ function AllowedGroupsInput({
               type="button"
               variant="outline"
               size="sm"
-              className="h-7 rounded-full px-3 font-mono text-xs"
+              className="h-7 rounded-md px-3 font-mono text-xs"
               onClick={() => addSuggestion(group)}
             >
               {group}
@@ -501,12 +501,12 @@ export function UsersPage() {
         <PageHeader title={t("users.title")} description={t("users.description")} actions={(
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+            <AnimatedButton>
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
                 {t("users.addUser")}
               </Button>
-            </motion.div>
+            </AnimatedButton>
           </DialogTrigger>
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
             <div className="flex min-h-0 flex-col p-6">
@@ -954,7 +954,9 @@ export function UsersPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
                           title={t("users.viewLogs")}
+                          aria-label={t("users.viewLogs")}
                           onClick={() =>
                             navigate(`/dashboard/logs?username=${encodeURIComponent(user.username)}`)
                           }
@@ -962,7 +964,13 @@ export function UsersPage() {
                           <ScrollText className="h-4 w-4" />
                         </Button>
                         {canEdit(user) && (
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(user)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-11 touch-manipulation sm:size-9"
+                            aria-label={t("common.edit")}
+                            onClick={() => openEdit(user)}
+                          >
                             <Pencil className="h-4 w-4" />
                           </Button>
                         )}
@@ -970,8 +978,9 @@ export function UsersPage() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            aria-label={t("common.delete")}
                             onClick={() => handleDelete(user.id)}
-                            className="text-destructive hover:text-destructive"
+                            className="size-11 touch-manipulation sm:size-9 text-destructive hover:text-destructive"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
