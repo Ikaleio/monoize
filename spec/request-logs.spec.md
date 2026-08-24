@@ -273,7 +273,9 @@ RL19. For active probe logs, `api_key_id` MUST be null and UI token column label
 }
 ```
 
-Where `EnrichedRequestLogRow` = `RequestLogRow` + `username` + `api_key_name` + `channel_name` + `provider_name`.
+Where `EnrichedRequestLogRow` = `RequestLogRow` + `username` + `api_key_name` + `channel_name` + `provider_name` + `has_capture`.
+
+RL-API14. Every `EnrichedRequestLogRow` MUST include `has_capture: boolean` computed per `request-capture-viewer.spec.md` RCV-L1/RCV-L2: `true` iff at least one `request_capture_records` row matches the row's `(request_id, user_id)`, computed with an indexed `EXISTS` subquery. The list path MUST NOT open, stat, or read dump files. SSE-delivered rows carry `has_capture: false` (RCV-L3).
 
 RL-API6. `total_charge_nano_usd` MUST equal the SUM of `charge_nano_usd` across all rows matching the active filters (not just the current page). Rows with null `charge_nano_usd` MUST be treated as 0. The value MUST be a string representation of a non-negative integer (nano-dollar).
 
