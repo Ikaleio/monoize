@@ -1530,7 +1530,12 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError) -> AppError {
     );
     let mut app_err = AppError::new(status, "upstream_error", client_message)
         .with_internal_message(internal_message)
-        .with_upstream_error(err.status, err.code, err.error_type.clone(), err.param.clone());
+        .with_upstream_error(
+            err.status,
+            err.code,
+            err.error_type.clone(),
+            err.param.clone(),
+        );
     if let Some(error_type) = err.error_type {
         app_err = app_err.with_type(error_type);
     }

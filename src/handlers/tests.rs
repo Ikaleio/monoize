@@ -2369,9 +2369,15 @@ fn upstream_error_to_app_replaces_transport_detail_with_generic_message() {
     assert_eq!(err.message, "failed to request upstream");
     // SAN-2: the admin-tier internal detail keeps the raw transport text.
     let internal = err.internal_message.as_deref().expect("internal detail");
-    assert!(internal.starts_with("upstream status 502 Bad Gateway: "), "{internal}");
+    assert!(
+        internal.starts_with("upstream status 502 Bad Gateway: "),
+        "{internal}"
+    );
     assert!(internal.contains("api.cloudflare.com"), "{internal}");
-    assert!(internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"), "{internal}");
+    assert!(
+        internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+        "{internal}"
+    );
 }
 
 #[test]
@@ -2416,7 +2422,11 @@ fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
         )
         .with_source(upstream::UpstreamErrorSource::StructuredBody),
     );
-    assert!(masked.message.contains("https://***.com/***"), "{}", masked.message);
+    assert!(
+        masked.message.contains("https://***.com/***"),
+        "{}",
+        masked.message
+    );
     assert!(!masked.message.contains("cloudflare"), "{}", masked.message);
 }
 
@@ -2446,7 +2456,11 @@ fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
         "All upstream attempts failed for model: deepseek-v4-flash. Last error: failed to request upstream"
     );
     assert!(!err.message.contains("cloudflare"), "{}", err.message);
-    assert!(!err.message.contains("2 upstream attempt"), "{}", err.message);
+    assert!(
+        !err.message.contains("2 upstream attempt"),
+        "{}",
+        err.message
+    );
 
     // SAN-7: the admin-tier internal detail carries the attempt count and the
     // raw last-attempt error.
@@ -2456,7 +2470,10 @@ fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
         "{internal}"
     );
     assert!(internal.contains("api.cloudflare.com"), "{internal}");
-    assert!(internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"), "{internal}");
+    assert!(
+        internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+        "{internal}"
+    );
 
     // SAN-5/SAN-10: persisted attempt errors keep the raw detail; the masked
     // client_error never serializes.

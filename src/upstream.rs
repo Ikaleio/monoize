@@ -221,7 +221,10 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
 /// SAN-D3: classify a non-2xx upstream response. `message` keeps the raw body
 /// only when no structured `error.message` exists, so that the routing layer
 /// can log it server-side without ever exposing it downstream.
-async fn non_success_upstream_error(resp: reqwest::Response, status: StatusCode) -> UpstreamCallError {
+async fn non_success_upstream_error(
+    resp: reqwest::Response,
+    status: StatusCode,
+) -> UpstreamCallError {
     let text = resp.text().await.unwrap_or_default();
     let info = extract_error_info(&text);
     let (message, source) = match info.message.clone() {

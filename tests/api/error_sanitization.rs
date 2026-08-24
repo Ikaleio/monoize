@@ -11,10 +11,7 @@ fn assert_no_infra_leak(text: &str) {
     assert!(!text.contains("10.32.4.17"), "{text}");
 }
 
-async fn find_error_log(
-    ctx: &TestContext,
-    model: &str,
-) -> monoize::users::RequestLogRow {
+async fn find_error_log(ctx: &TestContext, model: &str) -> monoize::users::RequestLogRow {
     let user = ctx
         .state
         .user_store
@@ -27,7 +24,17 @@ async fn find_error_log(
         let (logs, _, _) = ctx
             .state
             .user_store
-            .list_request_logs_by_user(&user.id, 100, 0, Some(model), Some("error"), None, None, None, None)
+            .list_request_logs_by_user(
+                &user.id,
+                100,
+                0,
+                Some(model),
+                Some("error"),
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("list request logs");
         if let Some(log) = logs.into_iter().find(|log| log.status == "error") {
@@ -247,7 +254,10 @@ async fn request_log_error_detail_is_full_for_admin_and_masked_for_non_admin() {
     let admin_message = admin_row["error"]["message"]
         .as_str()
         .expect("admin error message");
-    assert!(admin_message.contains("api.cloudflare.com"), "{admin_message}");
+    assert!(
+        admin_message.contains("api.cloudflare.com"),
+        "{admin_message}"
+    );
     assert!(
         admin_message.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
         "{admin_message}"
@@ -281,7 +291,10 @@ async fn request_log_error_detail_is_full_for_admin_and_masked_for_non_admin() {
         .as_str()
         .expect("tenant error message");
     assert_no_infra_leak(tenant_message);
-    assert!(tenant_message.contains("https://***.com/***"), "{tenant_message}");
+    assert!(
+        tenant_message.contains("https://***.com/***"),
+        "{tenant_message}"
+    );
     let tenant_tried_error = tenant_row["tried_providers"][0]["error"]
         .as_str()
         .expect("tenant tried error");

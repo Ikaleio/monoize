@@ -145,18 +145,23 @@ mod tests {
         let input = "error sending request for url (https://api.cloudflare.com/client/v4/accounts/ebb3b05a7371fbcbd62bde8264c86cfe/ai/v1/chat/completions)";
         let masked = mask_sensitive_text(input);
         assert!(!masked.contains("cloudflare"), "{masked}");
-        assert!(!masked.contains("ebb3b05a7371fbcbd62bde8264c86cfe"), "{masked}");
+        assert!(
+            !masked.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+            "{masked}"
+        );
         assert!(!masked.contains("accounts"), "{masked}");
         assert!(masked.contains("https://***.com/***"), "{masked}");
     }
 
     #[test]
     fn masks_url_query_values_and_keeps_keys() {
-        let masked =
-            mask_sensitive_text("GET https://api.test.org/v1/users/123?key=secret failed");
+        let masked = mask_sensitive_text("GET https://api.test.org/v1/users/123?key=secret failed");
         assert!(!masked.contains("secret"), "{masked}");
         assert!(!masked.contains("api.test.org"), "{masked}");
-        assert!(masked.contains("https://***.org/***/***/***?key=***"), "{masked}");
+        assert!(
+            masked.contains("https://***.org/***/***/***?key=***"),
+            "{masked}"
+        );
     }
 
     #[test]

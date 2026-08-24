@@ -976,7 +976,10 @@ mod tests {
             "{masked_message}"
         );
         assert!(!masked_message.contains("10.32.4.17"), "{masked_message}");
-        assert!(masked_message.contains("https://***.com/***"), "{masked_message}");
+        assert!(
+            masked_message.contains("https://***.com/***"),
+            "{masked_message}"
+        );
 
         let tried = row.tried_providers.as_ref().expect("tried providers");
         let first_error = tried[0]["error"].as_str().expect("first hop error");
