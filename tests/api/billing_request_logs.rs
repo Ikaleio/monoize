@@ -1204,6 +1204,111 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
 }
 
 #[tokio::test]
+async fn request_log_total_charge_covers_all_filtered_rows_not_only_the_page() {
+    let ctx = setup().await;
+    let user = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query user")
+        .expect("user exists");
+    let now = Utc::now();
+    let base_log = monoize::users::InsertRequestLog {
+        request_id: Some("aggregate-target-1".to_string()),
+        user_id: user.id.clone(),
+        api_key_id: None,
+        model: "aggregate-target".to_string(),
+        provider_id: None,
+        upstream_model: None,
+        channel_id: None,
+        names: monoize::users::RequestLogNameSnapshots::default(),
+        is_stream: false,
+        input_tokens: Some(1),
+        output_tokens: Some(1),
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        tool_prompt_tokens: None,
+        reasoning_tokens: None,
+        accepted_prediction_tokens: None,
+        rejected_prediction_tokens: None,
+        provider_multiplier: None,
+        charge_nano_usd: Some(1_000_000),
+        status: monoize::users::REQUEST_LOG_STATUS_SUCCESS.to_string(),
+        usage_breakdown_json: None,
+        billing_breakdown_json: None,
+        error_code: None,
+        error_message: None,
+        error_http_status: None,
+        duration_ms: Some(1),
+        ttfb_ms: None,
+        request_ip: None,
+        reasoning_effort: None,
+        tried_providers_json: None,
+        effective_provider_type: None,
+        affinity_hit: None,
+        affinity_key_hash: None,
+        affinity_target: None,
+        session_affinity_value: None,
+        request_kind: None,
+        created_at: now,
+    };
+
+    ctx.state
+        .user_store
+        .finalize_request_log(base_log.clone())
+        .await
+        .expect("insert first matching request log");
+    ctx.state
+        .user_store
+        .finalize_request_log(monoize::users::InsertRequestLog {
+            request_id: Some("aggregate-target-2".to_string()),
+            charge_nano_usd: Some(2_000_000),
+            created_at: now + ChronoDuration::seconds(1),
+            ..base_log.clone()
+        })
+        .await
+        .expect("insert second matching request log");
+    ctx.state
+        .user_store
+        .finalize_request_log(monoize::users::InsertRequestLog {
+            request_id: Some("aggregate-other".to_string()),
+            model: "aggregate-other".to_string(),
+            charge_nano_usd: Some(9_000_000),
+            created_at: now + ChronoDuration::seconds(2),
+            ..base_log
+        })
+        .await
+        .expect("insert non-matching request log");
+    ctx.state.user_store.flush_all_batchers().await;
+
+    for offset in [0, 1] {
+        let (logs, total, total_charge_nano_usd) = ctx
+            .state
+            .user_store
+            .list_request_logs_by_user(
+                &user.id,
+                1,
+                offset,
+                Some("aggregate-target"),
+                Some("success"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("list filtered request logs");
+        assert_eq!(logs.len(), 1, "each page is limited to one row");
+        assert_eq!(total, 2, "both matching rows contribute to total");
+        assert_eq!(
+            total_charge_nano_usd, "3000000",
+            "aggregate is independent of page offset"
+        );
+    }
+}
+
+#[tokio::test]
 async fn chat_streaming_length_finish_is_still_billed() {
     let ctx = setup().await;
     let req = Request::builder()

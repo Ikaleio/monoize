@@ -426,19 +426,23 @@ FL7. The top of the page MUST include a search bar and filter controls:
   - **Username filter** (admin only): text input. The default value is empty, which MUST omit `username` from `GET /api/dashboard/request-logs` and therefore list every user's logs. Applied on Enter or blur. Non-admin users do not see this control.
   - **Time range filter**: dropdown with preset options `All Time`, `Last 1 Hour`, `Last 24 Hours`, `Last 7 Days`, `Last 30 Days`, `Today`, `Yesterday`, `This Month`, `Last Month`. Selecting a preset computes `time_from` / `time_to` as ISO 8601 strings in the browser's local timezone and sends them as query parameters to the API.
 
-FL7a. The filter-control area MUST display the total charge sum for the current filter conditions. The value MUST be formatted as regular USD currency with 6 fractional digits (e.g. `$1.234567`). The label MUST use the i18n key `requestLogs.totalCost`. The element MUST be displayed in the summary area (top-right) alongside the existing "Showing X-Y of Z" text.
+FL7a. The filter-control area MUST display the total charge sum for the current filter conditions. The displayed value MUST come from the most recent REST response field `total_charge_nano_usd` for the active filters. It MUST include every matching persisted row and MUST be independent of request `limit`, request `offset`, and the number of rows currently loaded by infinite scrolling. The frontend MUST NOT compute this value by summing `loadedLogs` or the current response page. The value MUST be formatted as regular USD currency with 6 fractional digits (e.g. `$1.234567`). The label MUST use the i18n key `requestLogs.totalCost`. The element MUST be displayed in the summary area (top-right) alongside the existing "Showing X-Y of Z" text.
 
 FL7b. `/dashboard/logs` MUST read the optional `username` query parameter. For an admin viewer, a non-empty `username` value MUST initialize the username filter to that exact string. An absent or empty `username` query parameter MUST initialize the filter to empty (all users). Non-admin viewers MUST ignore the query parameter.
 
-FL8. Column order (left to right): `created_at`, `request_id` (with adjacent status indicator), `model` (ModelBadge), `api_key_name`, `[username]` (admin), `[channel]` (admin, with tooltip showing provider context), `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
+FL8. Column order (left to right): merged `created_at/request_id`, merged `model/[channel]`, `api_key_name`, `[username]` (admin), `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
 
-FL9. For the admin channel column display value:
+FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping visible lines in one column. The first line MUST render `created_at` per FL2. The second line MUST render the first 8 characters of `request_id` followed immediately by the FL36 status indicator. If `request_id` is absent, the second line MUST render `-`. The request tooltip behavior defined by FL28 and FL29 MUST remain attached to the second line.
 
-- If `provider_name` is non-empty, the first line MUST render `provider_name`.
-- Else if `provider_id` is non-empty, the first line MUST render `provider_id`.
-- Else the first line MUST render `-`.
-- If compact retry-chain hops defined by FL9a contain two or more hops, the cell MUST render a second line with those hop labels joined by the three-character separator ` → ` (space, U+2192, space). The second line MUST be visible without opening a tooltip. Each line MAY truncate independently.
-- When `affinity_hit` is true, the first line MUST include a localized sticky-session badge immediately after the provider name. The badge MUST NOT appear when `affinity_hit` is false or null.
+FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
+
+FL9. The merged `model/[channel]` cell MUST use exactly two non-wrapping layout lines in one column:
+
+- The first line MUST render the ModelBadge defined by FL3.
+- For an admin viewer, the second line MUST render the first non-empty value among `channel_name`, `channel_id`, and `-`.
+- For a non-admin viewer, the second line MUST remain visually empty and MUST NOT expose Provider or Channel information.
+- When `affinity_hit` is true for an admin viewer, the second line MUST include a localized sticky-session badge immediately after the Channel display value. The badge MUST NOT appear when `affinity_hit` is false or null.
+- Retry-chain hops MUST NOT create a third visible line. Their full path remains available through FL9b and their count remains visible through FL4.
 - On hover, focus, or activate, the tooltip MUST show the content defined by FL9b. Activation MUST work on touch devices; activating outside the tooltip or pressing Escape MUST close it.
 
 FL9a. Compact retry-chain hops:
@@ -447,13 +451,13 @@ FL9a. Compact retry-chain hops:
 2. If the row has a terminal Provider or Channel id, form terminal identity `(provider.id ?? "", channel.id ?? "")`. If that identity is not already in the hop list, append one hop for the terminal Provider/Channel.
 3. A hop label MUST be the first non-empty value among hop `channel_name`, hop `provider_name`, hop `channel_id`, hop `provider_id`. For the terminal hop those fields are `channel.name`, `provider.name`, `channel.id`, `provider.id`.
 4. Empty-label hops MUST be omitted.
-5. A hop list of length less than 2 is not a retry chain; FL9 MUST then use the non-chain primary text.
+5. A hop list of length less than 2 is not a retry chain. The visible merged `model/[channel]` cell remains the fixed two-line layout from FL9 regardless of hop count.
 
 FL9b. Channel tooltip:
 
 - If `tried_providers` is non-empty, the tooltip MUST first render a localized retry-chain heading, then one row per stored `tried_providers` entry in chronological order. Each row MUST show the hop label from FL9a.3, `duration_ms` when present, `upstream_status` when present, and `error`.
 - After those failed-attempt rows, if a terminal hop identity exists and either (a) it differs from the last `tried_providers` identity, or (b) row `status` is `success` or `client_gone` and the last `tried_providers` identity equals the terminal identity, the tooltip MUST append one terminal row with the terminal hop label and a localized served marker. When `status` is `error` and the last `tried_providers` identity already equals the terminal identity, the tooltip MUST NOT append a duplicate terminal row.
-- The tooltip MUST then show `channel_name` (or `channel_id` as fallback) when available, a localized affinity hit/miss label when `affinity_hit` is non-null, `affinity_target` when present, `session_affinity_value` when present, and upstream model when it differs from the requested model.
+- The tooltip MUST then show `provider_name` (or `provider_id` as fallback) when available, `channel_name` (or `channel_id` as fallback) when available, a localized affinity hit/miss label when `affinity_hit` is non-null, `affinity_target` when present, `session_affinity_value` when present, and upstream model when it differs from the requested model.
 
 FL10. The request logs table body MUST use virtualized rendering via `react-virtuoso` (`TableVirtuoso`) instead of rendering all loaded rows as plain DOM rows.
 
@@ -475,23 +479,23 @@ FL15. The table MUST use compact column spacing:
 - Header and body cells MUST use reduced horizontal/vertical padding suitable for dense log browsing.
 - Columns MUST use content-oriented widths (instead of evenly stretched wide columns) to avoid large unused horizontal gaps between adjacent fields.
 
-FL16. Token-count columns (`input_tokens` / `output_tokens`) MUST keep compact widths suitable for short integer values (commonly up to 7 digits), and should avoid consuming excess horizontal space from adjacent columns.
+FL16. The Input column MUST use a minimum width of 8 rem so its two non-wrapping lines fit common values. The Output column MUST keep a compact width suitable for short integer values (commonly up to 7 digits). Both columns SHOULD avoid consuming excess horizontal space from adjacent columns.
 
 FL17. The `duration/ttfb/stream` merged column MUST use compact inline-badge spacing and width so that token-count columns remain visually closer to it (reduced horizontal gap).
 
-FL18. Left-side leading columns (`created_at`, `request_id`) MUST use compact widths and reduced horizontal padding.
+FL18. The merged `created_at/request_id` leading column MUST use a compact width and reduced horizontal padding.
 
-FL19. The first visible column (`created_at`) MUST keep a small left inset from the table edge to avoid text touching the border.
+FL19. The first visible merged `created_at/request_id` column MUST keep a small left inset from the table edge to avoid text touching the border.
 
-FL20. The status indicator MUST be rendered directly adjacent to the request ID text inside the same `request_id` cell (near-zero gap), and columns to the right SHOULD use reduced left padding to keep the layout left-compacted.
+FL20. The status indicator MUST be rendered directly adjacent to the request ID text on the second line of the merged `created_at/request_id` cell (near-zero gap), and columns to the right SHOULD use reduced left padding to keep the layout left-compacted.
 
 FL21. The `api_key_name` (Token) column MUST use a narrow width and truncated text display to avoid occupying excessive horizontal space.
 
 FL22. The merged `duration/ttfb/stream` column MUST remain narrowly sized with minimal horizontal cell padding and a compact inline badge row, and MUST NOT reserve excess blank width when values are short.
 
-FL23. The admin `channel` column MUST use a compact width with truncation for long values. When FL9 renders a retry chain, the column MAY use a minimum width of 8 rem; overflow MUST still truncate.
+FL23. The merged `model/[channel]` column MUST use the model width rules in FL34. Its admin-only Channel line MUST remain non-wrapping and MAY expand the table width with long content.
 
-FL24. On desktop dashboard layouts, the logs table SHOULD fit within the page content width without horizontal scrolling; the `request_ip` column MUST use narrow width with truncated text display.
+FL24. On desktop dashboard layouts, content MAY expand the logs table beyond the page content width. The table viewport MUST then provide horizontal scrolling. The `request_ip` column MUST use narrow width with truncated text display.
 
 FL25. The `charge_nano_usd` (Cost) column displayed value MUST use regular USD currency formatting with exactly 6 fractional digits (for example: `$0.000123`), and MUST NOT use threshold shorthand (for example: `<$0.0001`). Formatting MUST operate on the integer string with `BigInt`; it MUST round to the nearest micro-dollar with ties away from zero and MUST NOT pass through JavaScript `Number`, `parseFloat`, or `Intl.NumberFormat`.
 
@@ -517,7 +521,7 @@ FL27b. If neither the usage-breakdown totals nor the scalar token columns are av
 
 FL27c. When FL27b applies, hovering the Input or Output cell MUST show the standard token-detail tooltip shell with a localized unavailable message rather than an empty numeric breakdown.
 
-FL27d. When a row carries cached-input data (`usage_breakdown_json.input.cached_tokens` present, or scalar `cache_read_tokens` non-null), the visible Input cell MUST render the uncached-input token count as its primary line with no localized uncached-input label (the number alone, e.g. `19,624`). The uncached value MUST prefer `usage_breakdown_json.input.uncached_tokens` and otherwise fall back to `input_tokens - cache_read_tokens` clamped at zero, falling back to the input total when either operand is unknown. When the cached count is positive, the cell MUST render a secondary, visually subordinate line below the primary line with the localized label `requestLogs.cachedInput` and the formatted cached count (e.g. `缓存输入 47,872`). When no cached-input data exists, the cell MUST render the input total count alone per FL27a. A missing cached value MUST NOT render as `0` or `-`, and the secondary line MUST NOT interfere with the FL27 hover surface.
+FL27d. The visible Input cell MUST reserve exactly two non-wrapping lines. The first line MUST always render the total input count selected by FL27a; it MUST NOT substitute the uncached-input count. When the cached-input count selected from `usage_breakdown_json.input.cached_tokens` or scalar `cache_read_tokens` is positive and total input is positive, the second line MUST render `<formatted cached count> / <integer percentage>%`, where `integer percentage = round(cached input / total input * 100)`. For example, total input `32000` and cached input `16000` render as first line `32,000` and second line `16,000 / 50%`. The second line MUST use smaller muted text and MUST NOT use a success/status color. When cached input is absent or not positive, or total input is absent or not positive, the second line MUST remain visually empty. It MUST NOT render `0`, `-`, or a percentage. The complete two-line cell remains the FL27 hover surface.
 
 FL28. For rows with `status = "error"` or `status = "client_gone"`, hovering the request-id/status indicator MUST show error details from `error_code`, `error_message`, and `error_http_status` when present.
 
@@ -525,15 +529,15 @@ FL29. When `tried_providers` is non-empty, the request-id tooltip MUST additiona
 
 FL30. For rows where `request_kind = "active_probe_connectivity"` and `api_key_name` is null, the Token column MUST display a localized i18n label meaning "Connectivity Test".
 
-FL31. The rightmost `request_ip` column MUST keep a trailing right inset equal to the leading left inset of the first (`created_at`) column, so IP text does not visually touch the table's right boundary.
+FL31. The rightmost `request_ip` column MUST keep a trailing right inset equal to the leading left inset of the merged `created_at/request_id` column, so IP text does not visually touch the table's right boundary.
 
 FL32. Tooltip overlays for request-log table detail cells (request-id, model, token, channel, duration, input/output, cost) MUST render in a portal layer attached to `document.body` so overlay width/position is not constrained by table/cell/container layout width or overflow clipping.
 
 FL33. On coarse-pointer devices (touch-first), those tooltip overlays MUST open on tap and close on outside tap, while preserving hover behavior on fine-pointer devices.
 
-FL34. The `model` column MUST use a minimum width of 13.5 rem as its baseline and MUST be allowed to expand with content when long model identifiers are present.
+FL34. The merged `model/[channel]` column MUST use a minimum width of 13.5 rem as its baseline and MUST be allowed to expand with content when long model identifiers or admin-visible Channel identifiers are present.
 
-FL35. In the logs table, model badge text in the `model` column MUST NOT be forcibly truncated. On narrow viewports, overflow MUST be handled by the table/container horizontal scrolling behavior rather than wrapping or clipping model badge text.
+FL35. In the logs table, model badge text in the merged `model/[channel]` column MUST NOT be forcibly truncated. On narrow viewports, overflow MUST be handled by the table/container horizontal scrolling behavior rather than wrapping or clipping model badge text.
 
 FL36. In the request-id status indicator, status-color mapping MUST be:
 

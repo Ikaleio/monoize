@@ -8,6 +8,7 @@ import {
 	billingValueTranslationKey,
 	compactRetryChainLabels,
 	computeTps,
+	formatCachePercentage,
 	formatCost,
 	formatRetryChain,
 	hopDisplayLabel,
@@ -117,6 +118,20 @@ describe('formatCost', () => {
 
 	test('does not narrow large integer strings through Number', () => {
 		expect(formatCost('9007199254740993000')).toBe('$9,007,199,254.740993')
+	})
+})
+
+describe('formatCachePercentage', () => {
+	test('rounds cached input as an integer share of total input', () => {
+		expect(formatCachePercentage(16_000, 32_000)).toBe('50%')
+		expect(formatCachePercentage(1, 3)).toBe('33%')
+	})
+
+	test('omits the share when cached or total input is not positive', () => {
+		expect(formatCachePercentage(0, 32_000)).toBeNull()
+		expect(formatCachePercentage(16_000, 0)).toBeNull()
+		expect(formatCachePercentage(null, 32_000)).toBeNull()
+		expect(formatCachePercentage(16_000, null)).toBeNull()
 	})
 })
 

@@ -166,6 +166,24 @@ export function formatCost(nanoUsd: string | null | undefined): string {
 	return formatNanoUsd(nanoUsd, 6)
 }
 
+export function formatCachePercentage(
+	cachedTokens: number | null | undefined,
+	totalTokens: number | null | undefined
+): string | null {
+	if (
+		cachedTokens == null ||
+		!Number.isFinite(cachedTokens) ||
+		cachedTokens <= 0 ||
+		totalTokens == null ||
+		!Number.isFinite(totalTokens) ||
+		totalTokens <= 0
+	) {
+		return null
+	}
+
+	return `${Math.round((cachedTokens / totalTokens) * 100)}%`
+}
+
 export function formatDuration(ms: number | null | undefined): string | null {
 	if (ms == null) return null
 	if (ms < 1000) return `${ms}ms`

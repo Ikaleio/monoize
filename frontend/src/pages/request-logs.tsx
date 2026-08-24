@@ -55,6 +55,7 @@ export function RequestLogsPage() {
 	const [requestOffset, setRequestOffset] = useState(0)
 	const [loadedLogs, setLoadedLogs] = useState<RequestLog[]>([])
 	const [totalCount, setTotalCount] = useState(0)
+	// This REST aggregate covers every filtered row and must never be derived from loadedLogs.
 	const [totalCharge, setTotalCharge] = useState<string>('0')
 	const [timeFrom, setTimeFrom] = useState<Date | undefined>(undefined)
 	const [timeTo, setTimeTo] = useState<Date | undefined>(undefined)

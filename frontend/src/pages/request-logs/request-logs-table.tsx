@@ -32,7 +32,7 @@ const tableComponents = {
 	TableRow: (props: ComponentProps<'tr'>) => (
 		<tr
 			{...props}
-			className='border-b transition-colors hover:bg-muted/50 align-middle'
+			className='h-11 border-b align-middle transition-colors hover:bg-muted/50'
 		/>
 	)
 }
@@ -40,14 +40,12 @@ const tableComponents = {
 function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isAdmin' | 't'>) {
 	return (
 		<tr className='border-b bg-muted/30'>
-			<th className='w-[10rem] text-left font-medium text-muted-foreground pl-2 pr-2 py-1.5 whitespace-nowrap'>
-				{t('requestLogs.time')}
-			</th>
-			<th className='w-[5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
-				{t('requestLogs.requestId')}
+			<th className='w-40 whitespace-nowrap py-1.5 pl-2 pr-2 text-left font-medium text-muted-foreground'>
+				{t('requestLogs.time')} / {t('requestLogs.requestId')}
 			</th>
 			<th className='min-w-[13.5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
 				{t('requestLogs.model')}
+				{isAdmin ? ` / ${t('requestLogs.channel')}` : null}
 			</th>
 			<th className='w-[5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
 				{t('requestLogs.tokenName')}
@@ -57,15 +55,10 @@ function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isA
 					{t('requestLogs.username')}
 				</th>
 			)}
-			{isAdmin && (
-				<th className='min-w-[8rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
-					{t('requestLogs.channel')}
-				</th>
-			)}
 			<th className='w-[10rem] text-left font-medium text-muted-foreground px-1 py-1.5 whitespace-nowrap'>
 				{t('requestLogs.duration')} / {t('requestLogs.ttfb')}
 			</th>
-			<th className='w-[3.25rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+			<th className='min-w-32 whitespace-nowrap px-2 py-1.5 text-right font-medium text-muted-foreground'>
 				{t('requestLogs.input')}
 			</th>
 			<th className='w-[3.25rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>

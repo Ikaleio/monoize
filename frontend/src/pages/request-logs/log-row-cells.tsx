@@ -17,11 +17,10 @@ import {
 import {
 	asObject,
 	billingValueTranslationKey,
-	compactRetryChainLabels,
 	computeTps,
+	formatCachePercentage,
 	formatCost,
 	formatDuration,
-	formatRetryChain,
 	formatTime,
 	getDurationMs,
 	getTtfbMs,
@@ -101,9 +100,6 @@ export function LogRowCells({
 	const computedTps = computeTps(log)
 	const channelDisplay = log.channel.name?.trim() || log.channel.id || null
 	const providerDisplay = log.provider.name?.trim() || log.provider.id || null
-	const retryChainLabels = compactRetryChainLabels(log)
-	const retryChainText = retryChainLabels ? formatRetryChain(retryChainLabels) : null
-	const channelPrimaryText = providerDisplay
 	const affinityHit = log.affinity?.hit === true
 	const triedProviders = triedProvidersOf(log)
 	const hasTriedProviders = triedProviders.length > 0
@@ -226,6 +222,7 @@ export function LogRowCells({
 	const inputText = readTokenCount(usageInput, 'text_tokens')
 	const inputCached =
 		readTokenCount(usageInput, 'cached_tokens') ?? log.tokens.cache_read ?? null
+	const inputCachePercentage = formatCachePercentage(inputCached, inputTotal)
 	const inputCacheCreation = readTokenCount(usageInput, 'cache_creation_tokens')
 	const inputAudio = readTokenCount(usageInput, 'audio_tokens')
 	const inputImage = readTokenCount(usageInput, 'image_tokens')
@@ -444,172 +441,137 @@ export function LogRowCells({
 
 	return (
 		<>
-			<td className='pl-2 pr-2 py-1 whitespace-nowrap text-muted-foreground font-mono align-middle'>
-				{formatTime(log.created_at)}
+			<td className='whitespace-nowrap py-1 pl-2 pr-2 align-middle font-mono text-muted-foreground'>
+				<span className='inline-flex flex-col leading-4'>
+					<span className='h-4 whitespace-nowrap'>{formatTime(log.created_at)}</span>
+					{log.request_id ? (
+						<TooltipProvider delayDuration={200}>
+							<Tooltip onOpenChange={requestTooltipOpenChange}>
+								<TooltipTrigger asChild>
+									<span className='inline-flex h-4 cursor-default items-center gap-1 whitespace-nowrap'>
+										<span>{log.request_id.substring(0, 8)}</span>
+										<span
+											className={cn(
+												'h-1.5 w-1.5 rounded-full',
+												statusIndicatorClass
+											)}
+										/>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent>
+									<div className='max-w-[480px] space-y-0.5 text-xs'>
+										<div className='font-mono'>{log.request_id}</div>
+										{(log.status === 'error' || log.status === 'client_gone') && (
+											<>
+												{log.error.http_status != null && (
+													<div>
+														{t('requestLogs.errorStatus')}: {log.error.http_status}
+													</div>
+												)}
+												{log.error.code && (
+													<div>
+														{t('requestLogs.errorCode')}: {log.error.code}
+													</div>
+												)}
+												{log.error.message && (
+													<div className='whitespace-pre-wrap break-words'>
+														{t('requestLogs.errorMessage')}: {log.error.message}
+													</div>
+												)}
+											</>
+										)}
+										{attemptRows.length > 0 && (
+											<div className='mt-1 border-t border-border/50 pt-1'>
+												<RetryAttemptList rows={attemptRows} t={t} />
+											</div>
+										)}
+									</div>
+								</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
+					) : (
+						<span className='h-4 whitespace-nowrap text-muted-foreground/50'>-</span>
+					)}
+				</span>
 			</td>
 
-			<td className='px-2 py-1 whitespace-nowrap align-middle'>
-				{log.request_id ? (
+			<td className='px-2 py-1 align-middle whitespace-nowrap'>
+				<span className='inline-flex flex-col items-start leading-4'>
 					<TooltipProvider delayDuration={200}>
-						<Tooltip onOpenChange={requestTooltipOpenChange}>
+						<Tooltip onOpenChange={modelTooltipOpenChange}>
 							<TooltipTrigger asChild>
-								<span className='inline-flex items-center gap-1 font-mono text-muted-foreground cursor-default'>
-									<span>{log.request_id.substring(0, 8)}</span>
-									<span
-										className={cn(
-											'h-1.5 w-1.5 rounded-full',
-											statusIndicatorClass
-										)}
+								<span className='h-5 cursor-default whitespace-nowrap'>
+									<ModelBadge
+										model={log.model}
+										multiplier={log.provider.multiplier}
+										showDetails={false}
+										truncateModelText={false}
+										className='h-5 min-w-max px-1.5 text-[10px]'
 									/>
 								</span>
 							</TooltipTrigger>
 							<TooltipContent>
-								<div className='text-xs space-y-0.5 max-w-[480px]'>
-									<div className='font-mono'>{log.request_id}</div>
-									{(log.status === 'error' || log.status === 'client_gone') && (
-										<>
-											{log.error.http_status != null && (
-												<div>
-													{t('requestLogs.errorStatus')}: {log.error.http_status}
-												</div>
-											)}
-											{log.error.code && (
-												<div>
-													{t('requestLogs.errorCode')}: {log.error.code}
-												</div>
-											)}
-											{log.error.message && (
-												<div className='break-words whitespace-pre-wrap'>
-													{t('requestLogs.errorMessage')}: {log.error.message}
-												</div>
-											)}
-										</>
+								<div className='min-w-[180px] space-y-0.5 text-xs'>
+									<div className='flex items-center justify-between gap-3'>
+										<span>{t('requestLogs.model')}</span>
+										<span className='font-mono'>{log.model}</span>
+									</div>
+									{log.upstream_model && log.upstream_model !== log.model && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.upstreamModel')}</span>
+											<span className='font-mono'>{log.upstream_model}</span>
+										</div>
 									)}
-									{attemptRows.length > 0 && (
-										<div className='border-t border-border/50 pt-1 mt-1'>
-											<RetryAttemptList rows={attemptRows} t={t} />
+									{log.provider.id && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.modelProvider')}</span>
+											<span className='font-mono'>{log.provider.id}</span>
+										</div>
+									)}
+									{log.provider.multiplier != null &&
+									log.provider.multiplier !== '1' && (
+											<div className='flex items-center justify-between gap-3'>
+												<span>{t('requestLogs.multiplier')}</span>
+												<span className='font-mono'>
+													{log.provider.multiplier}x
+												</span>
+											</div>
+										)}
+									{log.reasoning_effort && (
+										<div className='flex items-center justify-between gap-3'>
+											<span>{t('requestLogs.reasoningEffort')}</span>
+											<span className='font-mono'>{log.reasoning_effort}</span>
 										</div>
 									)}
 								</div>
 							</TooltipContent>
 						</Tooltip>
 					</TooltipProvider>
-				) : (
-					<span className='text-muted-foreground/50'>-</span>
-				)}
-			</td>
-
-			<td className='px-2 py-1 align-middle whitespace-nowrap'>
-				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={modelTooltipOpenChange}>
-						<TooltipTrigger asChild>
-							<span className='cursor-default'>
-								<ModelBadge
-									model={log.model}
-									multiplier={log.provider.multiplier}
-									showDetails={false}
-									truncateModelText={false}
-									className='text-[10px] h-5 px-1.5 min-w-max'
-								/>
-							</span>
-						</TooltipTrigger>
-						<TooltipContent>
-							<div className='text-xs space-y-0.5 min-w-[180px]'>
-								<div className='flex items-center justify-between gap-3'>
-									<span>{t('requestLogs.model')}</span>
-									<span className='font-mono'>{log.model}</span>
-								</div>
-								{log.upstream_model && log.upstream_model !== log.model && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.upstreamModel')}</span>
-										<span className='font-mono'>{log.upstream_model}</span>
-									</div>
-								)}
-								{log.provider.id && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.modelProvider')}</span>
-										<span className='font-mono'>{log.provider.id}</span>
-									</div>
-								)}
-								{log.provider.multiplier != null &&
-								log.provider.multiplier !== '1' && (
-										<div className='flex items-center justify-between gap-3'>
-											<span>{t('requestLogs.multiplier')}</span>
-											<span className='font-mono'>
-												{log.provider.multiplier}x
-											</span>
-										</div>
-									)}
-								{log.reasoning_effort && (
-									<div className='flex items-center justify-between gap-3'>
-										<span>{t('requestLogs.reasoningEffort')}</span>
-										<span className='font-mono'>{log.reasoning_effort}</span>
-									</div>
-								)}
-							</div>
-						</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
-			</td>
-
-			<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
-				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={tokenTooltipOpenChange}>
-						<TooltipTrigger asChild>
-							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
-								{isConnectivityTest ?
-									t('requestLogs.connectivityTest')
-								: log.api_key.name || '-'}
-							</span>
-						</TooltipTrigger>
-						<TooltipContent>
-							<span className='text-xs'>
-								{isConnectivityTest ?
-									t('requestLogs.connectivityTest')
-								: log.api_key.name || '-'}
-							</span>
-						</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
-			</td>
-
-			{isAdmin && (
-				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
-					<span className='inline-flex h-4 items-center max-w-[5rem] truncate'>
-						{log.user.username || '-'}
-					</span>
-				</td>
-			)}
-
-			{isAdmin && (
-				<td className='px-2 py-1 align-middle text-[11px] leading-4 text-muted-foreground'>
-					{channelPrimaryText ? (
+					{isAdmin ?
 						<TooltipProvider delayDuration={200}>
 							<Tooltip onOpenChange={channelTooltipOpenChange}>
 								<TooltipTrigger asChild>
-									<span className='inline-flex max-w-[16rem] cursor-default flex-col items-start leading-tight'>
-										<span className='inline-flex max-w-full items-center gap-1'>
-											<span className='truncate'>{channelPrimaryText}</span>
-											{affinityHit ?
-												<Badge
-													variant='secondary'
-													className='h-4 shrink-0 px-1 text-[10px] font-normal rounded-full border-info-border bg-info-soft text-info-foreground'
-												>
-													{t('requestLogs.stickySession')}
-												</Badge>
-											:	null}
-										</span>
-										{retryChainText ?
-											<span className='max-w-full truncate text-[10px] text-warning'>
-												{retryChainText}
-											</span>
-										:	null}
+									<span className='inline-flex h-4 cursor-default items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground'>
+										<span>{channelDisplay ?? '-'}</span>
+										{affinityHit ?
+											<Badge
+												variant='secondary'
+												className='h-4 shrink-0 rounded-full border-info-border bg-info-soft px-1 text-[10px] font-normal text-info-foreground'
+											>
+												{t('requestLogs.stickySession')}
+											</Badge>
+										: null}
 									</span>
 								</TooltipTrigger>
 								<TooltipContent>
-									<div className='text-xs space-y-1 max-w-[480px]'>
+									<div className='max-w-[480px] space-y-1 text-xs'>
 										{attemptRows.length > 0 && (
 											<RetryAttemptList rows={attemptRows} t={t} />
+										)}
+										{providerDisplay && (
+											<div>
+												{t('requestLogs.modelProvider')}: {providerDisplay}
+											</div>
 										)}
 										{channelDisplay && (
 											<div>
@@ -641,11 +603,36 @@ export function LogRowCells({
 								</TooltipContent>
 							</Tooltip>
 						</TooltipProvider>
-					) : (
-						<span className='inline-flex h-4 items-center text-muted-foreground/50'>
-							-
-						</span>
-					)}
+					: <span aria-hidden='true' className='h-4' />}
+				</span>
+			</td>
+
+			<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
+				<TooltipProvider delayDuration={200}>
+					<Tooltip onOpenChange={tokenTooltipOpenChange}>
+						<TooltipTrigger asChild>
+							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
+								{isConnectivityTest ?
+									t('requestLogs.connectivityTest')
+								: log.api_key.name || '-'}
+							</span>
+						</TooltipTrigger>
+						<TooltipContent>
+							<span className='text-xs'>
+								{isConnectivityTest ?
+									t('requestLogs.connectivityTest')
+								: log.api_key.name || '-'}
+							</span>
+						</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			</td>
+
+			{isAdmin && (
+				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
+					<span className='inline-flex h-4 items-center max-w-[5rem] truncate'>
+						{log.user.username || '-'}
+					</span>
 				</td>
 			)}
 
@@ -673,21 +660,19 @@ export function LogRowCells({
 				</TooltipProvider>
 			</td>
 
-			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
+			<td className='min-w-32 whitespace-nowrap px-2 py-1 text-right align-middle font-mono text-muted-foreground'>
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={inputTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='inline-flex cursor-default flex-col items-end leading-tight'>
-								<span className='text-sm font-medium tabular-nums'>
-									{inputCached != null
-										? formatTokenCount(inputUncached)
-										: formatTokenCount(inputTokensForDisplay)}
+							<span className='inline-flex cursor-default flex-col items-end leading-4'>
+								<span className='h-4 whitespace-nowrap text-sm font-medium tabular-nums'>
+									{formatTokenCount(inputTokensForDisplay)}
 								</span>
-								{inputCached ? (
-									<span className='text-[10px] text-success'>
-										{t('requestLogs.cachedInput')} {formatTokenCount(inputCached)}
+								{inputCached != null && inputCachePercentage ?
+									<span className='h-4 whitespace-nowrap text-[10px] text-muted-foreground tabular-nums'>
+										{formatTokenCount(inputCached)} / {inputCachePercentage}
 									</span>
-								) : null}
+								: <span aria-hidden='true' className='h-4' />}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>
