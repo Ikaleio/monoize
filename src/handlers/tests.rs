@@ -2307,7 +2307,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
         None,
         None,
         RequestCaptureContext {
-            raw_input: json!({}),
+            raw_input: std::sync::Arc::new(json!({})),
             session: None,
         },
     )
