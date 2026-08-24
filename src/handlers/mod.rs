@@ -744,7 +744,6 @@ pub async fn create_embeddings(
                         None,
                         None,
                         None,
-                        None,
                         tried_providers,
                         false,
                     );
@@ -1111,35 +1110,10 @@ pub(crate) struct StreamRuntimeMetrics {
     response_service_tier: Option<String>,
     terminal: StreamTerminalDiagnostics,
     pub(crate) estimated_output_tokens: u64,
-    first_visible_output_ms: Option<u64>,
-    last_visible_output_ms: Option<u64>,
+    // Feeds the usage-less billing estimate only; TPS is derived at display
+    // time from `output_tokens`, `duration_ms`, and `ttfb_ms` (request-logs
+    // spec FL4a).
     visible_output_bytes: u64,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct VisibleOutputTpsBasis {
-    pub(crate) first_visible_output_ms: u64,
-    pub(crate) last_visible_output_ms: u64,
-    pub(crate) visible_generation_ms: u64,
-    pub(crate) visible_output_tokens: u64,
-    pub(crate) tps_mode: &'static str,
-}
-
-impl StreamRuntimeMetrics {
-    pub(crate) fn visible_tps_basis(&self) -> Option<VisibleOutputTpsBasis> {
-        let first_visible_output_ms = self.first_visible_output_ms?;
-        let last_visible_output_ms = self.last_visible_output_ms?;
-        if self.visible_output_bytes == 0 {
-            return None;
-        }
-        Some(VisibleOutputTpsBasis {
-            first_visible_output_ms,
-            last_visible_output_ms,
-            visible_generation_ms: last_visible_output_ms.saturating_sub(first_visible_output_ms),
-            visible_output_tokens: self.visible_output_bytes.div_ceil(4),
-            tps_mode: "estimated",
-        })
-    }
 }
 
 async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::auth::AuthResult> {

@@ -6,20 +6,8 @@ type TimingValue = number | string | null | undefined
 export type TpsBasis = {
 	value: number
 	tokens: number
-	denominatorMs: number
+	windowMs: number
 }
-
-export type ComputedTps =
-	| {
-			state: 'display'
-			/** Wall-clock generation throughput: total output tokens over the generation window (FL4a-1/2). */
-			average: TpsBasis | null
-			/** Visible-text throughput over the visible generation window (FL4a-5). */
-			visible: TpsBasis | null
-	  }
-	| {
-			state: 'unavailable'
-	  }
 
 export type BillingValueDimension =
 	| 'usageClass'
@@ -124,63 +112,37 @@ function parseTimingMs(value: TimingValue): number | null {
 	return null
 }
 
-function tpsFromBasis(tokens: number | null, denominatorMs: number | null): TpsBasis | null {
-	if (tokens == null || tokens <= 0 || denominatorMs == null || denominatorMs <= 0) {
+function tpsFromBasis(tokens: number | null, windowMs: number | null): TpsBasis | null {
+	if (tokens == null || tokens <= 0 || windowMs == null || windowMs <= 0) {
 		return null
 	}
 	return {
-		value: tokens / (denominatorMs / 1000),
+		value: tokens / (windowMs / 1000),
 		tokens,
-		denominatorMs
+		windowMs
 	}
 }
 
-/** FL4a-1: the total output token count for the Average TPS numerator. */
+/** FL4a-1: the total output token count for the TPS numerator. */
 function totalOutputTokens(log: RequestLog): number | null {
 	const usageOutput = asObject(asObject(log.usage)?.output)
 	return readTokenCount(usageOutput, 'total_tokens') ?? log.tokens.output ?? null
 }
 
-function visibleOutputTokens(log: RequestLog): number | null {
-	return readNumber(log.timing.visible_output_tokens)
-}
-
-export function computeTps(log: RequestLog): ComputedTps {
+/**
+ * FL4a-1..FL4a-3: single TPS metric following the new-api RecordRelaySample
+ * model. Streaming rows with a known TTFB use `duration - ttfb` as the
+ * generation window; every other row uses the total duration.
+ * Returns null when the numerator or the window is absent or non-positive.
+ */
+export function computeTps(log: RequestLog): TpsBasis | null {
 	const durationMs = getDurationMs(log)
 	const ttfbMs = getTtfbMs(log)
-	const visibleGenerationMs = parseTimingMs(log.timing.visible_generation_ms)
-
-	// FL4a-2: the Average TPS generation window is the wall-clock span from
-	// first upstream chunk to stream end (duration - ttfb), falling back to the
-	// full duration when TTFB is unknown.
-	const averageWindowMs =
-		durationMs != null && ttfbMs != null && durationMs > ttfbMs ?
+	const windowMs =
+		log.is_stream && durationMs != null && ttfbMs != null && durationMs > ttfbMs ?
 			durationMs - ttfbMs
-		: durationMs
-
-	const outputTotal = totalOutputTokens(log)
-	const visibleTokens = visibleOutputTokens(log)
-	const visibleWindowEligible =
-		visibleGenerationMs != null && visibleGenerationMs >= 100
-
-	let average: TpsBasis | null = null
-	if (outputTotal != null) {
-		average = tpsFromBasis(outputTotal, averageWindowMs)
-	} else if (visibleWindowEligible) {
-		// FL4a-1: when no output-token total exists, fall back to the visible
-		// token count paired with the visible generation window.
-		average = tpsFromBasis(visibleTokens, visibleGenerationMs)
-	}
-
-	const visible =
-		outputTotal != null && visibleWindowEligible ?
-			tpsFromBasis(visibleTokens, visibleGenerationMs)
-		:	null
-
-	if (!average && !visible) {
-		return { state: 'unavailable' }
-	}
-	return { state: 'display', average, visible }
+		:	durationMs
+	return tpsFromBasis(totalOutputTokens(log), windowMs)
 }
 
 export function billingValueTranslationKey(

@@ -1216,11 +1216,6 @@ fn request_log_timing_serializes_compatibility_aliases() {
         timing: RequestLogTiming {
             duration_ms: Some(1200),
             ttfb_ms: Some(150),
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             duration_ms_alias: Some(1200),
             elapsed_ms: Some(1200),
             latency_ms: Some(1200),

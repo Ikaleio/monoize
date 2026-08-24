@@ -79,7 +79,7 @@ pub(crate) async fn stream_replicate_to_urp_events(
                 }
 
                 output_text.push_str(&ev.data);
-                record_visible_output_delta(started_at, &runtime_metrics, &ev.data).await;
+                record_visible_output_delta(&runtime_metrics, &ev.data).await;
                 let delta = NodeDelta::Text {
                     content: ev.data.clone(),
                 };

@@ -481,7 +481,7 @@ pub(crate) async fn stream_messages_to_urp_events(
                 };
                 let delta = data_val.get("delta").cloned().unwrap_or(Value::Null);
                 for event in handle_content_block_delta(node_index, delta, &mut state) {
-                    record_visible_stream_event_delta(started_at, &runtime_metrics, &event).await;
+                    record_visible_stream_event_delta(&runtime_metrics, &event).await;
                     let _ = tx.send(event).await;
                 }
             }

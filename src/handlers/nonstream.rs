@@ -871,7 +871,6 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         attempt.channel_id.clone(),
                         None,
                         None,
-                        None,
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                         client_gone_flag(task_state),

@@ -125,32 +125,22 @@ pub(crate) async fn increment_estimated_output_tokens(
 }
 
 pub(crate) async fn record_visible_output_delta(
-    started_at: Option<std::time::Instant>,
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     content: &str,
 ) {
     if content.is_empty() {
         return;
     }
-    let Some(started_at) = started_at else {
-        return;
-    };
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
         return;
     };
-    let elapsed_ms = started_at.elapsed().as_millis() as u64;
     let mut guard = runtime_metrics.lock().await;
-    if guard.first_visible_output_ms.is_none() {
-        guard.first_visible_output_ms = Some(elapsed_ms);
-    }
-    guard.last_visible_output_ms = Some(elapsed_ms);
     guard.visible_output_bytes = guard
         .visible_output_bytes
         .saturating_add(content.len() as u64);
 }
 
 pub(crate) async fn record_visible_stream_event_delta(
-    started_at: Option<std::time::Instant>,
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     event: &urp::UrpStreamEvent,
 ) {
@@ -165,7 +155,7 @@ pub(crate) async fn record_visible_stream_event_delta(
         } => content.as_str(),
         _ => return,
     };
-    record_visible_output_delta(started_at, runtime_metrics, content).await;
+    record_visible_output_delta(runtime_metrics, content).await;
 }
 
 pub(crate) async fn record_stream_terminal_event(
@@ -756,16 +746,12 @@ mod tests {
     use super::*;
     use crate::urp::{NodeDelta, UrpStreamEvent};
     use std::collections::HashMap;
-    use std::time::Instant;
-
     #[tokio::test]
-    async fn visible_tps_basis_counts_only_visible_text_and_refusal_deltas() {
+    async fn visible_output_bytes_count_only_visible_text_and_refusal_deltas() {
         let metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
         let runtime_metrics = Some(metrics.clone());
-        let started_at = Some(Instant::now());
 
         record_visible_stream_event_delta(
-            started_at,
             &runtime_metrics,
             &UrpStreamEvent::NodeDelta {
                 node_index: 0,
@@ -778,7 +764,6 @@ mod tests {
         )
         .await;
         record_visible_stream_event_delta(
-            started_at,
             &runtime_metrics,
             &UrpStreamEvent::NodeDelta {
                 node_index: 1,
@@ -794,7 +779,6 @@ mod tests {
         )
         .await;
         record_visible_stream_event_delta(
-            started_at,
             &runtime_metrics,
             &UrpStreamEvent::NodeDelta {
                 node_index: 2,
@@ -807,7 +791,6 @@ mod tests {
         )
         .await;
         record_visible_stream_event_delta(
-            started_at,
             &runtime_metrics,
             &UrpStreamEvent::NodeDelta {
                 node_index: 3,
@@ -820,13 +803,9 @@ mod tests {
         )
         .await;
 
-        let basis = metrics
-            .lock()
-            .await
-            .visible_tps_basis()
-            .expect("visible text/refusal basis");
-        assert_eq!(basis.visible_output_tokens, 3);
-        assert_eq!(basis.tps_mode, "estimated");
+        // "hello" (5 bytes) + "拒绝" (6 UTF-8 bytes); reasoning and tool
+        // arguments are not visible output.
+        assert_eq!(metrics.lock().await.visible_output_bytes, 11);
     }
 
     #[test]

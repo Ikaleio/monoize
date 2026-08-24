@@ -253,7 +253,6 @@ pub async fn compact_response(
                         None,
                         None,
                         None,
-                        None,
                         tried_providers,
                         false,
                     );

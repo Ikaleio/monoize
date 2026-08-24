@@ -500,11 +500,6 @@ pub struct InsertRequestLog {
     pub error_http_status: Option<u16>,
     pub duration_ms: Option<u64>,
     pub ttfb_ms: Option<u64>,
-    pub first_visible_output_ms: Option<u64>,
-    pub last_visible_output_ms: Option<u64>,
-    pub visible_generation_ms: Option<u64>,
-    pub visible_output_tokens: Option<u64>,
-    pub tps_mode: Option<String>,
     pub request_ip: Option<String>,
     pub reasoning_effort: Option<String>,
     pub tried_providers_json: Option<Value>,
@@ -570,11 +565,6 @@ pub struct RequestLogTokens {
 pub struct RequestLogTiming {
     pub duration_ms: Option<i64>,
     pub ttfb_ms: Option<i64>,
-    pub first_visible_output_ms: Option<i64>,
-    pub last_visible_output_ms: Option<i64>,
-    pub visible_generation_ms: Option<i64>,
-    pub visible_output_tokens: Option<i64>,
-    pub tps_mode: Option<String>,
     #[serde(rename = "durationMs")]
     pub duration_ms_alias: Option<i64>,
     pub elapsed_ms: Option<i64>,
@@ -683,19 +673,6 @@ impl InsertRequestLog {
             timing: RequestLogTiming {
                 duration_ms: self.duration_ms.and_then(|v| i64::try_from(v).ok()),
                 ttfb_ms: self.ttfb_ms.and_then(|v| i64::try_from(v).ok()),
-                first_visible_output_ms: self
-                    .first_visible_output_ms
-                    .and_then(|v| i64::try_from(v).ok()),
-                last_visible_output_ms: self
-                    .last_visible_output_ms
-                    .and_then(|v| i64::try_from(v).ok()),
-                visible_generation_ms: self
-                    .visible_generation_ms
-                    .and_then(|v| i64::try_from(v).ok()),
-                visible_output_tokens: self
-                    .visible_output_tokens
-                    .and_then(|v| i64::try_from(v).ok()),
-                tps_mode: self.tps_mode.clone(),
                 duration_ms_alias: self.duration_ms.and_then(|v| i64::try_from(v).ok()),
                 elapsed_ms: self.duration_ms.and_then(|v| i64::try_from(v).ok()),
                 latency_ms: self.duration_ms.and_then(|v| i64::try_from(v).ok()),

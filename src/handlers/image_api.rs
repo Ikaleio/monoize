@@ -1117,7 +1117,6 @@ async fn execute_stream_collected_image_typed(
                         attempt.channel_id.clone(),
                         None,
                         None,
-                        None,
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                         task_state.client_gone(),

@@ -821,8 +821,7 @@
 		"reasoningEffort": "Reasoning Effort",
 		"upstreamModel": "Upstream Model",
 		"modelProvider": "Provider",
-		"avgTps": "Avg TPS",
-		"tpsGenerationWindow": "Generation Window",
+		"tps": "TPS",
 		"connectivityTest": "Connectivity Test",
 		"totalCost": "Total Cost",
 		"timeRange": "Time Range",
@@ -838,7 +837,6 @@
 		"timeRangeFrom": "From: yyyy-MM-dd HH:mm:ss",
 		"timeRangeTo": "To: yyyy-MM-dd HH:mm:ss",
 		"toggleFilters": "Toggle Filters",
-		"visibleWindowTps": "Visible Window TPS",
 		"sessionAffinity": "Session Affinity",
 		"uncachedInput": "Uncached Input",
 		"cachedInput": "Cached Input"

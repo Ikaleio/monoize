@@ -140,7 +140,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
                         usage: None,
                         extra_body: next_extra.clone(),
                     };
-                    record_visible_stream_event_delta(started_at, &runtime_metrics, &event).await;
+                    record_visible_stream_event_delta(&runtime_metrics, &event).await;
                     let _ = tx.send(event).await;
                 }
             } else {
@@ -159,7 +159,7 @@ pub(crate) async fn stream_gemini_to_urp_events(
                     });
                 }
                 for event in events {
-                    record_visible_stream_event_delta(started_at, &runtime_metrics, &event).await;
+                    record_visible_stream_event_delta(&runtime_metrics, &event).await;
                     let _ = tx.send(event).await;
                 }
             }

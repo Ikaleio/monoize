@@ -260,7 +260,6 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &mut next_node_index,
                 &mut output_text,
                 &mut delta_extra,
-                started_at,
                 &runtime_metrics,
             )
             .await?;
@@ -280,7 +279,6 @@ pub(crate) async fn stream_chat_to_urp_events(
                         &mut next_node_index,
                         &mut output_text,
                         &mut delta_extra,
-                        started_at,
                         &runtime_metrics,
                     )
                     .await?;
@@ -352,7 +350,6 @@ pub(crate) async fn stream_chat_to_urp_events(
                             &mut next_node_index,
                             &mut output_text,
                             &mut delta_extra,
-                            started_at,
                             &runtime_metrics,
                         )
                         .await?;
@@ -544,7 +541,6 @@ pub(crate) async fn stream_chat_to_urp_events(
                 &mut tool_node_index_by_call_id,
                 &mut provider_items,
                 &mut delta_extra,
-                started_at,
                 &runtime_metrics,
             )
             .await?;
@@ -927,7 +923,6 @@ async fn process_text_delta(
     next_node_index: &mut u32,
     output_text: &mut String,
     delta_extra: &mut Map<String, Value>,
-    started_at: Option<std::time::Instant>,
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> AppResult<()> {
     if text.is_empty() {
@@ -950,7 +945,7 @@ async fn process_text_delta(
     )
     .await?;
     output_text.push_str(text);
-    record_visible_output_delta(started_at, runtime_metrics, text).await;
+    record_visible_output_delta(runtime_metrics, text).await;
     send_node_delta(
         tx,
         node_index,
@@ -1585,7 +1580,6 @@ async fn process_terminal_message_snapshot(
     tool_node_index_by_call_id: &mut HashMap<String, u32>,
     provider_items: &mut Vec<(u32, Node)>,
     delta_extra: &mut Map<String, Value>,
-    started_at: Option<std::time::Instant>,
     runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
 ) -> AppResult<()> {
     if assistant_message_phase.is_none() {
@@ -1703,7 +1697,6 @@ async fn process_terminal_message_snapshot(
                     next_node_index,
                     output_text,
                     delta_extra,
-                    started_at,
                     runtime_metrics,
                 )
                 .await?;
@@ -1724,7 +1717,6 @@ async fn process_terminal_message_snapshot(
                             next_node_index,
                             output_text,
                             delta_extra,
-                            started_at,
                             runtime_metrics,
                         )
                         .await?;
@@ -1753,7 +1745,6 @@ async fn process_terminal_message_snapshot(
                             next_node_index,
                             output_text,
                             delta_extra,
-                            started_at,
                             runtime_metrics,
                         )
                         .await?;
@@ -2366,7 +2357,6 @@ mod tests {
             &mut next_node_index,
             &mut output_text,
             &mut delta_extra,
-            None,
             &None,
         )
         .await

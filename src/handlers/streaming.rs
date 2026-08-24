@@ -91,7 +91,6 @@ fn spawn_stream_attempt_error(
         reasoning_effort,
         tried_providers,
         None,
-        None,
     );
 }
 
@@ -632,7 +631,6 @@ pub(super) async fn forward_stream_typed(
                                             attempt_for_log.channel_id.clone(),
                                             Some(started_at.elapsed().as_millis() as u64),
                                             None,
-                                            None,
                                             reasoning_effort_for_log,
                                             tried_providers_for_log,
                                             tx_err.is_closed(),
@@ -665,7 +663,6 @@ pub(super) async fn forward_stream_typed(
                                                 reasoning_effort_for_log,
                                                 tried_providers_for_log,
                                                 resp.usage.clone(),
-                                                None,
                                             );
                                         }
                                     }
@@ -854,8 +851,6 @@ pub(super) async fn forward_stream_typed(
                         response_service_tier: None,
                         terminal: StreamTerminalDiagnostics::default(),
                         estimated_output_tokens: 0,
-                        first_visible_output_ms: None,
-                        last_visible_output_ms: None,
                         visible_output_bytes: 0,
                     }));
                     let decoded_terminal_output = Arc::new(Mutex::new(Vec::<urp::Node>::new()));
@@ -1033,7 +1028,6 @@ pub(super) async fn forward_stream_typed(
                             usage,
                             is_estimated,
                             terminal_diagnostics,
-                            visible_tps_basis,
                             response_id,
                             response_service_tier,
                         ) = {
@@ -1070,7 +1064,6 @@ pub(super) async fn forward_stream_typed(
                                 usage,
                                 is_estimated,
                                 guard.terminal.clone(),
-                                guard.visible_tps_basis(),
                                 guard.response_id.clone(),
                                 guard.response_service_tier.clone(),
                             )
@@ -1100,7 +1093,6 @@ pub(super) async fn forward_stream_typed(
                                 reasoning_effort_for_log,
                                 tried_providers_for_log,
                                 actual_upstream_usage.clone(),
-                                visible_tps_basis.clone(),
                             );
                             if let Some(session) = capture_session.as_ref() {
                                 let frames = if let Some(frames) = capture_frames_for_task.as_ref()
@@ -1298,7 +1290,6 @@ pub(super) async fn forward_stream_typed(
                                     reasoning_effort_for_log,
                                     tried_providers_for_log,
                                     usage.clone(),
-                                    visible_tps_basis.clone(),
                                 );
                                 if let Some(session) = capture_session.as_ref() {
                                     session.persist_with_result(usage.as_ref(), true).await;
@@ -1345,7 +1336,6 @@ pub(super) async fn forward_stream_typed(
                             request_ip_for_log,
                             channel_id_for_log,
                             ttfb_ms,
-                            visible_tps_basis,
                             Some(terminal_diagnostics),
                             reasoning_effort_for_log,
                             tried_providers_for_log,
@@ -1453,7 +1443,6 @@ pub(super) async fn forward_stream_typed(
             terminal_error,
             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
             tried_providers,
-            None,
             None,
         );
     } else {
