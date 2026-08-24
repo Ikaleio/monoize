@@ -287,6 +287,7 @@ ST2. Health Monitoring section MUST expose at least these editable fields bound 
 - `monoize_strip_cross_protocol_nested_extra` (boolean)
 - `monoize_request_capture_enabled` (boolean switch, default off)
 - `monoize_request_capture_retention_days` (integer >= 1, default 1)
+- `monoize_mask_sensitive_info` (boolean switch, default on; when on, client-facing and non-admin request-log error text apply `MASK` per `upstream-error-sanitization.spec.md`; when off, that masking is disabled)
 
 ST2a. `/dashboard/admin-settings` MUST include a "Routing Affinity" card bound to `GET/PUT /api/dashboard/settings`. The card MUST expose:
 

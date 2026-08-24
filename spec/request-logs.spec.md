@@ -34,7 +34,7 @@ A request log row has:
 - `usage_breakdown_json: object?` (normalized per-request usage detail snapshot; persisted as JSON text in DB)
 - `billing_breakdown_json: object?` (per-request pricing and charge breakdown snapshot at billing time; persisted as JSON text in DB)
 - `error_code: string?` (error code for failed requests, e.g. `upstream_error`)
-- `error_message: string?` (error message for failed requests)
+- `error_message: string?` (error message for failed requests; for upstream-derived failures this is the full internal detail per `upstream-error-sanitization.spec.md` SAN-9 — the truncated raw upstream text, which MAY differ from the downstream client message and MAY contain raw upstream URLs, domains, IPv4 addresses, and `api_key:` values. Read-time disclosure to dashboard viewers follows RL-API14.)
 - `error_http_status: integer?` (HTTP status returned to downstream client for failed requests)
 - `duration_ms: integer?` (wall-clock time from request start to upstream response)
 - `ttfb_ms: integer?` (time from request start to first byte/chunk from upstream; null for non-streaming)
@@ -223,7 +223,7 @@ RL16b. Each token line item MUST include `usage_class`, `unit`, `unit_price_nano
 
 RL16c. Each meter line item MUST include `usage_class`, `unit`, `unit_price_nano`, `quantity`, `charge_nano`, and whether the quantity was authoritative when that can be represented.
 
-RL17. When a request triggers waterfall fail-forward, `tried_providers_json` MUST record each failed upstream attempt. This rule applies to every upstream error class. Each persisted entry MUST contain `attempt_number`, `provider_id`, `channel_id`, `provider_name`, `channel_name`, and `error`. It MUST also persist `duration_ms`, `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` when those values exist on the failed attempt. `duration_ms` MUST equal the wall-clock milliseconds from the start of that upstream attempt to the failure. `provider_name` and `channel_name` MUST equal the Provider and Channel display names at attempt time. The array MUST be ordered chronologically. When no upstream attempt failed, the field MUST be null.
+RL17. When a request triggers waterfall fail-forward, `tried_providers_json` MUST record each failed upstream attempt. This rule applies to every upstream error class. Each persisted entry MUST contain `attempt_number`, `provider_id`, `channel_id`, `provider_name`, `channel_name`, and `error`. `error` MUST equal the attempt's unmasked, truncated internal detail per `upstream-error-sanitization.spec.md` SAN-5/SAN-10; the attempt's client-facing `client_error` text MUST NOT be persisted. It MUST also persist `duration_ms`, `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` when those values exist on the failed attempt. `duration_ms` MUST equal the wall-clock milliseconds from the start of that upstream attempt to the failure. `provider_name` and `channel_name` MUST equal the Provider and Channel display names at attempt time. The array MUST be ordered chronologically. When no upstream attempt failed, the field MUST be null.
 
 RL17a. `GET /api/dashboard/request-logs` MUST return `tried_providers` as that JSON array, or null. For each hop, if `provider_name` is missing or empty, the handler MUST set it from the current `monoize_providers` row for `provider_id` when that row exists. If `channel_name` is missing or empty, the handler MUST set it from the current `monoize_channels` row for `channel_id` when that row exists. In-memory SSE snapshots already contain write-time names and MUST NOT require this fill.
 
@@ -301,12 +301,18 @@ RL-API12. The effective maximum number of non-empty comma-separated `model` term
 
 RL-API13. If a request supplies more `model` terms than the effective RL-API12 limit, `GET /api/dashboard/request-logs` MUST return HTTP `400`, code `request_log_model_filter_too_many_terms`, and `param = "model"` before executing any database query, including authentication or session lookup. Both admin and non-admin paths MUST apply the same check. The `UserStore` list methods and the SQL filter builder MUST independently reject an over-limit model filter so non-HTTP callers cannot construct an unbounded OR expression or bind list.
 
+RL-API14. Error-detail disclosure is role-dependent (`upstream-error-sanitization.spec.md` section 8):
+
+- When the caller's role is `admin` or `super_admin`, `GET /api/dashboard/request-logs` and `GET /api/dashboard/request-logs/stream` MUST return `error.message` and every `tried_providers[].error` exactly as stored (full raw detail, bounded only by write-time truncation).
+- For any other caller, both endpoints MUST replace `error.message` with `MASK(stored text)` and each `tried_providers[].error` with `MASK(stored text)` before serialization, where `MASK` is defined by `upstream-error-sanitization.spec.md` SAN-D1. The stored row MUST NOT be modified.
+
 ### 3.2 Admin-visible vs user-visible fields
 
 The API returns the same enriched schema for all users. The frontend controls column visibility:
 
 - **Admin-only columns:** `username`, `channel` (display text uses `provider_name` when available, otherwise falls back to `provider_id`; tooltip shows channel name and upstream model context)
 - **All users see:** `created_at`, `request_id`, `model` (with ModelBadge), `api_key_name`, `duration_ms`/`ttfb_ms`/`is_stream` (merged badge group), `input_tokens`, `output_tokens`, `charge_nano_usd`, `status`, `request_ip`, and error tooltip details (`error_code`, `error_message`, `error_http_status`) when `status = "error"`.
+- For non-admin callers, the `error_message` and `tried_providers[].error` values inside the returned rows are the read-time-masked forms defined by RL-API14; admin callers receive the stored full detail. The frontend renders whichever text the API returned and performs no additional masking.
 
 ## 4. Storage
 
@@ -616,7 +622,7 @@ FL46. The endpoint MUST emit exactly two event types:
 FL47. SSE event visibility MUST obey the same permission rules as the REST endpoint (RL-API1):
 
 - If the authenticated user has role `super_admin` or `admin`, the server MUST push ALL newly created log entries.
-- Otherwise, the server MUST push only log entries where `user_id` matches the authenticated user's ID.
+- Otherwise, the server MUST push only log entries where `user_id` matches the authenticated user's ID, and each pushed row MUST carry the read-time-masked `error.message` and `tried_providers[].error` values defined by RL-API14.
 - The server MUST NOT accept filter query parameters on the SSE endpoint (see FL53). Client-side code MUST filter SSE-delivered logs locally against the active UI filter state before displaying them.
 
 ### 6.4 Connection lifecycle

@@ -5,6 +5,12 @@ fn maybe_forced_upstream_error(body: &Value) -> Option<axum::response::Response>
         .and_then(|v| v.as_u64())?;
     let status_u16 = u16::try_from(status_u64).ok()?;
     let status = StatusCode::from_u16(status_u16).ok()?;
+    if let Some(raw_body) = body
+        .get("force_upstream_error_raw_body")
+        .and_then(|v| v.as_str())
+    {
+        return Some((status, raw_body.to_string()).into_response());
+    }
     let code = body
         .get("force_upstream_error_code")
         .and_then(|v| v.as_str())

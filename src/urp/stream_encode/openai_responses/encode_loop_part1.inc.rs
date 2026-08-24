@@ -104,6 +104,7 @@ pub(crate) async fn encode_urp_stream_as_responses(
     logical_model: &str,
     stream_started_at: Instant,
     sse_max_frame_length: Option<usize>,
+    mask_sensitive_info: bool,
 ) -> AppResult<()> {
     let mut seq = 1u64;
     let mut response_id = "resp".to_string();
@@ -1527,12 +1528,17 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 extra_body,
             } => {
                 let created_at = created.unwrap_or_else(now_ts);
+                // SAN-11 / SAN-CFG5: decoder-origin error text may embed
+                // upstream URLs; masking is gated by the runtime setting.
                 let failed_response = response_failed_payload(
                     &response_id,
                     created_at,
                     logical_model,
                     code.as_deref(),
-                    &message,
+                    &crate::error_sanitize::maybe_mask_sensitive_text(
+                        &message,
+                        mask_sensitive_info,
+                    ),
                     &extra_body,
                 );
                 send_responses_event(

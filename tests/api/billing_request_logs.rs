@@ -219,7 +219,10 @@ async fn chat_streaming_downstream_disconnect_still_drains_final_usage_and_bills
     drop(body);
 
     let mut matched = None;
-    for _ in 0..30 {
+    // The drain task must consume two mock frames spaced 150 ms apart before
+    // the log is persisted, which takes ~1 s unloaded; poll up to 10 s so the
+    // test stays deterministic when the whole suite runs in parallel.
+    for _ in 0..200 {
         ctx.state.user_store.flush_all_batchers().await;
         let (logs, _, _) = ctx
             .state

@@ -1144,7 +1144,20 @@ fn messages_body_uses_files_api(value: &serde_json::Value) -> bool {
     }
 }
 
+/// SAN-6: the downstream exhausted-routing message carries only the model and
+/// the last attempt's client-facing error text — no attempt counts, no
+/// provider/channel identity, no upstream URLs.
 pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]) -> String {
+    if tried.is_empty() {
+        return format!("No available upstream provider for model: {model}");
+    }
+    let last_error = &tried[tried.len() - 1].client_error;
+    format!("All upstream attempts failed for model: {model}. Last error: {last_error}")
+}
+
+/// SAN-7: the operator-facing internal detail keeps the attempt count and the
+/// unmasked internal error of the final attempt for request-log persistence.
+pub(super) fn build_exhausted_error_detail(model: &str, tried: &[TriedProvider]) -> String {
     if tried.is_empty() {
         return format!("No available upstream provider for model: {model}");
     }
@@ -1170,13 +1183,21 @@ pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider
     } else {
         StatusCode::BAD_GATEWAY
     };
+    // RTA-8a / SAN-8: the signature-invalid exception forwards the final
+    // attempt error without the exhausted wrapper.
     let message = if signature_invalid {
-        last.map(|attempt| attempt.error.clone())
+        last.map(|attempt| attempt.client_error.clone())
             .unwrap_or_else(|| build_exhausted_error_message(model, tried))
     } else {
         build_exhausted_error_message(model, tried)
     };
-    let mut err = AppError::new(status, code, message);
+    let internal_message = if signature_invalid {
+        last.map(|attempt| attempt.error.clone())
+            .unwrap_or_else(|| build_exhausted_error_detail(model, tried))
+    } else {
+        build_exhausted_error_detail(model, tried)
+    };
+    let mut err = AppError::new(status, code, message).with_internal_message(internal_message);
     if let Some(last) = last {
         err.upstream_status = last.upstream_status;
         err.upstream_code = last.upstream_code.clone();
@@ -1236,11 +1257,13 @@ pub(super) async fn record_upstream_attempt_failure(
     tried_providers: &mut Vec<TriedProvider>,
     execution_state: &mut AttemptExecutionState,
 ) {
+    let mask_sensitive_info = state.monoize_runtime.read().await.mask_sensitive_info;
     tried_providers.push(TriedProvider::from_app_error(
         attempt_number,
         attempt,
         app_err,
         execution_state.last_attempt_duration_ms(),
+        mask_sensitive_info,
     ));
     let Some(failure_class) = passive_failure_class else {
         return;
@@ -1482,16 +1505,49 @@ async fn apply_retryable_failure_to_channel(
         }
     }
 }
-pub(super) fn upstream_error_to_app(err: UpstreamCallError) -> AppError {
+pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info: bool) -> AppError {
     let status = err.status.unwrap_or(StatusCode::BAD_GATEWAY);
+    // SAN-3: the raw unmasked upstream detail (transport text with the full
+    // upstream URL, raw unparsed error bodies) exists in the server log only.
     tracing::warn!(status = %status, upstream_error = %err.message, "upstream request failed");
-    let user_message = format!("upstream status {status}: {}", err.message);
-    let mut app_err = AppError::new(status, "upstream_error", user_message).with_upstream_error(
-        err.status,
-        err.code,
-        err.error_type.clone(),
-        err.param.clone(),
+    // SAN-1 when masking is enabled; SAN-CFG5 items 1-4 when the admin
+    // disabled `monoize_mask_sensitive_info`.
+    let client_message = match err.source {
+        upstream::UpstreamErrorSource::Transport if mask_sensitive_info => {
+            "failed to request upstream".to_string()
+        }
+        upstream::UpstreamErrorSource::UnparsedBody if mask_sensitive_info => {
+            format!("upstream status {status}")
+        }
+        upstream::UpstreamErrorSource::EmptyBody => format!("upstream status {status}"),
+        upstream::UpstreamErrorSource::Transport | upstream::UpstreamErrorSource::UnparsedBody => {
+            format!(
+                "upstream status {status}: {}",
+                crate::error_sanitize::truncate_error_detail(&err.message)
+            )
+        }
+        upstream::UpstreamErrorSource::StructuredBody | upstream::UpstreamErrorSource::Internal => {
+            format!(
+                "upstream status {status}: {}",
+                crate::error_sanitize::maybe_mask_sensitive_text(&err.message, mask_sensitive_info)
+            )
+        }
+    };
+    // SAN-2: unmasked, TRUNC-bounded detail for request-log persistence.
+    // Admins read it verbatim; non-admin dashboard reads mask it at read
+    // time (SAN-13/SAN-14).
+    let internal_message = format!(
+        "upstream status {status}: {}",
+        crate::error_sanitize::truncate_error_detail(&err.message)
     );
+    let mut app_err = AppError::new(status, "upstream_error", client_message)
+        .with_internal_message(internal_message)
+        .with_upstream_error(
+            err.status,
+            err.code,
+            err.error_type.clone(),
+            err.param.clone(),
+        );
     if let Some(error_type) = err.error_type {
         app_err = app_err.with_type(error_type);
     }

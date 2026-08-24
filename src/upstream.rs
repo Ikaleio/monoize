@@ -9,6 +9,24 @@ pub enum UpstreamErrorKind {
     Http,
 }
 
+/// SAN-D3 (`spec/upstream-error-sanitization.spec.md`): classifies where the
+/// error `message` text came from, which decides how much of it may be shown
+/// to downstream clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamErrorSource {
+    /// The request could not be sent or its response body could not be read.
+    Transport,
+    /// Non-2xx upstream response with a parseable `error.message`.
+    StructuredBody,
+    /// Non-2xx upstream response whose non-empty body had no parseable
+    /// `error.message`; `message` carries the raw body for server logs only.
+    UnparsedBody,
+    /// Non-2xx upstream response with an empty body.
+    EmptyBody,
+    /// Monoize-generated diagnostic (config, encoding, 2xx decode failures).
+    Internal,
+}
+
 #[derive(Debug, Clone)]
 pub struct UpstreamCallError {
     pub kind: UpstreamErrorKind,
@@ -17,10 +35,19 @@ pub struct UpstreamCallError {
     pub error_type: Option<String>,
     pub param: Option<String>,
     pub message: String,
+    pub source: UpstreamErrorSource,
 }
 
 impl UpstreamCallError {
     pub fn new(kind: UpstreamErrorKind, status: Option<StatusCode>, message: String) -> Self {
+        // SAN-D3 defaults: network-kind messages are transport diagnostics
+        // (reqwest text may embed the upstream URL); HTTP-kind messages built
+        // by constructors other than the non-2xx response path are
+        // Monoize-generated diagnostics.
+        let source = match kind {
+            UpstreamErrorKind::Network => UpstreamErrorSource::Transport,
+            UpstreamErrorKind::Http => UpstreamErrorSource::Internal,
+        };
         Self {
             kind,
             status,
@@ -28,6 +55,7 @@ impl UpstreamCallError {
             error_type: None,
             param: None,
             message,
+            source,
         }
     }
 
@@ -35,6 +63,11 @@ impl UpstreamCallError {
         self.code = info.code;
         self.error_type = info.error_type;
         self.param = info.param;
+        self
+    }
+
+    pub fn with_source(mut self, source: UpstreamErrorSource) -> Self {
+        self.source = source;
         self
     }
 }
@@ -180,21 +213,31 @@ pub async fn call_upstream_raw_with_timeout_and_headers(
         .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Network, None, err.to_string()))?;
     let status = resp.status();
     if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        let info = extract_error_info(&text);
-        let message = info.message.clone().unwrap_or_else(|| {
-            if text.is_empty() {
-                "upstream returned an empty error body".to_string()
-            } else {
-                text
-            }
-        });
-        return Err(
-            UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
-                .with_error_info(info),
-        );
+        return Err(non_success_upstream_error(resp, status).await);
     }
     Ok(resp)
+}
+
+/// SAN-D3: classify a non-2xx upstream response. `message` keeps the raw body
+/// only when no structured `error.message` exists, so that the routing layer
+/// can log it server-side without ever exposing it downstream.
+async fn non_success_upstream_error(
+    resp: reqwest::Response,
+    status: StatusCode,
+) -> UpstreamCallError {
+    let text = resp.text().await.unwrap_or_default();
+    let info = extract_error_info(&text);
+    let (message, source) = match info.message.clone() {
+        Some(message) => (message, UpstreamErrorSource::StructuredBody),
+        None if text.is_empty() => (
+            "upstream returned an empty error body".to_string(),
+            UpstreamErrorSource::EmptyBody,
+        ),
+        None => (text, UpstreamErrorSource::UnparsedBody),
+    };
+    UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
+        .with_error_info(info)
+        .with_source(source)
 }
 
 pub async fn call_upstream_multipart_with_timeout_and_headers(
@@ -232,19 +275,7 @@ pub async fn call_upstream_multipart_with_timeout_and_headers(
         .map_err(|err| UpstreamCallError::new(UpstreamErrorKind::Network, None, err.to_string()))?;
     let status = resp.status();
     if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        let info = extract_error_info(&text);
-        let message = info.message.clone().unwrap_or_else(|| {
-            if text.is_empty() {
-                "upstream returned an empty error body".to_string()
-            } else {
-                text
-            }
-        });
-        return Err(
-            UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
-                .with_error_info(info),
-        );
+        return Err(non_success_upstream_error(resp, status).await);
     }
     Ok(resp)
 }

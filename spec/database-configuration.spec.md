@@ -210,6 +210,8 @@ DB23h. `POST /api/dashboard/auth/logout` MUST return success only after the curr
 
 DB24. `system_settings` MUST persist `monoize_affinity_enabled`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_mode`, and `monoize_affinity_failback_delay_seconds`. Missing rows MUST resolve to `true`, `1800`, `"sticky"`, and `300`, respectively.
 
+DB24i. `system_settings` MUST persist `monoize_mask_sensitive_info`. A missing row MUST resolve to `true`. `monoize_runtime.mask_sensitive_info` MUST equal the committed value after every settings publication (DB23b).
+
 DB24a. `system_settings` MUST persist `codex_model_ids` as a JSON array of strings. A missing, invalid, or non-array value MUST resolve to `[]`. Writes MUST use the canonical ordered array defined by `spec/unified_responses_proxy.spec.md` DMO3a.
 
 DB24b. `system_settings` MUST persist `global_model_redirects` as a JSON array

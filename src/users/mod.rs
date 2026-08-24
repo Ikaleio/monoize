@@ -616,6 +616,30 @@ pub struct RequestLogRow {
     pub error: RequestLogError,
 }
 
+impl RequestLogRow {
+    /// SAN-14 (`spec/upstream-error-sanitization.spec.md`): replace the
+    /// admin-tier error detail with its `MASK`ed form before serializing this
+    /// row for a non-admin dashboard viewer. Operates on the in-memory copy
+    /// only; the stored row is never modified.
+    pub fn mask_error_detail_for_non_admin(&mut self) {
+        if let Some(message) = self.error.message.as_deref() {
+            self.error.message = Some(crate::error_sanitize::mask_sensitive_text(message));
+        }
+        let Some(Value::Array(items)) = self.tried_providers.as_mut() else {
+            return;
+        };
+        for item in items {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            if let Some(error_text) = obj.get("error").and_then(Value::as_str) {
+                let masked = crate::error_sanitize::mask_sensitive_text(error_text);
+                obj.insert("error".to_string(), Value::String(masked));
+            }
+        }
+    }
+}
+
 impl InsertRequestLog {
     pub fn to_request_log_row(&self) -> RequestLogRow {
         RequestLogRow {
@@ -887,5 +911,83 @@ mod tests {
             },
         ])
         .expect("valid redirects should pass");
+    }
+
+    // SAN-14: the non-admin read-time mask rewrites `error.message` and every
+    // `tried_providers[].error` while leaving all other row fields untouched.
+    #[test]
+    fn non_admin_mask_rewrites_error_message_and_tried_provider_errors() {
+        let raw = "upstream status 502 Bad Gateway: connect to https://api.cloudflare.com/client/v4/accounts/ebb3b05a7371fbcbd62bde8264c86cfe/ai failed via 10.32.4.17";
+        let mut row = super::InsertRequestLog {
+            request_id: Some("req-mask".to_string()),
+            user_id: "user-1".to_string(),
+            api_key_id: None,
+            model: "gpt-5-mini".to_string(),
+            provider_id: None,
+            upstream_model: None,
+            channel_id: None,
+            names: super::RequestLogNameSnapshots::default(),
+            is_stream: false,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            tool_prompt_tokens: None,
+            reasoning_tokens: None,
+            accepted_prediction_tokens: None,
+            rejected_prediction_tokens: None,
+            provider_multiplier: None,
+            charge_nano_usd: None,
+            status: super::REQUEST_LOG_STATUS_ERROR.to_string(),
+            usage_breakdown_json: None,
+            billing_breakdown_json: None,
+            error_code: Some("upstream_error".to_string()),
+            error_message: Some(raw.to_string()),
+            error_http_status: Some(502),
+            duration_ms: None,
+            ttfb_ms: None,
+            first_visible_output_ms: None,
+            last_visible_output_ms: None,
+            visible_generation_ms: None,
+            visible_output_tokens: None,
+            tps_mode: None,
+            request_ip: None,
+            reasoning_effort: None,
+            tried_providers_json: Some(serde_json::json!([
+                { "attempt_number": 1, "provider_id": "p1", "channel_id": "c1", "error": raw },
+                { "attempt_number": 2, "provider_id": "p2", "channel_id": "c2", "error": "plain failure" }
+            ])),
+            request_kind: None,
+            effective_provider_type: None,
+            affinity_hit: None,
+            affinity_key_hash: None,
+            affinity_target: None,
+            session_affinity_value: None,
+            created_at: chrono::Utc::now(),
+        }
+        .to_request_log_row();
+
+        row.mask_error_detail_for_non_admin();
+
+        let masked_message = row.error.message.as_deref().expect("error message");
+        assert!(!masked_message.contains("cloudflare"), "{masked_message}");
+        assert!(
+            !masked_message.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+            "{masked_message}"
+        );
+        assert!(!masked_message.contains("10.32.4.17"), "{masked_message}");
+        assert!(
+            masked_message.contains("https://***.com/***"),
+            "{masked_message}"
+        );
+
+        let tried = row.tried_providers.as_ref().expect("tried providers");
+        let first_error = tried[0]["error"].as_str().expect("first hop error");
+        assert!(!first_error.contains("cloudflare"), "{first_error}");
+        assert!(first_error.contains("https://***.com/***"), "{first_error}");
+        assert_eq!(tried[1]["error"], serde_json::json!("plain failure"));
+        assert_eq!(tried[0]["provider_id"], serde_json::json!("p1"));
+        assert_eq!(row.error.code.as_deref(), Some("upstream_error"));
+        assert_eq!(row.error.http_status, Some(502));
     }
 }

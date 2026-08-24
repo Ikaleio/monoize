@@ -10,6 +10,7 @@ pub mod db;
 pub mod db_cache;
 pub mod entity;
 pub mod error;
+pub mod error_sanitize;
 pub mod exact_decimal;
 pub mod frontend;
 pub mod glob;

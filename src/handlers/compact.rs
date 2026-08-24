@@ -296,7 +296,9 @@ pub async fn compact_response(
                     let same_channel_retryable = is_same_channel_retryable_error(&err);
                     let passive_failure_class =
                         same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let app_err = upstream_error_to_app(err);
+                    let mask_sensitive_info =
+                        state.monoize_runtime.read().await.mask_sensitive_info;
+                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
                     record_upstream_attempt_failure(
                         &state,
                         &attempt,

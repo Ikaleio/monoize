@@ -772,7 +772,9 @@ pub async fn create_embeddings(
                     let same_channel_retryable = is_same_channel_retryable_error(&err);
                     let passive_failure_class =
                         same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let app_err = upstream_error_to_app(err);
+                    let mask_sensitive_info =
+                        state.monoize_runtime.read().await.mask_sensitive_info;
+                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
                     record_upstream_attempt_failure(
                         &state,
                         &attempt,
@@ -967,7 +969,14 @@ struct TriedProvider {
     channel_id: String,
     provider_name: String,
     channel_name: String,
+    /// SAN-5: unmasked, truncated internal detail persisted to
+    /// `tried_providers_json` (RL17). Admins read it verbatim; non-admin
+    /// dashboard reads mask it at read time (SAN-14).
     error: String,
+    /// SAN-5: client-facing text used by the exhausted downstream error.
+    /// Never persisted.
+    #[serde(skip)]
+    client_error: String,
     upstream_status: Option<u16>,
     upstream_code: Option<String>,
     upstream_type: Option<String>,
@@ -981,6 +990,7 @@ impl TriedProvider {
         attempt: &MonoizeAttempt,
         app_err: &AppError,
         duration_ms: Option<u64>,
+        mask_sensitive_info: bool,
     ) -> Self {
         Self {
             attempt_number,
@@ -988,7 +998,20 @@ impl TriedProvider {
             channel_id: attempt.channel_id.clone(),
             provider_name: attempt.provider_name.clone(),
             channel_name: attempt.channel_name.clone(),
-            error: app_err.message.clone(),
+            // SAN-5: `error` is the unmasked internal detail. Attempt
+            // failures can also come from response-decoding AppErrors that
+            // never pass through `upstream_error_to_app`, so `client_error`
+            // masks unconditionally when masking is enabled (idempotent)
+            // while `error` keeps the raw text for admin-tier request-log
+            // reads. SAN-CFG5 item 1: masking off makes `MASK` the identity.
+            error: app_err
+                .internal_message
+                .clone()
+                .unwrap_or_else(|| crate::error_sanitize::truncate_error_detail(&app_err.message)),
+            client_error: crate::error_sanitize::maybe_mask_sensitive_text(
+                &app_err.message,
+                mask_sensitive_info,
+            ),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(
                 app_err

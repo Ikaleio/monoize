@@ -549,6 +549,7 @@ pub(crate) async fn encode_urp_stream_as_chat(
     tx: mpsc::Sender<Event>,
     logical_model: &str,
     sse_max_frame_length: Option<usize>,
+    mask_sensitive_info: bool,
 ) -> AppResult<()> {
     let mut chat_id = String::new();
     let mut created = 0i64;
@@ -1059,6 +1060,10 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 message,
                 extra_body,
             } => {
+                // SAN-11 / SAN-CFG5: decoder-origin error text may embed
+                // upstream URLs; masking is gated by the runtime setting.
+                let message =
+                    crate::error_sanitize::maybe_mask_sensitive_text(&message, mask_sensitive_info);
                 let payload = chat_error_payload(
                     extra_body.get(CHAT_ERROR_EVENT_EXTRA_KEY),
                     code.as_deref(),
@@ -1582,7 +1587,7 @@ mod tests {
             .expect("response done");
         drop(event_tx);
 
-        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None, true)
             .await
             .expect("encode stream");
 
@@ -1595,6 +1600,46 @@ mod tests {
         assert!(text.contains("brief summary"));
         assert!(text.contains("\\\"delta\\\":{\\\"reasoning_content\\\":\\\"brief summary\\\"}"));
         assert!(!text.contains("data: {\"reasoning_content\":\"brief summary\"}"));
+    }
+
+    async fn collect_chat_error_frame_text(mask_sensitive_info: bool) -> String {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (sse_tx, mut sse_rx) = mpsc::channel(8);
+
+        event_tx
+            .send(UrpStreamEvent::Error {
+                code: Some("upstream_error".to_string()),
+                message:
+                    "decode failed for https://api.cloudflare.com/client/v4/accounts/abc123/ai"
+                        .to_string(),
+                extra_body: HashMap::new(),
+            })
+            .await
+            .expect("error event");
+        drop(event_tx);
+
+        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None, mask_sensitive_info)
+            .await
+            .expect("encode stream");
+
+        let mut text = String::new();
+        while let Some(event) = sse_rx.recv().await {
+            text.push_str(&format!("{event:?}"));
+        }
+        text
+    }
+
+    // SAN-11 / SAN-CFG5 item 1: the mid-stream error frame masks the message
+    // only while `mask_sensitive_info` is enabled.
+    #[tokio::test]
+    async fn chat_stream_error_frame_masking_follows_runtime_setting() {
+        let masked = collect_chat_error_frame_text(true).await;
+        assert!(!masked.contains("cloudflare"), "{masked}");
+        assert!(masked.contains("https://***.com/***"), "{masked}");
+
+        let unmasked = collect_chat_error_frame_text(false).await;
+        assert!(unmasked.contains("api.cloudflare.com"), "{unmasked}");
+        assert!(unmasked.contains("abc123"), "{unmasked}");
     }
 
     #[tokio::test]
@@ -1637,7 +1682,7 @@ mod tests {
         drop(event_tx);
 
         with_sse_capture(frames.clone(), async {
-            encode_urp_stream_as_chat(event_rx, sse_tx, "deepseek-chat", None)
+            encode_urp_stream_as_chat(event_rx, sse_tx, "deepseek-chat", None, true)
                 .await
                 .unwrap();
         })
@@ -1812,7 +1857,7 @@ mod tests {
         drop(event_tx);
 
         with_sse_capture(frames.clone(), async {
-            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None, true)
                 .await
                 .expect("encode stream");
         })
@@ -1887,7 +1932,7 @@ mod tests {
             .expect("response done");
         drop(event_tx);
 
-        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+        encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None, true)
             .await
             .expect("encode stream");
 
@@ -1971,7 +2016,7 @@ mod tests {
         drop(event_tx);
 
         with_sse_capture(frames.clone(), async {
-            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None, true)
                 .await
                 .expect("encode stream");
         })
@@ -2066,7 +2111,7 @@ mod tests {
         drop(event_tx);
 
         with_sse_capture(frames.clone(), async {
-            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-4", None)
+            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-4", None, true)
                 .await
                 .unwrap();
         })
@@ -2184,7 +2229,7 @@ mod tests {
         drop(event_tx);
 
         with_sse_capture(frames.clone(), async {
-            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None)
+            encode_urp_stream_as_chat(event_rx, sse_tx, "gpt-5.4", None, true)
                 .await
                 .expect("encode stream");
         })

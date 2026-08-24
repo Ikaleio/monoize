@@ -2330,7 +2330,9 @@ fn exhausted_upstream_error_preserves_final_machine_code() {
         channel_id: "channel-a".to_string(),
         provider_name: "Provider A".to_string(),
         channel_name: "Channel A".to_string(),
-        error: "encrypted content could not be verified".to_string(),
+        error: "upstream status 400 Bad Request: encrypted content could not be verified"
+            .to_string(),
+        client_error: "encrypted content could not be verified".to_string(),
         upstream_status: Some(StatusCode::BAD_REQUEST.as_u16()),
         upstream_code: Some("thinking_signature_invalid".to_string()),
         upstream_type: Some("invalid_request_error".to_string()),
@@ -2344,8 +2346,275 @@ fn exhausted_upstream_error_preserves_final_machine_code() {
     assert_eq!(err.code, "thinking_signature_invalid");
     assert_eq!(err.message, "encrypted content could not be verified");
     assert_eq!(
+        err.internal_message.as_deref(),
+        Some("upstream status 400 Bad Request: encrypted content could not be verified")
+    );
+    assert_eq!(
         err.upstream_code.as_deref(),
         Some("thinking_signature_invalid")
+    );
+}
+
+const LEAKY_TRANSPORT_ERROR: &str = "error sending request for url (https://api.cloudflare.com/client/v4/accounts/ebb3b05a7371fbcbd62bde8264c86cfe/ai/v1/chat/completions)";
+
+#[test]
+fn upstream_error_to_app_replaces_transport_detail_with_generic_message() {
+    let err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            None,
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        true,
+    );
+
+    assert_eq!(err.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(err.message, "failed to request upstream");
+    // SAN-2: the admin-tier internal detail keeps the raw transport text.
+    let internal = err.internal_message.as_deref().expect("internal detail");
+    assert!(
+        internal.starts_with("upstream status 502 Bad Gateway: "),
+        "{internal}"
+    );
+    assert!(internal.contains("api.cloudflare.com"), "{internal}");
+    assert!(
+        internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+        "{internal}"
+    );
+}
+
+#[test]
+fn upstream_error_to_app_drops_unparsed_error_body_from_client_message() {
+    let raw_body = format!("<html>502 Bad Gateway from {LEAKY_TRANSPORT_ERROR}</html>");
+    let err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::BAD_GATEWAY),
+            raw_body,
+        )
+        .with_source(upstream::UpstreamErrorSource::UnparsedBody),
+        true,
+    );
+
+    assert_eq!(err.message, "upstream status 502 Bad Gateway");
+    // SAN-2: the raw unparsed body stays admin-readable in internal detail.
+    let internal = err.internal_message.as_deref().expect("internal detail");
+    assert!(internal.contains("api.cloudflare.com"), "{internal}");
+    assert!(internal.contains("<html>502 Bad Gateway"), "{internal}");
+}
+
+#[test]
+fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
+    let err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::UNPROCESSABLE_ENTITY),
+            "invalid request".to_string(),
+        )
+        .with_source(upstream::UpstreamErrorSource::StructuredBody),
+        true,
+    );
+    assert_eq!(
+        err.message,
+        "upstream status 422 Unprocessable Entity: invalid request"
+    );
+
+    let masked = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::UNPROCESSABLE_ENTITY),
+            "rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai".to_string(),
+        )
+        .with_source(upstream::UpstreamErrorSource::StructuredBody),
+        true,
+    );
+    assert!(
+        masked.message.contains("https://***.com/***"),
+        "{}",
+        masked.message
+    );
+    assert!(!masked.message.contains("cloudflare"), "{}", masked.message);
+}
+
+// SAN-CFG5: with `mask_sensitive_info` disabled, the client message carries
+// the raw upstream detail (TRUNC-bounded for transport/unparsed sources).
+#[test]
+fn upstream_error_to_app_exposes_raw_detail_when_masking_disabled() {
+    let transport = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            None,
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        false,
+    );
+    assert_eq!(
+        transport.message,
+        format!("upstream status 502 Bad Gateway: {LEAKY_TRANSPORT_ERROR}")
+    );
+
+    let raw_body = format!("<html>502 Bad Gateway from {LEAKY_TRANSPORT_ERROR}</html>");
+    let unparsed = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::BAD_GATEWAY),
+            raw_body.clone(),
+        )
+        .with_source(upstream::UpstreamErrorSource::UnparsedBody),
+        false,
+    );
+    assert_eq!(
+        unparsed.message,
+        format!("upstream status 502 Bad Gateway: {raw_body}")
+    );
+
+    let empty = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::BAD_GATEWAY),
+            "502 Bad Gateway".to_string(),
+        )
+        .with_source(upstream::UpstreamErrorSource::EmptyBody),
+        false,
+    );
+    assert_eq!(empty.message, "upstream status 502 Bad Gateway");
+
+    let structured = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::UNPROCESSABLE_ENTITY),
+            "rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai".to_string(),
+        )
+        .with_source(upstream::UpstreamErrorSource::StructuredBody),
+        false,
+    );
+    assert_eq!(
+        structured.message,
+        "upstream status 422 Unprocessable Entity: rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai"
+    );
+}
+
+// SAN-CFG5.2/5.3: transport and unparsed client text is TRUNC-bounded when
+// masking is off, so an oversized raw body cannot flood the client message.
+#[test]
+fn upstream_error_to_app_truncates_raw_client_detail_when_masking_disabled() {
+    let oversized = "x".repeat(3000);
+    let err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::BAD_GATEWAY),
+            oversized,
+        )
+        .with_source(upstream::UpstreamErrorSource::UnparsedBody),
+        false,
+    );
+    assert!(err.message.ends_with("... (truncated)"), "{}", err.message);
+    assert_eq!(
+        err.message.chars().count(),
+        "upstream status 502 Bad Gateway: ".chars().count()
+            + 2048
+            + "... (truncated)".chars().count()
+    );
+}
+
+#[test]
+fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
+    let attempt = affinity_test_attempt(
+        "provider-leak",
+        "channel-leak",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    let app_err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            Some(StatusCode::BAD_GATEWAY),
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        true,
+    );
+    let tried = vec![
+        TriedProvider::from_app_error(1, &attempt, &app_err, Some(10), true),
+        TriedProvider::from_app_error(2, &attempt, &app_err, Some(11), true),
+    ];
+
+    let err = build_exhausted_upstream_error("deepseek-v4-flash", &tried);
+
+    assert_eq!(err.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        err.message,
+        "All upstream attempts failed for model: deepseek-v4-flash. Last error: failed to request upstream"
+    );
+    assert!(!err.message.contains("cloudflare"), "{}", err.message);
+    assert!(
+        !err.message.contains("2 upstream attempt"),
+        "{}",
+        err.message
+    );
+
+    // SAN-7: the admin-tier internal detail carries the attempt count and the
+    // raw last-attempt error.
+    let internal = err.internal_message.as_deref().expect("internal detail");
+    assert!(
+        internal.starts_with("All 2 upstream attempt(s) failed for model: deepseek-v4-flash."),
+        "{internal}"
+    );
+    assert!(internal.contains("api.cloudflare.com"), "{internal}");
+    assert!(
+        internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+        "{internal}"
+    );
+
+    // SAN-5/SAN-10: persisted attempt errors keep the raw detail; the masked
+    // client_error never serializes.
+    let persisted = serde_json::to_value(&tried).expect("tried providers serialize");
+    let serialized = persisted.to_string();
+    assert!(!serialized.contains("client_error"), "{serialized}");
+    assert!(
+        persisted[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("api.cloudflare.com")),
+        "{serialized}"
+    );
+    assert_eq!(tried[1].client_error, "failed to request upstream");
+}
+
+// SAN-CFG5 item 1: with masking disabled `client_error` equals the raw
+// AppError message, so the exhausted downstream error carries full detail.
+#[test]
+fn tried_provider_client_error_keeps_raw_text_when_masking_disabled() {
+    let attempt = affinity_test_attempt(
+        "provider-raw",
+        "channel-raw",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    let app_err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            Some(StatusCode::BAD_GATEWAY),
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        false,
+    );
+    let tried = vec![TriedProvider::from_app_error(
+        1,
+        &attempt,
+        &app_err,
+        Some(10),
+        false,
+    )];
+
+    assert_eq!(
+        tried[0].client_error,
+        format!("upstream status 502 Bad Gateway: {LEAKY_TRANSPORT_ERROR}")
+    );
+
+    let err = build_exhausted_upstream_error("deepseek-v4-flash", &tried);
+    assert!(
+        err.message.contains("api.cloudflare.com"),
+        "{}",
+        err.message
     );
 }
 

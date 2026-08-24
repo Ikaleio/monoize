@@ -610,6 +610,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 attempt.provider_type,
                                 value,
                                 &req_attempt.model,
+                                state.monoize_runtime.read().await.mask_sensitive_info,
                             ) {
                                 Ok(resp) => resp,
                                 Err(err) => {
@@ -909,7 +910,9 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     let same_channel_retryable = is_same_channel_retryable_error(&err);
                     let passive_failure_class =
                         same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let app_err = upstream_error_to_app(err);
+                    let mask_sensitive_info =
+                        state.monoize_runtime.read().await.mask_sensitive_info;
+                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
                     record_upstream_attempt_failure(
                         state,
                         &attempt,
@@ -1197,11 +1200,15 @@ pub(super) fn decode_response_from_provider(
     provider_type: ProviderType,
     value: &Value,
     model: &str,
+    mask_sensitive_info: bool,
 ) -> AppResult<urp::UrpResponse> {
     if provider_type == ProviderType::ChatCompletion
         && let Some(error) = embedded_chat_completion_error(value)
     {
-        return Err(embedded_chat_completion_error_to_app(error));
+        return Err(embedded_chat_completion_error_to_app(
+            error,
+            mask_sensitive_info,
+        ));
     }
     if provider_type == ProviderType::ChatCompletion
         && chat_completion_finish_reason_is_error(value)
@@ -1249,7 +1256,7 @@ fn chat_completion_finish_reason_is_error(value: &Value) -> bool {
         == Some("error")
 }
 
-fn embedded_chat_completion_error_to_app(error: &Value) -> AppError {
+fn embedded_chat_completion_error_to_app(error: &Value, mask_sensitive_info: bool) -> AppError {
     let message = error
         .get("message")
         .and_then(Value::as_str)
@@ -1278,14 +1285,22 @@ fn embedded_chat_completion_error_to_app(error: &Value) -> AppError {
         .filter(|value| !value.is_empty())
         .map(str::to_string);
 
-    AppError::new(StatusCode::BAD_GATEWAY, "upstream_chat_error", message)
-        .with_type("server_error")
-        .with_upstream_error(
-            upstream_status,
-            upstream_code,
-            upstream_type,
-            upstream_param,
-        )
+    // SAN-4: the embedded message is upstream-controlled free text — the
+    // client sees the masked form while the raw text stays admin-readable
+    // via `internal_message`. SAN-CFG5 item 1: masking off disables `MASK`.
+    AppError::new(
+        StatusCode::BAD_GATEWAY,
+        "upstream_chat_error",
+        crate::error_sanitize::maybe_mask_sensitive_text(message, mask_sensitive_info),
+    )
+    .with_internal_message(crate::error_sanitize::truncate_error_detail(message))
+    .with_type("server_error")
+    .with_upstream_error(
+        upstream_status,
+        upstream_code,
+        upstream_type,
+        upstream_param,
+    )
 }
 
 fn json_scalar_string(value: &Value) -> Option<String> {

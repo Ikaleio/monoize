@@ -54,7 +54,12 @@ fn stream_error_code(err: &AppError) -> String {
 fn stream_terminal_error_from_app(err: &AppError) -> StreamTerminalError {
     StreamTerminalError {
         code: stream_error_code(err),
-        message: err.message.clone(),
+        // SAN-9: the terminal request-log row keeps the internal detail while
+        // the downstream frame carries the sanitized client message.
+        message: err
+            .internal_message
+            .clone()
+            .unwrap_or_else(|| err.message.clone()),
         http_status: err.upstream_status.unwrap_or(err.status.as_u16()),
         error_type: err
             .upstream_type
@@ -411,6 +416,7 @@ pub(super) async fn forward_stream_typed(
                             attempt.provider_type,
                             &value,
                             &nonstream_req.model,
+                            state.monoize_runtime.read().await.mask_sensitive_info,
                         ) {
                             Ok(resp) => resp,
                             Err(err) => {
@@ -729,7 +735,9 @@ pub(super) async fn forward_stream_typed(
                         let same_channel_retryable = is_same_channel_retryable_error(&err);
                         let passive_failure_class =
                             same_channel_retryable.then(|| classify_retryable_failure(&err));
-                        let app_err = upstream_error_to_app(err);
+                        let mask_sensitive_info =
+                            state.monoize_runtime.read().await.mask_sensitive_info;
+                        let app_err = upstream_error_to_app(err, mask_sensitive_info);
                         record_upstream_attempt_failure(
                             &state,
                             &attempt,
@@ -880,12 +888,13 @@ pub(super) async fn forward_stream_typed(
                     let reasoning_effort_for_log =
                         req.reasoning.as_ref().and_then(|r| r.effort.clone());
                     let tried_providers_for_log = tried_providers.clone();
-                    let stream_idle_timeout_ms = state
-                        .monoize_runtime
-                        .read()
-                        .await
-                        .stream_idle_timeout_ms
-                        .max(1);
+                    let (stream_idle_timeout_ms, mask_sensitive_info) = {
+                        let runtime = state.monoize_runtime.read().await;
+                        (
+                            runtime.stream_idle_timeout_ms.max(1),
+                            runtime.mask_sensitive_info,
+                        )
+                    };
                     let state_for_transform = state.clone();
                     let provider_rules_for_transform = attempt.provider_transforms.clone();
                     let global_rules_for_transform = global_transforms.clone();
@@ -968,6 +977,7 @@ pub(super) async fn forward_stream_typed(
                                         &model_for_encode,
                                         started_at,
                                         sse_max_frame_length,
+                                        mask_sensitive_info,
                                     )
                                     .await
                                 });
@@ -1399,7 +1409,9 @@ pub(super) async fn forward_stream_typed(
                     let same_channel_retryable = is_same_channel_retryable_error(&err);
                     let passive_failure_class =
                         same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let app_err = upstream_error_to_app(err);
+                    let mask_sensitive_info =
+                        state.monoize_runtime.read().await.mask_sensitive_info;
+                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
                     record_upstream_attempt_failure(
                         &state,
                         &attempt,

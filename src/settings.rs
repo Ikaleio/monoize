@@ -62,6 +62,8 @@ pub struct SystemSettings {
     pub monoize_strip_cross_protocol_nested_extra: bool,
     pub monoize_request_capture_enabled: bool,
     pub monoize_request_capture_retention_days: u64,
+    #[serde(default = "default_true")]
+    pub monoize_mask_sensitive_info: bool,
     pub monoize_affinity_enabled: bool,
     pub monoize_affinity_idle_ttl_seconds: u64,
     pub monoize_affinity_failback_mode: AffinityFailbackMode,
@@ -202,6 +204,7 @@ impl Default for SystemSettings {
             monoize_strip_cross_protocol_nested_extra: true,
             monoize_request_capture_enabled: false,
             monoize_request_capture_retention_days: 1,
+            monoize_mask_sensitive_info: true,
             monoize_affinity_enabled: true,
             monoize_affinity_idle_ttl_seconds: 30 * 60,
             monoize_affinity_failback_mode: AffinityFailbackMode::Sticky,
@@ -388,6 +391,11 @@ impl SettingsStore {
         self.set_if_not_exists(
             "monoize_request_capture_retention_days",
             &defaults.monoize_request_capture_retention_days.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_mask_sensitive_info",
+            &defaults.monoize_mask_sensitive_info.to_string(),
         )
         .await?;
         self.set_if_not_exists(
@@ -665,6 +673,9 @@ impl SettingsStore {
                     settings.monoize_request_capture_retention_days =
                         row.value.parse().unwrap_or(1);
                 }
+                "monoize_mask_sensitive_info" => {
+                    settings.monoize_mask_sensitive_info = row.value.parse().unwrap_or(true);
+                }
                 "monoize_affinity_enabled" => {
                     settings.monoize_affinity_enabled = row.value.parse().unwrap_or(true);
                 }
@@ -811,6 +822,10 @@ impl SettingsStore {
                     .monoize_request_capture_retention_days
                     .max(1)
                     .to_string(),
+            ),
+            (
+                "monoize_mask_sensitive_info",
+                settings.monoize_mask_sensitive_info.to_string(),
             ),
             (
                 "monoize_affinity_enabled",

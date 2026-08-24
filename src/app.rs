@@ -1806,6 +1806,7 @@ pub(crate) fn runtime_config_from_settings(
     runtime.request_capture_retention_days = settings_snapshot
         .monoize_request_capture_retention_days
         .max(1);
+    runtime.mask_sensitive_info = settings_snapshot.monoize_mask_sensitive_info;
     runtime.affinity_enabled = settings_snapshot.monoize_affinity_enabled;
     runtime.affinity_idle_ttl_seconds = settings_snapshot.monoize_affinity_idle_ttl_seconds.max(1);
     runtime.affinity_failback_mode = settings_snapshot.monoize_affinity_failback_mode;
