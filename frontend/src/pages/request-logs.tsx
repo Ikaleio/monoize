@@ -40,6 +40,15 @@ export function RequestLogsPage() {
 	const usernameFromQuery = isAdmin ? (searchParams.get('username')?.trim() ?? '') : ''
 
 	const [searchInput, setSearchInput] = useState('')
+	// FL7c: only the debounced value participates in fetch filters so each
+	// keystroke does not issue a new request-log query and list reset.
+	const [debouncedSearch, setDebouncedSearch] = useState('')
+	useEffect(() => {
+		const handle = window.setTimeout(() => {
+			setDebouncedSearch(searchInput.trim())
+		}, 300)
+		return () => window.clearTimeout(handle)
+	}, [searchInput])
 	const [modelInput, setModelInput] = useState('')
 	const [usernameInput, setUsernameInput] = useState(usernameFromQuery)
 	const [appliedUsernameQuery, setAppliedUsernameQuery] = useState(usernameFromQuery)
@@ -99,11 +108,11 @@ export function RequestLogsPage() {
 		if (filters.model) f.model = filters.model
 		if (filters.api_key_id) f.api_key_id = filters.api_key_id
 		if (isAdmin && filters.username) f.username = filters.username
-		if (searchInput.trim()) f.search = searchInput.trim()
+		if (debouncedSearch) f.search = debouncedSearch
 		if (timeFrom) f.time_from = timeFrom.toISOString()
 		if (timeTo) f.time_to = timeTo.toISOString()
 		return f
-	}, [filters, searchInput, isAdmin, timeFrom, timeTo])
+	}, [filters, debouncedSearch, isAdmin, timeFrom, timeTo])
 
 	const filterKey = useMemo(() => JSON.stringify(activeFilters), [activeFilters])
 

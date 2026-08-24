@@ -430,6 +430,8 @@ FL7a. The filter-control area MUST display the total charge sum for the current 
 
 FL7b. `/dashboard/logs` MUST read the optional `username` query parameter. For an admin viewer, a non-empty `username` value MUST initialize the username filter to that exact string. An absent or empty `username` query parameter MUST initialize the filter to empty (all users). Non-admin viewers MUST ignore the query parameter.
 
+FL7c. The free-text search input MUST debounce fetches. A keystroke MUST NOT issue a request-log fetch directly; the client applies the current search text to the active filter set only after 300 ms have elapsed without a further keystroke. Clearing the input follows the same 300 ms rule. Local (client-side) filtering of SSE-delivered rows per FL53 MAY use the debounced value.
+
 FL8. Column order (left to right): merged `created_at/request_id`, merged `model/[channel]`, merged `[username/]api_key_name`, `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
 
 FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping visible lines in one column. The first line MUST render `created_at` per FL2. The second line MUST render the first 8 characters of `request_id` followed immediately by the FL36 status indicator. If `request_id` is absent, the second line MUST render `-`. The request tooltip behavior defined by FL28 and FL29 MUST remain attached to the second line.
