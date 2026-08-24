@@ -1278,12 +1278,15 @@ fn embedded_chat_completion_error_to_app(error: &Value) -> AppError {
         .filter(|value| !value.is_empty())
         .map(str::to_string);
 
-    // SAN-4: the embedded message is upstream-controlled free text.
+    // SAN-4: the embedded message is upstream-controlled free text — the
+    // client sees the masked form while the raw text stays admin-readable
+    // via `internal_message`.
     AppError::new(
         StatusCode::BAD_GATEWAY,
         "upstream_chat_error",
         crate::error_sanitize::mask_sensitive_text(message),
     )
+    .with_internal_message(crate::error_sanitize::truncate_error_detail(message))
     .with_type("server_error")
     .with_upstream_error(
         upstream_status,

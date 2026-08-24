@@ -2,10 +2,15 @@
 
 ## 0. Status
 
-- **Purpose:** Define exactly which parts of an upstream failure are exposed to downstream API clients, which parts are persisted in request logs, and which parts exist only in the server log.
-- **Scope:** Applies to every forwarding endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, the Image API, compact, and the Responses WebSocket) for errors derived from upstream attempts, to the request-log persistence of those errors, and to mid-stream downstream error frames.
-- **Reference alignment:** The disclosure policy follows the New API reference implementation (`QuantumNous/new-api`): every client-facing relay error message is masked (`kitutil.MaskSensitiveInfo`), transport failures are replaced by one fixed generic message, an unparseable upstream error body is never echoed to a client, persisted error-log text is masked, and full raw detail is written to the server log only.
-- **Relation to other specs:** `monoize-upstream-routing.spec.md` RTA-8/RTA-8a define when the exhausted-routing error is returned; this spec defines its text. `request-logs.spec.md` RL17 defines which attempt fields are persisted; this spec defines the sanitization of their error text. `unified_responses_proxy.spec.md` FP4e renders the message defined here.
+- **Purpose:** Define exactly which parts of an upstream failure are exposed to downstream API clients, which parts are persisted in request logs, which parts each dashboard viewer role may read back, and which parts exist only in the server log.
+- **Scope:** Applies to every forwarding endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, the Image API, compact, and the Responses WebSocket) for errors derived from upstream attempts, to the request-log persistence of those errors, to the dashboard request-log read paths that return those errors, and to mid-stream downstream error frames.
+- **Disclosure tiers.** There are exactly three disclosure tiers:
+  1. **Client tier** — downstream API responses and mid-stream frames: masked or generic text only (sections 2, 4, 6).
+  2. **Admin tier** — persisted request-log fields as read back by a dashboard user whose role satisfies `request-logs.spec.md` RL-API1 admin access (`admin` or `super_admin`): the full raw upstream detail, bounded only by `TRUNC` (sections 3, 5, 8).
+  3. **Non-admin dashboard tier** — persisted request-log fields as read back by any other dashboard user: `MASK` applied at read time (section 8).
+  The server tracing log additionally carries the full unbounded raw detail (SAN-3).
+- **Reference alignment:** The client tier follows the New API reference implementation (`QuantumNous/new-api`): every client-facing relay error message is masked (`kitutil.MaskSensitiveInfo`), transport failures are replaced by one fixed generic message, and an unparseable upstream error body is never echoed to a client. Monoize deliberately deviates from New API for persisted error-log text: Monoize persists the truncated raw detail so administrators can read the complete upstream error, and enforces masking for non-admin viewers at read time instead of at write time.
+- **Relation to other specs:** `monoize-upstream-routing.spec.md` RTA-8/RTA-8a define when the exhausted-routing error is returned; this spec defines its text. `request-logs.spec.md` RL17 defines which attempt fields are persisted and RL-API14 mirrors the read-time disclosure rule; this spec defines the error-text content of those fields. `unified_responses_proxy.spec.md` FP4e renders the client message defined here.
 
 ## 1. Definitions
 
@@ -40,20 +45,20 @@ SAN-1. When a failed upstream attempt is converted to an `AppError` (`upstream_e
 - `source = unparsed_body` or `empty_body`: `upstream status {STATUS}` (the Display form of the status, e.g. `upstream status 502 Bad Gateway`), with no body content.
 - `source = structured_body` or `internal`: `upstream status {STATUS}: ` followed by `MASK(raw message)`.
 
-SAN-2. The same `AppError` MUST set `internal_message` to `upstream status {STATUS}: ` followed by `TRUNC(MASK(raw message))`.
+SAN-2. The same `AppError` MUST set `internal_message` to `upstream status {STATUS}: ` followed by `TRUNC(raw message)`. `MASK` MUST NOT be applied to `internal_message`; it is the admin-tier detail and its read-time disclosure is governed by section 8.
 
-SAN-3. Before the conversion in SAN-1, the raw unmasked detail (including transport error text with the full upstream URL and the raw unparsed error body) MUST be written to the server log (tracing, `warn` level). The raw unmasked detail MUST NOT appear in any downstream response body and MUST NOT be persisted in any request-log field. Request-capture dump files (`request-capture-dumps.spec.md`) are server-local operator artifacts and are exempt.
+SAN-3. Before the conversion in SAN-1, the raw unmasked detail (including transport error text with the full upstream URL and the raw unparsed error body) MUST be written to the server log (tracing, `warn` level) without truncation. The raw unmasked detail MUST NOT appear in any downstream response body or mid-stream frame. Persisted request-log fields carry the `TRUNC`-bounded raw detail per SAN-2, SAN-5, SAN-9, and SAN-10; disclosure of those fields to dashboard viewers is governed by section 8. Request-capture dump files (`request-capture-dumps.spec.md`) are server-local operator artifacts and are exempt.
 
-SAN-4. When a 2xx upstream response embeds a Chat Completions error object (`embedded_chat_completion_error_to_app`), the resulting `AppError.message` MUST be `MASK` of the embedded message.
+SAN-4. When a 2xx upstream response embeds a Chat Completions error object (`embedded_chat_completion_error_to_app`), the resulting `AppError.message` MUST be `MASK` of the embedded message, and `AppError.internal_message` MUST be `TRUNC` of the raw embedded message.
 
 ## 3. Attempt recording
 
 SAN-5. Each recorded failed attempt (`TriedProvider`) MUST carry two error strings:
 
-- `error`: the persisted internal detail. It MUST equal `AppError.internal_message` when set, otherwise `TRUNC(MASK(AppError.message))`.
+- `error`: the persisted internal detail. It MUST equal `AppError.internal_message` when set, otherwise `TRUNC(AppError.message)`. `MASK` MUST NOT be applied to `error` at write time; read-time disclosure is governed by section 8.
 - `client_error`: the client-facing text, equal to `MASK(AppError.message)`. `client_error` MUST NOT be serialized into `tried_providers_json`.
 
-`MASK` is applied unconditionally in both fields because attempt failures can also originate from response-decoding `AppError`s that do not pass through SAN-1.
+`MASK` is applied unconditionally to `client_error` because attempt failures can also originate from response-decoding `AppError`s that do not pass through SAN-1; masking is idempotent, so re-masking an already-sanitized client message is a fixed point.
 
 ## 4. Exhausted-routing downstream error
 
@@ -67,15 +72,15 @@ The downstream message MUST NOT contain the attempt count, provider identifiers,
 SAN-7. The exhausted-routing error MUST set `internal_message` to:
 
 - zero recorded attempts: equal to the downstream message.
-- one or more recorded attempts: `All {n} upstream attempt(s) failed for model: {model}. Last error: {error of the last recorded attempt}`, where `n` is the recorded attempt count.
+- one or more recorded attempts: `All {n} upstream attempt(s) failed for model: {model}. Last error: {error of the last recorded attempt}`, where `n` is the recorded attempt count and `{error}` is the unmasked internal detail per SAN-5. Consequently the admin-tier request-log message includes the full last-attempt detail.
 
 SAN-8. Under the RTA-8a exception (`upstream_code = "thinking_signature_invalid"`), the downstream message MUST equal the last recorded attempt's `client_error` and `internal_message` MUST equal the last recorded attempt's `error`.
 
 ## 5. Request-log persistence
 
-SAN-9. A terminal error request-log row MUST persist `error_message = AppError.internal_message` when set, otherwise `AppError.message`. The streaming terminal-error log path MUST apply the same rule. Consequently a persisted `error_message` MAY differ from the downstream client message but MUST NOT contain unmasked URLs, bare domains, IPv4 addresses, or `api_key:` values originating from upstream error text.
+SAN-9. A terminal error request-log row MUST persist `error_message = AppError.internal_message` when set, otherwise `AppError.message`. The streaming terminal-error log path MUST apply the same rule. Consequently a persisted `error_message` MAY contain raw upstream URLs, bare domains, IPv4 addresses, and `api_key:` values, bounded only by `TRUNC`. The stored value is the admin-tier text; disclosure to dashboard viewers is governed by section 8.
 
-SAN-10. Each `tried_providers_json` entry's `error` field MUST equal the attempt's `error` string per SAN-5 (masked, truncated internal detail).
+SAN-10. Each `tried_providers_json` entry's `error` field MUST equal the attempt's `error` string per SAN-5 (unmasked, truncated internal detail).
 
 ## 6. Mid-stream error frames
 
@@ -84,3 +89,15 @@ SAN-11. When a downstream stream encoder renders a `UrpStreamEvent::Error` into 
 ## 7. Diagnostic fields
 
 SAN-12. The structured diagnostic fields `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` remain exposed downstream unchanged, as required by RTA-8. They carry enumerated upstream error metadata, not free-form infrastructure text.
+
+## 8. Read-time disclosure of persisted error detail
+
+The request-log read surfaces are `GET /api/dashboard/request-logs` (REST list) and `GET /api/dashboard/request-logs/stream` (SSE). Both surfaces serialize `error_message` (as `error.message`) and `tried_providers[].error`.
+
+SAN-13. When the authenticated dashboard caller's role satisfies the RL-API1 admin predicate (`admin` or `super_admin`), both read surfaces MUST return `error.message` and every `tried_providers[].error` exactly as stored: the full raw detail bounded only by `TRUNC`, with no `MASK` applied.
+
+SAN-14. For every other authenticated dashboard caller, both read surfaces MUST replace, before serialization, `error.message` with `MASK(stored error_message)` and each `tried_providers[].error` with `MASK(stored error)`. The replacement applies to REST list rows, to the initial SSE pending batch, and to every live SSE `log_batch` row. The stored row MUST NOT be modified.
+
+SAN-15. SAN-14 operates on the stored text, which is `TRUNC`-bounded at write time. Because `MASK` is idempotent, applying SAN-14 to a historical row whose stored text was masked at write time (rows persisted before this policy) yields the stored text unchanged.
+
+SAN-16. No non-dashboard API may return persisted request-log error text. The forwarding endpoints return only the client-tier messages defined in sections 2, 4, and 6.

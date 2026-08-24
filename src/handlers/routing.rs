@@ -1156,7 +1156,7 @@ pub(super) fn build_exhausted_error_message(model: &str, tried: &[TriedProvider]
 }
 
 /// SAN-7: the operator-facing internal detail keeps the attempt count and the
-/// masked internal error of the final attempt for request-log persistence.
+/// unmasked internal error of the final attempt for request-log persistence.
 pub(super) fn build_exhausted_error_detail(model: &str, tried: &[TriedProvider]) -> String {
     if tried.is_empty() {
         return format!("No available upstream provider for model: {model}");
@@ -1521,12 +1521,12 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError) -> AppError {
             )
         }
     };
-    // SAN-2: masked, bounded detail for request-log persistence.
+    // SAN-2: unmasked, TRUNC-bounded detail for request-log persistence.
+    // Admins read it verbatim; non-admin dashboard reads mask it at read
+    // time (SAN-13/SAN-14).
     let internal_message = format!(
         "upstream status {status}: {}",
-        crate::error_sanitize::truncate_error_detail(&crate::error_sanitize::mask_sensitive_text(
-            &err.message
-        ))
+        crate::error_sanitize::truncate_error_detail(&err.message)
     );
     let mut app_err = AppError::new(status, "upstream_error", client_message)
         .with_internal_message(internal_message)

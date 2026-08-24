@@ -967,8 +967,9 @@ struct TriedProvider {
     channel_id: String,
     provider_name: String,
     channel_name: String,
-    /// SAN-5: masked, truncated internal detail persisted to
-    /// `tried_providers_json` (RL17).
+    /// SAN-5: unmasked, truncated internal detail persisted to
+    /// `tried_providers_json` (RL17). Admins read it verbatim; non-admin
+    /// dashboard reads mask it at read time (SAN-14).
     error: String,
     /// SAN-5: client-facing text used by the exhausted downstream error.
     /// Never persisted.
@@ -994,14 +995,15 @@ impl TriedProvider {
             channel_id: attempt.channel_id.clone(),
             provider_name: attempt.provider_name.clone(),
             channel_name: attempt.channel_name.clone(),
-            // Attempt failures can also come from response-decoding AppErrors
-            // that never pass through `upstream_error_to_app`, so masking is
-            // applied unconditionally here (SAN-5); it is idempotent.
-            error: app_err.internal_message.clone().unwrap_or_else(|| {
-                crate::error_sanitize::truncate_error_detail(
-                    &crate::error_sanitize::mask_sensitive_text(&app_err.message),
-                )
-            }),
+            // SAN-5: `error` is the unmasked internal detail. Attempt
+            // failures can also come from response-decoding AppErrors that
+            // never pass through `upstream_error_to_app`, so `client_error`
+            // masks unconditionally (idempotent) while `error` keeps the raw
+            // text for admin-tier request-log reads.
+            error: app_err
+                .internal_message
+                .clone()
+                .unwrap_or_else(|| crate::error_sanitize::truncate_error_detail(&app_err.message)),
             client_error: crate::error_sanitize::mask_sensitive_text(&app_err.message),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(

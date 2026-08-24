@@ -2367,10 +2367,11 @@ fn upstream_error_to_app_replaces_transport_detail_with_generic_message() {
 
     assert_eq!(err.status, StatusCode::BAD_GATEWAY);
     assert_eq!(err.message, "failed to request upstream");
+    // SAN-2: the admin-tier internal detail keeps the raw transport text.
     let internal = err.internal_message.as_deref().expect("internal detail");
-    assert!(internal.contains("https://***.com/***"), "{internal}");
-    assert!(!internal.contains("cloudflare"), "{internal}");
-    assert!(!internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"), "{internal}");
+    assert!(internal.starts_with("upstream status 502 Bad Gateway: "), "{internal}");
+    assert!(internal.contains("api.cloudflare.com"), "{internal}");
+    assert!(internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"), "{internal}");
 }
 
 #[test]
@@ -2386,9 +2387,10 @@ fn upstream_error_to_app_drops_unparsed_error_body_from_client_message() {
     );
 
     assert_eq!(err.message, "upstream status 502 Bad Gateway");
+    // SAN-2: the raw unparsed body stays admin-readable in internal detail.
     let internal = err.internal_message.as_deref().expect("internal detail");
-    assert!(internal.contains("https://***.com/***"), "{internal}");
-    assert!(!internal.contains("cloudflare"), "{internal}");
+    assert!(internal.contains("api.cloudflare.com"), "{internal}");
+    assert!(internal.contains("<html>502 Bad Gateway"), "{internal}");
 }
 
 #[test]
@@ -2446,24 +2448,28 @@ fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
     assert!(!err.message.contains("cloudflare"), "{}", err.message);
     assert!(!err.message.contains("2 upstream attempt"), "{}", err.message);
 
+    // SAN-7: the admin-tier internal detail carries the attempt count and the
+    // raw last-attempt error.
     let internal = err.internal_message.as_deref().expect("internal detail");
     assert!(
         internal.starts_with("All 2 upstream attempt(s) failed for model: deepseek-v4-flash."),
         "{internal}"
     );
-    assert!(internal.contains("https://***.com/***"), "{internal}");
-    assert!(!internal.contains("cloudflare"), "{internal}");
+    assert!(internal.contains("api.cloudflare.com"), "{internal}");
+    assert!(internal.contains("ebb3b05a7371fbcbd62bde8264c86cfe"), "{internal}");
 
+    // SAN-5/SAN-10: persisted attempt errors keep the raw detail; the masked
+    // client_error never serializes.
     let persisted = serde_json::to_value(&tried).expect("tried providers serialize");
     let serialized = persisted.to_string();
     assert!(!serialized.contains("client_error"), "{serialized}");
-    assert!(!serialized.contains("cloudflare"), "{serialized}");
     assert!(
         persisted[0]["error"]
             .as_str()
-            .is_some_and(|error| error.contains("https://***.com/***")),
+            .is_some_and(|error| error.contains("api.cloudflare.com")),
         "{serialized}"
     );
+    assert_eq!(tried[1].client_error, "failed to request upstream");
 }
 
 #[test]

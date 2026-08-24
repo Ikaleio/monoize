@@ -3,8 +3,10 @@
 //! The masking algorithm follows the New API reference implementation
 //! (`relaykit/relayconvert/kitutil/mask.go` in QuantumNous/new-api): URLs,
 //! bare domain names, IPv4 addresses, and `api_key:` values are masked before
-//! upstream-derived error text reaches API clients or persisted request logs.
-//! Raw unmasked detail is written to the server log only.
+//! upstream-derived error text reaches API clients, and again at read time
+//! when a non-admin dashboard user views persisted request-log error detail
+//! (SAN-14). Persisted request-log fields keep the raw truncated detail for
+//! admin visibility; the server tracing log keeps the unbounded raw detail.
 
 use regex::Regex;
 use std::sync::LazyLock;

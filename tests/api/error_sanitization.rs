@@ -39,7 +39,7 @@ async fn find_error_log(
 }
 
 #[tokio::test]
-async fn unparsed_upstream_error_body_is_hidden_from_client_and_masked_in_logs() {
+async fn unparsed_upstream_error_body_is_hidden_from_client_and_kept_raw_in_stored_log() {
     let ctx = setup().await;
 
     let (status, body) = json_post(
@@ -66,19 +66,30 @@ async fn unparsed_upstream_error_body_is_hidden_from_client_and_masked_in_logs()
     assert_eq!(error["error"]["code"], json!("upstream_error"));
     assert_eq!(error["error"]["upstream_status"], json!(502));
 
-    // SAN-9: operators keep the masked, counted detail in the request log
-    // while the client message stays generic. (SAN-10 tried_providers_json
-    // content is asserted at unit level in
-    // handlers::tests::exhausted_error_message_omits_attempt_count_and_infra_detail;
-    // the list endpoints do not select that column.)
+    // SAN-9: the stored request-log detail keeps the counted wrapper plus the
+    // full raw upstream body for admin-tier reads, while the client message
+    // stays generic.
     let log = find_error_log(&ctx, "gpt-5-mini-chat").await;
     let log_message = log.error.message.as_deref().expect("log error message");
     assert!(
         log_message.starts_with("All 1 upstream attempt(s) failed for model: gpt-5-mini-chat."),
         "{log_message}"
     );
-    assert!(log_message.contains("https://***.com/***"), "{log_message}");
-    assert_no_infra_leak(log_message);
+    assert!(log_message.contains("api.cloudflare.com"), "{log_message}");
+    assert!(
+        log_message.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+        "{log_message}"
+    );
+    assert!(log_message.contains("10.32.4.17"), "{log_message}");
+
+    // SAN-10: the stored per-attempt error carries the same raw detail.
+    let tried = log.tried_providers.as_ref().expect("tried providers");
+    let first_error = tried[0]["error"].as_str().expect("first attempt error");
+    assert!(first_error.contains("api.cloudflare.com"), "{first_error}");
+    assert!(
+        !tried.to_string().contains("client_error"),
+        "client_error must never persist: {tried}"
+    );
 }
 
 #[tokio::test]
@@ -123,9 +134,11 @@ async fn transport_error_is_hidden_from_client() {
     assert!(!body.contains(&dead_port.to_string()), "{body}");
     assert!(!body.contains("error sending request"), "{body}");
 
+    // SAN-2/SAN-9: the stored detail keeps the raw transport text (with the
+    // upstream address) for admin-tier reads.
     let log = find_error_log(&ctx, "dead-model").await;
     let log_message = log.error.message.as_deref().expect("log error message");
-    assert!(!log_message.contains("127.0.0.1"), "{log_message}");
+    assert!(log_message.contains("127.0.0.1"), "{log_message}");
 }
 
 #[tokio::test]
@@ -156,6 +169,127 @@ async fn structured_upstream_error_message_is_masked_but_passes_through() {
         "{message}"
     );
     assert_eq!(error["error"]["code"], json!("invalid_request_error"));
+}
+
+async fn dashboard_get(ctx: &TestContext, path: &str, session_token: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(AUTHORIZATION, format!("Bearer {session_token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).expect("dashboard response JSON");
+    (status, body)
+}
+
+async fn find_error_log_via_dashboard(
+    ctx: &TestContext,
+    session_token: &str,
+    model: &str,
+) -> Value {
+    let path = format!("/api/dashboard/request-logs?status=error&model={model}");
+    for _ in 0..20 {
+        ctx.state.user_store.flush_all_batchers().await;
+        let (status, body) = dashboard_get(ctx, &path, session_token).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if let Some(row) = body["data"].as_array().and_then(|rows| rows.first()) {
+            return row.clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("error request log should be listed for model {model}");
+}
+
+// RL-API14 / SAN-13 / SAN-14: the same stored row surfaces the full raw
+// upstream detail to an admin session and the MASKed detail to the owning
+// non-admin session.
+#[tokio::test]
+async fn request_log_error_detail_is_full_for_admin_and_masked_for_non_admin() {
+    let ctx = setup().await;
+
+    let (status, body) = json_post(
+        &ctx,
+        "/v1/chat/completions",
+        json!({
+            "model": "gpt-5-mini-chat",
+            "messages": [{ "role": "user", "content": "role disclosure test" }],
+            "force_upstream_error_status": 502,
+            "force_upstream_error_raw_body": LEAKY_RAW_BODY
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_no_infra_leak(&body);
+
+    let admin = ctx
+        .state
+        .user_store
+        .create_user(
+            "admin-full-detail",
+            "admin-password-12",
+            monoize::users::UserRole::Admin,
+            &[],
+        )
+        .await
+        .expect("create admin user");
+    let admin_session = ctx
+        .state
+        .user_store
+        .create_session(&admin.id, 7)
+        .await
+        .expect("admin session");
+
+    let admin_row =
+        find_error_log_via_dashboard(&ctx, &admin_session.token, "gpt-5-mini-chat").await;
+    let admin_message = admin_row["error"]["message"]
+        .as_str()
+        .expect("admin error message");
+    assert!(admin_message.contains("api.cloudflare.com"), "{admin_message}");
+    assert!(
+        admin_message.contains("ebb3b05a7371fbcbd62bde8264c86cfe"),
+        "{admin_message}"
+    );
+    assert!(admin_message.contains("10.32.4.17"), "{admin_message}");
+    let admin_tried_error = admin_row["tried_providers"][0]["error"]
+        .as_str()
+        .expect("admin tried error");
+    assert!(
+        admin_tried_error.contains("api.cloudflare.com"),
+        "{admin_tried_error}"
+    );
+
+    let tenant = ctx
+        .state
+        .user_store
+        .get_user_by_username("tenant-1")
+        .await
+        .expect("query tenant")
+        .expect("tenant exists");
+    let tenant_session = ctx
+        .state
+        .user_store
+        .create_session(&tenant.id, 7)
+        .await
+        .expect("tenant session");
+
+    let tenant_row =
+        find_error_log_via_dashboard(&ctx, &tenant_session.token, "gpt-5-mini-chat").await;
+    let tenant_message = tenant_row["error"]["message"]
+        .as_str()
+        .expect("tenant error message");
+    assert_no_infra_leak(tenant_message);
+    assert!(tenant_message.contains("https://***.com/***"), "{tenant_message}");
+    let tenant_tried_error = tenant_row["tried_providers"][0]["error"]
+        .as_str()
+        .expect("tenant tried error");
+    assert_no_infra_leak(tenant_tried_error);
+    assert!(
+        tenant_tried_error.contains("https://***.com/***"),
+        "{tenant_tried_error}"
+    );
 }
 
 #[tokio::test]
