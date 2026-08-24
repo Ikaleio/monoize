@@ -34,21 +34,24 @@ CI-R9. The image MUST declare these Open Container Initiative labels:
 
 ## 2. Build inputs
 
-CI-B1. The build stage MUST use Rust `1.89.0` on Debian Bookworm.
+CI-B1. The runtime base image MUST be Ubuntu 24.04, referenced by a multi-platform manifest digest. Ubuntu 24.04 is the same major distribution as the native linux runners in `release-artifacts.spec.md` RA-M1, so a copied native linux executable's GNU libc requirement is satisfied.
 
-CI-B2. The build stage MUST use Bun `1.4.0`.
+CI-B2. The image build MUST NOT install Rust, Bun, clang, cmake, or a C/C++ toolchain.
 
 CI-B3. Every base image reference MUST include a multi-platform manifest digest.
 
-CI-B4. The build MUST run `bun install --frozen-lockfile` before compiling Monoize.
+CI-B4. Each platform container job MUST download the native Release archive for the matching RA-M1 target, verify its sibling SHA-256 file, and extract the executable:
 
-CI-B5. The build MUST run `cargo build --locked --release`.
+| Container platform | Native Rust target |
+| --- | --- |
+| `linux/amd64` | `x86_64-unknown-linux-gnu` |
+| `linux/arm64` | `aarch64-unknown-linux-gnu` |
 
-CI-B5a. The container build MUST compile inside the Bookworm build stage. It MUST NOT copy a native GitHub Release binary built on `ubuntu-24.04` or `ubuntu-24.04-arm` into the runtime image.
+CI-B5. The image build MUST copy that extracted executable to `/usr/local/bin/monoize` with mode `0755`. It MUST NOT run `cargo`, `bun`, `rustc`, or compile Monoize from source.
 
-CI-B6. The Docker build context MUST exclude Git metadata, local databases, environment files, native build output, frontend dependencies, SDK test dependencies, and deployment backups.
+CI-B6. The Docker build context MUST contain exactly the `Dockerfile` and one file named `monoize` (the extracted native executable). It MUST NOT contain Git metadata, source trees, frontend dependencies, Cargo `target/` output, or other Release archives.
 
-CI-B7. Each platform container job MUST restore and save GitHub Actions Docker layer cache scoped to that platform (`linux-amd64` or `linux-arm64`). A cache miss MUST continue the job. A cache hit MUST NOT skip the image build or change `VERSION` / `REVISION` build arguments.
+CI-B7. Each platform container job MUST restore and save GitHub Actions Docker layer cache scoped to that platform (`linux-amd64` or `linux-arm64`). A cache miss MUST continue the job. A cache hit MUST NOT skip copying the native executable or change `VERSION` / `REVISION` build arguments.
 
 ## 3. Publication authority and triggers
 
@@ -81,7 +84,7 @@ CI-M1. One publication MUST build exactly these platforms on native GitHub-hoste
 | `linux/amd64` | `ubuntu-24.04` |
 | `linux/arm64` | `ubuntu-24.04-arm` |
 
-CI-M1a. The two platform container jobs MUST run sequentially. Workflow `strategy.max-parallel` for that matrix MUST equal `1`. They MUST NOT compile at the same time.
+CI-M1a. The two platform container jobs MAY run in parallel. They MUST NOT compile Monoize; each job only packages the native linux executable for its architecture.
 
 CI-M2. The platform build jobs MUST push content-addressed images. The merge job MUST create one manifest list from the two resulting digests.
 

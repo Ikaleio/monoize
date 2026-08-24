@@ -222,26 +222,28 @@ jobs:
               || (github.event_name == 'workflow_dispatch' && inputs.publish_container)) }}
     needs: [validate, verify, publish]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
       actions: write
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         include:
           - platform: linux/amd64
             runner: ubuntu-24.04
             artifact: amd64
+            native_target: x86_64-unknown-linux-gnu
             cache-scope: linux-amd64
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
             artifact: arm64
+            native_target: aarch64-unknown-linux-gnu
             cache-scope: linux-arm64
     env:
       IMAGE_NAME: ${{ needs.validate.outputs.image }}
+      NATIVE_TARGET: ${{ matrix.native_target }}
     steps:
       - name: Check out release ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -253,6 +255,24 @@ jobs:
         id: source
         shell: bash
         run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Download native linux archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ matrix.native_target }}
+          path: dist
+
+      - name: Stage prebuilt binary
+        shell: bash
+        run: |
+          archive="monoize-${RELEASE_TAG}-${NATIVE_TARGET}.tar.gz"
+          cd dist
+          sha256sum -c "${archive}.sha256"
+          tar -xzf "$archive"
+          cd ..
+          mkdir -p docker-pack
+          install -m 0755 "dist/monoize-${RELEASE_TAG}-${NATIVE_TARGET}/monoize" docker-pack/monoize
+          cp Dockerfile docker-pack/Dockerfile
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
@@ -268,7 +288,7 @@ jobs:
         id: container
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.0.0
         with:
-          context: .
+          context: docker-pack
           platforms: ${{ matrix.platform }}
           build-args: |
             VERSION=${{ env.CONTAINER_TAG }}
