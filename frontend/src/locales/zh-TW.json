@@ -71,7 +71,7 @@
 	},
 	"dashboard": {
 		"title": "儀表板",
-		"greeting": "👋 午安，{{username}}",
+		"greeting": "午安，{{username}}",
 		"subtitle": "帳戶狀態、資源消耗與路由資料的即時總覽",
 		"searchAction": "搜尋",
 		"refreshAction": "重新整理資料",

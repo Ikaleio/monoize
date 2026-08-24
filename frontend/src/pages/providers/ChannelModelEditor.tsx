@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CloudDownload, Layers3, Plus, Trash2 } from 'lucide-react'
 import { ModelBadge } from '@/components/ModelBadge'
+import { StackedModelList } from '@/components/StackedModelList'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -161,38 +162,36 @@ export function ChannelModelEditor({
 					<AlertTitle>{c('当前 Channel 不会接收请求', 'This channel will not receive traffic')}</AlertTitle>
 					<AlertDescription>{c('从上游获取模型，或手动添加一个逻辑模型。', 'Fetch models from the upstream or add a logical model manually.')}</AlertDescription>
 				</Alert>
-			: 	<div className='rounded-lg border bg-muted/10 p-3'>
-					<div className='flex max-h-52 flex-wrap content-start gap-1.5 overflow-y-auto'>
-						{models.map((model, index) => {
-							const modelName = model.model.trim()
-							const unpriced = Boolean(modelName) && !hasBillablePricingModelId(
-								pricedModels,
-								modelName,
-								model.redirect,
-								reasoningSuffixMap
-							)
-							return (
-								<Button
-									key={`${modelName}-${index}`}
-									type='button'
-									variant='ghost'
-									className='h-auto max-w-full rounded-full p-0 text-left'
-									onClick={() => openEdit(index)}
-									aria-label={c(`编辑模型 ${modelName}`, `Edit model ${modelName}`)}
-								>
-									<ModelBadge
-										model={modelName}
-										provider={metadataProvider.get(modelName)}
-										multiplier={model.multiplier}
-										redirect={model.redirect}
-										highlightUnpriced={unpriced}
-										className='pointer-events-none'
-									/>
-								</Button>
-							)
-						})}
-					</div>
-				</div>
+			: 	<StackedModelList>
+					{models.map((model, index) => {
+						const modelName = model.model.trim()
+						const unpriced = Boolean(modelName) && !hasBillablePricingModelId(
+							pricedModels,
+							modelName,
+							model.redirect,
+							reasoningSuffixMap
+						)
+						return (
+							<Button
+								key={`${modelName}-${index}`}
+								type='button'
+								variant='ghost'
+								className='h-auto max-w-full rounded-md p-0 text-left'
+								onClick={() => openEdit(index)}
+								aria-label={c(`编辑模型 ${modelName}`, `Edit model ${modelName}`)}
+							>
+								<ModelBadge
+									model={modelName}
+									provider={metadataProvider.get(modelName)}
+									multiplier={model.multiplier}
+									redirect={model.redirect}
+									highlightUnpriced={unpriced}
+									className='pointer-events-none'
+								/>
+							</Button>
+						)
+					})}
+				</StackedModelList>
 			}
 
 			<Dialog open={editor !== null} onOpenChange={open => { if (!open) setEditor(null) }}>

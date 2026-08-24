@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -244,7 +244,8 @@ function MessageRow({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                  className="size-11 touch-manipulation transition-opacity text-muted-foreground hover:text-destructive sm:size-8 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                  aria-label={t("common.delete")}
                   onClick={() => onDelete(message.id)}
                   disabled={isStreaming}
                 >
@@ -625,15 +626,12 @@ export function PlaygroundPage() {
                     </Button>
                   </motion.div>
                 ) : (
-                  <motion.div
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
+                  <AnimatedButton>
                     <Button onClick={handleSend}>
                       <Send className="h-4 w-4 mr-2" />
                       {t("playground.send")}
                     </Button>
-                  </motion.div>
+                  </AnimatedButton>
                 )}
               </div>
             </div>

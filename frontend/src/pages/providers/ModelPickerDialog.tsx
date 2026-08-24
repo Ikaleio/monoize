@@ -4,6 +4,7 @@ import useSWR from 'swr'
 import { Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { ModelBadge } from '@/components/ModelBadge'
+import { StackedModelList } from '@/components/StackedModelList'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -205,45 +206,43 @@ function ModelPickerDialogContent({
 					/>
 				</div>
 
-				<div className='border rounded-lg h-[clamp(220px,45vh,420px)] overflow-y-auto p-3'>
+				<StackedModelList listClassName='max-h-none h-[clamp(220px,45vh,420px)] gap-2'>
 					{loading ?
-						<div className='text-sm text-muted-foreground py-8 text-center'>
+						<div className='w-full text-sm text-muted-foreground py-8 text-center'>
 							{t('providers.fetchingModels')}
 						</div>
 					: filtered.length === 0 ?
-							<div className='text-sm text-muted-foreground py-8 text-center'>
+							<div className='w-full text-sm text-muted-foreground py-8 text-center'>
 								{t('providers.noNewModels')}
 							</div>
-					:	<div className='flex flex-wrap gap-2'>
-							{filtered.map(model => {
-								const provider = modelProviderMap.get(model)
-								return (
-									<label
-										key={model}
-										className='inline-flex items-center gap-2 cursor-pointer'
-									>
-										<Checkbox
-											checked={checked.has(model)}
-											onCheckedChange={() => toggleModel(model)}
-										/>
-										<ModelBadge
-											model={model}
-											provider={provider}
-											highlightUnpriced={
-												!hasBillablePricingModelId(
-													pricedModelIdSet,
-													model,
-													null,
-													reasoningSuffixMap
-												)
-											}
-										/>
-									</label>
-								)
-							})}
-						</div>
+					:	filtered.map(model => {
+							const provider = modelProviderMap.get(model)
+							return (
+								<label
+									key={model}
+									className='inline-flex items-center gap-2 cursor-pointer'
+								>
+									<Checkbox
+										checked={checked.has(model)}
+										onCheckedChange={() => toggleModel(model)}
+									/>
+									<ModelBadge
+										model={model}
+										provider={provider}
+										highlightUnpriced={
+											!hasBillablePricingModelId(
+												pricedModelIdSet,
+												model,
+												null,
+												reasoningSuffixMap
+											)
+										}
+									/>
+								</label>
+							)
+						})
 					}
-				</div>
+				</StackedModelList>
 			</div>
 
 			<DialogFooter>

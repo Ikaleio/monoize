@@ -23,7 +23,7 @@ import {
 	updateProviderOptimistic,
 	reorderProviders
 } from '@/lib/swr'
-import { PageWrapper, motion, transitions } from '@/components/ui/motion'
+import { AnimatedButton, PageWrapper, motion, transitions } from '@/components/ui/motion'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { CardsPageSkeleton } from '@/components/ui/page-skeleton'
@@ -143,12 +143,12 @@ export function ProvidersPage() {
 				transition={transitions.normal}
 			>
 				<PageHeader title={t('providers.title')} description={t('providers.description')} actions={(
-					<motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+					<AnimatedButton>
 						<Button onClick={() => setCreateOpen(true)}>
 							<Plus className='h-4 w-4 mr-2' />
 							{t('providers.addProvider')}
 						</Button>
-					</motion.div>
+					</AnimatedButton>
 				)} />
 			</motion.div>
 

@@ -207,6 +207,8 @@ PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge 
 - Provider overview model badges and Channel model rows MUST preserve unpriced highlighting.
 - Model-list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
 
+PL19a. The expanded provider-card model list, the selected Channel model editor, and the model picker dialog result area MUST render their badge collections through one shared stacked model list container component (`StackedModelList`), so that border, inner padding, wrap behavior, and item gap are identical on all three surfaces. The bounded height of the inner scroll region MAY be overridden per surface (the model picker uses a taller viewport-relative height); border, padding, and wrap behavior MUST come from the shared component.
+
 PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-virtuoso`) with embedded scrolling.
 
 - Channel list MUST render through `Virtuoso`.

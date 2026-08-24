@@ -350,7 +350,7 @@ export function AdminDashboardPage() {
 													<div className='flex flex-col gap-0.5'>
 														{healthBadge(channel, tt)}
 														{(channel.unhealthy_models ?? []).length > 0 && (
-															<span className='truncate font-mono text-[10px] text-destructive'>
+															<span className='truncate font-mono text-xs text-destructive'>
 																{(channel.unhealthy_models ?? []).join(', ')}
 															</span>
 														)}
@@ -358,7 +358,7 @@ export function AdminDashboardPage() {
 												</td>
 												<td className='py-1 pr-2 text-right font-mono'>
 													<div>{formatNanoUsd(channel.today_cost_nano_usd ?? '0', 2)}</div>
-													<div className='text-[10px] text-muted-foreground'>
+													<div className='text-xs text-muted-foreground'>
 														{formatNumber(channel.today_calls ?? 0)} {tt('adminDashboard.calls', 'Calls')}
 													</div>
 												</td>
