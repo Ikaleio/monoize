@@ -1247,14 +1247,101 @@ pub(super) async fn record_upstream_attempt_failure(
     };
     let shared_origin_blast = failure_class == RetryableFailureClass::Transient
         && is_shared_origin_status(app_err.upstream_status);
-    if !shared_origin_blast {
+    mark_channel_retryable_failure(state, attempt, failure_class).await;
+    // AFF-9: clear the binding only when the failed attempt is the bound
+    // target itself, the failure is not a shared-origin blast, and this
+    // failure tripped the breaker. Sub-threshold transient failures keep the
+    // binding so prompt-cache locality survives one-off faults.
+    if attempt.affinity_hit == Some(true)
+        && !shared_origin_blast
+        && !is_attempt_channel_healthy(state, attempt).await
+    {
         clear_channel_affinity(state, attempt).await;
     }
-    mark_channel_retryable_failure(state, attempt, failure_class).await;
     if shared_origin_blast {
         execution_state.mark_shared_origin_skip(attempt);
         mark_shared_origin_peer_failures(state, attempt, failure_class).await;
     }
+}
+
+/// STRM-4 + STRM-4a: one passive-failure sample for a retryable terminal
+/// failure that occurs after the first downstream byte (in-stream terminal
+/// error event or upstream-side adapter failure). Mid-stream failures never
+/// blast shared-origin peers. The affinity binding is cleared only when the
+/// serving attempt is the bound target and the sample tripped the breaker.
+pub(super) async fn record_midstream_terminal_failure(
+    state: &AppState,
+    attempt: &MonoizeAttempt,
+    failure_class: RetryableFailureClass,
+) {
+    mark_channel_retryable_failure(state, attempt, failure_class).await;
+    if attempt.affinity_hit == Some(true) && !is_attempt_channel_healthy(state, attempt).await {
+        clear_channel_affinity(state, attempt).await;
+    }
+}
+
+/// STRM-4: an in-stream terminal error records a health sample only for
+/// retryable statuses; `429` cools down as RateLimited, everything else as
+/// Transient.
+pub(super) fn midstream_terminal_failure_class(
+    http_status: u16,
+) -> Option<RetryableFailureClass> {
+    match http_status {
+        429 => Some(RetryableFailureClass::RateLimited),
+        408 => Some(RetryableFailureClass::Transient),
+        status if (500..600).contains(&status) => Some(RetryableFailureClass::Transient),
+        _ => None,
+    }
+}
+
+/// STRM-4: only upstream-side adapter failures (idle timeout, malformed
+/// upstream stream, connection loss, missing terminal) count as retryable
+/// terminal failures. Internal transform/encode errors do not penalize the
+/// Channel.
+pub(super) fn is_upstream_adapter_failure(err: &AppError) -> bool {
+    err.code.starts_with("upstream_")
+}
+
+/// RTA-4/RTA-4a: per-Channel loop-slot count. The affinity-hit target
+/// reserves one extra slot beyond `channel_max_retries + 1`;
+/// `allow_same_channel_retry` decides whether that slot is usable.
+pub(super) fn same_channel_attempt_slots(attempt: &MonoizeAttempt) -> usize {
+    let base = (attempt.channel_max_retries + 1).max(1) as usize;
+    if attempt.affinity_hit == Some(true) {
+        base + 1
+    } else {
+        base
+    }
+}
+
+/// RTA-4/RTA-4a/RTA-5: decide whether the same Channel may serve one more
+/// attempt after a failure. `attempts_used` counts attempts already executed
+/// on this Channel for this request, including the failed one.
+/// `failure_class` is `None` when the failure is not same-Channel retryable.
+/// The affinity-hit target earns one attempt beyond `channel_max_retries + 1`
+/// for a Transient (non-429) failure so a single transient fault on the bound
+/// Channel does not force a switch that discards prompt-cache locality.
+pub(super) async fn allow_same_channel_retry(
+    state: &AppState,
+    attempt: &MonoizeAttempt,
+    execution_state: &AttemptExecutionState,
+    attempts_used: usize,
+    failure_class: Option<RetryableFailureClass>,
+) -> bool {
+    let Some(failure_class) = failure_class else {
+        return false;
+    };
+    let base_limit = (attempt.channel_max_retries + 1).max(1) as usize;
+    let limit = if attempt.affinity_hit == Some(true)
+        && failure_class == RetryableFailureClass::Transient
+    {
+        base_limit + 1
+    } else {
+        base_limit
+    };
+    attempts_used < limit
+        && !execution_state.should_skip(attempt)
+        && is_attempt_channel_healthy(state, attempt).await
 }
 
 pub(super) fn prune_passive_failure_timestamps(
