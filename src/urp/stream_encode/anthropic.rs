@@ -1441,6 +1441,7 @@ pub(crate) async fn encode_urp_stream_as_messages(
     tx: mpsc::Sender<Event>,
     logical_model: &str,
     sse_max_frame_length: Option<usize>,
+    mask_sensitive_info: bool,
 ) -> AppResult<()> {
     let mut next_content_block_index = 0u32;
     let mut saw_tool_use = false;
@@ -1873,10 +1874,14 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     &mut message_start_sent,
                 )
                 .await?;
-                // SAN-11: decoder-origin error text may embed upstream URLs.
+                // SAN-11 / SAN-CFG5: decoder-origin error text may embed
+                // upstream URLs; masking is gated by the runtime setting.
                 let error = messages_error_payload(
                     code.as_deref(),
-                    &crate::error_sanitize::mask_sensitive_text(&message),
+                    &crate::error_sanitize::maybe_mask_sensitive_text(
+                        &message,
+                        mask_sensitive_info,
+                    ),
                     &extra_body,
                 );
                 send_named_messages_event(&tx, error).await?;

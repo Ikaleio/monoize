@@ -307,6 +307,8 @@
 		"requestCaptureEnabledDescription": "按 API Key 抓包的总开关。关闭时不会写入任何 dump 文件。",
 		"requestCaptureRetentionDays": "抓包保留期（天）",
 		"requestCaptureRetentionDaysDescription": "自动删除早于该天数的抓包 dump 文件。",
+		"maskSensitiveInfo": "脱敏敏感信息",
+		"maskSensitiveInfoDescription": "在面向客户端的错误信息和非管理员请求日志读取中，对上游 URL、域名、IP 和 API Key 进行脱敏。关闭后将暴露原始上游错误文本。",
 		"stripCrossProtocolNestedExtra": "剥离跨协议嵌套扩展字段",
 		"stripCrossProtocolNestedExtraDescription": "跨协议族转发前移除下游协议专用的嵌套透传状态。",
 		"activeProbeIntervalSeconds": "探测间隔（秒）",

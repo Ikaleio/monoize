@@ -394,6 +394,11 @@ impl SettingsStore {
         )
         .await?;
         self.set_if_not_exists(
+            "monoize_mask_sensitive_info",
+            &defaults.monoize_mask_sensitive_info.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
             "monoize_affinity_enabled",
             &defaults.monoize_affinity_enabled.to_string(),
         )
@@ -668,6 +673,9 @@ impl SettingsStore {
                     settings.monoize_request_capture_retention_days =
                         row.value.parse().unwrap_or(1);
                 }
+                "monoize_mask_sensitive_info" => {
+                    settings.monoize_mask_sensitive_info = row.value.parse().unwrap_or(true);
+                }
                 "monoize_affinity_enabled" => {
                     settings.monoize_affinity_enabled = row.value.parse().unwrap_or(true);
                 }
@@ -814,6 +822,10 @@ impl SettingsStore {
                     .monoize_request_capture_retention_days
                     .max(1)
                     .to_string(),
+            ),
+            (
+                "monoize_mask_sensitive_info",
+                settings.monoize_mask_sensitive_info.to_string(),
             ),
             (
                 "monoize_affinity_enabled",

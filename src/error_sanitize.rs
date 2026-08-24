@@ -213,6 +213,18 @@ mod tests {
         assert_eq!(mask_sensitive_text(input), input);
     }
 
+    // SAN-CFG5 item 1: the gated wrapper is `MASK` when enabled and the
+    // identity when disabled.
+    #[test]
+    fn maybe_mask_applies_mask_only_when_enabled() {
+        let input = "rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai";
+        assert_eq!(
+            maybe_mask_sensitive_text(input, true),
+            mask_sensitive_text(input)
+        );
+        assert_eq!(maybe_mask_sensitive_text(input, false), input);
+    }
+
     #[test]
     fn truncates_long_detail_at_char_boundary() {
         let short = "x".repeat(ERROR_DETAIL_MAX_CHARS);

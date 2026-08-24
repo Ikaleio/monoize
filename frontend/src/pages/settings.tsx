@@ -645,6 +645,21 @@ export function SettingsPage() {
                   }
                 />
               </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>{t("settings.maskSensitiveInfo")}</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.maskSensitiveInfoDescription")}
+                  </p>
+                </div>
+                <Switch
+                  checked={currentSettings.monoize_mask_sensitive_info}
+                  onCheckedChange={(checked) =>
+                    handleChange({ monoize_mask_sensitive_info: checked })
+                  }
+                />
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="request_capture_retention_days">{t("settings.requestCaptureRetentionDays")}</Label>
                 <Input

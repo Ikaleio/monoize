@@ -772,7 +772,9 @@ pub async fn create_embeddings(
                     let same_channel_retryable = is_same_channel_retryable_error(&err);
                     let passive_failure_class =
                         same_channel_retryable.then(|| classify_retryable_failure(&err));
-                    let app_err = upstream_error_to_app(err);
+                    let mask_sensitive_info =
+                        state.monoize_runtime.read().await.mask_sensitive_info;
+                    let app_err = upstream_error_to_app(err, mask_sensitive_info);
                     record_upstream_attempt_failure(
                         &state,
                         &attempt,
@@ -988,6 +990,7 @@ impl TriedProvider {
         attempt: &MonoizeAttempt,
         app_err: &AppError,
         duration_ms: Option<u64>,
+        mask_sensitive_info: bool,
     ) -> Self {
         Self {
             attempt_number,
@@ -998,13 +1001,17 @@ impl TriedProvider {
             // SAN-5: `error` is the unmasked internal detail. Attempt
             // failures can also come from response-decoding AppErrors that
             // never pass through `upstream_error_to_app`, so `client_error`
-            // masks unconditionally (idempotent) while `error` keeps the raw
-            // text for admin-tier request-log reads.
+            // masks unconditionally when masking is enabled (idempotent)
+            // while `error` keeps the raw text for admin-tier request-log
+            // reads. SAN-CFG5 item 1: masking off makes `MASK` the identity.
             error: app_err
                 .internal_message
                 .clone()
                 .unwrap_or_else(|| crate::error_sanitize::truncate_error_detail(&app_err.message)),
-            client_error: crate::error_sanitize::mask_sensitive_text(&app_err.message),
+            client_error: crate::error_sanitize::maybe_mask_sensitive_text(
+                &app_err.message,
+                mask_sensitive_info,
+            ),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(
                 app_err

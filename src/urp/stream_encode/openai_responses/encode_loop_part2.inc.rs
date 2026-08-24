@@ -124,6 +124,7 @@ mod tests {
                 "gpt-5.4",
                 Instant::now(),
                 None,
+                true,
             )
             .await
             .expect("encode Responses provider control");
@@ -273,6 +274,7 @@ mod tests {
                 "gpt-5.4",
                 Instant::now(),
                 None,
+                true,
             )
             .await
             .expect("encode Responses stream");
@@ -662,6 +664,7 @@ mod tests {
                 "gpt-5.4",
                 Instant::now(),
                 None,
+                true,
             )
             .await
             .expect("encode custom Responses stream");
@@ -848,6 +851,7 @@ mod tests {
                 "gpt-5.4",
                 Instant::now(),
                 None,
+                true,
             )
             .await
             .expect("encode file provenance stream");
@@ -936,6 +940,7 @@ mod tests {
                 "gpt-5.4",
                 Instant::now(),
                 None,
+                true,
             )
             .await
             .expect("encode Responses stream");
@@ -1085,6 +1090,7 @@ mod tests {
                 "gpt-5.4",
                 Instant::now(),
                 None,
+                true,
             )
             .await
             .expect("encode Responses stream");

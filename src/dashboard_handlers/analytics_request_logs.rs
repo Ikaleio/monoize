@@ -204,7 +204,8 @@ pub async fn list_my_request_logs(
     .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     // RL-API14 / SAN-14: only admins may read the stored full error detail.
-    if !is_admin {
+    // SAN-CFG5 item 5: skipped entirely when masking is disabled.
+    if !is_admin && state.monoize_runtime.read().await.mask_sensitive_info {
         for log in &mut logs {
             log.mask_error_detail_for_non_admin();
         }
@@ -416,6 +417,7 @@ pub async fn stream_request_logs(
     };
 
     let receiver = state.log_broadcast.subscribe();
+    let runtime = state.monoize_runtime.clone();
 
     let mut initial_pending: Vec<_> = state
         .pending_request_logs
@@ -427,12 +429,14 @@ pub async fn stream_request_logs(
     let initial_event = if initial_pending.is_empty() {
         Event::default().comment("ready")
     } else {
+        // RL-API14 / SAN-14: non-admin SSE rows carry masked detail unless
+        // masking is disabled (SAN-CFG5 item 5).
+        let mask_batch = !is_admin && runtime.read().await.mask_sensitive_info;
         let enriched_batch: Vec<_> = initial_pending
             .into_iter()
             .map(|log| {
                 let mut row = log.to_request_log_row();
-                // RL-API14 / SAN-14: non-admin SSE rows carry masked detail.
-                if !is_admin {
+                if mask_batch {
                     row.mask_error_detail_for_non_admin();
                 }
                 row
@@ -445,8 +449,8 @@ pub async fn stream_request_logs(
     };
 
     let live_stream = stream::unfold(
-        (receiver, is_admin, user_id, guard),
-        |(mut receiver, is_admin, user_id, guard)| async move {
+        (receiver, is_admin, user_id, guard, runtime),
+        |(mut receiver, is_admin, user_id, guard, runtime)| async move {
             loop {
                 match receiver.recv().await {
                     Ok(batch) => {
@@ -461,13 +465,15 @@ pub async fn stream_request_logs(
                         if filtered.is_empty() {
                             continue;
                         }
+                        // RL-API14 / SAN-14 with the SAN-CFG5 item 5 gate,
+                        // re-read per batch so a settings change applies to
+                        // subsequent frames of an open connection.
+                        let mask_batch = !is_admin && runtime.read().await.mask_sensitive_info;
                         let enriched_batch: Vec<_> = filtered
                             .into_iter()
                             .map(|log| {
                                 let mut row = log.to_request_log_row();
-                                // RL-API14 / SAN-14: non-admin SSE rows carry
-                                // masked detail.
-                                if !is_admin {
+                                if mask_batch {
                                     row.mask_error_detail_for_non_admin();
                                 }
                                 row
@@ -479,14 +485,14 @@ pub async fn stream_request_logs(
                         };
                         return Some((
                             Ok::<Event, Infallible>(event),
-                            (receiver, is_admin, user_id, guard),
+                            (receiver, is_admin, user_id, guard, runtime),
                         ));
                     }
                     Err(RecvError::Lagged(_)) => {
                         let event = Event::default().event("resync").data("{}");
                         return Some((
                             Ok::<Event, Infallible>(event),
-                            (receiver, is_admin, user_id, guard),
+                            (receiver, is_admin, user_id, guard, runtime),
                         ));
                     }
                     Err(RecvError::Closed) => return None,

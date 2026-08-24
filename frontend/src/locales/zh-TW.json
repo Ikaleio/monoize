@@ -304,6 +304,8 @@
 		"requestCaptureEnabledDescription": "按 API 金鑰抓包的總開關。關閉時不會寫入任何 dump 檔案。",
 		"requestCaptureRetentionDays": "抓包保留期（天）",
 		"requestCaptureRetentionDaysDescription": "自動刪除早於該天數的抓包 dump 檔案。",
+		"maskSensitiveInfo": "遮罩敏感資訊",
+		"maskSensitiveInfoDescription": "在面向客戶端的錯誤訊息和非管理員請求日誌讀取中，對上游 URL、網域、IP 和 API 金鑰進行遮罩。關閉後將暴露原始上游錯誤文字。",
 		"stripCrossProtocolNestedExtra": "剝離跨協定巢狀額外欄位",
 		"stripCrossProtocolNestedExtraDescription": "跨協定族轉發前移除下游協定專用的巢狀透傳狀態。",
 		"activeProbeIntervalSeconds": "探測間隔（秒）",

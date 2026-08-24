@@ -46,6 +46,7 @@ pub(crate) async fn encode_urp_stream(
     logical_model: &str,
     stream_started_at: Instant,
     sse_max_frame_length: Option<usize>,
+    mask_sensitive_info: bool,
 ) -> AppResult<()> {
     match downstream {
         DownstreamProtocol::Responses => {
@@ -55,16 +56,29 @@ pub(crate) async fn encode_urp_stream(
                 logical_model,
                 stream_started_at,
                 sse_max_frame_length,
+                mask_sensitive_info,
             )
             .await
         }
         DownstreamProtocol::ChatCompletions => {
-            openai_chat::encode_urp_stream_as_chat(rx, tx, logical_model, sse_max_frame_length)
-                .await
+            openai_chat::encode_urp_stream_as_chat(
+                rx,
+                tx,
+                logical_model,
+                sse_max_frame_length,
+                mask_sensitive_info,
+            )
+            .await
         }
         DownstreamProtocol::AnthropicMessages => {
-            anthropic::encode_urp_stream_as_messages(rx, tx, logical_model, sse_max_frame_length)
-                .await
+            anthropic::encode_urp_stream_as_messages(
+                rx,
+                tx,
+                logical_model,
+                sse_max_frame_length,
+                mask_sensitive_info,
+            )
+            .await
         }
     }
 }

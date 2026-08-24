@@ -2359,11 +2359,14 @@ const LEAKY_TRANSPORT_ERROR: &str = "error sending request for url (https://api.
 
 #[test]
 fn upstream_error_to_app_replaces_transport_detail_with_generic_message() {
-    let err = routing::upstream_error_to_app(UpstreamCallError::new(
-        UpstreamErrorKind::Network,
-        None,
-        LEAKY_TRANSPORT_ERROR.to_string(),
-    ));
+    let err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            None,
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        true,
+    );
 
     assert_eq!(err.status, StatusCode::BAD_GATEWAY);
     assert_eq!(err.message, "failed to request upstream");
@@ -2390,6 +2393,7 @@ fn upstream_error_to_app_drops_unparsed_error_body_from_client_message() {
             raw_body,
         )
         .with_source(upstream::UpstreamErrorSource::UnparsedBody),
+        true,
     );
 
     assert_eq!(err.message, "upstream status 502 Bad Gateway");
@@ -2408,6 +2412,7 @@ fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
             "invalid request".to_string(),
         )
         .with_source(upstream::UpstreamErrorSource::StructuredBody),
+        true,
     );
     assert_eq!(
         err.message,
@@ -2421,6 +2426,7 @@ fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
             "rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai".to_string(),
         )
         .with_source(upstream::UpstreamErrorSource::StructuredBody),
+        true,
     );
     assert!(
         masked.message.contains("https://***.com/***"),
@@ -2428,6 +2434,87 @@ fn upstream_error_to_app_masks_structured_message_and_keeps_status_prefix() {
         masked.message
     );
     assert!(!masked.message.contains("cloudflare"), "{}", masked.message);
+}
+
+// SAN-CFG5: with `mask_sensitive_info` disabled, the client message carries
+// the raw upstream detail (TRUNC-bounded for transport/unparsed sources).
+#[test]
+fn upstream_error_to_app_exposes_raw_detail_when_masking_disabled() {
+    let transport = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            None,
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        false,
+    );
+    assert_eq!(
+        transport.message,
+        format!("upstream status 502 Bad Gateway: {LEAKY_TRANSPORT_ERROR}")
+    );
+
+    let raw_body = format!("<html>502 Bad Gateway from {LEAKY_TRANSPORT_ERROR}</html>");
+    let unparsed = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::BAD_GATEWAY),
+            raw_body.clone(),
+        )
+        .with_source(upstream::UpstreamErrorSource::UnparsedBody),
+        false,
+    );
+    assert_eq!(
+        unparsed.message,
+        format!("upstream status 502 Bad Gateway: {raw_body}")
+    );
+
+    let empty = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::BAD_GATEWAY),
+            "502 Bad Gateway".to_string(),
+        )
+        .with_source(upstream::UpstreamErrorSource::EmptyBody),
+        false,
+    );
+    assert_eq!(empty.message, "upstream status 502 Bad Gateway");
+
+    let structured = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::UNPROCESSABLE_ENTITY),
+            "rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai".to_string(),
+        )
+        .with_source(upstream::UpstreamErrorSource::StructuredBody),
+        false,
+    );
+    assert_eq!(
+        structured.message,
+        "upstream status 422 Unprocessable Entity: rejected by https://api.cloudflare.com/client/v4/accounts/abc123/ai"
+    );
+}
+
+// SAN-CFG5.2/5.3: transport and unparsed client text is TRUNC-bounded when
+// masking is off, so an oversized raw body cannot flood the client message.
+#[test]
+fn upstream_error_to_app_truncates_raw_client_detail_when_masking_disabled() {
+    let oversized = "x".repeat(3000);
+    let err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Http,
+            Some(StatusCode::BAD_GATEWAY),
+            oversized,
+        )
+        .with_source(upstream::UpstreamErrorSource::UnparsedBody),
+        false,
+    );
+    assert!(err.message.ends_with("... (truncated)"), "{}", err.message);
+    assert_eq!(
+        err.message.chars().count(),
+        "upstream status 502 Bad Gateway: ".chars().count()
+            + 2048
+            + "... (truncated)".chars().count()
+    );
 }
 
 #[test]
@@ -2438,14 +2525,17 @@ fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
         crate::monoize_routing::AffinityFailbackMode::Sticky,
         30,
     );
-    let app_err = routing::upstream_error_to_app(UpstreamCallError::new(
-        UpstreamErrorKind::Network,
-        Some(StatusCode::BAD_GATEWAY),
-        LEAKY_TRANSPORT_ERROR.to_string(),
-    ));
+    let app_err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            Some(StatusCode::BAD_GATEWAY),
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        true,
+    );
     let tried = vec![
-        TriedProvider::from_app_error(1, &attempt, &app_err, Some(10)),
-        TriedProvider::from_app_error(2, &attempt, &app_err, Some(11)),
+        TriedProvider::from_app_error(1, &attempt, &app_err, Some(10), true),
+        TriedProvider::from_app_error(2, &attempt, &app_err, Some(11), true),
     ];
 
     let err = build_exhausted_upstream_error("deepseek-v4-flash", &tried);
@@ -2487,6 +2577,45 @@ fn exhausted_error_message_omits_attempt_count_and_infra_detail() {
         "{serialized}"
     );
     assert_eq!(tried[1].client_error, "failed to request upstream");
+}
+
+// SAN-CFG5 item 1: with masking disabled `client_error` equals the raw
+// AppError message, so the exhausted downstream error carries full detail.
+#[test]
+fn tried_provider_client_error_keeps_raw_text_when_masking_disabled() {
+    let attempt = affinity_test_attempt(
+        "provider-raw",
+        "channel-raw",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    let app_err = routing::upstream_error_to_app(
+        UpstreamCallError::new(
+            UpstreamErrorKind::Network,
+            Some(StatusCode::BAD_GATEWAY),
+            LEAKY_TRANSPORT_ERROR.to_string(),
+        ),
+        false,
+    );
+    let tried = vec![TriedProvider::from_app_error(
+        1,
+        &attempt,
+        &app_err,
+        Some(10),
+        false,
+    )];
+
+    assert_eq!(
+        tried[0].client_error,
+        format!("upstream status 502 Bad Gateway: {LEAKY_TRANSPORT_ERROR}")
+    );
+
+    let err = build_exhausted_upstream_error("deepseek-v4-flash", &tried);
+    assert!(
+        err.message.contains("api.cloudflare.com"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]

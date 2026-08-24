@@ -172,6 +172,7 @@ export interface SystemSettings {
   monoize_strip_cross_protocol_nested_extra: boolean;
   monoize_request_capture_enabled: boolean;
   monoize_request_capture_retention_days: number;
+  monoize_mask_sensitive_info: boolean;
   pricing_profile_model_patterns: PricingProfilePattern[];
   updated_at: string;
 }

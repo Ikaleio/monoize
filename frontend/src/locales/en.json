@@ -307,6 +307,8 @@
 		"requestCaptureEnabledDescription": "Master switch for per-API-key request capture dumps. When off, no dump files are written.",
 		"requestCaptureRetentionDays": "Capture Retention (days)",
 		"requestCaptureRetentionDaysDescription": "Automatically delete capture dump files older than this number of days.",
+		"maskSensitiveInfo": "Mask Sensitive Info",
+		"maskSensitiveInfoDescription": "Mask upstream URLs, domains, IPs, and API keys in client-facing error messages and non-admin request-log reads. When off, raw upstream error text is exposed.",
 		"stripCrossProtocolNestedExtra": "Strip Cross-Protocol Nested Extra",
 		"stripCrossProtocolNestedExtraDescription": "Remove nested downstream-only passthrough state before cross-family upstream encoding.",
 		"activeProbeIntervalSeconds": "Probe Interval (seconds)",

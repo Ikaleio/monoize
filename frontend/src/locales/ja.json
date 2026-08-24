@@ -304,6 +304,8 @@
 		"requestCaptureEnabledDescription": "API キー単位のキャプチャを制御するマスタースイッチです。オフの場合、dump ファイルは書き込まれません。",
 		"requestCaptureRetentionDays": "キャプチャ保持期間（日）",
 		"requestCaptureRetentionDaysDescription": "この日数より古いキャプチャ dump ファイルを自動削除します。",
+		"maskSensitiveInfo": "機密情報をマスク",
+		"maskSensitiveInfoDescription": "クライアント向けエラーメッセージと非管理者のリクエストログ読み取りで、上流の URL・ドメイン・IP・API キーをマスクします。オフにすると生の上流エラーテキストが公開されます。",
 		"stripCrossProtocolNestedExtra": "クロスプロトコルのネスト追加情報を除去",
 		"stripCrossProtocolNestedExtraDescription": "プロトコルファミリーをまたぐ転送前に、下流専用のネストされた透過状態を削除します。",
 		"activeProbeIntervalSeconds": "プローブ間隔（秒）",

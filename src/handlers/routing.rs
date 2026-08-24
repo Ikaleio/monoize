@@ -1257,11 +1257,13 @@ pub(super) async fn record_upstream_attempt_failure(
     tried_providers: &mut Vec<TriedProvider>,
     execution_state: &mut AttemptExecutionState,
 ) {
+    let mask_sensitive_info = state.monoize_runtime.read().await.mask_sensitive_info;
     tried_providers.push(TriedProvider::from_app_error(
         attempt_number,
         attempt,
         app_err,
         execution_state.last_attempt_duration_ms(),
+        mask_sensitive_info,
     ));
     let Some(failure_class) = passive_failure_class else {
         return;
@@ -1503,21 +1505,31 @@ async fn apply_retryable_failure_to_channel(
         }
     }
 }
-pub(super) fn upstream_error_to_app(err: UpstreamCallError) -> AppError {
+pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info: bool) -> AppError {
     let status = err.status.unwrap_or(StatusCode::BAD_GATEWAY);
     // SAN-3: the raw unmasked upstream detail (transport text with the full
     // upstream URL, raw unparsed error bodies) exists in the server log only.
     tracing::warn!(status = %status, upstream_error = %err.message, "upstream request failed");
-    // SAN-1: the client-facing message per error source.
+    // SAN-1 when masking is enabled; SAN-CFG5 items 1-4 when the admin
+    // disabled `monoize_mask_sensitive_info`.
     let client_message = match err.source {
-        upstream::UpstreamErrorSource::Transport => "failed to request upstream".to_string(),
-        upstream::UpstreamErrorSource::UnparsedBody | upstream::UpstreamErrorSource::EmptyBody => {
+        upstream::UpstreamErrorSource::Transport if mask_sensitive_info => {
+            "failed to request upstream".to_string()
+        }
+        upstream::UpstreamErrorSource::UnparsedBody if mask_sensitive_info => {
             format!("upstream status {status}")
+        }
+        upstream::UpstreamErrorSource::EmptyBody => format!("upstream status {status}"),
+        upstream::UpstreamErrorSource::Transport | upstream::UpstreamErrorSource::UnparsedBody => {
+            format!(
+                "upstream status {status}: {}",
+                crate::error_sanitize::truncate_error_detail(&err.message)
+            )
         }
         upstream::UpstreamErrorSource::StructuredBody | upstream::UpstreamErrorSource::Internal => {
             format!(
                 "upstream status {status}: {}",
-                crate::error_sanitize::mask_sensitive_text(&err.message)
+                crate::error_sanitize::maybe_mask_sensitive_text(&err.message, mask_sensitive_info)
             )
         }
     };
