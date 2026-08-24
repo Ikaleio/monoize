@@ -1935,8 +1935,22 @@ fn write_admission_marker(
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn sync_directory(directory: &std::path::Path) -> Result<(), String> {
     std::fs::File::open(directory)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn sync_directory(directory: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(directory)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| error.to_string())
 }
