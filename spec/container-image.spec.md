@@ -46,6 +46,8 @@ CI-B5. The build MUST run `cargo build --locked --release`.
 
 CI-B6. The Docker build context MUST exclude Git metadata, local databases, environment files, native build output, frontend dependencies, SDK test dependencies, and deployment backups.
 
+CI-B7. Each platform container job MUST restore and save GitHub Actions Docker layer cache scoped to that platform (`linux-amd64` or `linux-arm64`). A cache miss MUST continue the job. A cache hit MUST NOT skip the image build or change `VERSION` / `REVISION` build arguments.
+
 ## 3. Publication authority and triggers
 
 CI-P1. The publication workflow MUST publish to `ghcr.io/<lowercase github.repository>`.
