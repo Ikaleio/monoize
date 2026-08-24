@@ -483,7 +483,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             runtime.node.config_poll_interval,
         );
     }
-    let request_capture = RequestCaptureStore::new(&runtime.database_dsn);
+    let request_capture = RequestCaptureStore::new(&runtime.database_dsn).with_db(db.clone());
     request_capture.spawn_cleanup_task(monoize_runtime.clone());
     let probe_runtime = monoize_runtime.clone();
     let probe_health = channel_health.clone();
@@ -2192,6 +2192,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/request-logs",
             get(crate::dashboard_handlers::list_my_request_logs),
+        )
+        .route(
+            "/dashboard/request-captures/{request_id}",
+            get(crate::dashboard_handlers::get_request_capture),
         )
         .route(
             "/dashboard/analytics",

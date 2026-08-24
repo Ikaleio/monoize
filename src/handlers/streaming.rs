@@ -340,6 +340,12 @@ pub(super) async fn forward_stream_typed(
                 return Err(err);
             }
             strip_monoize_context(&mut req_attempt);
+            let capture_transform_chain = crate::request_capture::build_transform_chain(
+                &attempt.provider_transforms,
+                &global_transforms,
+                &auth.transforms,
+                &transform_match_model,
+            );
 
             if requires_buffered_stream {
                 let mut nonstream_req = req_attempt.clone();
@@ -397,6 +403,7 @@ pub(super) async fn forward_stream_typed(
                                     upstream_body.clone(),
                                     Some(value.clone()),
                                     None,
+                                    capture_transform_chain.clone(),
                                     None,
                                 ))
                                 .await;
@@ -724,6 +731,7 @@ pub(super) async fn forward_stream_typed(
                                     upstream_body.clone(),
                                     None,
                                     None,
+                                    capture_transform_chain.clone(),
                                     Some(json!({
                                         "message": err.message,
                                         "code": err.code,
@@ -874,6 +882,7 @@ pub(super) async fn forward_stream_typed(
                     let channel_id_for_log = attempt.channel_id.clone();
                     let capture_session = capture.session.clone();
                     let capture_raw_input = capture.raw_input.clone();
+                    let capture_transform_chain_for_task = capture_transform_chain.clone();
                     let capture_req_attempt = req_attempt.clone();
                     let capture_upstream_body = upstream_body.clone();
                     let capture_path = path.clone();
@@ -1133,6 +1142,7 @@ pub(super) async fn forward_stream_typed(
                                         capture_upstream_body,
                                         None,
                                         frames,
+                                        capture_transform_chain_for_task,
                                         error_json,
                                     ))
                                     .await;
@@ -1244,6 +1254,7 @@ pub(super) async fn forward_stream_typed(
                                         capture_upstream_body,
                                         None,
                                         frames,
+                                        capture_transform_chain_for_task,
                                         Some(json!({
                                             "message": err.message,
                                             "code": err.code,
@@ -1372,6 +1383,7 @@ pub(super) async fn forward_stream_typed(
                                     capture_upstream_body,
                                     None,
                                     frames,
+                                    capture_transform_chain_for_task,
                                     None,
                                 ))
                                 .await;
@@ -1398,6 +1410,7 @@ pub(super) async fn forward_stream_typed(
                                 upstream_body.clone(),
                                 None,
                                 None,
+                                capture_transform_chain.clone(),
                                 Some(json!({
                                     "message": err.message,
                                     "code": err.code,
