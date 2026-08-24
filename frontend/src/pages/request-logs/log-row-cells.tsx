@@ -594,9 +594,6 @@ export function LogRowCells({
 												)}
 											</div>
 										)}
-										{log.affinity?.hit === false && (
-											<div>{t('requestLogs.affinityMiss')}</div>
-										)}
 										{affinityTargetDisplay && (
 											<div>
 												{t('requestLogs.affinityTarget')}: {affinityTargetDisplay}
