@@ -2264,7 +2264,7 @@ mod tests {
             .map(|chunk| request_log_insert_chunk(chunk.iter()).1.len())
             .collect::<Vec<_>>();
 
-        assert_eq!(bind_counts, vec![860, 860, 43]);
+        assert_eq!(bind_counts, vec![760, 760, 38]);
         assert!(bind_counts.into_iter().all(|count| count <= 999));
     }
 

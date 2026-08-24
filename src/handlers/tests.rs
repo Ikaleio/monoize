@@ -2445,6 +2445,396 @@ async fn shared_origin_blast_marks_peer_channels_and_skips_without_clearing_affi
     );
 }
 
+#[test]
+fn midstream_terminal_failure_class_maps_retryable_statuses() {
+    assert_eq!(
+        routing::midstream_terminal_failure_class(429),
+        Some(routing::RetryableFailureClass::RateLimited)
+    );
+    assert_eq!(
+        routing::midstream_terminal_failure_class(408),
+        Some(routing::RetryableFailureClass::Transient)
+    );
+    for status in [500, 502, 503, 529, 599] {
+        assert_eq!(
+            routing::midstream_terminal_failure_class(status),
+            Some(routing::RetryableFailureClass::Transient),
+            "{status}"
+        );
+    }
+    for status in [200, 400, 401, 403, 404, 422] {
+        assert_eq!(
+            routing::midstream_terminal_failure_class(status),
+            None,
+            "{status}"
+        );
+    }
+}
+
+#[test]
+fn upstream_adapter_failure_classification_uses_upstream_prefix() {
+    for code in [
+        "upstream_idle_timeout",
+        "upstream_stream_error",
+        "upstream_incomplete_stream",
+    ] {
+        let err = AppError::new(StatusCode::BAD_GATEWAY, code, "adapter failure");
+        assert!(routing::is_upstream_adapter_failure(&err), "{code}");
+    }
+    for code in ["invalid_upstream_response", "encode_error", "internal_error"] {
+        let err = AppError::new(StatusCode::BAD_GATEWAY, code, "internal failure");
+        assert!(!routing::is_upstream_adapter_failure(&err), "{code}");
+    }
+}
+
+#[test]
+fn same_channel_attempt_slots_reserve_one_extra_for_affinity_hit() {
+    let mut attempt = affinity_test_attempt(
+        "provider",
+        "slots-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    attempt.channel_max_retries = 0;
+    assert_eq!(routing::same_channel_attempt_slots(&attempt), 1);
+
+    attempt.channel_max_retries = 2;
+    assert_eq!(routing::same_channel_attempt_slots(&attempt), 3);
+
+    attempt.affinity_hit = Some(true);
+    assert_eq!(routing::same_channel_attempt_slots(&attempt), 4);
+
+    attempt.affinity_hit = Some(false);
+    assert_eq!(routing::same_channel_attempt_slots(&attempt), 3);
+}
+
+#[tokio::test]
+async fn bound_target_earns_one_extra_transient_attempt_but_not_for_rate_limits() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    let mut attempt = affinity_test_attempt(
+        "provider",
+        "extra-slot-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    attempt.channel_max_retries = 0;
+    attempt.routing_config_revision = state
+        .routing_config_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+    let execution_state = AttemptExecutionState::default();
+
+    // RTA-4: without an affinity hit, channel_max_retries = 0 permits no retry.
+    assert!(
+        !routing::allow_same_channel_retry(
+            &state,
+            &attempt,
+            &execution_state,
+            1,
+            Some(routing::RetryableFailureClass::Transient),
+        )
+        .await
+    );
+
+    // RTA-4a: the bound target earns exactly one extra Transient attempt.
+    attempt.affinity_hit = Some(true);
+    assert!(
+        routing::allow_same_channel_retry(
+            &state,
+            &attempt,
+            &execution_state,
+            1,
+            Some(routing::RetryableFailureClass::Transient),
+        )
+        .await
+    );
+    assert!(
+        !routing::allow_same_channel_retry(
+            &state,
+            &attempt,
+            &execution_state,
+            2,
+            Some(routing::RetryableFailureClass::Transient),
+        )
+        .await
+    );
+
+    // RTA-4a: a 429 never consumes the extra slot.
+    assert!(
+        !routing::allow_same_channel_retry(
+            &state,
+            &attempt,
+            &execution_state,
+            1,
+            Some(routing::RetryableFailureClass::RateLimited),
+        )
+        .await
+    );
+
+    // A non-retryable failure never re-enters the same Channel.
+    assert!(!routing::allow_same_channel_retry(&state, &attempt, &execution_state, 1, None).await);
+}
+
+#[tokio::test]
+async fn same_channel_retry_requires_healthy_channel_and_no_shared_origin_skip() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    let mut attempt = affinity_test_attempt(
+        "provider",
+        "gated-retry-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    attempt.channel_max_retries = 1;
+    attempt.passive_failure_count_threshold = 1;
+    attempt.routing_config_revision = state
+        .routing_config_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+
+    let mut execution_state = AttemptExecutionState::default();
+    attempt.origin_key = Some("https|origin.example|443".to_string());
+    execution_state.mark_shared_origin_skip(&attempt);
+    assert!(
+        !routing::allow_same_channel_retry(
+            &state,
+            &attempt,
+            &execution_state,
+            1,
+            Some(routing::RetryableFailureClass::Transient),
+        )
+        .await
+    );
+
+    let execution_state = AttemptExecutionState::default();
+    routing::mark_channel_retryable_failure(
+        &state,
+        &attempt,
+        routing::RetryableFailureClass::Transient,
+    )
+    .await;
+    assert!(
+        !routing::allow_same_channel_retry(
+            &state,
+            &attempt,
+            &execution_state,
+            1,
+            Some(routing::RetryableFailureClass::Transient),
+        )
+        .await
+    );
+}
+
+#[tokio::test]
+async fn sub_threshold_failure_on_bound_target_keeps_affinity_binding() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    let mut attempt = affinity_test_attempt(
+        "provider",
+        "sticky-keep-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    attempt.passive_failure_count_threshold = 3;
+    attempt.affinity_hit = Some(true);
+    attempt.affinity_key = Some("v1|api_key:k|model:gpt-affinity|prefix:keep".to_string());
+    attempt.routing_config_revision = state
+        .routing_config_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+    state.channel_affinity.lock().await.insert(
+        attempt.affinity_key.clone().expect("key"),
+        crate::monoize_routing::ChannelAffinityBinding {
+            provider_id: attempt.provider_id.clone(),
+            channel_id: attempt.channel_id.clone(),
+            bound_at: now_ts(),
+            last_used_at: now_ts(),
+            expires_at: now_ts() + 1800,
+        },
+    );
+
+    // 500 is Transient but not a shared-origin status; one sample stays below
+    // the threshold of 3, so AFF-9 keeps the binding.
+    let err = AppError::new(
+        StatusCode::BAD_GATEWAY,
+        "upstream_error",
+        "upstream status 500",
+    )
+    .with_upstream_error(Some(StatusCode::INTERNAL_SERVER_ERROR), None, None, None);
+    let mut tried = Vec::new();
+    let mut execution_state = AttemptExecutionState::default();
+    routing::record_upstream_attempt_failure(
+        &state,
+        &attempt,
+        1,
+        &err,
+        Some(routing::RetryableFailureClass::Transient),
+        &mut tried,
+        &mut execution_state,
+    )
+    .await;
+
+    assert!(
+        state
+            .channel_affinity
+            .lock()
+            .await
+            .contains_key(attempt.affinity_key.as_ref().expect("key"))
+    );
+    let health = state.channel_health.lock().await;
+    assert!(health.get("sticky-keep-channel").expect("entry").healthy);
+}
+
+#[tokio::test]
+async fn breaker_tripping_failure_on_bound_target_clears_affinity_binding() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    let mut attempt = affinity_test_attempt(
+        "provider",
+        "sticky-clear-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    attempt.passive_failure_count_threshold = 1;
+    attempt.affinity_hit = Some(true);
+    attempt.affinity_key = Some("v1|api_key:k|model:gpt-affinity|prefix:clear".to_string());
+    attempt.routing_config_revision = state
+        .routing_config_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+    state.channel_affinity.lock().await.insert(
+        attempt.affinity_key.clone().expect("key"),
+        crate::monoize_routing::ChannelAffinityBinding {
+            provider_id: attempt.provider_id.clone(),
+            channel_id: attempt.channel_id.clone(),
+            bound_at: now_ts(),
+            last_used_at: now_ts(),
+            expires_at: now_ts() + 1800,
+        },
+    );
+
+    let err = AppError::new(
+        StatusCode::BAD_GATEWAY,
+        "upstream_error",
+        "upstream status 500",
+    )
+    .with_upstream_error(Some(StatusCode::INTERNAL_SERVER_ERROR), None, None, None);
+    let mut tried = Vec::new();
+    let mut execution_state = AttemptExecutionState::default();
+    routing::record_upstream_attempt_failure(
+        &state,
+        &attempt,
+        1,
+        &err,
+        Some(routing::RetryableFailureClass::Transient),
+        &mut tried,
+        &mut execution_state,
+    )
+    .await;
+
+    assert!(
+        !state
+            .channel_affinity
+            .lock()
+            .await
+            .contains_key(attempt.affinity_key.as_ref().expect("key"))
+    );
+    let health = state.channel_health.lock().await;
+    assert!(!health.get("sticky-clear-channel").expect("entry").healthy);
+}
+
+#[tokio::test]
+async fn midstream_terminal_failure_samples_health_and_clears_affinity_only_on_trip() {
+    let runtime = RuntimeConfig {
+        listen: "127.0.0.1:0".to_string(),
+        metrics_path: "/metrics".to_string(),
+        database_dsn: "sqlite::memory:".to_string(),
+        request_log_spool_dir: None,
+        node: crate::node_config::NodeSettings::primary_default(),
+    };
+    let state = load_state_with_runtime(runtime).await.expect("state loads");
+    let mut attempt = affinity_test_attempt(
+        "provider",
+        "midstream-channel",
+        crate::monoize_routing::AffinityFailbackMode::Sticky,
+        30,
+    );
+    attempt.passive_failure_count_threshold = 2;
+    attempt.affinity_hit = Some(true);
+    attempt.affinity_key = Some("v1|api_key:k|model:gpt-affinity|prefix:mid".to_string());
+    attempt.origin_key = routing::channel_origin_key("https://midstream.example");
+    attempt.origin_peer_channel_ids =
+        vec!["midstream-channel".to_string(), "midstream-peer".to_string()];
+    attempt.routing_config_revision = state
+        .routing_config_revision
+        .load(std::sync::atomic::Ordering::Acquire);
+    state.channel_affinity.lock().await.insert(
+        attempt.affinity_key.clone().expect("key"),
+        crate::monoize_routing::ChannelAffinityBinding {
+            provider_id: attempt.provider_id.clone(),
+            channel_id: attempt.channel_id.clone(),
+            bound_at: now_ts(),
+            last_used_at: now_ts(),
+            expires_at: now_ts() + 1800,
+        },
+    );
+
+    // STRM-4a: the first sample stays below the threshold of 2 and keeps the binding.
+    routing::record_midstream_terminal_failure(
+        &state,
+        &attempt,
+        routing::RetryableFailureClass::Transient,
+    )
+    .await;
+    assert!(
+        state
+            .channel_affinity
+            .lock()
+            .await
+            .contains_key(attempt.affinity_key.as_ref().expect("key"))
+    );
+
+    // The second sample trips the breaker and clears the binding.
+    routing::record_midstream_terminal_failure(
+        &state,
+        &attempt,
+        routing::RetryableFailureClass::Transient,
+    )
+    .await;
+    assert!(
+        !state
+            .channel_affinity
+            .lock()
+            .await
+            .contains_key(attempt.affinity_key.as_ref().expect("key"))
+    );
+    let health = state.channel_health.lock().await;
+    assert!(!health.get("midstream-channel").expect("entry").healthy);
+    // STRM-4: mid-stream failures never blast shared-origin peers.
+    assert!(!health.contains_key("midstream-peer"));
+}
+
 #[tokio::test]
 async fn affinity_keeps_unexpired_binding_when_target_is_absent() {
     let runtime = RuntimeConfig {

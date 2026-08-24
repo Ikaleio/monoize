@@ -1299,7 +1299,9 @@ async fn sqlite_migration_creates_request_log_retention_indexes() {
         .expect("request-log column count exists")
         .try_get("", "column_count")
         .expect("request-log column count decodes");
-    assert_eq!(request_log_columns, 43);
+    // 42 columns from the RL-S3b rebuild, plus session_affinity_value (RL-S4),
+    // minus the five visible-TPS columns dropped per RL-S12.
+    assert_eq!(request_log_columns, 38);
 
     let request_log_foreign_keys = db
         .read()
