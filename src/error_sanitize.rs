@@ -44,6 +44,16 @@ pub fn mask_sensitive_text(text: &str) -> String {
         .into_owned()
 }
 
+/// SAN-CFG5: apply [`mask_sensitive_text`] only when the runtime setting
+/// `mask_sensitive_info` is enabled; otherwise return `text` unchanged.
+pub fn maybe_mask_sensitive_text(text: &str, mask_sensitive_info: bool) -> String {
+    if mask_sensitive_info {
+        mask_sensitive_text(text)
+    } else {
+        text.to_string()
+    }
+}
+
 /// SAN-D2 `TRUNC`: bound persisted error detail to [`ERROR_DETAIL_MAX_CHARS`]
 /// Unicode scalar values, appending a fixed truncation marker when clipped.
 pub fn truncate_error_detail(text: &str) -> String {

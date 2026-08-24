@@ -101,3 +101,25 @@ SAN-14. For every other authenticated dashboard caller, both read surfaces MUST 
 SAN-15. SAN-14 operates on the stored text, which is `TRUNC`-bounded at write time. Because `MASK` is idempotent, applying SAN-14 to a historical row whose stored text was masked at write time (rows persisted before this policy) yields the stored text unchanged.
 
 SAN-16. No non-dashboard API may return persisted request-log error text. The forwarding endpoints return only the client-tier messages defined in sections 2, 4, and 6.
+
+## 9. System setting: mask sensitive info
+
+SAN-CFG1. System settings MUST include `monoize_mask_sensitive_info: boolean`.
+
+SAN-CFG2. The default value of `monoize_mask_sensitive_info` MUST be `true`.
+
+SAN-CFG3. `monoize_runtime` MUST publish `mask_sensitive_info` equal to the committed `monoize_mask_sensitive_info`. Forwarding and dashboard request-log read paths that apply `MASK` MUST read this runtime value and MUST NOT query `system_settings` per request.
+
+SAN-CFG4. When `mask_sensitive_info` is `true`, sections 2, 3 (`client_error`), 4, 6, and 8 apply unchanged.
+
+SAN-CFG5. When `mask_sensitive_info` is `false`:
+
+1. Every call site that would apply `MASK` (SAN-1 structured/internal client text, SAN-4, SAN-5 `client_error`, SAN-11, SAN-14) MUST leave the text unchanged (identity).
+2. SAN-1 transport client message MUST be `upstream status {STATUS}: ` followed by `TRUNC(raw message)` instead of the fixed string `failed to request upstream`.
+3. SAN-1 `unparsed_body` client message MUST be `upstream status {STATUS}: ` followed by `TRUNC(raw message)` instead of status-only text.
+4. SAN-1 `empty_body` client message remains `upstream status {STATUS}`.
+5. SAN-14 MUST NOT run: non-admin dashboard callers receive the stored admin-tier text verbatim.
+6. SAN-2, SAN-5 `error`, SAN-7, SAN-9, and SAN-10 remain unchanged (persisted detail stays unmasked and `TRUNC`-bounded).
+7. SAN-3 server tracing remains unchanged.
+
+SAN-CFG6. Changing `monoize_mask_sensitive_info` via `PUT /api/dashboard/settings` MUST take effect for subsequent forwarding and dashboard reads after the settings transaction publishes `monoize_runtime` (DB23b). Already-persisted request-log rows are not rewritten.
