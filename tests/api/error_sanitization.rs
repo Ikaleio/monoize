@@ -66,7 +66,11 @@ async fn unparsed_upstream_error_body_is_hidden_from_client_and_masked_in_logs()
     assert_eq!(error["error"]["code"], json!("upstream_error"));
     assert_eq!(error["error"]["upstream_status"], json!(502));
 
-    // SAN-9/SAN-10: operators keep the masked detail in the request log.
+    // SAN-9: operators keep the masked, counted detail in the request log
+    // while the client message stays generic. (SAN-10 tried_providers_json
+    // content is asserted at unit level in
+    // handlers::tests::exhausted_error_message_omits_attempt_count_and_infra_detail;
+    // the list endpoints do not select that column.)
     let log = find_error_log(&ctx, "gpt-5-mini-chat").await;
     let log_message = log.error.message.as_deref().expect("log error message");
     assert!(
@@ -75,17 +79,6 @@ async fn unparsed_upstream_error_body_is_hidden_from_client_and_masked_in_logs()
     );
     assert!(log_message.contains("https://***.com/***"), "{log_message}");
     assert_no_infra_leak(log_message);
-
-    let tried = log.tried_providers.expect("tried providers recorded");
-    let tried_text = tried.to_string();
-    assert_no_infra_leak(&tried_text);
-    assert!(!tried_text.contains("client_error"), "{tried_text}");
-    assert!(
-        tried[0]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("https://***.com/***")),
-        "{tried_text}"
-    );
 }
 
 #[tokio::test]
