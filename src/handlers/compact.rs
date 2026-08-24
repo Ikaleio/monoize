@@ -6,7 +6,25 @@ pub async fn compact_response(
     Json(mut body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    let raw_input = body.clone();
+    let request_id = extract_request_id(&headers);
+    // Compact is non-streaming by contract; the session starts before the body
+    // is mutated below so the capture clone still sees the body as received,
+    // and the deep clone is skipped entirely when capture is off.
+    let capture_session = state
+        .request_capture
+        .maybe_start_session(
+            &state.monoize_runtime,
+            &auth,
+            request_id.clone(),
+            DownstreamProtocol::Responses,
+            false,
+        )
+        .await;
+    let raw_input = Arc::new(if capture_session.is_some() {
+        body.clone()
+    } else {
+        Value::Null
+    });
     let body_obj = body.as_object_mut().ok_or_else(|| {
         AppError::new(
             StatusCode::BAD_REQUEST,
@@ -65,21 +83,11 @@ pub async fn compact_response(
     );
     ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
 
-    let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
     let started_at = std::time::Instant::now();
     let capture = RequestCaptureContext {
         raw_input,
-        session: state
-            .request_capture
-            .maybe_start_session(
-                &state.monoize_runtime,
-                &auth,
-                request_id.clone(),
-                DownstreamProtocol::Responses,
-                false,
-            )
-            .await,
+        session: capture_session,
     };
     let _pending_request_log_guard = insert_pending_request_log(
         &state,
@@ -142,7 +150,7 @@ pub async fn compact_response(
                                 &logical_model,
                                 &attempt.upstream_model,
                                 "/v1/responses/compact",
-                                capture.raw_input.clone(),
+                                capture.raw_input.as_ref().clone(),
                                 &routing_request,
                                 upstream_body,
                                 Some(value.clone()),
@@ -272,7 +280,7 @@ pub async fn compact_response(
                                 &logical_model,
                                 &attempt.upstream_model,
                                 "/v1/responses/compact",
-                                capture.raw_input.clone(),
+                                capture.raw_input.as_ref().clone(),
                                 &routing_request,
                                 upstream_body,
                                 None,

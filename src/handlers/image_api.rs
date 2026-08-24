@@ -520,7 +520,7 @@ async fn execute_image_subrequest_typed(
         request_ip,
         client_session_id,
         super::RequestCaptureContext {
-            raw_input: Value::Object(serde_json::Map::new()),
+            raw_input: std::sync::Arc::new(Value::Object(serde_json::Map::new())),
             session: None,
         },
         Some(validate_image_subrequest_response),

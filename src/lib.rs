@@ -12,6 +12,7 @@ pub mod entity;
 pub mod error;
 pub mod exact_decimal;
 pub mod frontend;
+pub mod glob;
 pub mod handlers;
 pub mod image_transform_cache;
 pub mod migration;

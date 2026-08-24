@@ -253,26 +253,34 @@ pub async fn create_response(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    let raw_input = body.clone();
+    let request_id = extract_request_id(&headers);
+    // Session starts before decode so the body is deep-cloned only when a
+    // capture session exists. The top-level "stream" bool is exactly what the
+    // decoder assigns to `req.stream` for this protocol.
+    let capture_session = state
+        .request_capture
+        .maybe_start_session(
+            &state.monoize_runtime,
+            &auth,
+            request_id.clone(),
+            DownstreamProtocol::Responses,
+            body.get("stream").and_then(Value::as_bool).unwrap_or(false),
+        )
+        .await;
+    let raw_input = Arc::new(if capture_session.is_some() {
+        body.clone()
+    } else {
+        Value::Null
+    });
     let (known, extra) = split_body(body, &URP_KNOWN_RESPONSE_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::Responses, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
-    let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
         raw_input,
-        session: state
-            .request_capture
-            .maybe_start_session(
-                &state.monoize_runtime,
-                &auth,
-                request_id.clone(),
-                DownstreamProtocol::Responses,
-                req.stream.unwrap_or(false),
-            )
-            .await,
+        session: capture_session,
     };
     if req
         .extra_body
@@ -339,26 +347,31 @@ pub async fn create_chat_completions(
     Json(body): Json<Value>,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    let raw_input = body.clone();
+    let request_id = extract_request_id(&headers);
+    let capture_session = state
+        .request_capture
+        .maybe_start_session(
+            &state.monoize_runtime,
+            &auth,
+            request_id.clone(),
+            DownstreamProtocol::ChatCompletions,
+            body.get("stream").and_then(Value::as_bool).unwrap_or(false),
+        )
+        .await;
+    let raw_input = Arc::new(if capture_session.is_some() {
+        body.clone()
+    } else {
+        Value::Null
+    });
     let (known, extra) = split_body(body, &URP_KNOWN_CHAT_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::ChatCompletions, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
-    let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
         raw_input,
-        session: state
-            .request_capture
-            .maybe_start_session(
-                &state.monoize_runtime,
-                &auth,
-                request_id.clone(),
-                DownstreamProtocol::ChatCompletions,
-                req.stream.unwrap_or(false),
-            )
-            .await,
+        session: capture_session,
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::ChatCompletions;
@@ -423,26 +436,31 @@ async fn create_messages_inner(
     body: Value,
 ) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    let raw_input = body.clone();
+    let request_id = extract_request_id(&headers);
+    let capture_session = state
+        .request_capture
+        .maybe_start_session(
+            &state.monoize_runtime,
+            &auth,
+            request_id.clone(),
+            DownstreamProtocol::AnthropicMessages,
+            body.get("stream").and_then(Value::as_bool).unwrap_or(false),
+        )
+        .await;
+    let raw_input = Arc::new(if capture_session.is_some() {
+        body.clone()
+    } else {
+        Value::Null
+    });
     let (known, extra) = split_body(body, &URP_KNOWN_MESSAGES_FIELDS)?;
     let mut req = decode_urp_request(DownstreamProtocol::AnthropicMessages, known, extra)?;
     apply_model_redirects(&state, &mut req, &auth).await;
     ensure_model_allowed(&auth, &req.model)?;
     let max_multiplier = resolve_max_multiplier(&req, &headers, &auth);
-    let request_id = extract_request_id(&headers);
     let request_ip = extract_client_ip(&headers);
     let capture = RequestCaptureContext {
         raw_input,
-        session: state
-            .request_capture
-            .maybe_start_session(
-                &state.monoize_runtime,
-                &auth,
-                request_id.clone(),
-                DownstreamProtocol::AnthropicMessages,
-                req.stream.unwrap_or(false),
-            )
-            .await,
+        session: capture_session,
     };
     if req.stream.unwrap_or(false) {
         let downstream = DownstreamProtocol::AnthropicMessages;
@@ -1055,9 +1073,13 @@ pub(crate) enum DownstreamProtocol {
     AnthropicMessages,
 }
 
+/// Capture context for one downstream request. `raw_input` holds the parsed
+/// downstream body only when a capture session actually started; otherwise it
+/// is `Value::Null` so the normal (capture-off) path never deep-clones the
+/// request body. The `Arc` keeps the per-attempt context clones cheap.
 #[derive(Clone)]
 pub(crate) struct RequestCaptureContext {
-    raw_input: Value,
+    raw_input: Arc<Value>,
     session: Option<RequestCaptureSession>,
 }
 

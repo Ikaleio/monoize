@@ -137,6 +137,14 @@ TF-4. A rule is eligible to execute only when all conditions below hold:
 2. the rule phase equals the current phase; and
 3. if `models` is present, at least one model glob matches the normalized logical model.
 
+TF-4a. Model glob matching is case-sensitive and anchored to the full model string.
+`*` matches any sequence of zero or more characters. `?` matches exactly one
+character. Every other pattern character matches only itself. Both wildcards
+match every Unicode scalar value, including newline. Matching MUST NOT compile
+a regular expression per evaluation; evaluation cost MUST be bounded by
+O(len(pattern) x len(model)) without heap-allocated per-call pattern
+translation.
+
 TF-5. Transform registry discovery MUST be automatic through `inventory`.
 
 TF-6. Adding a new transform file with a valid inventory submission MUST be sufficient for registration.
