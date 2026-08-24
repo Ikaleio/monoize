@@ -196,11 +196,12 @@ export function LoginPage() {
               <motion.div variants={itemVariants}>
                 {publicSettingsLoading ? (
                   <Skeleton className="h-[54px] w-full" />
-                ) : publicSettingsError || !publicSettings?.cap_api_endpoint ? (
+                ) : publicSettingsError ||
+                  (publicSettings?.captcha_enabled && !publicSettings.cap_api_endpoint) ? (
                   <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                     {t("auth.captchaUnavailable")}
                   </div>
-                ) : (
+                ) : publicSettings?.captcha_enabled && publicSettings.cap_api_endpoint ? (
                   <CapCaptcha
                     key={i18n.language}
                     apiEndpoint={publicSettings.cap_api_endpoint}
@@ -209,7 +210,7 @@ export function LoginPage() {
                     onTokenChange={setCaptchaToken}
                     onError={handleCaptchaError}
                   />
-                )}
+                ) : null}
               </motion.div>
               <AnimatePresence mode="wait">
                 {error && (
@@ -232,8 +233,9 @@ export function LoginPage() {
                     disabled={
                       loading ||
                       publicSettingsLoading ||
-                      !publicSettings?.cap_api_endpoint ||
-                      !captchaToken
+                      !publicSettings ||
+                      (publicSettings.captcha_enabled &&
+                        (!publicSettings.cap_api_endpoint || !captchaToken))
                     }
                   >
                     {loading ? t("common.loading") : isLogin ? t("auth.signIn") : t("auth.signUp")}

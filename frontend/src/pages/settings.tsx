@@ -360,6 +360,21 @@ export function SettingsPage() {
               <CardDescription>{t("settings.sessionSecurityDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label>{t("settings.captchaEnabled")}</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.captchaEnabledDescription")}
+                  </p>
+                </div>
+                <Switch
+                  checked={currentSettings.captcha_enabled}
+                  onCheckedChange={(checked) =>
+                    handleChange({ captcha_enabled: checked })
+                  }
+                />
+              </div>
+              <Separator />
               <div className="space-y-2">
                 <Label htmlFor="session_ttl">{t("settings.sessionDuration")}</Label>
                 <Input

@@ -262,6 +262,8 @@
 		"defaultUserRoleDescription": "指派給新使用者的角色（user、admin）",
 		"sessionSecurity": "工作階段與安全性",
 		"sessionSecurityDescription": "設定工作階段和 API 金鑰限制",
+		"captchaEnabled": "啟用人機驗證",
+		"captchaEnabledDescription": "使用內建 Cap 保護儀表板登入和註冊。關閉後將失去機器人與撞庫攻擊防護。",
 		"sessionDuration": "工作階段有效期（天）",
 		"sessionDurationDescription": "使用者工作階段保持有效的時間",
 		"maxApiKeys": "每位使用者最大 API 金鑰數",

@@ -265,6 +265,8 @@
 		"defaultUserRoleDescription": "Role assigned to new users (user, admin)",
 		"sessionSecurity": "Session & Security",
 		"sessionSecurityDescription": "Configure session and API key limits",
+		"captchaEnabled": "Require human verification",
+		"captchaEnabledDescription": "Protect dashboard login and registration with built-in Cap. Disabling this removes bot and credential-stuffing protection.",
 		"sessionDuration": "Session Duration (days)",
 		"sessionDurationDescription": "How long user sessions remain valid",
 		"maxApiKeys": "Max API Keys per User",

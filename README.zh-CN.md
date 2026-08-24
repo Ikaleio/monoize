@@ -219,10 +219,10 @@ curl http://localhost:8080/v1/responses \
 | `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | 转发请求体上限 |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | 空 | 受信任的反向代理网段 |
 | `MONOIZE_UPSTREAM_PROXY_URL` | 未设置 | 本节点的上游出站 HTTP(S) 代理；Channel 可通过 `proxy_url` 单独覆盖 |
-| `MONOIZE_CAP_API_ENDPOINT` | 未设置 | 包含 site key 路径的 Cap 公共站点端点；未设置时登录和注册失败关闭 |
-| `MONOIZE_CAP_SECRET_KEY` | 未设置 | 对应 Cap 站点的 secret key；必须与 `MONOIZE_CAP_API_ENDPOINT` 同时配置 |
+| `MONOIZE_CAP_API_ENDPOINT` | 未设置 | 可选的外部 Cap 公共站点端点（包含 site key 路径）；未设置时使用 Monoize 内置 Cap |
+| `MONOIZE_CAP_SECRET_KEY` | 未设置 | 外部 Cap 站点的 secret key；必须与 `MONOIZE_CAP_API_ENDPOINT` 同时配置 |
 
-仪表盘登录和注册需要一个 [Cap Standalone](https://capjs.js.org/zh/guide/) 部署。创建 site key 后，通过上述两个变量设置公共端点和 secret，并在 Cap 的 CORS 配置中允许仪表盘来源。Monoize 通过该站点的 `/siteverify` 端点验证每个令牌，不再对认证请求应用基于 IP 的限流。
+仪表盘登录和注册默认使用 Monoize 内置的 Cap 工作量证明服务，无需额外配置。管理员可在系统设置中关闭人机验证；关闭后，登录和注册将失去机器人与撞库攻击防护。如需改用 [Cap Standalone](https://capjs.js.org/zh/guide/)，请创建 site key、同时设置上述两个变量，并在 Cap 的 CORS 配置中允许仪表盘来源。Monoize 随后通过该站点的 `/siteverify` 端点验证令牌。
 
 Monoize 支持 SQLite 和 PostgreSQL。业务表只支持由一个 Monoize 应用进程写入。
 

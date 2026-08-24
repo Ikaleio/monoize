@@ -16,6 +16,7 @@ use std::sync::atomic::Ordering;
 #[derive(Debug, Deserialize)]
 pub struct UpdateSettingsRequest {
     pub registration_enabled: Option<bool>,
+    pub captcha_enabled: Option<bool>,
     pub default_user_role: Option<String>,
     pub session_ttl_days: Option<i64>,
     pub api_key_max_per_user: Option<i64>,
@@ -100,6 +101,9 @@ pub async fn update_settings(
 
     if let Some(v) = body.registration_enabled {
         settings.registration_enabled = v;
+    }
+    if let Some(v) = body.captcha_enabled {
+        settings.captcha_enabled = v;
     }
     if let Some(v) = body.default_user_role {
         settings.default_user_role = v;
@@ -360,7 +364,9 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<imp
         .get_public_settings()
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    settings.cap_api_endpoint = state.cap_verifier.public_api_endpoint().map(str::to_string);
+    settings.cap_api_endpoint = settings
+        .captcha_enabled
+        .then(|| state.cap_verifier.public_api_endpoint().to_string());
     Ok(Json(settings))
 }
 

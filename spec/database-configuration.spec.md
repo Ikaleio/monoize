@@ -200,7 +200,7 @@ DB23c. `monoize_runtime` MUST contain the committed `reasoning_suffix_map`, `pri
 
 DB23d. Authentication code that needs only `session_ttl_days`, and API-key creation code that needs only `api_key_max_per_user`, MUST execute one point lookup for that key. It MUST NOT call `get_all()` or parse unrelated setting payloads. A missing, malformed, or non-positive point value MUST resolve to `7` and `1000`, respectively. A database error from either point lookup MUST return HTTP `500`; authentication MUST NOT create a session and API-key creation MUST NOT insert a key after that error.
 
-DB23e. `GET /api/dashboard/settings/public` MUST execute one set-based query restricted to `registration_enabled`, `site_name`, `site_description`, and `api_base_url`. It MUST return defaults for any missing row and MUST NOT load or parse unrelated settings rows. If a persisted `registration_enabled` row exists, its value MUST be exactly the boolean text `true` or `false`; any other value MUST return a storage error and MUST NOT be interpreted as enabled.
+DB23e. `GET /api/dashboard/settings/public` MUST execute one set-based query restricted to `registration_enabled`, `captcha_enabled`, `site_name`, `site_description`, and `api_base_url`. It MUST return defaults for any missing row and MUST NOT load or parse unrelated settings rows. If a persisted `registration_enabled` or `captcha_enabled` row exists, its value MUST be exactly the boolean text `true` or `false`; any other value MUST return a storage error and MUST NOT be interpreted as enabled.
 
 DB23f. `GET /api/dashboard/stats` MUST obtain `my_api_keys_count` with `COUNT(*) WHERE user_id = ?`. It MUST NOT load or deserialize the user's API-key rows to compute the count.
 

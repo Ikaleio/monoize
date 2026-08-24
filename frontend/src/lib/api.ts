@@ -141,6 +141,7 @@ export interface UpdateApiKeyInput {
 
 export interface SystemSettings {
   registration_enabled: boolean;
+  captcha_enabled: boolean;
   default_user_role: string;
   session_ttl_days: number;
   api_key_max_per_user: number;
@@ -177,6 +178,7 @@ export interface SystemSettings {
 
 export interface PublicSystemSettings {
   registration_enabled: boolean;
+  captcha_enabled: boolean;
   site_name: string;
   site_description: string;
   api_base_url: string;

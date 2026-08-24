@@ -66,10 +66,10 @@ async fn dashboard_auth_requires_a_valid_cap_token() {
 }
 
 #[tokio::test]
-async fn dashboard_auth_fails_closed_when_cap_is_unconfigured() {
+async fn dashboard_auth_uses_builtin_cap_without_external_configuration() {
     let ctx = setup().await;
     let mut state = ctx.state.clone();
-    state.cap_verifier = monoize::captcha::CapVerifier::unconfigured();
+    state.cap_verifier = monoize::captcha::CapVerifier::builtin();
     let router = monoize::app::build_app(state);
 
     for path in ["/api/dashboard/auth/login", "/api/dashboard/auth/register"] {
@@ -87,14 +87,15 @@ async fn dashboard_auth_fails_closed_when_cap_is_unconfigured() {
             ))
             .unwrap();
         let response = router.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body: Value =
             serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
-        assert_eq!(body["error"]["code"], json!("captcha_unavailable"));
+        assert_eq!(body["error"]["code"], json!("captcha_invalid"));
     }
 
     let response = router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/dashboard/settings/public")
@@ -112,6 +113,73 @@ async fn dashboard_auth_fails_closed_when_cap_is_unconfigured() {
     assert!(csp.contains("connect-src 'self';"));
     let body: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["captcha_enabled"], json!(true));
+    assert_eq!(body["cap_api_endpoint"], json!("/api/dashboard/captcha/"));
+
+    let challenge = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/dashboard/captcha/challenge")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(challenge.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&challenge.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["challenge"], json!({"c": 50, "s": 32, "d": 4}));
+    assert!(
+        body["token"]
+            .as_str()
+            .is_some_and(|token| token.len() >= 32)
+    );
+}
+
+#[tokio::test]
+async fn disabled_captcha_allows_login_without_a_token() {
+    let ctx = setup().await;
+    ctx.state
+        .settings_store
+        .set("captcha_enabled", "false")
+        .await
+        .unwrap();
+
+    let response = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/dashboard/auth/login")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "username": "tenant-1",
+                        "password": "test-password"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let public = ctx
+        .router
+        .oneshot(
+            Request::builder()
+                .uri("/api/dashboard/settings/public")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: Value =
+        serde_json::from_slice(&public.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["captcha_enabled"], json!(false));
     assert!(body["cap_api_endpoint"].is_null());
 }
 
@@ -139,6 +207,7 @@ async fn public_settings_and_csp_publish_only_cap_public_configuration() {
     assert!(!first_csp.contains("script-src 'self' 'unsafe-inline'"));
     let body: Value =
         serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["captcha_enabled"], json!(true));
     assert!(
         body["cap_api_endpoint"]
             .as_str()

@@ -470,6 +470,16 @@ pub async fn change_password(
 }
 
 async fn verify_captcha(state: &AppState, token: &str) -> AppResult<()> {
+    let enabled = state
+        .settings_store
+        .is_captcha_enabled()
+        .await
+        .map_err(|error| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        })?;
+    if !enabled {
+        return Ok(());
+    }
     state
         .cap_verifier
         .verify(token)

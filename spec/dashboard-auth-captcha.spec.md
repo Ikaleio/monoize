@@ -2,29 +2,33 @@
 
 ## 0. Scope
 
-This specification defines Cap challenge configuration and verification for the public dashboard login and registration endpoints.
+This specification defines Cap challenge generation, configuration, and verification for the public dashboard login and registration endpoints.
 
 ## 1. Configuration
 
-CAP-C1. `MONOIZE_CAP_API_ENDPOINT` MUST contain the public Cap site endpoint used by the browser, including the site key path. The value MUST be an absolute `http` or `https` URL with a host. Monoize MUST normalize its path to end with `/`. The value MUST NOT contain credentials, a query string, or a fragment.
+CAP-C1. `captcha_enabled` MUST be stored in `system_settings` as the exact text `true` or `false`. A missing row MUST resolve to `true`. The authenticated system settings API MUST return and update this value.
 
-CAP-C2. `MONOIZE_CAP_SECRET_KEY` MUST contain the secret key for the site identified by `MONOIZE_CAP_API_ENDPOINT`. Monoize MUST NOT return this value through any API or log it.
+CAP-C2. If `captcha_enabled` is `true` and both `MONOIZE_CAP_API_ENDPOINT` and `MONOIZE_CAP_SECRET_KEY` are absent or empty, Monoize MUST use its built-in Cap service. The browser endpoint MUST be `/api/dashboard/captcha/`. This mode MUST require no operator-supplied secret, site key, sidecar process, or external network request.
 
-CAP-C3. If both variables are absent or empty, Monoize MAY start, but login and registration MUST fail closed as specified by CAP-V4. If exactly one variable is non-empty, or if the endpoint is invalid, startup MUST fail with code `cap_config_invalid`.
+CAP-C3. If both external Cap variables are non-empty, Monoize MUST use external mode. `MONOIZE_CAP_API_ENDPOINT` MUST contain the public Cap site endpoint, including the site key path. It MUST be an absolute `http` or `https` URL with a host. Monoize MUST normalize its path to end with `/`. It MUST NOT contain credentials, a query string, or a fragment. `MONOIZE_CAP_SECRET_KEY` MUST contain the corresponding site secret and MUST NOT be returned through an API or log.
 
-CAP-C4. `GET /api/dashboard/settings/public` MUST add `cap_api_endpoint`. The value MUST equal the normalized `MONOIZE_CAP_API_ENDPOINT` when Cap is configured and MUST be `null` otherwise. The settings store MUST continue to query only the four database keys listed in `database-configuration.spec.md` DB23e.
+CAP-C4. If exactly one external Cap variable is non-empty, or the endpoint is invalid, startup MUST fail with code `cap_config_invalid`.
+
+CAP-C5. `GET /api/dashboard/settings/public` MUST return `captcha_enabled`. When it is `true`, `cap_api_endpoint` MUST equal `/api/dashboard/captcha/` in built-in mode and the normalized external endpoint in external mode. When it is `false`, `cap_api_endpoint` MUST be `null`.
 
 ## 2. Authentication request contract
 
-CAP-A1. `POST /api/dashboard/auth/login` and `POST /api/dashboard/auth/register` MUST accept `captcha_token: string` in the JSON request body.
+CAP-A1. `POST /api/dashboard/auth/login` and `POST /api/dashboard/auth/register` MUST accept an optional `captcha_token: string` in the JSON request body.
 
-CAP-A2. A missing token, an empty token after trimming, or a token longer than 4096 bytes MUST return HTTP `400` with code `captcha_required`. The handler MUST NOT query or mutate user, session, or settings state after this rejection.
+CAP-A2. Each authentication request MUST read only the `captcha_enabled` settings row before CAPTCHA and account processing. A missing row MUST resolve to `true`. A malformed row or database error MUST return HTTP `500` without querying or mutating user or session state.
 
-CAP-A3. Monoize MUST NOT derive an authentication admission decision from the client IP address. The authentication request path MUST NOT contain an IP-keyed rate limiter, IP-key capacity, IP-key cleanup task, or `MONOIZE_AUTH_RATE_LIMIT_MAX_KEYS` compatibility setting.
+CAP-A3. If `captcha_enabled` is `true`, a missing token, an empty token after trimming, or a token longer than 4096 bytes MUST return HTTP `400` with code `captcha_required`. The handler MUST NOT query or mutate user or session state after this rejection.
+
+CAP-A4. If `captcha_enabled` is `false`, the handler MUST ignore `captcha_token` and continue without a Cap request. Monoize MUST NOT derive an authentication admission decision from the client IP address.
 
 ## 3. Server verification
 
-CAP-V1. Before username, password, account, registration-state, or session processing, Monoize MUST send one JSON request to `<cap_api_endpoint>siteverify`:
+CAP-V1. In external mode, Monoize MUST send one JSON request to `<cap_api_endpoint>siteverify` after CAP-A2 and CAP-A3 and before username, password, account, registration-state, or session processing:
 
 ```json
 {
@@ -39,27 +43,43 @@ CAP-V2. The verification request timeout MUST be 5 seconds. Its response body MU
 
 CAP-V3. A `2xx` verification response with JSON field `success: true` MUST authorize the handler to continue. A `2xx` response without boolean `success: true` MUST return HTTP `400` with code `captcha_invalid`.
 
-CAP-V4. Missing Cap configuration, a transport error, a timeout, a non-`2xx` response, an over-limit response body, or invalid response JSON MUST return HTTP `503` with code `captcha_unavailable`.
+CAP-V4. An external Cap transport error, timeout, non-`2xx` response, over-limit response body, or invalid response JSON MUST return HTTP `503` with code `captcha_unavailable`.
 
 CAP-V5. The handler MUST verify each request token exactly once. It MUST NOT retry verification. Cap tokens are single-use; after any post-verification authentication error, the client MUST obtain a new token before another submission.
 
-## 4. Dashboard client
+## 4. Built-in Cap service
+
+CAP-B1. `POST /api/dashboard/captcha/challenge` MUST be available only when `captcha_enabled` is `true` and built-in mode is active. It MUST return a Cap format-1 challenge with `c = 50`, `s = 32`, `d = 4`, an opaque random token with at least 128 bits of entropy, and an expiry 10 minutes after issuance.
+
+CAP-B2. Built-in challenge salts and targets MUST use the Cap format-1 FNV-1a and xorshift derivation from the opaque challenge token. `POST /api/dashboard/captcha/redeem` MUST accept `{ token, solutions }`, require exactly 50 non-negative integer solutions, and verify each SHA-256 proof against its derived hexadecimal prefix.
+
+CAP-B3. A challenge token MUST be redeemed at most once. The server MUST remove it atomically only after every proof is valid and before returning success. An expired, unknown, or concurrently redeemed challenge MUST return JSON `success: false`.
+
+CAP-B4. A successful redemption MUST return a random authentication token and an expiry 20 minutes after redemption. The server MUST store only a SHA-256 lookup key for that token. Authentication MUST consume the lookup key atomically. An expired, unknown, or reused authentication token MUST return `captcha_invalid`.
+
+CAP-B5. The built-in challenge store and authentication-token store MUST each contain at most 10,000 entries. Before rejecting an insertion at capacity, the server MUST remove expired entries. A capacity rejection MUST return HTTP `503` and MUST NOT evict an unexpired entry.
+
+CAP-B6. Built-in state is process-local. A process restart MAY invalidate unredeemed challenges and unconsumed authentication tokens. Built-in endpoints MUST return HTTP `404` when external mode is active and HTTP `403` when `captcha_enabled` is `false`.
+
+## 5. Dashboard client
 
 CAP-U1. The login page MUST load the Cap widget from the pinned frontend package and MUST set `data-cap-api-endpoint` to the public `cap_api_endpoint` value.
 
 CAP-U2. The frontend MUST bundle the pinned Cap WASM solver and its pako decompression fallback as same-origin build assets. The widget MUST use those assets through `CAP_CUSTOM_WASM_URL` and `CAP_PAKO_URL`; it MUST NOT depend on a runtime CDN request for either asset.
 
-CAP-U3. While public settings are loading, the login form MUST show a skeleton in the widget position and MUST disable submission. If `cap_api_endpoint` is `null`, the page MUST show a configuration error and MUST disable submission.
+CAP-U3. While public settings are loading, the login form MUST show a skeleton in the widget position and MUST disable submission. If `captcha_enabled` is `false`, the page MUST omit the widget and allow submission without a token. If `captcha_enabled` is `true` and `cap_api_endpoint` is `null`, the page MUST show a configuration error and disable submission.
 
-CAP-U4. The client MUST enable submission only after the widget emits a non-empty token. The client MUST send that token as `captcha_token` for login or registration.
+CAP-U4. When `captcha_enabled` is `true`, the client MUST enable submission only after the widget emits a non-empty token and MUST send that token as `captcha_token`. When it is `false`, the client MUST send an empty token and MUST NOT gate submission on a token.
 
 CAP-U5. After a failed login or registration request, the client MUST clear the stored token and reset the widget. Switching between login and registration MUST also clear the token and reset the widget.
 
 CAP-U6. Widget solve and widget error messages MUST use the active dashboard locale. Supported dashboard locales MUST remain English, Simplified Chinese, Traditional Chinese, and Japanese.
 
-## 5. Content Security Policy
+CAP-U7. The system settings page MUST expose `captcha_enabled` as a switch in the session and security section. Its default state MUST be enabled. Its description MUST state that disabling it removes bot and credential-stuffing protection from dashboard login and registration.
 
-CAP-S1. The response Content Security Policy MUST allow `connect-src` only from `'self'` and the configured Cap endpoint origin. An unconfigured deployment MUST keep `connect-src 'self'`.
+## 6. Content Security Policy
+
+CAP-S1. The response Content Security Policy MUST allow `connect-src` only from `'self'` and the external Cap endpoint origin when external mode is configured. Built-in mode MUST keep `connect-src 'self'`.
 
 CAP-S2. The policy MUST allow Cap solver workers from same-origin URLs and `blob:` URLs.
 

@@ -4,6 +4,7 @@ mod api_keys;
 mod auth;
 mod billing_plans;
 mod billing_rates;
+mod captcha;
 mod groups;
 mod model_registry;
 mod providers;
@@ -39,6 +40,7 @@ pub use billing_rates::{
     get_pricing_profile_patterns, list_billing_rates, sync_billing_rates_catalog,
     update_pricing_profile_patterns, upsert_billing_rate,
 };
+pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
 pub use groups::{DashboardGroupsResponse, list_dashboard_groups};
 pub use model_registry::{
     create_model, delete_model, delete_model_metadata, get_model, get_model_metadata,

@@ -262,6 +262,8 @@
 		"defaultUserRoleDescription": "新規ユーザーに割り当てられるロール（user、admin）",
 		"sessionSecurity": "セッションとセキュリティ",
 		"sessionSecurityDescription": "セッションと API キーの制限を設定",
+		"captchaEnabled": "人間確認を必須にする",
+		"captchaEnabledDescription": "組み込み Cap でダッシュボードのログインと登録を保護します。無効にするとボットとクレデンシャルスタッフィングへの保護がなくなります。",
 		"sessionDuration": "セッション有効期間（日）",
 		"sessionDurationDescription": "ユーザーセッションの有効期間",
 		"maxApiKeys": "ユーザーあたりの最大 API キー数",

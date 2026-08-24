@@ -265,6 +265,8 @@
 		"defaultUserRoleDescription": "分配给新用户的角色（user、admin）",
 		"sessionSecurity": "会话与安全",
 		"sessionSecurityDescription": "配置会话和 API 密钥限制",
+		"captchaEnabled": "启用人机验证",
+		"captchaEnabledDescription": "使用内置 Cap 保护仪表盘登录和注册。关闭后将失去机器人和撞库攻击防护。",
 		"sessionDuration": "会话有效期（天）",
 		"sessionDurationDescription": "用户会话保持有效的时间",
 		"maxApiKeys": "每用户最大 API 密钥数",

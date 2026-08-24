@@ -17,6 +17,7 @@ pub struct PricingProfilePattern {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicSettings {
     pub registration_enabled: bool,
+    pub captcha_enabled: bool,
     pub site_name: String,
     pub site_description: String,
     pub api_base_url: String,
@@ -26,6 +27,7 @@ pub struct PublicSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemSettings {
     pub registration_enabled: bool,
+    pub captcha_enabled: bool,
     pub default_user_role: String,
     pub session_ttl_days: i64,
     pub api_key_max_per_user: i64,
@@ -171,6 +173,7 @@ impl Default for SystemSettings {
     fn default() -> Self {
         Self {
             registration_enabled: true,
+            captcha_enabled: true,
             default_user_role: "user".to_string(),
             session_ttl_days: 7,
             api_key_max_per_user: 1000,
@@ -254,6 +257,8 @@ impl SettingsStore {
             &serde_json::to_string(&defaults.registration_enabled).unwrap(),
         )
         .await?;
+        self.set_if_not_exists("captcha_enabled", &defaults.captcha_enabled.to_string())
+            .await?;
         self.set_if_not_exists("default_user_role", &defaults.default_user_role)
             .await?;
         self.set_if_not_exists("session_ttl_days", &defaults.session_ttl_days.to_string())
@@ -459,8 +464,9 @@ impl SettingsStore {
     }
 
     pub async fn get_public_settings(&self) -> Result<PublicSettings, String> {
-        const PUBLIC_KEYS: [&str; 4] = [
+        const PUBLIC_KEYS: [&str; 5] = [
             "registration_enabled",
+            "captcha_enabled",
             "site_name",
             "site_description",
             "api_base_url",
@@ -473,6 +479,7 @@ impl SettingsStore {
         let defaults = SystemSettings::default();
         let mut public = PublicSettings {
             registration_enabled: defaults.registration_enabled,
+            captcha_enabled: defaults.captcha_enabled,
             site_name: defaults.site_name,
             site_description: defaults.site_description,
             api_base_url: defaults.api_base_url,
@@ -482,6 +489,9 @@ impl SettingsStore {
             match row.key.as_str() {
                 "registration_enabled" => {
                     public.registration_enabled = decode_registration_enabled(&row.value)?;
+                }
+                "captcha_enabled" => {
+                    public.captcha_enabled = decode_captcha_enabled(&row.value)?;
                 }
                 "site_name" => public.site_name = row.value,
                 "site_description" => public.site_description = row.value,
@@ -538,6 +548,9 @@ impl SettingsStore {
             match row.key.as_str() {
                 "registration_enabled" => {
                     settings.registration_enabled = decode_registration_enabled(&row.value)?;
+                }
+                "captcha_enabled" => {
+                    settings.captcha_enabled = decode_captcha_enabled(&row.value)?;
                 }
                 "default_user_role" => {
                     settings.default_user_role = row.value;
@@ -688,6 +701,7 @@ impl SettingsStore {
                 "registration_enabled",
                 settings.registration_enabled.to_string(),
             ),
+            ("captcha_enabled", settings.captcha_enabled.to_string()),
             ("default_user_role", settings.default_user_role.clone()),
             ("session_ttl_days", settings.session_ttl_days.to_string()),
             (
@@ -873,6 +887,13 @@ impl SettingsStore {
         }
     }
 
+    pub async fn is_captcha_enabled(&self) -> Result<bool, String> {
+        match self.get("captcha_enabled").await? {
+            Some(raw) => decode_captcha_enabled(&raw),
+            None => Ok(true),
+        }
+    }
+
     pub async fn get_reasoning_suffix_map(&self) -> Result<HashMap<String, String>, String> {
         match self.get("reasoning_suffix_map").await? {
             Some(json_str) => serde_json::from_str(&json_str)
@@ -982,4 +1003,9 @@ pub(crate) async fn bump_config_epoch_in_tx(
 fn decode_registration_enabled(raw: &str) -> Result<bool, String> {
     raw.parse::<bool>()
         .map_err(|error| format!("invalid registration_enabled boolean: {error}"))
+}
+
+fn decode_captcha_enabled(raw: &str) -> Result<bool, String> {
+    raw.parse::<bool>()
+        .map_err(|error| format!("invalid captcha_enabled boolean: {error}"))
 }

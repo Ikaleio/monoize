@@ -1985,6 +1985,14 @@ fn build_dashboard_api_router() -> Router<AppState> {
             post(crate::dashboard_handlers::login),
         )
         .route(
+            "/dashboard/captcha/challenge",
+            post(crate::dashboard_handlers::create_captcha_challenge),
+        )
+        .route(
+            "/dashboard/captcha/redeem",
+            post(crate::dashboard_handlers::redeem_captcha_challenge),
+        )
+        .route(
             "/dashboard/auth/logout",
             post(crate::dashboard_handlers::logout),
         )
