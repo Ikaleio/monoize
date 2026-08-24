@@ -71,7 +71,7 @@
 	},
 	"dashboard": {
 		"title": "仪表盘",
-		"greeting": "👋 下午好，{{username}}",
+		"greeting": "下午好，{{username}}",
 		"subtitle": "账户状态、资源消耗与路由数据的实时总览",
 		"searchAction": "搜索",
 		"refreshAction": "刷新数据",

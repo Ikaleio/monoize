@@ -412,7 +412,7 @@ export function DashboardPage() {
         className="shrink-0"
       >
         <PageHeader
-          title={tt("dashboard.greeting", "👋 Good afternoon, {{username}}", { username: user?.username ?? "User" })}
+          title={tt("dashboard.greeting", "Good afternoon, {{username}}", { username: user?.username ?? "User" })}
           description={tt("dashboard.subtitle", "Realtime overview of account status, usage and routing data")}
         />
       </motion.header>

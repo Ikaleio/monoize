@@ -71,7 +71,7 @@
 	},
 	"dashboard": {
 		"title": "ダッシュボード",
-		"greeting": "👋 こんにちは、{{username}}さん",
+		"greeting": "こんにちは、{{username}}さん",
 		"subtitle": "アカウント状況、使用量、ルーティングデータのリアルタイム概要",
 		"searchAction": "検索",
 		"refreshAction": "データを更新",

@@ -71,7 +71,7 @@
 	},
 	"dashboard": {
 		"title": "Dashboard",
-		"greeting": "👋 Good afternoon, {{username}}",
+		"greeting": "Good afternoon, {{username}}",
 		"subtitle": "Realtime overview of account status, usage and routing data",
 		"searchAction": "Search",
 		"refreshAction": "Refresh data",
