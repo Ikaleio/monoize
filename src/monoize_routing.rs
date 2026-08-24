@@ -2415,21 +2415,7 @@ pub fn resolve_effective_api_type(
 }
 
 fn glob_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    let mut regex = String::from("^");
-    for ch in pattern.chars() {
-        match ch {
-            '*' => regex.push_str(".*"),
-            '?' => regex.push('.'),
-            other => regex.push_str(&regex::escape(&other.to_string())),
-        }
-    }
-    regex.push('$');
-    regex::Regex::new(&regex)
-        .map(|re| re.is_match(value))
-        .unwrap_or(false)
+    crate::glob::case_sensitive_glob_match(pattern, value)
 }
 
 pub struct ChannelProbeOutcome {

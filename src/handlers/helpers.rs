@@ -749,21 +749,7 @@ pub(super) fn convert_assistant_images_to_markdown(resp: &mut urp::UrpResponse) 
 }
 
 pub(super) fn model_glob_match(pattern: &str, model: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    let mut regex = String::from("^");
-    for ch in pattern.chars() {
-        match ch {
-            '*' => regex.push_str(".*"),
-            '?' => regex.push('.'),
-            other => regex.push_str(&regex::escape(&other.to_string())),
-        }
-    }
-    regex.push('$');
-    regex::Regex::new(&regex)
-        .map(|re| re.is_match(model))
-        .unwrap_or(false)
+    crate::glob::case_sensitive_glob_match(pattern, model)
 }
 
 /// Default upstream extra_body field whitelists per provider type.

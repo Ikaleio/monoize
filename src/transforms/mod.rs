@@ -1,6 +1,5 @@
 use crate::urp::{Node, OrdinaryRole, UrpRequest, UrpResponse, UrpStreamEvent};
 use async_trait::async_trait;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::any::Any;
@@ -340,21 +339,7 @@ pub async fn apply_stream_transforms(
 }
 
 pub fn model_glob_match(pattern: &str, model: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    let mut regex = String::from("^");
-    for ch in pattern.chars() {
-        match ch {
-            '*' => regex.push_str(".*"),
-            '?' => regex.push('.'),
-            other => regex.push_str(&regex::escape(&other.to_string())),
-        }
-    }
-    regex.push('$');
-    Regex::new(&regex)
-        .map(|re| re.is_match(model))
-        .unwrap_or(false)
+    crate::glob::case_sensitive_glob_match(pattern, model)
 }
 
 pub fn text_node(role: OrdinaryRole, content: impl Into<String>) -> Node {
