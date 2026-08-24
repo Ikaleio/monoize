@@ -65,7 +65,7 @@ export function CapCaptcha({
   }, [ready, resetKey]);
 
   if (!ready) {
-    return <Skeleton className="h-[54px] w-full" />;
+    return <Skeleton className="h-12 w-full rounded-md" />;
   }
 
   return (
@@ -74,7 +74,7 @@ export function CapCaptcha({
       required
       data-cap-api-endpoint={apiEndpoint}
       data-cap-lang={capLanguage(language)}
-      className="block w-full"
+      className="monoize-cap-widget"
     />
   );
 }

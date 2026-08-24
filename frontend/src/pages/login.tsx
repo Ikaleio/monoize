@@ -195,7 +195,7 @@ export function LoginPage() {
               </motion.div>
               <motion.div variants={itemVariants}>
                 {publicSettingsLoading ? (
-                  <Skeleton className="h-[54px] w-full" />
+                  <Skeleton className="h-12 w-full rounded-md" />
                 ) : publicSettingsError ||
                   (publicSettings?.captcha_enabled && !publicSettings.cap_api_endpoint) ? (
                   <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

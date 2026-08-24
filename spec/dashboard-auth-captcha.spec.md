@@ -49,7 +49,7 @@ CAP-V5. The handler MUST verify each request token exactly once. It MUST NOT ret
 
 ## 4. Built-in Cap service
 
-CAP-B1. `POST /api/dashboard/captcha/challenge` MUST be available only when `captcha_enabled` is `true` and built-in mode is active. It MUST return a Cap format-1 challenge with `c = 50`, `s = 32`, `d = 4`, an opaque random token with at least 128 bits of entropy, and an expiry 10 minutes after issuance.
+CAP-B1. `POST /api/dashboard/captcha/challenge` MUST be available only when `captcha_enabled` is `true` and built-in mode is active. It MUST return a Cap format-1 challenge with `c = 50`, `s = 32`, `d = 3`, an opaque random token with at least 128 bits of entropy, and an expiry 10 minutes after issuance.
 
 CAP-B2. Built-in challenge salts and targets MUST use the Cap format-1 FNV-1a and xorshift derivation from the opaque challenge token. `POST /api/dashboard/captcha/redeem` MUST accept `{ token, solutions }`, require exactly 50 non-negative integer solutions, and verify each SHA-256 proof against its derived hexadecimal prefix.
 
@@ -76,6 +76,8 @@ CAP-U5. After a failed login or registration request, the client MUST clear the 
 CAP-U6. Widget solve and widget error messages MUST use the active dashboard locale. Supported dashboard locales MUST remain English, Simplified Chinese, Traditional Chinese, and Japanese.
 
 CAP-U7. The system settings page MUST expose `captcha_enabled` as a switch in the session and security section. Its default state MUST be enabled. Its description MUST state that disabling it removes bot and credential-stuffing protection from dashboard login and registration.
+
+CAP-U8. The rendered widget control MUST occupy 100% of the login form width and match the submit button width. It MUST have a height of 48 CSS pixels and an 8 CSS pixel border radius. Its background, border, text, checkbox, spinner, and focus colors MUST derive from the dashboard semantic color variables. Changing the dashboard between light and dark themes MUST update these colors without reloading or recreating the widget.
 
 ## 6. Content Security Policy
 

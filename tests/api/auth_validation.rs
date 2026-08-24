@@ -129,7 +129,7 @@ async fn dashboard_auth_uses_builtin_cap_without_external_configuration() {
     assert_eq!(challenge.status(), StatusCode::OK);
     let body: Value =
         serde_json::from_slice(&challenge.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert_eq!(body["challenge"], json!({"c": 50, "s": 32, "d": 4}));
+    assert_eq!(body["challenge"], json!({"c": 50, "s": 32, "d": 3}));
     assert!(
         body["token"]
             .as_str()

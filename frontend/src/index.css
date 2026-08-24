@@ -185,3 +185,31 @@
 	scrollbar-width: thin;
 	scrollbar-color: hsl(var(--muted-foreground) / 0.3) hsl(var(--muted));
 }
+
+@layer components {
+	cap-widget.monoize-cap-widget {
+		--cap-background: hsl(var(--background));
+		--cap-border-color: hsl(var(--border));
+		--cap-border-radius: 8px;
+		--cap-widget-height: 48px;
+		--cap-widget-width: 100%;
+		--cap-widget-padding: 11px;
+		--cap-gap: 10px;
+		--cap-color: hsl(var(--foreground));
+		--cap-font: var(--font-sans-cjk);
+		--cap-checkbox-size: 22px;
+		--cap-checkbox-border: 1px solid hsl(var(--input));
+		--cap-checkbox-border-radius: 5px;
+		--cap-checkbox-background: hsl(var(--muted));
+		--cap-spinner-color: hsl(var(--primary));
+		--cap-spinner-background-color: hsl(var(--muted));
+		--cap-focus-ring: hsl(var(--ring));
+		--cap-troubleshoot-color: hsl(var(--primary));
+		--cap-invalid-border-color: hsl(var(--destructive));
+		--cap-invalid-ring-color: hsl(var(--destructive) / 0.2);
+		display: block;
+		width: 100%;
+		max-width: none;
+		color-scheme: light dark;
+	}
+}
