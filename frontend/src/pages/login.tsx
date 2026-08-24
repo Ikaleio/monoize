@@ -14,6 +14,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { usePublicSettings } from "@/lib/swr";
 import { toggleLanguage } from "@/i18n";
 import { motion, AnimatePresence } from "framer-motion";
+import { AnimatedButton } from "@/components/ui/motion";
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -96,10 +97,11 @@ export function LoginPage() {
         transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
         className="absolute right-4 top-4 flex gap-2"
       >
-        <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+        <AnimatedButton>
           <Button
             variant="ghost"
             size="icon"
+            className="size-11 touch-manipulation sm:size-9"
             onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
             title={t("theme.toggle")}
           >
@@ -119,17 +121,18 @@ export function LoginPage() {
               </motion.div>
             </AnimatePresence>
           </Button>
-        </motion.div>
-        <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+        </AnimatedButton>
+        <AnimatedButton>
           <Button
             variant="ghost"
             size="icon"
+            className="size-11 touch-manipulation sm:size-9"
             onClick={toggleLanguage}
             title={t("language.switchLanguage")}
           >
             <Languages className="h-5 w-5" />
           </Button>
-        </motion.div>
+        </AnimatedButton>
       </motion.div>
 
       <motion.div
@@ -142,9 +145,6 @@ export function LoginPage() {
           <CardHeader className="text-center">
             <motion.div
               variants={itemVariants}
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              transition={{ type: "spring", stiffness: 500, damping: 30 }}
               className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border bg-background p-2 text-foreground"
             >
               <MonoizeLogo className="h-full w-full" />
@@ -225,10 +225,7 @@ export function LoginPage() {
                 )}
               </AnimatePresence>
               <motion.div variants={itemVariants}>
-                <motion.div
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
+                <AnimatedButton>
                   <Button
                     type="submit"
                     className="w-full"
@@ -241,7 +238,7 @@ export function LoginPage() {
                   >
                     {loading ? t("common.loading") : isLogin ? t("auth.signIn") : t("auth.signUp")}
                   </Button>
-                </motion.div>
+                </AnimatedButton>
               </motion.div>
             </motion.form>
             {registrationEnabled && (

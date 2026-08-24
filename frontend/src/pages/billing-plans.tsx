@@ -366,6 +366,8 @@ export function BillingPlansPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
+                          aria-label={t("common.edit")}
                           onClick={() => {
                             setForm(formFromPlan(plan));
                             setEditTarget(plan);
@@ -376,6 +378,8 @@ export function BillingPlansPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
+                          aria-label={t("common.delete")}
                           onClick={() => setDeleteTarget(plan)}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />

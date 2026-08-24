@@ -149,7 +149,7 @@ function PaginatedChartLegend({
           >
             <ChevronUp className="h-3.5 w-3.5" />
           </button>
-          <span className="text-[10px] tabular-nums leading-none">
+          <span className="text-xs tabular-nums leading-none">
             {page + 1}/{totalPages}
           </span>
           <button

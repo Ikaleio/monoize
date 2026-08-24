@@ -43,7 +43,7 @@ import {
 } from "@/lib/swr";
 import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { api as apiClient } from "@/lib/api";
-import { PageWrapper, motion, transitions } from "@/components/ui/motion";
+import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { DataTableShell, VirtualTableCell, VirtualTableHeaderCell } from "@/components/ui/data-table-shell";
@@ -348,9 +348,9 @@ function AllowedGroupsInput({
       )}
       {suggestionsLoading ? (
         <div className="flex flex-wrap gap-2">
-          <Skeleton className="h-7 w-20 rounded-full" />
-          <Skeleton className="h-7 w-24 rounded-full" />
-          <Skeleton className="h-7 w-16 rounded-full" />
+          <Skeleton className="h-7 w-20 rounded-md" />
+          <Skeleton className="h-7 w-24 rounded-md" />
+          <Skeleton className="h-7 w-16 rounded-md" />
         </div>
       ) : filteredSuggestions.length > 0 ? (
         <div className="flex flex-wrap gap-2">
@@ -360,7 +360,7 @@ function AllowedGroupsInput({
               type="button"
               variant="outline"
               size="sm"
-              className="h-7 rounded-full px-3 font-mono text-xs"
+              className="h-7 rounded-md px-3 font-mono text-xs"
               onClick={() => addSuggestion(group)}
             >
               {group}
@@ -441,7 +441,8 @@ function ModelRedirectsEditor({ value, onChange }: ModelRedirectsEditorProps) {
             type="button"
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className="size-11 touch-manipulation sm:size-8 shrink-0"
+            aria-label={t("common.delete")}
             onClick={() => onChange(value.filter((_, i) => i !== idx))}
           >
             <X className="h-4 w-4" />
@@ -727,12 +728,12 @@ export function ApiKeysPage() {
           )}
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+              <AnimatedButton>
                 <Button>
                   <Plus className="mr-2 h-4 w-4" />
                   {t("apiKeys.createKey")}
                 </Button>
-              </motion.div>
+              </AnimatedButton>
             </DialogTrigger>
             <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-4xl">
               <div className="flex min-h-0 flex-col p-6">
@@ -917,10 +918,12 @@ export function ApiKeysPage() {
                 <code className="flex-1 rounded-lg border bg-muted px-3 py-2 text-sm">
                   {createdKey.key}
                 </code>
-                <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}>
+                <AnimatedButton>
                   <Button
                     variant="outline"
                     size="icon"
+                    className="size-11 touch-manipulation sm:size-9"
+                    aria-label={t("common.copy")}
                     onClick={() => handleCopy(createdKey.key)}
                   >
                     {copiedKey === createdKey.key ? (
@@ -929,7 +932,7 @@ export function ApiKeysPage() {
                       <Copy className="h-4 w-4" />
                     )}
                   </Button>
-                </motion.div>
+                </AnimatedButton>
               </div>
               <Button
                 variant="ghost"
@@ -1047,7 +1050,8 @@ export function ApiKeysPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6"
+                            className="size-11 touch-manipulation sm:size-6"
+                            aria-label={t("common.copy")}
                             onClick={() => handleCopy(key.key)}
                           >
                             {copiedKey === key.key ? (
@@ -1084,6 +1088,8 @@ export function ApiKeysPage() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            className="size-11 touch-manipulation sm:size-9"
+                            aria-label={t("apiKeys.transferBalance", { defaultValue: "Transfer balance" })}
                             onClick={() => {
                               setTransferDialogKey(key);
                               setTransferAmount("");
@@ -1095,6 +1101,8 @@ export function ApiKeysPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          className="size-11 touch-manipulation sm:size-9"
+                          aria-label={t("common.edit")}
                           onClick={() => openEditDialog(key)}
                         >
                           <Edit className="h-4 w-4" />
@@ -1102,8 +1110,9 @@ export function ApiKeysPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={t("common.delete")}
                           onClick={() => handleDelete(key.id)}
-                          className="text-destructive hover:text-destructive"
+                          className="size-11 touch-manipulation sm:size-9 text-destructive hover:text-destructive"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>

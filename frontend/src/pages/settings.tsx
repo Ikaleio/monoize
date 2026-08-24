@@ -22,7 +22,7 @@ import {
   useTransformRegistry,
 } from "@/lib/swr";
 import type { SystemSettings } from "@/lib/api";
-import { PageWrapper, motion, transitions, StaggerList, StaggerItem } from "@/components/ui/motion";
+import { AnimatedButton, PageWrapper, motion, transitions, StaggerList, StaggerItem } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { TablePageSkeleton } from "@/components/ui/page-skeleton";
 import { TransformChainEditor } from "@/components/transforms/transform-chain-editor";
@@ -121,6 +121,8 @@ function SuffixMapEditor({
           <Button
             variant="ghost"
             size="icon"
+            className="size-11 touch-manipulation sm:size-9"
+            aria-label={t("common.delete")}
             onClick={() => commit(rows.filter((_, i) => i !== idx))}
           >
             <X className="h-4 w-4" />
@@ -241,15 +243,12 @@ export function SettingsPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={transitions.normal}
       >
-        <PageHeader title={t("settings.title")} description={t("settings.description")} actions={(<motion.div
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-        >
+        <PageHeader title={t("settings.title")} description={t("settings.description")} actions={(<AnimatedButton>
           <Button onClick={handleSave} disabled={saving || !hasChanges}>
             <Save className="mr-2 h-4 w-4" />
             {saving ? t("common.saving") : saved ? t("common.saved") : t("common.saveChanges")}
           </Button>
-        </motion.div>)} />
+        </AnimatedButton>)} />
       </motion.div>
 
       <StaggerList className="grid min-w-0 gap-6 [&>*]:min-w-0">
@@ -321,11 +320,7 @@ export function SettingsPage() {
               <CardDescription>{t("settings.registrationDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <motion.div
-                whileHover={{ x: 4 }}
-                transition={{ type: "spring", stiffness: 300 }}
-                className="flex items-center justify-between"
-              >
+              <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>{t("settings.allowRegistration")}</Label>
                   <p className="text-sm text-muted-foreground">
@@ -338,7 +333,7 @@ export function SettingsPage() {
                     handleChange({ registration_enabled: checked })
                   }
                 />
-              </motion.div>
+              </div>
               <Separator />
               <div className="space-y-2">
                 <Label htmlFor="default_role">{t("settings.defaultUserRole")}</Label>
@@ -576,11 +571,7 @@ export function SettingsPage() {
               <CardDescription>{t("settings.healthMonitoringDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <motion.div
-                whileHover={{ x: 4 }}
-                transition={{ type: "spring", stiffness: 300 }}
-                className="flex items-center justify-between"
-              >
+              <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>{t("settings.activeProbeEnabled")}</Label>
                   <p className="text-sm text-muted-foreground">
@@ -593,13 +584,9 @@ export function SettingsPage() {
                     handleChange({ monoize_active_probe_enabled: checked })
                   }
                 />
-              </motion.div>
+              </div>
               <Separator />
-              <motion.div
-                whileHover={{ x: 4 }}
-                transition={{ type: "spring", stiffness: 300 }}
-                className="flex items-center justify-between"
-              >
+              <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>{t("settings.enableEstimatedBilling")}</Label>
                   <p className="text-sm text-muted-foreground">
@@ -612,13 +599,9 @@ export function SettingsPage() {
                     handleChange({ monoize_enable_estimated_billing: checked })
                   }
                 />
-              </motion.div>
+              </div>
               <Separator />
-              <motion.div
-                whileHover={{ x: 4 }}
-                transition={{ type: "spring", stiffness: 300 }}
-                className="flex items-center justify-between"
-              >
+              <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>{t("settings.stripCrossProtocolNestedExtra")}</Label>
                   <p className="text-sm text-muted-foreground">
@@ -631,13 +614,9 @@ export function SettingsPage() {
                     handleChange({ monoize_strip_cross_protocol_nested_extra: checked })
                   }
                 />
-              </motion.div>
+              </div>
               <Separator />
-              <motion.div
-                whileHover={{ x: 4 }}
-                transition={{ type: "spring", stiffness: 300 }}
-                className="flex items-center justify-between"
-              >
+              <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>{t("settings.requestCaptureEnabled")}</Label>
                   <p className="text-sm text-muted-foreground">
@@ -650,7 +629,7 @@ export function SettingsPage() {
                     handleChange({ monoize_request_capture_enabled: checked })
                   }
                 />
-              </motion.div>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="request_capture_retention_days">{t("settings.requestCaptureRetentionDays")}</Label>
                 <Input
