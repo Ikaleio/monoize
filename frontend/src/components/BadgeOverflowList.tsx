@@ -177,7 +177,7 @@ export function BadgeOverflowList({
 				<Badge
 					variant='secondary'
 					className={cn(
-						'h-6 shrink-0 flex-nowrap rounded-full border border-border/60 bg-secondary/80 px-2 font-mono text-xs backdrop-blur-sm',
+						'h-6 shrink-0 flex-nowrap rounded-md border border-border/60 bg-secondary/80 px-2 font-mono text-xs backdrop-blur-sm',
 						countClassName
 					)}
 				>
