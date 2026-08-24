@@ -11,6 +11,7 @@ interface RequestLogsTableProps {
 	isInitialLoading: boolean
 	logs: RequestLog[]
 	onLoadMore: () => void
+	onOpenCapture: (log: RequestLog) => void
 	onTooltipOpenChange: (tooltipId: string, open: boolean) => void
 	showIp: boolean
 	t: (key: string, options?: Record<string, unknown>) => string
@@ -41,7 +42,7 @@ const tableComponents = {
 function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isAdmin' | 't'>) {
 	return (
 		<tr className='border-b bg-muted/30'>
-			<th className='w-40 whitespace-nowrap py-1.5 pl-2 pr-2 text-left font-medium text-muted-foreground'>
+			<th className='w-[11rem] whitespace-nowrap py-1.5 pl-2 pr-2 text-left font-medium text-muted-foreground'>
 				{t('requestLogs.time')} / {t('requestLogs.requestId')}
 			</th>
 			<th className='min-w-[13.5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
@@ -77,6 +78,7 @@ export function RequestLogsTable({
 	isInitialLoading,
 	logs,
 	onLoadMore,
+	onOpenCapture,
 	onTooltipOpenChange,
 	showIp,
 	t
@@ -113,6 +115,7 @@ export function RequestLogsTable({
 					isAdmin={isAdmin}
 					showIp={showIp}
 					t={t}
+					onOpenCapture={onOpenCapture}
 					onTooltipOpenChange={onTooltipOpenChange}
 				/>
 			)}

@@ -26,6 +26,7 @@ import type { RequestLog, RequestLogsFilter, RequestLogsResponse } from '@/lib/a
 import { PageWrapper, motion, transitions } from '@/components/ui/motion'
 import { PageHeader } from '@/components/ui/page-header'
 import { AnimatePresence } from 'framer-motion'
+import { CaptureViewerDialog } from './request-logs/capture-viewer-dialog'
 import { DateRangePicker } from './request-logs/date-range-picker'
 import { RequestLogsTable } from './request-logs/request-logs-table'
 import { asObject, formatCost } from './request-logs/utils'
@@ -74,6 +75,18 @@ export function RequestLogsPage() {
 	const pendingNewestDataRef = useRef<RequestLogsResponse | null>(null)
 	const pendingSSERef = useRef<RequestLog[]>([])
 	const [flushSignal, setFlushSignal] = useState(0)
+	const [captureOpen, setCaptureOpen] = useState(false)
+	const [captureTarget, setCaptureTarget] = useState<{
+		requestId: string
+		userId: string
+	} | null>(null)
+	const captureRevalidateTimerRef = useRef<number | null>(null)
+
+	const handleOpenCapture = useCallback((log: RequestLog) => {
+		if (!log.request_id) return
+		setCaptureTarget({ requestId: log.request_id, userId: log.user.id })
+		setCaptureOpen(true)
+	}, [])
 
 	const onTooltipOpenChange = useCallback((tooltipId: string, open: boolean) => {
 		if (open) {
@@ -281,6 +294,28 @@ export function RequestLogsPage() {
 		}
 	)
 
+	// RCV-L4: SSE rows always carry `has_capture: false`, so one trailing
+	// 1500 ms debounced newest-page revalidation refreshes the capture flag
+	// after terminal rows arrive, without a revalidation per SSE batch.
+	const scheduleCaptureFlagRevalidate = useCallback(() => {
+		if (captureRevalidateTimerRef.current != null) {
+			window.clearTimeout(captureRevalidateTimerRef.current)
+		}
+		captureRevalidateTimerRef.current = window.setTimeout(() => {
+			captureRevalidateTimerRef.current = null
+			void mutateNewest()
+		}, 1500)
+	}, [mutateNewest])
+
+	useEffect(
+		() => () => {
+			if (captureRevalidateTimerRef.current != null) {
+				window.clearTimeout(captureRevalidateTimerRef.current)
+			}
+		},
+		[]
+	)
+
 	useEffect(() => {
 		if (!sseEvent) return
 
@@ -290,6 +325,14 @@ export function RequestLogsPage() {
 			return
 		}
 
+		const hasTerminalRow = sseEvent.logs.some(
+			log =>
+				log.status === 'success' ||
+				log.status === 'error' ||
+				log.status === 'client_gone'
+		)
+		if (hasTerminalRow) scheduleCaptureFlagRevalidate()
+
 		if (openTooltipIdsRef.current.size > 0) {
 			pendingSSERef.current = [...pendingSSERef.current, ...sseEvent.logs]
 			return
@@ -297,7 +340,7 @@ export function RequestLogsPage() {
 
 		// eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the external SSE event with the local visible list
 		prependSSELogs(sseEvent.logs)
-	}, [sseEvent, mutate, mutateNewest, prependSSELogs])
+	}, [sseEvent, mutate, mutateNewest, prependSSELogs, scheduleCaptureFlagRevalidate])
 
 	const prevConnectedRef = useRef(false)
 	useEffect(() => {
@@ -659,11 +702,19 @@ export function RequestLogsPage() {
 					isInitialLoading={isInitialLoading}
 					logs={sortedLogs}
 					onLoadMore={handleLoadMore}
+					onOpenCapture={handleOpenCapture}
 					onTooltipOpenChange={onTooltipOpenChange}
 					showIp={showIp}
 					t={t}
 				/>
 			</motion.div>
+
+			<CaptureViewerDialog
+				open={captureOpen}
+				onOpenChange={setCaptureOpen}
+				requestId={captureTarget?.requestId ?? null}
+				userId={captureTarget?.userId ?? null}
+			/>
 		</PageWrapper>
 	)
 }

@@ -843,7 +843,40 @@
 		"toggleFilters": "展开/收起筛选",
 		"sessionAffinity": "会话亲和",
 		"uncachedInput": "未缓存输入",
-		"cachedInput": "缓存输入"
+		"cachedInput": "缓存输入",
+		"capture": {
+			"open": "查看抓包",
+			"title": "请求抓包",
+			"loadFailed": "抓包内容加载失败",
+			"retry": "重试",
+			"attempt": "尝试",
+			"stream": "流式",
+			"nonStream": "非流式",
+			"transformChain": "转换链",
+			"transformChainEmpty": "无",
+			"hiddenTransforms": "{{count}} 个系统转换已隐藏",
+			"scope": {
+				"provider": "供应商",
+				"global": "全局",
+				"api_key": "API 密钥"
+			},
+			"phase": {
+				"request": "请求",
+				"response": "响应"
+			},
+			"tabDownstream": "下游请求",
+			"tabUpstream": "上游请求",
+			"tabUrp": "URP",
+			"tabResponse": "响应",
+			"copy": "复制",
+			"copied": "已复制",
+			"empty": "无内容",
+			"expandChars": "展开（{{count}} 字符）",
+			"collapse": "收起",
+			"keysSummary": "{{count}} 个键",
+			"itemsSummary": "{{count}} 项",
+			"framesTruncated": "帧列表已截断：省略 {{frames}} 帧 / {{bytes}} 字节"
+		}
 	},
 	"billingPlans": {
 		"title": "订阅套餐",

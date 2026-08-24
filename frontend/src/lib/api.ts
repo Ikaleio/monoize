@@ -562,6 +562,62 @@ export interface RequestLog {
   billing: RequestLogBilling;
   usage?: Record<string, unknown>;
   error: RequestLogError;
+  has_capture?: boolean;
+}
+
+export interface CaptureTransformChainEntry {
+  scope: "provider" | "global" | "api_key";
+  transform: string;
+  phase: "request" | "response";
+}
+
+export interface CaptureFrameTruncation {
+  truncated?: boolean;
+  omitted_frames?: number;
+  omitted_bytes?: number;
+  retained_frames?: number;
+  retained_bytes?: number;
+}
+
+export interface CaptureAttempt {
+  attempt_number: number;
+  provider_id: string;
+  channel_id?: string | null;
+  provider_type: string;
+  logical_model: string;
+  upstream_model: string;
+  upstream_path: string;
+  raw_input: unknown;
+  transformed_urp_request: unknown;
+  upstream_request: unknown;
+  downstream_response?: unknown;
+  downstream_sse_frames?: string[] | null;
+  downstream_sse_frames_truncation?: CaptureFrameTruncation;
+  transform_chain?: CaptureTransformChainEntry[] | null;
+  /** Number of transform entries redacted for non-admin viewers (RCV-A10). */
+  hidden_transforms?: number;
+  error?: unknown;
+}
+
+export interface CaptureDump {
+  version: number;
+  request_id?: string | null;
+  created_at: string;
+  api_key_id: string;
+  user_id: string;
+  downstream_protocol: string;
+  is_stream: boolean;
+  attempts: CaptureAttempt[];
+  capture_truncation?: Record<string, unknown>;
+}
+
+export interface RequestCaptureDetail {
+  request_id: string;
+  file_name: string;
+  created_at: string;
+  size_bytes: number;
+  owner: { id: string; username?: string | null };
+  dump: CaptureDump;
 }
 
 export interface AdminOverviewNode {
@@ -1046,6 +1102,15 @@ class ApiClient {
     if (filters?.time_from) params.set("time_from", filters.time_from);
     if (filters?.time_to) params.set("time_to", filters.time_to);
     return this.request(`/request-logs?${params.toString()}`);
+  }
+
+  async getRequestCapture(requestId: string, userId?: string): Promise<RequestCaptureDetail> {
+    const params = new URLSearchParams();
+    if (userId) params.set("user_id", userId);
+    const query = params.toString();
+    return this.request(
+      `/request-captures/${encodeURIComponent(requestId)}${query ? `?${query}` : ""}`
+    );
   }
 
   async getDashboardAnalytics(buckets = 8, rangeHours = 24): Promise<DashboardAnalytics> {

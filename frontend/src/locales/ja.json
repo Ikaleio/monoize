@@ -839,7 +839,40 @@
 		"toggleFilters": "フィルターの表示/非表示",
 		"sessionAffinity": "セッションアフィニティ",
 		"uncachedInput": "非キャッシュ入力",
-		"cachedInput": "キャッシュ入力"
+		"cachedInput": "キャッシュ入力",
+		"capture": {
+			"open": "キャプチャを表示",
+			"title": "リクエストキャプチャ",
+			"loadFailed": "キャプチャの読み込みに失敗しました",
+			"retry": "再試行",
+			"attempt": "試行",
+			"stream": "ストリーミング",
+			"nonStream": "非ストリーミング",
+			"transformChain": "変換チェーン",
+			"transformChainEmpty": "なし",
+			"hiddenTransforms": "{{count}} 件のシステム変換は非表示",
+			"scope": {
+				"provider": "プロバイダー",
+				"global": "グローバル",
+				"api_key": "API キー"
+			},
+			"phase": {
+				"request": "リクエスト",
+				"response": "レスポンス"
+			},
+			"tabDownstream": "ダウンストリーム",
+			"tabUpstream": "アップストリーム",
+			"tabUrp": "URP",
+			"tabResponse": "レスポンス",
+			"copy": "コピー",
+			"copied": "コピーしました",
+			"empty": "コンテンツなし",
+			"expandChars": "展開（{{count}} 文字）",
+			"collapse": "折りたたむ",
+			"keysSummary": "{{count}} キー",
+			"itemsSummary": "{{count}} 項目",
+			"framesTruncated": "フレーム一覧は切り詰められました：{{frames}} フレーム / {{bytes}} バイト省略"
+		}
 	},
 	"billingPlans": {
 		"title": "課金プラン",
