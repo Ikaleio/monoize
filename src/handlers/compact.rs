@@ -100,7 +100,7 @@ pub async fn compact_response(
         if execution_state.should_skip(&attempt) {
             continue;
         }
-        let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
+        let max_channel_attempts = same_channel_attempt_slots(&attempt);
         for channel_attempt in 0..max_channel_attempts {
             if execution_state.should_skip(&attempt) {
                 break;
@@ -222,10 +222,14 @@ pub async fn compact_response(
                             )
                             .await;
                             last_failed_attempt = Some(attempt.clone());
-                            if same_channel_retryable
-                                && is_attempt_channel_healthy(&state, &attempt).await
-                                && !execution_state.should_skip(&attempt)
-                                && channel_attempt + 1 < max_channel_attempts
+                            if allow_same_channel_retry(
+                                &state,
+                                &attempt,
+                                &execution_state,
+                                channel_attempt + 1,
+                                passive_failure_class,
+                            )
+                            .await
                             {
                                 maybe_sleep_before_channel_retry(&attempt).await;
                                 continue;
@@ -246,7 +250,6 @@ pub async fn compact_response(
                         request_id,
                         request_ip,
                         attempt.channel_id.clone(),
-                        None,
                         None,
                         None,
                         None,
@@ -297,10 +300,14 @@ pub async fn compact_response(
                     )
                     .await;
                     last_failed_attempt = Some(attempt.clone());
-                    if same_channel_retryable
-                        && is_attempt_channel_healthy(&state, &attempt).await
-                        && !execution_state.should_skip(&attempt)
-                        && channel_attempt + 1 < max_channel_attempts
+                    if allow_same_channel_retry(
+                        &state,
+                        &attempt,
+                        &execution_state,
+                        channel_attempt + 1,
+                        passive_failure_class,
+                    )
+                    .await
                     {
                         maybe_sleep_before_channel_retry(&attempt).await;
                         continue;

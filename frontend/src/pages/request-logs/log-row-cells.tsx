@@ -321,18 +321,8 @@ export function LogRowCells({
 		outputDetailRows.push([t('requestLogs.imageTokens'), formatTokenCount(outputImage)])
 	}
 
-	const averageTpsValue =
-		computedTps.state === 'display' && computedTps.average ?
-			`~${computedTps.average.value.toFixed(2)} t/s`
-		:	null
-	const visibleTpsValue =
-		computedTps.state === 'display' && computedTps.visible ?
-			`~${computedTps.visible.value.toFixed(2)} t/s`
-		:	null
-	const visibleTpsWindow =
-		computedTps.state === 'display' && computedTps.visible ?
-			formatDuration(computedTps.visible.denominatorMs)
-		:	null
+	// FL4a-3: two decimal places, `t/s` unit, no approximation prefix.
+	const tpsValue = computedTps ? `${computedTps.value.toFixed(2)} t/s` : null
 	const durationBadge =
 		duration ?
 			<Badge
@@ -390,26 +380,10 @@ export function LogRowCells({
 					<span className='font-mono'>{ttfb}</span>
 				</div>
 			)}
-			{averageTpsValue && (
+			{tpsValue && (
 				<div className='flex items-center justify-between gap-3'>
-					<span className='text-muted-foreground'>{t('requestLogs.avgTps')}</span>
-					<span className='font-mono'>{averageTpsValue}</span>
-				</div>
-			)}
-			{visibleTpsValue && (
-				<div className='flex items-center justify-between gap-3'>
-					<span className='text-muted-foreground'>
-						{t('requestLogs.visibleWindowTps')}
-					</span>
-					<span className='font-mono'>{visibleTpsValue}</span>
-				</div>
-			)}
-			{visibleTpsWindow && (
-				<div className='flex items-center justify-between gap-3'>
-					<span className='text-muted-foreground'>
-						{t('requestLogs.tpsGenerationWindow')}
-					</span>
-					<span className='font-mono'>{visibleTpsWindow}</span>
+					<span className='text-muted-foreground'>{t('requestLogs.tps')}</span>
+					<span className='font-mono'>{tpsValue}</span>
 				</div>
 			)}
 			{attemptRows.length > 0 && (

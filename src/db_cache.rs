@@ -186,7 +186,7 @@ pub(crate) fn last_used_bulk_update(
 // RequestLogBatcher: buffers InsertRequestLog entries, flushes as batch INSERT
 // ---------------------------------------------------------------------------
 
-const REQUEST_LOG_INSERT_COLUMNS: usize = 43;
+const REQUEST_LOG_INSERT_COLUMNS: usize = 38;
 pub(crate) const REQUEST_LOG_INSERT_CHUNK_ENTRIES: usize = 20;
 pub(crate) const REQUEST_LOG_MIN_ENTRY_BYTES: u64 = 4_096;
 const REQUEST_LOG_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(10);
@@ -204,8 +204,7 @@ const REQUEST_LOG_INSERT_PREFIX: &str = r#"INSERT INTO request_logs
         accepted_prediction_tokens, rejected_prediction_tokens,
         provider_multiplier, charge_nano_usd, status, usage_breakdown_json,
         billing_breakdown_json, error_code, error_message, error_http_status,
-        duration_ms, ttfb_ms, first_visible_output_ms, last_visible_output_ms,
-        visible_generation_ms, visible_output_tokens, tps_mode,
+        duration_ms, ttfb_ms,
         request_ip, reasoning_effort, tried_providers_json, request_kind,
         effective_provider_type, affinity_hit, affinity_key_hash, affinity_target,
         session_affinity_value,
@@ -255,11 +254,6 @@ pub struct SpoolRequestLog {
     pub error_http_status: Option<u16>,
     pub duration_ms: Option<u64>,
     pub ttfb_ms: Option<u64>,
-    pub first_visible_output_ms: Option<u64>,
-    pub last_visible_output_ms: Option<u64>,
-    pub visible_generation_ms: Option<u64>,
-    pub visible_output_tokens: Option<u64>,
-    pub tps_mode: Option<String>,
     pub request_ip: Option<String>,
     pub reasoning_effort: Option<String>,
     pub tried_providers_json: Option<serde_json::Value>,
@@ -303,11 +297,6 @@ impl SpoolRequestLog {
             error_http_status: log.error_http_status,
             duration_ms: log.duration_ms,
             ttfb_ms: log.ttfb_ms,
-            first_visible_output_ms: log.first_visible_output_ms,
-            last_visible_output_ms: log.last_visible_output_ms,
-            visible_generation_ms: log.visible_generation_ms,
-            visible_output_tokens: log.visible_output_tokens,
-            tps_mode: log.tps_mode.clone(),
             request_ip: log.request_ip.clone(),
             reasoning_effort: log.reasoning_effort.clone(),
             tried_providers_json: log.tried_providers_json.clone(),
@@ -363,11 +352,6 @@ impl SpoolRequestLog {
             error_http_status: self.error_http_status,
             duration_ms: self.duration_ms,
             ttfb_ms: self.ttfb_ms,
-            first_visible_output_ms: self.first_visible_output_ms,
-            last_visible_output_ms: self.last_visible_output_ms,
-            visible_generation_ms: self.visible_generation_ms,
-            visible_output_tokens: self.visible_output_tokens,
-            tps_mode: self.tps_mode.clone(),
             request_ip: self.request_ip.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
             tried_providers_json: self.tried_providers_json.clone(),
@@ -460,27 +444,6 @@ fn request_log_insert_values(log: &SpoolRequestLog) -> Vec<sea_orm::Value> {
             .unwrap_or(SeaValue::BigInt(None)),
         request_log_u64_value("duration_ms", log.duration_ms, log.request_id.as_deref()),
         request_log_u64_value("ttfb_ms", log.ttfb_ms, log.request_id.as_deref()),
-        request_log_u64_value(
-            "first_visible_output_ms",
-            log.first_visible_output_ms,
-            log.request_id.as_deref(),
-        ),
-        request_log_u64_value(
-            "last_visible_output_ms",
-            log.last_visible_output_ms,
-            log.request_id.as_deref(),
-        ),
-        request_log_u64_value(
-            "visible_generation_ms",
-            log.visible_generation_ms,
-            log.request_id.as_deref(),
-        ),
-        request_log_u64_value(
-            "visible_output_tokens",
-            log.visible_output_tokens,
-            log.request_id.as_deref(),
-        ),
-        log.tps_mode.clone().into(),
         log.request_ip.clone().into(),
         log.reasoning_effort.clone().into(),
         log.tried_providers_json
@@ -2119,11 +2082,6 @@ mod tests {
             error_http_status: None,
             duration_ms: Some(10),
             ttfb_ms: Some(11),
-            first_visible_output_ms: Some(12),
-            last_visible_output_ms: Some(13),
-            visible_generation_ms: Some(14),
-            visible_output_tokens: Some(15),
-            tps_mode: Some("visible".to_string()),
             request_ip: Some("192.0.2.1".to_string()),
             reasoning_effort: Some("high".to_string()),
             tried_providers_json: Some(serde_json::json!(["provider-1"])),
@@ -2167,11 +2125,6 @@ mod tests {
             error_http_status: None,
             duration_ms: Some(4),
             ttfb_ms: Some(5),
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             request_ip: Some("192.0.2.1".to_string()),
             reasoning_effort: None,
             tried_providers_json: None,
@@ -2311,7 +2264,7 @@ mod tests {
             .map(|chunk| request_log_insert_chunk(chunk.iter()).1.len())
             .collect::<Vec<_>>();
 
-        assert_eq!(bind_counts, vec![860, 860, 43]);
+        assert_eq!(bind_counts, vec![760, 760, 38]);
         assert!(bind_counts.into_iter().all(|count| count <= 999));
     }
 

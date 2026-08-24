@@ -817,8 +817,7 @@
 		"reasoningEffort": "推論強度",
 		"upstreamModel": "上流モデル",
 		"modelProvider": "プロバイダー",
-		"avgTps": "平均 TPS",
-		"tpsGenerationWindow": "生成時間",
+		"tps": "TPS",
 		"connectivityTest": "接続性テスト",
 		"totalCost": "合計コスト",
 		"timeRange": "期間",
@@ -834,7 +833,6 @@
 		"timeRangeFrom": "開始: yyyy-MM-dd HH:mm:ss",
 		"timeRangeTo": "終了: yyyy-MM-dd HH:mm:ss",
 		"toggleFilters": "フィルターの表示/非表示",
-		"visibleWindowTps": "生成ウィンドウ TPS",
 		"sessionAffinity": "セッションアフィニティ",
 		"uncachedInput": "非キャッシュ入力",
 		"cachedInput": "キャッシュ入力"

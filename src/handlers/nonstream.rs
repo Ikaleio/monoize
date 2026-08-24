@@ -252,7 +252,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
             continue;
         }
 
-        let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
+        let max_channel_attempts = same_channel_attempt_slots(&attempt);
         'channel_attempts: for channel_attempt in 0..max_channel_attempts {
             if execution_state.should_skip(&attempt) {
                 break;
@@ -475,10 +475,14 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             )
                             .await;
                             last_failed_attempt = Some(attempt.clone());
-                            if same_channel_retryable
-                                && is_attempt_channel_healthy(state, &attempt).await
-                                && !execution_state.should_skip(&attempt)
-                                && channel_attempt + 1 < max_channel_attempts
+                            if allow_same_channel_retry(
+                                state,
+                                &attempt,
+                                &execution_state,
+                                channel_attempt + 1,
+                                passive_failure_class,
+                            )
+                            .await
                             {
                                 maybe_sleep_before_channel_retry(&attempt).await;
                                 continue 'channel_attempts;
@@ -624,10 +628,14 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                     )
                                     .await;
                                     last_failed_attempt = Some(attempt.clone());
-                                    if same_channel_retryable
-                                        && is_attempt_channel_healthy(state, &attempt).await
-                                        && !execution_state.should_skip(&attempt)
-                                        && channel_attempt + 1 < max_channel_attempts
+                                    if allow_same_channel_retry(
+                                        state,
+                                        &attempt,
+                                        &execution_state,
+                                        channel_attempt + 1,
+                                        passive_failure_class,
+                                    )
+                                    .await
                                     {
                                         maybe_sleep_before_channel_retry(&attempt).await;
                                         continue 'channel_attempts;
@@ -680,10 +688,14 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         )
                         .await;
                         last_failed_attempt = Some(attempt.clone());
-                        if same_channel_retryable
-                            && is_attempt_channel_healthy(state, &attempt).await
-                            && !execution_state.should_skip(&attempt)
-                            && channel_attempt + 1 < max_channel_attempts
+                        if allow_same_channel_retry(
+                            state,
+                            &attempt,
+                            &execution_state,
+                            channel_attempt + 1,
+                            passive_failure_class,
+                        )
+                        .await
                         {
                             maybe_sleep_before_channel_retry(&attempt).await;
                             continue 'channel_attempts;
@@ -859,7 +871,6 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         attempt.channel_id.clone(),
                         None,
                         None,
-                        None,
                         req.reasoning.as_ref().and_then(|r| r.effort.clone()),
                         tried_providers,
                         client_gone_flag(task_state),
@@ -910,10 +921,14 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                     )
                     .await;
                     last_failed_attempt = Some(attempt.clone());
-                    if same_channel_retryable
-                        && is_attempt_channel_healthy(state, &attempt).await
-                        && !execution_state.should_skip(&attempt)
-                        && channel_attempt + 1 < max_channel_attempts
+                    if allow_same_channel_retry(
+                        state,
+                        &attempt,
+                        &execution_state,
+                        channel_attempt + 1,
+                        passive_failure_class,
+                    )
+                    .await
                     {
                         maybe_sleep_before_channel_retry(&attempt).await;
                         continue;

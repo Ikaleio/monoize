@@ -35,7 +35,7 @@ function requestLog(overrides: Partial<RequestLog> = {}): RequestLog {
 }
 
 describe('computeTps', () => {
-	test('pairs the total output numerator with the wall-clock generation window', () => {
+	test('streaming rows exclude TTFB from the generation window (FL4a-2)', () => {
 		const result = computeTps(
 			requestLog({
 				tokens: { output: 30 },
@@ -43,45 +43,19 @@ describe('computeTps', () => {
 			})
 		)
 
-		expect(result.state).toBe('display')
-		if (result.state === 'display') {
-			expect(result.average).toEqual({ value: 30, tokens: 30, denominatorMs: 1000 })
-			expect(result.visible).toBeNull()
-		}
+		expect(result).toEqual({ value: 30, tokens: 30, windowMs: 1000 })
 	})
 
-	test('shows the visible-window TPS beside the average when a visible basis exists', () => {
+	test('non-streaming rows use total duration even when TTFB exists (FL4a-2)', () => {
 		const result = computeTps(
 			requestLog({
+				is_stream: false,
 				tokens: { output: 30 },
-				timing: {
-					duration_ms: 1200,
-					ttfb_ms: 200,
-					visible_output_tokens: 12,
-					visible_generation_ms: 500
-				}
+				timing: { duration_ms: 1200, ttfb_ms: 200 }
 			})
 		)
 
-		expect(result.state).toBe('display')
-		if (result.state === 'display') {
-			expect(result.average).toEqual({ value: 30, tokens: 30, denominatorMs: 1000 })
-			expect(result.visible).toEqual({ value: 24, tokens: 12, denominatorMs: 500 })
-		}
-	})
-
-	test('falls back to the visible basis when no output total exists', () => {
-		const result = computeTps(
-			requestLog({
-				timing: { visible_output_tokens: 4, visible_generation_ms: 250 }
-			})
-		)
-
-		expect(result.state).toBe('display')
-		if (result.state === 'display') {
-			expect(result.average).toEqual({ value: 16, tokens: 4, denominatorMs: 250 })
-			expect(result.visible).toBeNull()
-		}
+		expect(result).toEqual({ value: 25, tokens: 30, windowMs: 1200 })
 	})
 
 	test('uses duration when TTFB is absent', () => {
@@ -92,41 +66,45 @@ describe('computeTps', () => {
 			})
 		)
 
-		expect(result.state).toBe('display')
-		if (result.state === 'display') {
-			expect(result.average).toEqual({ value: 12 / 0.9, tokens: 12, denominatorMs: 900 })
-		}
+		expect(result).toEqual({ value: 12 / 0.9, tokens: 12, windowMs: 900 })
 	})
 
-	test('omits TPS when no positive token numerator exists', () => {
+	test('usage output total takes precedence over scalar output tokens (FL4a-1)', () => {
+		const result = computeTps(
+			requestLog({
+				tokens: { output: 8 },
+				usage: { output: { total_tokens: 40 } },
+				timing: { duration_ms: 2000, ttfb_ms: 1000 }
+			})
+		)
+
+		expect(result).toEqual({ value: 40, tokens: 40, windowMs: 1000 })
+	})
+
+	test('omits TPS when no positive token numerator exists (FL4a-4)', () => {
 		expect(
 			computeTps(
 				requestLog({
 					tokens: { output: 0 },
-					timing: { duration_ms: 500, visible_output_tokens: 0 }
+					timing: { duration_ms: 500 }
 				})
 			)
-		).toEqual({ state: 'unavailable' })
+		).toBeNull()
 	})
 
-	test('omits visible-window TPS when the visible span is under 100 ms', () => {
+	test('omits TPS when no positive generation window exists (FL4a-4)', () => {
+		expect(computeTps(requestLog({ tokens: { output: 30 }, timing: {} }))).toBeNull()
+	})
+
+	test('imposes no minimum window duration (FL4a-3)', () => {
 		const result = computeTps(
 			requestLog({
-				tokens: { output: 1037 },
-				timing: {
-					duration_ms: 33360,
-					ttfb_ms: 15560,
-					visible_output_tokens: 31,
-					visible_generation_ms: 5
-				}
+				tokens: { output: 3 },
+				timing: { duration_ms: 20, ttfb_ms: 15 }
 			})
 		)
 
-		expect(result.state).toBe('display')
-		if (result.state === 'display') {
-			expect(result.average?.denominatorMs).toBe(17800)
-			expect(result.visible).toBeNull()
-		}
+		expect(result).toEqual({ value: 600, tokens: 3, windowMs: 5 })
 	})
 })
 
@@ -179,7 +157,7 @@ describe('billing breakdown translations', () => {
 		'billingUnitGeneric',
 		'billingModality',
 		'billingCacheTtl',
-		'tpsGenerationWindow'
+		'tps'
 	] as const
 	const locales = [en, zh, zhTw, ja]
 

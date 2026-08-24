@@ -1216,11 +1216,6 @@ fn request_log_timing_serializes_compatibility_aliases() {
         timing: RequestLogTiming {
             duration_ms: Some(1200),
             ttfb_ms: Some(150),
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             duration_ms_alias: Some(1200),
             elapsed_ms: Some(1200),
             latency_ms: Some(1200),
@@ -1304,7 +1299,9 @@ async fn sqlite_migration_creates_request_log_retention_indexes() {
         .expect("request-log column count exists")
         .try_get("", "column_count")
         .expect("request-log column count decodes");
-    assert_eq!(request_log_columns, 43);
+    // 42 columns from the RL-S3b rebuild, plus session_affinity_value (RL-S4),
+    // minus the five visible-TPS columns dropped per RL-S12.
+    assert_eq!(request_log_columns, 38);
 
     let request_log_foreign_keys = db
         .read()

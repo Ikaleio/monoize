@@ -38,11 +38,6 @@ A request log row has:
 - `error_http_status: integer?` (HTTP status returned to downstream client for failed requests)
 - `duration_ms: integer?` (wall-clock time from request start to upstream response)
 - `ttfb_ms: integer?` (time from request start to first byte/chunk from upstream; null for non-streaming)
-- `first_visible_output_ms: integer?` (time from request start to the first upstream decoded visible output delta; null when no visible streaming output basis exists)
-- `last_visible_output_ms: integer?` (time from request start to the last upstream decoded visible output delta; null when no visible streaming output basis exists)
-- `visible_generation_ms: integer?` (`last_visible_output_ms - first_visible_output_ms`; null when no visible streaming output basis exists)
-- `visible_output_tokens: integer?` (token count used as the TPS numerator; null when no visible streaming output basis exists)
-- `tps_mode: string?` (`"exact"`, `"estimated"`, or `"approx"`; null for rows without new TPS basis)
 - `request_ip: string?` (the server-generated canonical client IP for the request)
 - `reasoning_effort: string?` (the selected reasoning-effort label when present)
 - `tried_providers_json: object[]?` (array of failed upstream attempts in chronological order; persisted as JSON text in DB; null when no upstream attempt failed). Each object has:
@@ -101,7 +96,7 @@ RL1b. The lifecycle row MUST transition from `"pending"` to exactly one terminal
 
 RL1b-1. The only exception to RL1b for an already-delivered normal streaming response is a post-response billing settlement failure. That lifecycle row MUST use `status = "error"` with `error_code = "billing_settlement_failed"`. No additional terminal status value is introduced.
 
-RL1b-1a. A `billing_settlement_failed` terminal row MUST still include the usage snapshot, scalar token fields, and timing fields that were available when settlement was attempted (`input_tokens`, `output_tokens`, related detail counters, `usage_breakdown_json`, `duration_ms`, `ttfb_ms`, and visible-TPS fields when known). It MUST NOT store those fields as null solely because charging failed. `charge_nano_usd` and `billing_breakdown_json` MAY be null on that row.
+RL1b-1a. A `billing_settlement_failed` terminal row MUST still include the usage snapshot, scalar token fields, and timing fields that were available when settlement was attempted (`input_tokens`, `output_tokens`, related detail counters, `usage_breakdown_json`, `duration_ms`, and `ttfb_ms` when known). It MUST NOT store those fields as null solely because charging failed. `charge_nano_usd` and `billing_breakdown_json` MAY be null on that row.
 
 RL1c. Terminal logging MUST enqueue exactly one new row with all fields populated (including terminal status, usage, billing, and provider metadata) into the request-log write batcher. There is no preceding pending row to update. Enqueue succeeds only after a durable bounded spool file exists. An abrupt process termination after successful enqueue MUST NOT lose the spooled entry.
 
@@ -176,19 +171,7 @@ RL6d. For pass-through streaming requests that finalize successfully without a u
 
 RL6e. For pass-through streaming requests, an upstream in-stream terminal error event is an API error response even when the upstream HTTP status is `200`. This includes OpenAI Responses SSE events named `error` and `response.failed`. Monoize MUST forward the protocol-correct downstream terminal error event, MUST finalize the request log with `status = "error"`, MUST leave `charge_nano_usd` and `billing_breakdown_json` null, and MUST populate `error_code`, `error_message`, and `error_http_status`. For OpenAI Responses `response.failed`, `error_code` MUST equal `response.error.code` when present, `error_message` MUST equal `response.error.message` when present, and `error_http_status` MUST be `400` unless the upstream stream exposes a more specific non-2xx status.
 
-RL6f. For successful pass-through streaming requests, Monoize MUST record a visible-output TPS basis when at least one visible upstream decoded output delta exists. The basis MUST be recorded during upstream stream decode, before downstream stream encode and before browser/network flushing can affect timing.
-
-RL6f-1. `NodeDelta::Text` and `NodeDelta::Refusal` are visible output deltas. `NodeDelta::Reasoning`, `NodeDelta::ToolCallArguments`, provider control events, ping events, usage-only events, and terminal-only image/audio/file nodes are not visible output deltas.
-
-RL6f-2. `first_visible_output_ms` MUST equal the elapsed milliseconds from request start to the first visible output delta. `last_visible_output_ms` MUST equal the elapsed milliseconds from request start to the most recent visible output delta. `visible_generation_ms` MUST equal `last_visible_output_ms - first_visible_output_ms`. Version 1 does not subtract tool pauses or reasoning-only pauses from this window.
-
-RL6f-3. When the visible-output token count is estimated from decoded visible text, the estimate MUST be `ceil(visible_utf8_bytes / 4)`, where `visible_utf8_bytes` is the UTF-8 byte length of visible text/refusal deltas accumulated during upstream decode. The estimated count MUST only populate `visible_output_tokens`; it MUST NOT populate or modify `output_tokens`, billing, or `usage_breakdown_json`.
-
-RL6f-4. `tps_mode` MUST describe the source of `visible_output_tokens`: `"exact"` for a trusted visible-output token count, `"estimated"` for the UTF-8 byte estimate in RL6f-3, and `"approx"` for a conservative usage-based fallback. Monoize MUST NOT mark an estimated or usage-difference numerator as `"exact"`.
-
-RL6f-5. Non-streaming requests and synthetic/buffered streams MUST leave `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, and `tps_mode` null. Such rows may use the frontend legacy fallback defined in FL4a.
-
-RL6f-6. Failed requests MUST leave the visible-output TPS basis fields null. A pass-through stream that finalizes as `status = "success"` after downstream disconnection MAY persist the visible-output TPS basis accumulated before the adapter stopped consuming upstream events.
+RL6f. *(Removed — the stored visible-output TPS basis (`first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, `tps_mode`) is deleted, including rules RL6f-1 through RL6f-6. Output throughput is now computed at display time exclusively from `output_tokens` (or `usage_breakdown_json.output.total_tokens`), `duration_ms`, `ttfb_ms`, and `is_stream` per FL4a. The request-log write path MUST NOT record per-delta visible-output timestamps. See RL-S12 for the column drop migration.)*
 
 RL7. The `duration_ms` field MUST measure wall-clock time from the start of request processing (after auth) to the point where the upstream response is received.
 
@@ -354,7 +337,7 @@ RL-S3. `request_logs.user_id` MUST store the exact authenticated user identifier
 
 RL-S3a. A terminal row from the durable request-log spool MUST remain insertable when its `user_id` no longer exists in `users`, including when the user was deleted after request admission and when a later process recovers an older spool file. A missing current user MUST NOT make request-log batch flush retry permanently.
 
-RL-S3b. Migration `m20260809_000031_request_logs_without_user_fk` requires its input `request_logs` table to contain `id`, `user_id`, `model`, `is_stream`, `status`, and `created_at`. Every other canonical column in section 1.1 MAY be absent. The input MAY also contain non-canonical legacy columns. The output table on SQLite and PostgreSQL MUST contain exactly the 42 canonical columns in section 1.1 and MUST contain no foreign key from `user_id` to `users`.
+RL-S3b. Migration `m20260809_000031_request_logs_without_user_fk` requires its input `request_logs` table to contain `id`, `user_id`, `model`, `is_stream`, `status`, and `created_at`. Every other canonical column in section 1.1 MAY be absent. The input MAY also contain non-canonical legacy columns. The output table on SQLite and PostgreSQL MUST contain exactly 42 columns — the canonical columns in section 1.1 except `session_affinity_value` (added later per RL-S4), plus the five visible-TPS columns (`first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, `tps_mode`) that a later migration removes per RL-S12 — and MUST contain no foreign key from `user_id` to `users`.
 
 RL-S3b-1. For each canonical source column that exists, migration `m20260809_000031_request_logs_without_user_fk` MUST copy its value without conversion except for the three token fallback rules in RL-S3b-2. For each absent nullable canonical source column, the migration MUST create that column with the backend type defined by RL-S2f and store null for every existing row.
 
@@ -371,11 +354,11 @@ RL-S3b-3. PostgreSQL migration MUST drop both possible user foreign-key constrai
 - `idx_request_logs_model` on `(model)`
 - `idx_request_logs_legacy_created_at` on `(created_at)` where `created_at_unix_ms IS NULL`
 
-RL-S3c. On SQLite and PostgreSQL, every column outside the 42-column data model in section 1.1, including legacy `prompt_tokens`, `completion_tokens`, and `cached_tokens`, MUST be absent after migration `m20260809_000031_request_logs_without_user_fk`. These columns are not canonical storage and MUST NOT be retained as compatibility aliases. When a canonical token value and its legacy counterpart are both non-null and differ, the canonical value MUST win under RL-S3b-2.
+RL-S3c. On SQLite and PostgreSQL, every column outside the 42-column set defined in RL-S3b, including legacy `prompt_tokens`, `completion_tokens`, and `cached_tokens`, MUST be absent after migration `m20260809_000031_request_logs_without_user_fk`. These columns are not canonical storage and MUST NOT be retained as compatibility aliases. When a canonical token value and its legacy counterpart are both non-null and differ, the canonical value MUST win under RL-S3b-2.
 
 RL-S3d. Every schema inspection, data update, table rebuild, constraint change, column change, and index change performed by migration `m20260809_000031_request_logs_without_user_fk` MUST execute in one database transaction per backend. If a required RL-S3b source column is absent or any statement fails, the original table, rows, constraints, and indexes MUST remain unchanged. Running the up migration twice against a successful output MUST leave the same rows, 42-column schema, four ordinary indexes, and no user foreign key. The down migration MUST be a no-op because an intervening request-log row may contain a deleted `user_id` that cannot satisfy a restored foreign key.
 
-RL-S4. Outside the SQLite rebuild defined by RL-S3b, new columns (`request_id`, `channel_id`, `ttfb_ms`, `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, `tps_mode`, `request_ip`, `usage_breakdown_json`, `billing_breakdown_json`, `error_code`, `error_message`, `error_http_status`, `tried_providers_json`, `session_affinity_value`) MUST be added via `ALTER TABLE ADD COLUMN` statements in migration logic. The RL-S3b SQLite rebuild MAY define an absent nullable canonical column directly on its replacement table. All such columns are nullable for existing rows.
+RL-S4. Outside the SQLite rebuild defined by RL-S3b, new columns (`request_id`, `channel_id`, `ttfb_ms`, `request_ip`, `usage_breakdown_json`, `billing_breakdown_json`, `error_code`, `error_message`, `error_http_status`, `tried_providers_json`, `session_affinity_value`) MUST be added via `ALTER TABLE ADD COLUMN` statements in migration logic. The RL-S3b SQLite rebuild MAY define an absent nullable canonical column directly on its replacement table. All such columns are nullable for existing rows.
 
 RL-S6. Migration `m20260809_000031_request_logs_without_user_fk` MUST converge legacy `prompt_tokens`/`completion_tokens`/`cached_tokens` and canonical `input_tokens`/`output_tokens`/`cache_read_tokens` according to RL-S3b-2, then remove the three legacy columns. New usage detail columns (`cache_creation_tokens`, `tool_prompt_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens`) MUST be nullable for migrated rows whose source schema did not contain those columns.
 
@@ -390,6 +373,8 @@ RL-S9. Request-log retention MUST delete rows whose `created_at_unix_ms` is olde
 RL-S10. Expired-row cleanup defined in RL-S9 SHOULD execute once during startup before the HTTP listener begins accepting traffic. If that cleanup attempt fails, startup MAY continue and the failure MUST be logged.
 
 RL-S11. Expired-row cleanup defined in RL-S9 MUST also execute periodically in a background task while the process is running. The default cleanup interval MUST be 1 hour.
+
+RL-S12. Migration `m20260824_000040_drop_request_log_visible_tps` MUST drop columns `first_visible_output_ms`, `last_visible_output_ms`, `visible_generation_ms`, `visible_output_tokens`, and `tps_mode` from `request_logs` on SQLite and PostgreSQL. Each drop MUST be a no-op when that column is already absent, so running the up migration twice succeeds and leaves the same schema. The migration MUST NOT modify any other column, row, or index. The down migration MUST be a no-op because dropped visible-TPS values cannot be reconstructed.
 
 ## 5. Frontend display
 
@@ -416,17 +401,17 @@ FL4. The `duration_ms`, `ttfb_ms`, and `is_stream` fields MUST be merged into a 
 FL4b. The frontend MUST treat request-log timing values as numeric-compatible inputs. For badge rendering and tooltip math, it MUST accept canonical fields `duration_ms` and `ttfb_ms`, and it MUST also accept the compatibility aliases `durationMs`, `elapsed_ms`, or `latency_ms` (total duration) and `ttfbMs`, `first_token_ms`, or `firstTokenMs` (TTFB) when those aliases are present. String values that parse to finite numbers MUST be rendered identically to numeric values.
 FL4c. Backend request-log API responses MUST include compatibility aliases for timing fields (`durationMs`, `elapsed_ms`, `latency_ms`, `ttfbMs`, `first_token_ms`, `firstTokenMs`) with values equal to canonical `duration_ms` / `ttfb_ms`, so updated frontend builds do not rely on client-side fallback only.
 
-FL4a. Hovering, focusing, or activating the timing badge row MUST show a tooltip containing a duration detail row with the total duration and a TTFB detail row when TTFB is present. The tooltip MUST include an "Average TPS" (tokens per second) metric when both the TPS numerator and generation window defined by FL4a-1 and FL4a-2 are greater than zero, and a "Visible window TPS" metric when the basis defined by FL4a-5 exists. Activation MUST work on touch devices; activating outside the tooltip or pressing Escape MUST close it.
+FL4a. Hovering, focusing, or activating the timing badge row MUST show a tooltip containing a duration detail row with the total duration and a TTFB detail row when TTFB is present. The tooltip MUST include exactly one "TPS" (output tokens per second) metric when both the TPS numerator and generation window defined by FL4a-1 and FL4a-2 are greater than zero. Activation MUST work on touch devices; activating outside the tooltip or pressing Escape MUST close it.
 
-FL4a-1. The Average TPS numerator MUST be the total output token count: `usage_breakdown_json.output.total_tokens` takes precedence over scalar `output_tokens`. Reasoning tokens MUST NOT be subtracted. When neither total is present, the numerator MUST fall back to a positive `visible_output_tokens` value, and in that case the generation window MUST be the visible window defined in FL4a-5 instead of FL4a-2.
+FL4a-1. The TPS numerator MUST be the total output token count: `usage_breakdown_json.output.total_tokens` takes precedence over scalar `output_tokens`. Reasoning tokens MUST NOT be subtracted. There is no other numerator source; when neither value is present and positive, no TPS row is rendered.
 
-FL4a-2. The Average TPS generation window MUST be `duration_ms - ttfb_ms` when both values are present and `duration_ms > ttfb_ms`; otherwise a positive `duration_ms` value. This window represents wall-clock generation time and therefore pairs with the total output token count of FL4a-1.
+FL4a-2. The TPS generation window follows the new-api `RecordRelaySample` model. For a streaming row (`is_stream` truthy) where both `duration_ms` and `ttfb_ms` are present and `duration_ms > ttfb_ms`, the window MUST be `duration_ms - ttfb_ms` (generation time excludes time-to-first-token). Otherwise the window MUST be a positive `duration_ms` value (total latency). No other timing field participates.
 
-FL4a-3. The UI MUST compute `TPS = numerator / (generation_window_ms / 1000)`. Every displayed value MUST use two decimal places, the unit `t/s`, and the `~` prefix because either the numerator, the generation window, or both may be approximate. Average TPS MUST NOT impose a minimum token count or minimum generation-window duration.
+FL4a-3. The UI MUST compute `TPS = numerator / (generation_window_ms / 1000)` and display it with two decimal places and the unit `t/s`, without any approximation prefix. TPS MUST NOT impose a minimum token count or minimum generation-window duration.
 
-FL4a-4. When the numerator or generation window is absent or not greater than zero, the tooltip MUST omit the Average TPS row. It MUST NOT render an insufficient-sample state. The tooltip MUST NOT expose `tps_mode` or legacy/exact/estimated basis labels. Because the Average TPS window is the wall-clock span bounded by the duration and TTFB rows, the tooltip MUST NOT render an additional generation-window row for Average TPS.
+FL4a-4. When the numerator or generation window is absent or not greater than zero, the tooltip MUST omit the TPS row. It MUST NOT render an insufficient-sample state, a basis/mode label, or a separate generation-window row.
 
-FL4a-5. When `visible_generation_ms >= 100` and `visible_output_tokens > 0`, the tooltip MUST additionally render a localized "Visible window TPS" row computed as `visible_output_tokens / (visible_generation_ms / 1000)` with the same two-decimal `~`-prefixed `t/s` format, followed by exactly one localized generation-window row showing `visible_generation_ms` formatted per the shared duration format. When `visible_generation_ms` is absent, zero, or less than 100, both visible-window rows MUST be omitted. The stored timing fields MUST remain unchanged. The visible basis MUST NOT be combined with the total output numerator of FL4a-1.
+FL4a-5. *(Removed — the "Visible window TPS" metric and its generation-window tooltip row are deleted together with the stored visible-TPS basis fields; see RL6f and RL-S12.)*
 
 FL4d. When `tried_providers` is non-empty, the timing tooltip MUST list those hops in stored order after the duration/TTFB/TPS rows. Each hop row MUST show the FL9a.3 label, `duration_ms` when present (same duration format as the duration badge), `upstream_status` when present, and `error`. The list MUST use the same served-terminal rule as FL9b.
 

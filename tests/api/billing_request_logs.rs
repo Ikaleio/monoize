@@ -56,21 +56,13 @@ async fn chat_streaming_records_ttfb_usage_and_charge_in_request_logs() {
 
     let log = matched.expect("request log should be inserted");
     assert!(log.is_stream);
-    assert!(log.timing.ttfb_ms.is_some());
-    assert!(log.timing.first_visible_output_ms.is_some());
-    assert!(log.timing.last_visible_output_ms.is_some());
-    assert_eq!(log.timing.tps_mode.as_deref(), Some("estimated"));
-    assert!(
-        log.timing.visible_output_tokens.unwrap_or_default() > 0,
-        "visible TPS numerator should be persisted"
-    );
-    assert_eq!(
-        log.timing.visible_generation_ms,
-        Some(
-            log.timing.last_visible_output_ms.unwrap()
-                - log.timing.first_visible_output_ms.unwrap()
-        )
-    );
+    // FL4a TPS inputs: output_tokens plus duration_ms/ttfb_ms; both timings must persist.
+    let ttfb_ms = log.timing.ttfb_ms.expect("ttfb_ms should be persisted");
+    let duration_ms = log
+        .timing
+        .duration_ms
+        .expect("duration_ms should be persisted");
+    assert!(duration_ms >= ttfb_ms);
     assert_eq!(log.tokens.input, Some(12));
     assert_eq!(log.tokens.output, Some(8));
     assert_eq!(log.billing.charge_nano_usd.as_deref(), Some("20000"));
@@ -560,11 +552,6 @@ async fn request_log_batcher_broadcasts_immediately_before_flush() {
         error_http_status: None,
         duration_ms: Some(50),
         ttfb_ms: None,
-        first_visible_output_ms: None,
-        last_visible_output_ms: None,
-        visible_generation_ms: None,
-        visible_output_tokens: None,
-        tps_mode: None,
         request_ip: Some("127.0.0.1".to_string()),
         reasoning_effort: None,
         tried_providers_json: None,
@@ -1129,11 +1116,6 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
             error_http_status: None,
             duration_ms: Some(1),
             ttfb_ms: None,
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: None,
@@ -1178,11 +1160,6 @@ async fn request_log_retention_deletes_only_rows_older_than_ninety_days() {
             error_http_status: None,
             duration_ms: Some(1),
             ttfb_ms: None,
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: None,

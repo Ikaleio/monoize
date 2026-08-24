@@ -818,8 +818,7 @@
 		"reasoningEffort": "推理強度",
 		"upstreamModel": "上游模型",
 		"modelProvider": "供應商",
-		"avgTps": "平均 TPS",
-		"tpsGenerationWindow": "生成視窗",
+		"tps": "TPS",
 		"connectivityTest": "連通性測試",
 		"totalCost": "總費用",
 		"timeRange": "時間範圍",
@@ -835,7 +834,6 @@
 		"timeRangeFrom": "起: yyyy-MM-dd HH:mm:ss",
 		"timeRangeTo": "止: yyyy-MM-dd HH:mm:ss",
 		"toggleFilters": "展開/收起篩選",
-		"visibleWindowTps": "生成視窗 TPS",
 		"sessionAffinity": "工作階段親和",
 		"uncachedInput": "未快取輸入",
 		"cachedInput": "快取輸入"

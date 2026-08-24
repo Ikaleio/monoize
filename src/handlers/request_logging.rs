@@ -95,11 +95,7 @@ fn apply_client_gone_if_needed(log: &mut InsertRequestLog, client_gone: bool) {
     log.error_http_status = Some(499);
 }
 
-fn apply_usage_fields(
-    log: &mut InsertRequestLog,
-    usage: Option<&urp::Usage>,
-    visible_tps_basis: Option<&VisibleOutputTpsBasis>,
-) {
+fn apply_usage_fields(log: &mut InsertRequestLog, usage: Option<&urp::Usage>) {
     if let Some(usage) = usage {
         log.input_tokens = Some(usage.input_tokens);
         log.output_tokens = Some(usage.output_tokens);
@@ -126,13 +122,6 @@ fn apply_usage_fields(
             .map(|details| details.rejected_prediction_tokens)
             .filter(|&value| value > 0);
         log.usage_breakdown_json = Some(build_usage_breakdown(usage));
-    }
-    if let Some(basis) = visible_tps_basis {
-        log.first_visible_output_ms = Some(basis.first_visible_output_ms);
-        log.last_visible_output_ms = Some(basis.last_visible_output_ms);
-        log.visible_generation_ms = Some(basis.visible_generation_ms);
-        log.visible_output_tokens = Some(basis.visible_output_tokens);
-        log.tps_mode = Some(basis.tps_mode.to_string());
     }
 }
 
@@ -297,11 +286,6 @@ fn broadcast_pending_snapshot(
         error_http_status: None,
         duration_ms: None,
         ttfb_ms: None,
-        first_visible_output_ms: None,
-        last_visible_output_ms: None,
-        visible_generation_ms: None,
-        visible_output_tokens: None,
-        tps_mode: None,
         request_ip: request_ip.map(ToOwned::to_owned),
         reasoning_effort: None,
         tried_providers_json: None,
@@ -504,7 +488,6 @@ pub(super) fn spawn_request_log(
     request_ip: Option<String>,
     channel_id: String,
     ttfb_ms: Option<u64>,
-    visible_tps_basis: Option<VisibleOutputTpsBasis>,
     stream_terminal_diagnostics: Option<StreamTerminalDiagnostics>,
     reasoning_effort: Option<String>,
     tried_providers: Vec<TriedProvider>,
@@ -621,21 +604,6 @@ pub(super) fn spawn_request_log(
         error_http_status: None,
         duration_ms: Some(duration_ms),
         ttfb_ms,
-        first_visible_output_ms: visible_tps_basis
-            .as_ref()
-            .map(|basis| basis.first_visible_output_ms),
-        last_visible_output_ms: visible_tps_basis
-            .as_ref()
-            .map(|basis| basis.last_visible_output_ms),
-        visible_generation_ms: visible_tps_basis
-            .as_ref()
-            .map(|basis| basis.visible_generation_ms),
-        visible_output_tokens: visible_tps_basis
-            .as_ref()
-            .map(|basis| basis.visible_output_tokens),
-        tps_mode: visible_tps_basis
-            .as_ref()
-            .map(|basis| basis.tps_mode.to_string()),
         request_ip,
         reasoning_effort,
         tried_providers_json,
@@ -739,11 +707,6 @@ pub(super) fn spawn_request_log_error(
         error_http_status,
         duration_ms: Some(duration_ms),
         ttfb_ms: None,
-        first_visible_output_ms: None,
-        last_visible_output_ms: None,
-        visible_generation_ms: None,
-        visible_output_tokens: None,
-        tps_mode: None,
         request_ip,
         reasoning_effort,
         tried_providers_json,
@@ -777,7 +740,6 @@ pub(super) fn spawn_request_log_stream_terminal_error(
     reasoning_effort: Option<String>,
     tried_providers: Vec<TriedProvider>,
     usage: Option<urp::Usage>,
-    visible_tps_basis: Option<VisibleOutputTpsBasis>,
 ) {
     let Some(user_id) = auth.user_id.clone() else {
         return;
@@ -840,11 +802,6 @@ pub(super) fn spawn_request_log_stream_terminal_error(
         error_http_status: Some(terminal_error.http_status),
         duration_ms: Some(duration_ms),
         ttfb_ms,
-        first_visible_output_ms: None,
-        last_visible_output_ms: None,
-        visible_generation_ms: None,
-        visible_output_tokens: None,
-        tps_mode: None,
         request_ip,
         reasoning_effort,
         tried_providers_json,
@@ -856,7 +813,7 @@ pub(super) fn spawn_request_log_stream_terminal_error(
         session_affinity_value,
         created_at,
     };
-    apply_usage_fields(&mut log, usage.as_ref(), visible_tps_basis.as_ref());
+    apply_usage_fields(&mut log, usage.as_ref());
     spawn_claimed_terminal_log(
         state.user_store.clone(),
         state.request_log_admissions.clone(),
@@ -937,11 +894,6 @@ pub(super) fn spawn_request_log_error_no_attempt(
         error_http_status,
         duration_ms: Some(duration_ms),
         ttfb_ms: None,
-        first_visible_output_ms: None,
-        last_visible_output_ms: None,
-        visible_generation_ms: None,
-        visible_output_tokens: None,
-        tps_mode: None,
         request_ip,
         reasoning_effort,
         tried_providers_json,
@@ -1093,19 +1045,10 @@ mod admission_tests {
             output_details: None,
             extra_body: Default::default(),
         };
-        let basis = VisibleOutputTpsBasis {
-            first_visible_output_ms: 100,
-            last_visible_output_ms: 400,
-            visible_generation_ms: 300,
-            visible_output_tokens: 3,
-            tps_mode: "estimated",
-        };
-        apply_usage_fields(&mut log, Some(&usage), Some(&basis));
+        apply_usage_fields(&mut log, Some(&usage));
         assert_eq!(log.input_tokens, Some(12));
         assert_eq!(log.output_tokens, Some(3));
         assert!(log.usage_breakdown_json.is_some());
-        assert_eq!(log.first_visible_output_ms, Some(100));
-        assert_eq!(log.visible_output_tokens, Some(3));
         assert_eq!(log.error_code.as_deref(), Some("billing_settlement_failed"));
     }
 
@@ -1156,11 +1099,6 @@ mod admission_tests {
             error_http_status: None,
             duration_ms: None,
             ttfb_ms: None,
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: None,

@@ -187,6 +187,16 @@ RTA-4. Execute provider with intra-provider retry:
 - after a shared-origin blast defined by RTA-6c, remaining not-yet-attempted Channels of that Provider whose origin key equals the failed Channel's origin key MUST be skipped for this request without consuming the Provider attempt budget
 - between intra-channel retry attempts on the same channel, the router MUST sleep for `channel_retry_interval_ms` milliseconds. If `channel_retry_interval_ms == 0` (default), no sleep is inserted.
 
+RTA-4a. Bound-target extra retry. When the current attempt is the request's affinity-hit target (`affinity_hit == true` per AFF-7/AFF-7a), the router MUST allow at most one same-Channel attempt beyond the RTA-4 per-channel limit, so the effective per-channel attempt limit for that attempt is `channel_max_retries + 2`. The extra attempt is authorized if and only if all of the following hold after the most recent failure on that Channel:
+
+1. the failure is same-Channel retryable per RTA-5,
+2. the failure class is Transient (the upstream HTTP status is not `429`),
+3. the Channel health state for the request's health key (HSK-1/HSK-2) is still healthy,
+4. no shared-origin skip (RTA-6c step 3) applies to the attempt,
+5. the Provider total attempt budget of RTA-4 is not exhausted.
+
+The extra attempt consumes the Provider total attempt budget normally and MUST honor the RTA-4 `channel_retry_interval_ms` sleep. An attempt that is not the affinity-hit target MUST NOT receive this extra attempt. Purpose: one transient fault on the bound Channel MUST NOT force a Channel switch that discards upstream prompt-cache locality.
+
 RTA-5. Error policy per attempt:
 
 - Every upstream HTTP, timeout, connection, response-decoding, or response-validation error that occurs before the first downstream byte MUST end the current attempt. Monoize MUST continue routing until an attempt succeeds or all eligible attempts are exhausted.
@@ -223,7 +233,9 @@ STRM-2. Provider/channel fallback is allowed only before the first downstream pr
 
 STRM-3. A streaming request MUST write or refresh affinity only after the upstream stream completes without terminal error.
 
-STRM-4. If a partial stream later fails with a retryable upstream/adapter error, Monoize MUST clear any existing affinity binding for that request affinity key.
+STRM-4. If a partial stream later fails with a retryable terminal failure — an in-stream terminal error event whose HTTP status is `408`, `429`, or `5xx`, or a stream adapter failure whose error code starts with `upstream_` (idle timeout, stream decode failure, protocol error, missing stream terminal) — Monoize MUST record exactly one passive-failure sample (PHS-1) for the serving Channel using the attempt's health key. The sample class MUST be RateLimited for HTTP `429` and Transient otherwise; a qualifying adapter failure is Transient. A mid-stream failure MUST NOT trigger a shared-origin blast and MUST NOT mark peer Channels. An in-stream terminal error event whose status is outside `408`/`429`/`5xx` MUST NOT record a sample. An adapter failure whose error code does not start with `upstream_` (internal transform or encode failure) MUST NOT record a sample and MUST NOT clear the affinity binding.
+
+STRM-4a. After recording the STRM-4 sample, Monoize MUST clear the request's affinity binding if and only if the serving attempt is the request's affinity-hit target (`affinity_hit == true`) and the Channel health state for the attempt's health key is unhealthy after the sample (AFF-9 conditions 1 and 3). In every other case the binding MUST remain stored.
 
 ## 5.1 Channel Affinity
 
@@ -279,7 +291,13 @@ AFF-8. If the bound Provider+Channel is stale, affinity-disabled, disabled, zero
 
 AFF-8a. If the bound Provider+Channel is merely unhealthy or otherwise absent from this request's eligible attempt list, the binding MUST remain stored. Routing MUST NOT jump to that target for this request. Waterfall MUST continue from the first eligible attempt. When the bound target is eligible again, AFF-7 MUST apply to the retained binding.
 
-AFF-9. HTTP `408`, HTTP `429`, HTTP `5xx` other than a shared-origin blast, timeout, and connection failures MUST clear affinity. A shared-origin blast as defined by RTA-6c MUST NOT clear affinity. Other upstream errors MUST NOT clear affinity by themselves. A later successful fallback attempt MAY replace the binding.
+AFF-9. A same-Channel-retryable failure (HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, or connection failure) MUST clear the request's affinity binding if and only if all of the following hold:
+
+1. the failed attempt is the request's affinity-hit target (`affinity_hit == true` per AFF-7/AFF-7a),
+2. the failure is not a shared-origin blast per RTA-6c,
+3. after the RTA-6 passive-failure sample is recorded, the Channel health state for the attempt's health key (HSK-1/HSK-2) is unhealthy.
+
+In every other case the binding MUST remain stored: a failure on an attempt that is not the affinity-hit target MUST NOT clear the binding, a sub-threshold failure on the bound target MUST NOT clear the binding, and a shared-origin blast MUST NOT clear the binding. When `provider.circuit_breaker_enabled == false`, no unhealthy transition exists, so retryable failures MUST NOT clear the binding. Other upstream errors MUST NOT clear affinity by themselves. A successful fallback attempt on an affinity-enabled Channel MUST replace the binding per AFF-7c and AFF-10, so the binding always tracks the most recent successful Channel. Purpose: sub-threshold transient failures MUST NOT discard upstream prompt-cache locality.
 
 AFF-10. A successful non-stream request MUST write or refresh affinity after success only when the successful Channel's effective `affinity_enabled` is true.
 

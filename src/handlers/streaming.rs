@@ -91,7 +91,6 @@ fn spawn_stream_attempt_error(
         reasoning_effort,
         tried_providers,
         None,
-        None,
     );
 }
 
@@ -229,7 +228,7 @@ pub(super) async fn forward_stream_typed(
             &logical_model,
             downstream,
         ) || attempt.provider_type == ProviderType::Replicate;
-        let max_channel_attempts = (attempt.channel_max_retries + 1).max(1) as usize;
+        let max_channel_attempts = same_channel_attempt_slots(&attempt);
 
         'channel_attempts: for channel_attempt in 0..max_channel_attempts {
             if execution_state.should_skip(&attempt) {
@@ -430,10 +429,14 @@ pub(super) async fn forward_stream_typed(
                                 )
                                 .await;
                                 last_failed_attempt = Some(attempt.clone());
-                                if same_channel_retryable
-                                    && is_attempt_channel_healthy(&state, &attempt).await
-                                    && !execution_state.should_skip(&attempt)
-                                    && channel_attempt + 1 < max_channel_attempts
+                                if allow_same_channel_retry(
+                                    &state,
+                                    &attempt,
+                                    &execution_state,
+                                    channel_attempt + 1,
+                                    passive_failure_class,
+                                )
+                                .await
                                 {
                                     maybe_sleep_before_channel_retry(&attempt).await;
                                     continue 'channel_attempts;
@@ -461,10 +464,14 @@ pub(super) async fn forward_stream_typed(
                             )
                             .await;
                             last_failed_attempt = Some(attempt.clone());
-                            if same_channel_retryable
-                                && is_attempt_channel_healthy(&state, &attempt).await
-                                && !execution_state.should_skip(&attempt)
-                                && channel_attempt + 1 < max_channel_attempts
+                            if allow_same_channel_retry(
+                                &state,
+                                &attempt,
+                                &execution_state,
+                                channel_attempt + 1,
+                                passive_failure_class,
+                            )
+                            .await
                             {
                                 maybe_sleep_before_channel_retry(&attempt).await;
                                 continue 'channel_attempts;
@@ -624,7 +631,6 @@ pub(super) async fn forward_stream_typed(
                                             attempt_for_log.channel_id.clone(),
                                             Some(started_at.elapsed().as_millis() as u64),
                                             None,
-                                            None,
                                             reasoning_effort_for_log,
                                             tried_providers_for_log,
                                             tx_err.is_closed(),
@@ -657,7 +663,6 @@ pub(super) async fn forward_stream_typed(
                                                 reasoning_effort_for_log,
                                                 tried_providers_for_log,
                                                 resp.usage.clone(),
-                                                None,
                                             );
                                         }
                                     }
@@ -736,10 +741,14 @@ pub(super) async fn forward_stream_typed(
                         )
                         .await;
                         last_failed_attempt = Some(attempt.clone());
-                        if same_channel_retryable
-                            && is_attempt_channel_healthy(&state, &attempt).await
-                            && !execution_state.should_skip(&attempt)
-                            && channel_attempt + 1 < max_channel_attempts
+                        if allow_same_channel_retry(
+                            &state,
+                            &attempt,
+                            &execution_state,
+                            channel_attempt + 1,
+                            passive_failure_class,
+                        )
+                        .await
                         {
                             maybe_sleep_before_channel_retry(&attempt).await;
                             continue;
@@ -842,8 +851,6 @@ pub(super) async fn forward_stream_typed(
                         response_service_tier: None,
                         terminal: StreamTerminalDiagnostics::default(),
                         estimated_output_tokens: 0,
-                        first_visible_output_ms: None,
-                        last_visible_output_ms: None,
                         visible_output_bytes: 0,
                     }));
                     let decoded_terminal_output = Arc::new(Mutex::new(Vec::<urp::Node>::new()));
@@ -1021,7 +1028,6 @@ pub(super) async fn forward_stream_typed(
                             usage,
                             is_estimated,
                             terminal_diagnostics,
-                            visible_tps_basis,
                             response_id,
                             response_service_tier,
                         ) = {
@@ -1058,17 +1064,21 @@ pub(super) async fn forward_stream_typed(
                                 usage,
                                 is_estimated,
                                 guard.terminal.clone(),
-                                guard.visible_tps_basis(),
                                 guard.response_id.clone(),
                                 guard.response_service_tier.clone(),
                             )
                         };
 
                         if let Some(terminal_error) = terminal_diagnostics.terminal_error.clone() {
-                            if terminal_error.http_status == 429
-                                || terminal_error.http_status >= 500
+                            if let Some(failure_class) =
+                                midstream_terminal_failure_class(terminal_error.http_status)
                             {
-                                clear_channel_affinity(&state_for_log, &attempt_for_log).await;
+                                record_midstream_terminal_failure(
+                                    &state_for_log,
+                                    &attempt_for_log,
+                                    failure_class,
+                                )
+                                .await;
                             }
                             spawn_request_log_stream_terminal_error(
                                 &state_for_log,
@@ -1083,7 +1093,6 @@ pub(super) async fn forward_stream_typed(
                                 reasoning_effort_for_log,
                                 tried_providers_for_log,
                                 actual_upstream_usage.clone(),
-                                visible_tps_basis.clone(),
                             );
                             if let Some(session) = capture_session.as_ref() {
                                 let frames = if let Some(frames) = capture_frames_for_task.as_ref()
@@ -1126,7 +1135,14 @@ pub(super) async fn forward_stream_typed(
 
                         if let Err(ref err) = stream_result {
                             tracing::warn!("stream passthrough adapter failed: {}", err.message);
-                            clear_channel_affinity(&state_for_log, &attempt_for_log).await;
+                            if is_upstream_adapter_failure(err) {
+                                record_midstream_terminal_failure(
+                                    &state_for_log,
+                                    &attempt_for_log,
+                                    RetryableFailureClass::Transient,
+                                )
+                                .await;
+                            }
                             spawn_stream_attempt_error(
                                 &state_for_log,
                                 &auth_for_log,
@@ -1274,7 +1290,6 @@ pub(super) async fn forward_stream_typed(
                                     reasoning_effort_for_log,
                                     tried_providers_for_log,
                                     usage.clone(),
-                                    visible_tps_basis.clone(),
                                 );
                                 if let Some(session) = capture_session.as_ref() {
                                     session.persist_with_result(usage.as_ref(), true).await;
@@ -1321,7 +1336,6 @@ pub(super) async fn forward_stream_typed(
                             request_ip_for_log,
                             channel_id_for_log,
                             ttfb_ms,
-                            visible_tps_basis,
                             Some(terminal_diagnostics),
                             reasoning_effort_for_log,
                             tried_providers_for_log,
@@ -1397,10 +1411,14 @@ pub(super) async fn forward_stream_typed(
                     )
                     .await;
                     last_failed_attempt = Some(attempt.clone());
-                    if same_channel_retryable
-                        && is_attempt_channel_healthy(&state, &attempt).await
-                        && !execution_state.should_skip(&attempt)
-                        && channel_attempt + 1 < max_channel_attempts
+                    if allow_same_channel_retry(
+                        &state,
+                        &attempt,
+                        &execution_state,
+                        channel_attempt + 1,
+                        passive_failure_class,
+                    )
+                    .await
                     {
                         maybe_sleep_before_channel_retry(&attempt).await;
                         continue;
@@ -1425,7 +1443,6 @@ pub(super) async fn forward_stream_typed(
             terminal_error,
             req.reasoning.as_ref().and_then(|r| r.effort.clone()),
             tried_providers,
-            None,
             None,
         );
     } else {
