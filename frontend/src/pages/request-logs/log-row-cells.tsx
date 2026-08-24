@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Info, Zap } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
 	Tooltip,
@@ -332,7 +331,7 @@ export function LogRowCells({
 			<Badge
 				variant='secondary'
 				className={cn(
-					'h-5 cursor-default border-0 px-1 font-mono',
+					'text-[10px] h-5 px-1 font-mono rounded-full border-0 cursor-default',
 					'bg-muted text-muted-foreground'
 				)}
 			>
@@ -343,7 +342,7 @@ export function LogRowCells({
 		ttfb ?
 			<Badge
 				variant='secondary'
-				className='h-5 border-info-border bg-info-soft px-1 font-mono text-info-foreground'
+				className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
 			>
 				{ttfb}
 			</Badge>
@@ -352,7 +351,7 @@ export function LogRowCells({
 		hasTriedProviders ?
 			<Badge
 				variant='secondary'
-				className='h-5 border-warning-border bg-warning-soft px-1 font-mono text-warning-foreground'
+				className='text-[10px] h-5 px-1 font-mono rounded-full border-warning-border bg-warning-soft text-warning-foreground'
 			>
 				{t('requestLogs.retryHopCount', { count: triedProviders.length })}
 			</Badge>
@@ -360,13 +359,13 @@ export function LogRowCells({
 	const streamBadge = log.is_stream ?
 		<Badge
 			variant='secondary'
-			className='h-5 border-info-border bg-info-soft px-1 font-mono text-info-foreground'
+			className='text-[10px] h-5 px-1 font-mono rounded-full border-info-border bg-info-soft text-info-foreground'
 		>
 			{t('requestLogs.streamBadge')}
 		</Badge>
 	:	<Badge
 			variant='secondary'
-			className='h-5 border-warning-border bg-warning-soft px-1 font-mono text-warning-foreground'
+			className='text-[10px] h-5 px-1 font-mono rounded-full border-warning-border bg-warning-soft text-warning-foreground'
 		>
 			{t('requestLogs.nonStreamBadge')}
 		</Badge>
@@ -513,7 +512,7 @@ export function LogRowCells({
 										multiplier={log.provider.multiplier}
 										showDetails={false}
 										truncateModelText={false}
-										className='h-5 min-w-max px-1.5'
+										className='h-5 min-w-max px-1.5 text-[10px]'
 									/>
 								</span>
 							</TooltipTrigger>
@@ -558,12 +557,12 @@ export function LogRowCells({
 						<TooltipProvider delayDuration={200}>
 							<Tooltip onOpenChange={channelTooltipOpenChange}>
 								<TooltipTrigger asChild>
-									<span className='inline-flex h-5 cursor-default items-center gap-1 whitespace-nowrap text-muted-foreground'>
+									<span className='inline-flex h-4 cursor-default items-center gap-1 whitespace-nowrap text-[10px] text-muted-foreground'>
 										<span>{channelDisplay ?? '-'}</span>
 										{affinityHit ?
 											<Badge
 												variant='secondary'
-												className='h-5 shrink-0 border-info-border bg-info-soft px-1 font-normal text-info-foreground'
+												className='h-4 shrink-0 rounded-full border-info-border bg-info-soft px-1 text-[10px] font-normal text-info-foreground'
 											>
 												{t('requestLogs.stickySession')}
 											</Badge>
@@ -588,7 +587,7 @@ export function LogRowCells({
 												{log.affinity?.hit === true && (
 													<Badge
 														variant='secondary'
-														className='h-5 px-1 font-normal'
+														className='h-4 rounded-full px-1 text-[10px] font-normal'
 													>
 														{t('requestLogs.affinityHit')}
 													</Badge>
@@ -629,7 +628,11 @@ export function LogRowCells({
 						<Tooltip onOpenChange={tokenTooltipOpenChange}>
 							<TooltipTrigger asChild>
 								<span
-									className='h-4 max-w-full cursor-default truncate text-muted-foreground'
+									className={
+										isAdmin ?
+											'h-4 max-w-full cursor-default truncate text-[10px] text-muted-foreground'
+										: 'h-4 max-w-full cursor-default truncate text-[11px] text-muted-foreground'
+									}
 								>
 									{tokenDisplay}
 								</span>
@@ -678,11 +681,11 @@ export function LogRowCells({
 									: 'items-center'
 								)}
 							>
-								<span className='h-4 whitespace-nowrap tabular-nums'>
+								<span className='h-4 whitespace-nowrap text-sm font-medium tabular-nums'>
 									{formatTokenCount(inputTokensForDisplay)}
 								</span>
 								{inputCached != null && inputCachePercentage ?
-									<span className='h-4 whitespace-nowrap text-muted-foreground tabular-nums'>
+									<span className='h-4 whitespace-nowrap text-[10px] text-muted-foreground tabular-nums'>
 										{formatTokenCount(inputCached)} / {inputCachePercentage}
 									</span>
 								: null}
@@ -715,7 +718,7 @@ export function LogRowCells({
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={outputTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='cursor-default tabular-nums'>
+							<span className='cursor-default text-sm font-medium tabular-nums'>
 								{formatTokenCount(outputTokensForDisplay)}
 							</span>
 						</TooltipTrigger>
@@ -883,14 +886,12 @@ export function LogRowCells({
 								)}
 								{isEstimatedBilling && (
 									<div className='text-warning text-xs flex items-center gap-1'>
-										<Zap className='h-3 w-3 shrink-0' />
-										{t('requestLogs.estimatedBilling')}
+										⚡ {t('requestLogs.estimatedBilling')}
 									</div>
 								)}
 								{isAdminUnpricedExemption && (
 									<div className='text-warning text-xs flex items-center gap-1'>
-										<Info className='h-3 w-3 shrink-0' />
-										{t('requestLogs.adminUnpricedExemption')}
+										ℹ {t('requestLogs.adminUnpricedExemption')}
 									</div>
 								)}
 									<div className='border-t border-muted pt-2 mt-2'>
@@ -917,7 +918,7 @@ export function LogRowCells({
 				)}
 			</td>
 
-			<td className='whitespace-nowrap py-1 pl-2 pr-2 align-middle font-mono text-muted-foreground'>
+			<td className='pl-2 pr-2 py-1 whitespace-nowrap font-mono text-muted-foreground text-[11px] align-middle'>
 				<span
 					className={cn(
 						'inline-block align-bottom transition-[filter] duration-150',

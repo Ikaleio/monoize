@@ -576,13 +576,6 @@ FL43. Time-range selection MUST be bidirectionally synchronized:
 
 FL44. Active preset buttons (including `All Time`) MUST use a high-contrast foreground/background pair so text remains legible in both light and dark themes.
 
-FL58. Request-logs table typography MUST be uniform across sibling cells:
-
-- All body cells MUST use the table base font size (`text-xs`); cells MUST NOT apply smaller arbitrary sizes such as `text-[10px]` or `text-[11px]`.
-- The visible Input and Output token values MUST use identical font size, weight, and numeric styling (`font-mono` + `tabular-nums`).
-- Compact badges inside table cells (timing, stream, hop-count, sticky-session, model) MUST keep the badge base font size (`text-xs`) with compact height (`h-5`) and reduced horizontal padding, and MUST use the `rounded-md` badge shape per design-system rule DS40f.
-- Secondary lines inside a cell (cached-input line, retry-chain line) MUST use the table base font size with muted or semantic color for hierarchy.
-
 ## 6. SSE Real-Time Updates
 
 ### 6.1 SSE endpoint contract
