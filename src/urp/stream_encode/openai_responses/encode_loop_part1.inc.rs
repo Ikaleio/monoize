@@ -1527,12 +1527,13 @@ pub(crate) async fn encode_urp_stream_as_responses(
                 extra_body,
             } => {
                 let created_at = created.unwrap_or_else(now_ts);
+                // SAN-11: decoder-origin error text may embed upstream URLs.
                 let failed_response = response_failed_payload(
                     &response_id,
                     created_at,
                     logical_model,
                     code.as_deref(),
-                    &message,
+                    &crate::error_sanitize::mask_sensitive_text(&message),
                     &extra_body,
                 );
                 send_responses_event(

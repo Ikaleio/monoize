@@ -967,7 +967,13 @@ struct TriedProvider {
     channel_id: String,
     provider_name: String,
     channel_name: String,
+    /// SAN-5: masked, truncated internal detail persisted to
+    /// `tried_providers_json` (RL17).
     error: String,
+    /// SAN-5: client-facing text used by the exhausted downstream error.
+    /// Never persisted.
+    #[serde(skip)]
+    client_error: String,
     upstream_status: Option<u16>,
     upstream_code: Option<String>,
     upstream_type: Option<String>,
@@ -988,7 +994,15 @@ impl TriedProvider {
             channel_id: attempt.channel_id.clone(),
             provider_name: attempt.provider_name.clone(),
             channel_name: attempt.channel_name.clone(),
-            error: app_err.message.clone(),
+            // Attempt failures can also come from response-decoding AppErrors
+            // that never pass through `upstream_error_to_app`, so masking is
+            // applied unconditionally here (SAN-5); it is idempotent.
+            error: app_err.internal_message.clone().unwrap_or_else(|| {
+                crate::error_sanitize::truncate_error_detail(
+                    &crate::error_sanitize::mask_sensitive_text(&app_err.message),
+                )
+            }),
+            client_error: crate::error_sanitize::mask_sensitive_text(&app_err.message),
             upstream_status: Some(app_err.upstream_status.unwrap_or(app_err.status.as_u16())),
             upstream_code: Some(
                 app_err

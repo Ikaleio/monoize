@@ -209,7 +209,7 @@ FP4d. For streaming upstream calls, Monoize MUST track terminal-stream evidence 
 
 FP4e. If a downstream request has `stream=true` and an upstream attempt returns a non-2xx HTTP response before Monoize receives any upstream SSE frame, Monoize MUST NOT return the upstream HTTP status as the downstream HTTP status. Monoize MUST return a downstream SSE response with HTTP `200` and a protocol-specific terminal error frame:
 
-- `/v1/responses`: one `event: error` frame whose JSON payload has `type = "error"`, `code` equal to the upstream error code when present, and `message` equal to the upstream error message as exposed by Monoize, followed by one plain `data: [DONE]` frame.
+- `/v1/responses`: one `event: error` frame whose JSON payload has `type = "error"`, `code` equal to the upstream error code when present, and `message` equal to the upstream error message as exposed by Monoize (the sanitized client message defined by `upstream-error-sanitization.spec.md`), followed by one plain `data: [DONE]` frame.
 - `/v1/chat/completions`: one plain `data:` frame whose JSON payload has an `error` object, with `error.code` equal to the upstream error code when present, followed by one plain `data: [DONE]` frame.
 - `/v1/messages`: one `event: error` frame whose JSON payload has `type = "error"` and an `error` object, with `error.type` equal to the upstream error code when present. Monoize MUST NOT append a `[DONE]` frame on `/v1/messages`.
 

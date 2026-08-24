@@ -5272,6 +5272,7 @@ async fn configure_test_extra_fields_whitelist(state: &monoize::app::AppState) {
         "force_upstream_delay_ms".to_string(),
         "force_upstream_error_code".to_string(),
         "force_upstream_error_message".to_string(),
+        "force_upstream_error_raw_body".to_string(),
         "force_upstream_error_status".to_string(),
         "message_phase".to_string(),
         "native_response_mode".to_string(),

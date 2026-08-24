@@ -54,7 +54,12 @@ fn stream_error_code(err: &AppError) -> String {
 fn stream_terminal_error_from_app(err: &AppError) -> StreamTerminalError {
     StreamTerminalError {
         code: stream_error_code(err),
-        message: err.message.clone(),
+        // SAN-9: the terminal request-log row keeps the internal detail while
+        // the downstream frame carries the sanitized client message.
+        message: err
+            .internal_message
+            .clone()
+            .unwrap_or_else(|| err.message.clone()),
         http_status: err.upstream_status.unwrap_or(err.status.as_u16()),
         error_type: err
             .upstream_type

@@ -1278,14 +1278,19 @@ fn embedded_chat_completion_error_to_app(error: &Value) -> AppError {
         .filter(|value| !value.is_empty())
         .map(str::to_string);
 
-    AppError::new(StatusCode::BAD_GATEWAY, "upstream_chat_error", message)
-        .with_type("server_error")
-        .with_upstream_error(
-            upstream_status,
-            upstream_code,
-            upstream_type,
-            upstream_param,
-        )
+    // SAN-4: the embedded message is upstream-controlled free text.
+    AppError::new(
+        StatusCode::BAD_GATEWAY,
+        "upstream_chat_error",
+        crate::error_sanitize::mask_sensitive_text(message),
+    )
+    .with_type("server_error")
+    .with_upstream_error(
+        upstream_status,
+        upstream_code,
+        upstream_type,
+        upstream_param,
+    )
 }
 
 fn json_scalar_string(value: &Value) -> Option<String> {

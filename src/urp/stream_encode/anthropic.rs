@@ -1873,7 +1873,12 @@ pub(crate) async fn encode_urp_stream_as_messages(
                     &mut message_start_sent,
                 )
                 .await?;
-                let error = messages_error_payload(code.as_deref(), &message, &extra_body);
+                // SAN-11: decoder-origin error text may embed upstream URLs.
+                let error = messages_error_payload(
+                    code.as_deref(),
+                    &crate::error_sanitize::mask_sensitive_text(&message),
+                    &extra_body,
+                );
                 send_named_messages_event(&tx, error).await?;
                 return Ok(());
             }

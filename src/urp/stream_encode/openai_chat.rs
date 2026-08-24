@@ -1059,6 +1059,8 @@ pub(crate) async fn encode_urp_stream_as_chat(
                 message,
                 extra_body,
             } => {
+                // SAN-11: decoder-origin error text may embed upstream URLs.
+                let message = crate::error_sanitize::mask_sensitive_text(&message);
                 let payload = chat_error_payload(
                     extra_body.get(CHAT_ERROR_EVENT_EXTRA_KEY),
                     code.as_deref(),

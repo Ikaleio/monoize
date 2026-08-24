@@ -34,7 +34,7 @@ A request log row has:
 - `usage_breakdown_json: object?` (normalized per-request usage detail snapshot; persisted as JSON text in DB)
 - `billing_breakdown_json: object?` (per-request pricing and charge breakdown snapshot at billing time; persisted as JSON text in DB)
 - `error_code: string?` (error code for failed requests, e.g. `upstream_error`)
-- `error_message: string?` (error message for failed requests)
+- `error_message: string?` (error message for failed requests; for upstream-derived failures this is the sanitized internal detail per `upstream-error-sanitization.spec.md` SAN-9, which MAY differ from the downstream client message and MUST NOT contain unmasked upstream URLs, bare domains, IPv4 addresses, or `api_key:` values)
 - `error_http_status: integer?` (HTTP status returned to downstream client for failed requests)
 - `duration_ms: integer?` (wall-clock time from request start to upstream response)
 - `ttfb_ms: integer?` (time from request start to first byte/chunk from upstream; null for non-streaming)
@@ -223,7 +223,7 @@ RL16b. Each token line item MUST include `usage_class`, `unit`, `unit_price_nano
 
 RL16c. Each meter line item MUST include `usage_class`, `unit`, `unit_price_nano`, `quantity`, `charge_nano`, and whether the quantity was authoritative when that can be represented.
 
-RL17. When a request triggers waterfall fail-forward, `tried_providers_json` MUST record each failed upstream attempt. This rule applies to every upstream error class. Each persisted entry MUST contain `attempt_number`, `provider_id`, `channel_id`, `provider_name`, `channel_name`, and `error`. It MUST also persist `duration_ms`, `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` when those values exist on the failed attempt. `duration_ms` MUST equal the wall-clock milliseconds from the start of that upstream attempt to the failure. `provider_name` and `channel_name` MUST equal the Provider and Channel display names at attempt time. The array MUST be ordered chronologically. When no upstream attempt failed, the field MUST be null.
+RL17. When a request triggers waterfall fail-forward, `tried_providers_json` MUST record each failed upstream attempt. This rule applies to every upstream error class. Each persisted entry MUST contain `attempt_number`, `provider_id`, `channel_id`, `provider_name`, `channel_name`, and `error`. `error` MUST equal the attempt's masked, truncated internal detail per `upstream-error-sanitization.spec.md` SAN-5/SAN-10; raw unmasked upstream error text MUST NOT be persisted. It MUST also persist `duration_ms`, `upstream_status`, `upstream_code`, `upstream_type`, and `upstream_param` when those values exist on the failed attempt. `duration_ms` MUST equal the wall-clock milliseconds from the start of that upstream attempt to the failure. `provider_name` and `channel_name` MUST equal the Provider and Channel display names at attempt time. The array MUST be ordered chronologically. When no upstream attempt failed, the field MUST be null.
 
 RL17a. `GET /api/dashboard/request-logs` MUST return `tried_providers` as that JSON array, or null. For each hop, if `provider_name` is missing or empty, the handler MUST set it from the current `monoize_providers` row for `provider_id` when that row exists. If `channel_name` is missing or empty, the handler MUST set it from the current `monoize_channels` row for `channel_id` when that row exists. In-memory SSE snapshots already contain write-time names and MUST NOT require this fill.
 
