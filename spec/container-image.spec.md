@@ -44,6 +44,8 @@ CI-B4. The build MUST run `bun install --frozen-lockfile` before compiling Monoi
 
 CI-B5. The build MUST run `cargo build --locked --release`.
 
+CI-B5a. The container build MUST compile inside the Bookworm build stage. It MUST NOT copy a native GitHub Release binary built on `ubuntu-24.04` or `ubuntu-24.04-arm` into the runtime image.
+
 CI-B6. The Docker build context MUST exclude Git metadata, local databases, environment files, native build output, frontend dependencies, SDK test dependencies, and deployment backups.
 
 CI-B7. Each platform container job MUST restore and save GitHub Actions Docker layer cache scoped to that platform (`linux-amd64` or `linux-arm64`). A cache miss MUST continue the job. A cache hit MUST NOT skip the image build or change `VERSION` / `REVISION` build arguments.
@@ -78,6 +80,8 @@ CI-M1. One publication MUST build exactly these platforms on native GitHub-hoste
 | --- | --- |
 | `linux/amd64` | `ubuntu-24.04` |
 | `linux/arm64` | `ubuntu-24.04-arm` |
+
+CI-M1a. The two platform container jobs MUST run sequentially. Workflow `strategy.max-parallel` for that matrix MUST equal `1`. They MUST NOT compile at the same time.
 
 CI-M2. The platform build jobs MUST push content-addressed images. The merge job MUST create one manifest list from the two resulting digests.
 
