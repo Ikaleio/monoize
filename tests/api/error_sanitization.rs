@@ -248,6 +248,10 @@ async fn set_mask_sensitive_info(ctx: &TestContext, admin_token: &str, enabled: 
         ctx.state.monoize_runtime.read().await.mask_sensitive_info,
         enabled
     );
+    // The PUT republishes the runtime from persisted settings, which drops
+    // the whitelist that `setup()` injects directly into the runtime; restore
+    // it so `force_upstream_error_*` test fields still reach the mock.
+    configure_test_extra_fields_whitelist(&ctx.state).await;
 }
 
 async fn find_error_log_via_dashboard(
