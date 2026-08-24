@@ -430,11 +430,11 @@ FL7a. The filter-control area MUST display the total charge sum for the current 
 
 FL7b. `/dashboard/logs` MUST read the optional `username` query parameter. For an admin viewer, a non-empty `username` value MUST initialize the username filter to that exact string. An absent or empty `username` query parameter MUST initialize the filter to empty (all users). Non-admin viewers MUST ignore the query parameter.
 
-FL8. Column order (left to right): merged `created_at/request_id`, merged `model/[channel]`, `api_key_name`, `[username]` (admin), `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
+FL8. Column order (left to right): merged `created_at/request_id`, merged `model/[channel]`, merged `[username/]api_key_name`, `duration/ttfb/stream` (merged badges), `input_tokens` (input), `output_tokens` (output), `charge_nano_usd` (cost), `request_ip`.
 
 FL8a. The merged `created_at/request_id` cell MUST use exactly two non-wrapping visible lines in one column. The first line MUST render `created_at` per FL2. The second line MUST render the first 8 characters of `request_id` followed immediately by the FL36 status indicator. If `request_id` is absent, the second line MUST render `-`. The request tooltip behavior defined by FL28 and FL29 MUST remain attached to the second line.
 
-FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
+FL8b. Every request-log body row MUST have a fixed height of 44 pixels. The merged leading cells, the admin-visible merged User/Token cell, and the Input cell MUST reserve their two-line layout inside that height. Text and badges inside those lines MUST NOT wrap. Content-oriented columns MAY expand the table width, and the table viewport MUST provide horizontal scrolling when the expanded table exceeds the viewport.
 
 FL9. The merged `model/[channel]` cell MUST use exactly two non-wrapping layout lines in one column:
 
@@ -479,7 +479,7 @@ FL15. The table MUST use compact column spacing:
 - Header and body cells MUST use reduced horizontal/vertical padding suitable for dense log browsing.
 - Columns MUST use content-oriented widths (instead of evenly stretched wide columns) to avoid large unused horizontal gaps between adjacent fields.
 
-FL16. The Input column MUST use a minimum width of 8 rem so its two non-wrapping lines fit common values. The Output column MUST keep a compact width suitable for short integer values (commonly up to 7 digits). Both columns SHOULD avoid consuming excess horizontal space from adjacent columns.
+FL16. The Input column MUST use a minimum width of 8 rem so its two non-wrapping lines fit common values. The Output column MUST use a minimum width of 6 rem. Its visible token count MUST use the same font size, font weight, and tabular-number treatment as the first line of the Input column. The width removed by merging the admin User and Token columns MUST be allocated to the Output column instead of becoming unused inter-column space.
 
 FL17. The `duration/ttfb/stream` merged column MUST use compact inline-badge spacing and width so that token-count columns remain visually closer to it (reduced horizontal gap).
 
@@ -489,7 +489,7 @@ FL19. The first visible merged `created_at/request_id` column MUST keep a small 
 
 FL20. The status indicator MUST be rendered directly adjacent to the request ID text on the second line of the merged `created_at/request_id` cell (near-zero gap), and columns to the right SHOULD use reduced left padding to keep the layout left-compacted.
 
-FL21. The `api_key_name` (Token) column MUST use a narrow width and truncated text display to avoid occupying excessive horizontal space.
+FL21. For an admin viewer, `username` and `api_key_name` MUST share one fixed two-line, non-wrapping column with a minimum width of 6 rem. The first line MUST show `username` as the primary value. The second line MUST show the Token display value from FL30 in smaller muted text. Each line MUST truncate independently when its content exceeds the available width. For a non-admin viewer, the same column MUST show only the Token display value and MUST NOT repeat the viewer's username.
 
 FL22. The merged `duration/ttfb/stream` column MUST remain narrowly sized with minimal horizontal cell padding and a compact inline badge row, and MUST NOT reserve excess blank width when values are short.
 

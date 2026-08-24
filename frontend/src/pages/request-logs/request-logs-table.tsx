@@ -47,21 +47,17 @@ function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isA
 				{t('requestLogs.model')}
 				{isAdmin ? ` / ${t('requestLogs.channel')}` : null}
 			</th>
-			<th className='w-[5rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+			<th className='min-w-24 whitespace-nowrap px-2 py-1.5 text-left font-medium text-muted-foreground'>
+				{isAdmin ? `${t('requestLogs.username')} / ` : null}
 				{t('requestLogs.tokenName')}
 			</th>
-			{isAdmin && (
-				<th className='w-[4rem] text-left font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
-					{t('requestLogs.username')}
-				</th>
-			)}
 			<th className='w-[10rem] text-left font-medium text-muted-foreground px-1 py-1.5 whitespace-nowrap'>
 				{t('requestLogs.duration')} / {t('requestLogs.ttfb')}
 			</th>
 			<th className='min-w-32 whitespace-nowrap px-2 py-1.5 text-right font-medium text-muted-foreground'>
 				{t('requestLogs.input')}
 			</th>
-			<th className='w-[3.25rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>
+			<th className='min-w-24 whitespace-nowrap px-2 py-1.5 text-right font-medium text-muted-foreground'>
 				{t('requestLogs.output')}
 			</th>
 			<th className='min-w-[8.5rem] text-right font-medium text-muted-foreground px-2 py-1.5 whitespace-nowrap'>

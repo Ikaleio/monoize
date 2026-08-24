@@ -93,6 +93,8 @@ export function LogRowCells({
 
 	const isConnectivityTest =
 		log.request_kind === 'active_probe_connectivity' && !log.api_key.name
+	const tokenDisplay =
+		isConnectivityTest ? t('requestLogs.connectivityTest') : log.api_key.name || '-'
 	const durationMs = getDurationMs(log)
 	const ttfbMs = getTtfbMs(log)
 	const duration = formatDuration(durationMs)
@@ -607,34 +609,33 @@ export function LogRowCells({
 				</span>
 			</td>
 
-			<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
-				<TooltipProvider delayDuration={200}>
-					<Tooltip onOpenChange={tokenTooltipOpenChange}>
-						<TooltipTrigger asChild>
-							<span className='inline-flex h-4 items-center max-w-[5rem] truncate cursor-default'>
-								{isConnectivityTest ?
-									t('requestLogs.connectivityTest')
-								: log.api_key.name || '-'}
-							</span>
-						</TooltipTrigger>
-						<TooltipContent>
-							<span className='text-xs'>
-								{isConnectivityTest ?
-									t('requestLogs.connectivityTest')
-								: log.api_key.name || '-'}
-							</span>
-						</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
+			<td className='min-w-24 whitespace-nowrap px-2 py-1 align-middle leading-4'>
+				<span className='inline-flex max-w-24 flex-col items-start'>
+					{isAdmin && (
+						<span className='h-4 max-w-full truncate text-xs font-medium text-foreground'>
+							{log.user.username || '-'}
+						</span>
+					)}
+					<TooltipProvider delayDuration={200}>
+						<Tooltip onOpenChange={tokenTooltipOpenChange}>
+							<TooltipTrigger asChild>
+								<span
+									className={
+										isAdmin ?
+											'h-4 max-w-full cursor-default truncate text-[10px] text-muted-foreground'
+										: 'h-4 max-w-full cursor-default truncate text-[11px] text-muted-foreground'
+									}
+								>
+									{tokenDisplay}
+								</span>
+							</TooltipTrigger>
+							<TooltipContent>
+								<span className='text-xs'>{tokenDisplay}</span>
+							</TooltipContent>
+						</Tooltip>
+					</TooltipProvider>
+				</span>
 			</td>
-
-			{isAdmin && (
-				<td className='px-2 py-1 whitespace-nowrap align-middle text-[11px] leading-4 text-muted-foreground'>
-					<span className='inline-flex h-4 items-center max-w-[5rem] truncate'>
-						{log.user.username || '-'}
-					</span>
-				</td>
-			)}
 
 			<td className='px-1 py-1 whitespace-nowrap align-middle'>
 				<TooltipProvider delayDuration={200}>
@@ -698,11 +699,11 @@ export function LogRowCells({
 				</TooltipProvider>
 			</td>
 
-			<td className='px-2 py-1 text-right whitespace-nowrap font-mono text-muted-foreground align-middle'>
+			<td className='min-w-24 whitespace-nowrap px-2 py-1 text-right align-middle font-mono text-muted-foreground'>
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={outputTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='cursor-default'>
+							<span className='cursor-default text-sm font-medium tabular-nums'>
 								{formatTokenCount(outputTokensForDisplay)}
 							</span>
 						</TooltipTrigger>
