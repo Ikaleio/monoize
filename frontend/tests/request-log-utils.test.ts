@@ -12,6 +12,7 @@ import {
 	formatCost,
 	formatRetryChain,
 	hopDisplayLabel,
+	readableAffinityTarget,
 	retryAttemptRows,
 	type BillingValueDimension
 } from '../src/pages/request-logs/utils'
@@ -132,6 +133,42 @@ describe('formatCachePercentage', () => {
 		expect(formatCachePercentage(16_000, 0)).toBeNull()
 		expect(formatCachePercentage(null, 32_000)).toBeNull()
 		expect(formatCachePercentage(16_000, null)).toBeNull()
+	})
+})
+
+describe('readableAffinityTarget', () => {
+	test('resolves an internal binding id through the admin Provider catalog', () => {
+		const log = requestLog({
+			affinity: {
+				target: '8rrbb6hw/mono_ch_7bf5f8e819794fd3b2911e8c35f38556'
+			}
+		})
+		const knownTargets = new Map([
+			[
+				'8rrbb6hw/mono_ch_7bf5f8e819794fd3b2911e8c35f38556',
+				'codex/input-im'
+			]
+		])
+
+		expect(readableAffinityTarget(log, knownTargets)).toBe('codex/input-im')
+	})
+
+	test('uses request-time names when the terminal route is the binding target', () => {
+		const log = requestLog({
+			provider: { id: 'provider-id', name: 'codex' },
+			channel: { id: 'channel-id', name: 'input-im' },
+			affinity: { target: 'provider-id/channel-id' }
+		})
+
+		expect(readableAffinityTarget(log, new Map())).toBe('codex/input-im')
+	})
+
+	test('never exposes an unresolved internal binding id', () => {
+		const log = requestLog({
+			affinity: { target: 'provider-id/channel-id' }
+		})
+
+		expect(readableAffinityTarget(log, new Map())).toBeNull()
 	})
 })
 

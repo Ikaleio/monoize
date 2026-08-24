@@ -27,12 +27,14 @@ import {
 	readNanoString,
 	readNumber,
 	readTokenCount,
+	readableAffinityTarget,
 	retryAttemptRows,
 	triedProvidersOf,
 	type RetryAttemptRow
 } from './utils'
 
 interface LogRowCellsProps {
+	affinityTargetNames: ReadonlyMap<string, string>
 	log: RequestLog
 	isAdmin: boolean
 	showIp: boolean
@@ -41,6 +43,7 @@ interface LogRowCellsProps {
 }
 
 export function LogRowCells({
+	affinityTargetNames,
 	log,
 	isAdmin,
 	showIp,
@@ -106,6 +109,7 @@ export function LogRowCells({
 	const triedProviders = triedProvidersOf(log)
 	const hasTriedProviders = triedProviders.length > 0
 	const attemptRows = hasTriedProviders ? retryAttemptRows(log) : []
+	const affinityTargetDisplay = readableAffinityTarget(log, affinityTargetNames)
 	const costDisplay = formatCost(log.billing.charge_nano_usd)
 	const usageSnapshot = asObject(log.usage)
 	const usageInput = asObject(usageSnapshot?.input)
@@ -576,19 +580,26 @@ export function LogRowCells({
 											</div>
 										)}
 										{channelDisplay && (
-											<div>
-												{t('requestLogs.channel')}: {channelDisplay}
+											<div className='flex items-center gap-1'>
+												<span>
+													{t('requestLogs.channel')}: {channelDisplay}
+												</span>
+												{log.affinity?.hit === true && (
+													<Badge
+														variant='secondary'
+														className='h-4 rounded-full px-1 text-[10px] font-normal'
+													>
+														{t('requestLogs.affinityHit')}
+													</Badge>
+												)}
 											</div>
-										)}
-										{log.affinity?.hit === true && (
-											<div>{t('requestLogs.affinityHit')}</div>
 										)}
 										{log.affinity?.hit === false && (
 											<div>{t('requestLogs.affinityMiss')}</div>
 										)}
-										{log.affinity?.target && (
+										{affinityTargetDisplay && (
 											<div>
-												{t('requestLogs.affinityTarget')}: {log.affinity.target}
+												{t('requestLogs.affinityTarget')}: {affinityTargetDisplay}
 											</div>
 										)}
 										{log.session_affinity_value && (
@@ -665,7 +676,14 @@ export function LogRowCells({
 				<TooltipProvider delayDuration={200}>
 					<Tooltip onOpenChange={inputTooltipOpenChange}>
 						<TooltipTrigger asChild>
-							<span className='inline-flex cursor-default flex-col items-end leading-4'>
+							<span
+								className={cn(
+									'inline-flex cursor-default leading-4',
+									inputCached != null && inputCachePercentage ?
+										'flex-col items-end'
+									: 'items-center'
+								)}
+							>
 								<span className='h-4 whitespace-nowrap text-sm font-medium tabular-nums'>
 									{formatTokenCount(inputTokensForDisplay)}
 								</span>
@@ -673,7 +691,7 @@ export function LogRowCells({
 									<span className='h-4 whitespace-nowrap text-[10px] text-muted-foreground tabular-nums'>
 										{formatTokenCount(inputCached)} / {inputCachePercentage}
 									</span>
-								: <span aria-hidden='true' className='h-4' />}
+								: null}
 							</span>
 						</TooltipTrigger>
 						<TooltipContent>

@@ -6,6 +6,7 @@ import type { RequestLog } from '@/lib/api'
 import { LogRowCells } from './log-row-cells'
 
 interface RequestLogsTableProps {
+	affinityTargetNames: ReadonlyMap<string, string>
 	isAdmin: boolean
 	isInitialLoading: boolean
 	logs: RequestLog[]
@@ -71,6 +72,7 @@ function RequestLogsTableHeader({ isAdmin, t }: Pick<RequestLogsTableProps, 'isA
 }
 
 export function RequestLogsTable({
+	affinityTargetNames,
 	isAdmin,
 	isInitialLoading,
 	logs,
@@ -106,6 +108,7 @@ export function RequestLogsTable({
 			fixedHeaderContent={() => <RequestLogsTableHeader isAdmin={isAdmin} t={t} />}
 			itemContent={(_index, log) => (
 				<LogRowCells
+					affinityTargetNames={affinityTargetNames}
 					log={log}
 					isAdmin={isAdmin}
 					showIp={showIp}

@@ -208,6 +208,16 @@ function nonempty(value: string | null | undefined): string | null {
 	return trimmed ? trimmed : null
 }
 
+function readableRouteName(
+	providerName: string | null | undefined,
+	channelName: string | null | undefined
+): string | null {
+	const names = [nonempty(providerName), nonempty(channelName)].filter(
+		(value): value is string => value != null
+	)
+	return names.length > 0 ? names.join('/') : null
+}
+
 export function triedProvidersOf(log: RequestLog): RequestLogTriedProvider[] {
 	const raw = log.tried_providers as unknown
 	if (Array.isArray(raw)) {
@@ -229,6 +239,40 @@ export type RetryHopIdentity = {
 	channel_id?: string | null
 	provider_name?: string | null
 	channel_name?: string | null
+}
+
+function affinityTargetKey(
+	providerId: string | null | undefined,
+	channelId: string | null | undefined
+): string | null {
+	const provider = nonempty(providerId)
+	const channel = nonempty(channelId)
+	return provider && channel ? `${provider}/${channel}` : null
+}
+
+export function readableAffinityTarget(
+	log: RequestLog,
+	knownTargets: ReadonlyMap<string, string>
+): string | null {
+	const target = nonempty(log.affinity.target)
+	if (!target) return null
+
+	const knownName = nonempty(knownTargets.get(target))
+	if (knownName) return knownName
+
+	const terminalKey = affinityTargetKey(log.provider.id, log.channel.id)
+	if (terminalKey === target) {
+		const terminalName = readableRouteName(log.provider.name, log.channel.name)
+		if (terminalName) return terminalName
+	}
+
+	for (const attempt of triedProvidersOf(log)) {
+		if (affinityTargetKey(attempt.provider_id, attempt.channel_id) !== target) continue
+		const attemptName = readableRouteName(attempt.provider_name, attempt.channel_name)
+		if (attemptName) return attemptName
+	}
+
+	return null
 }
 
 export function hopDisplayLabel(hop: RetryHopIdentity): string {

@@ -18,7 +18,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger
 } from '@/components/ui/tooltip'
-import { useRequestLogs, useApiKeys } from '@/lib/swr'
+import { useRequestLogs, useApiKeys, useProviders } from '@/lib/swr'
 import { useRequestLogSSE } from '@/lib/sse'
 import { useAuth } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
@@ -79,6 +79,19 @@ export function RequestLogsPage() {
 	}, [])
 
 	const { data: apiKeys } = useApiKeys()
+	const { data: providers } = useProviders(undefined, isAdmin)
+	const affinityTargetNames = useMemo(() => {
+		const names = new Map<string, string>()
+		for (const provider of providers ?? []) {
+			for (const channel of provider.channels) {
+				const readableNames = [provider.name.trim(), channel.name.trim()].filter(Boolean)
+				if (readableNames.length > 0) {
+					names.set(`${provider.id}/${channel.id}`, readableNames.join('/'))
+				}
+			}
+		}
+		return names
+	}, [providers])
 
 	const activeFilters = useMemo<RequestLogsFilter>(() => {
 		const f: RequestLogsFilter = {}
@@ -632,6 +645,7 @@ export function RequestLogsPage() {
 				className='rounded-lg border bg-card flex-1 min-h-0 overflow-auto'
 			>
 				<RequestLogsTable
+					affinityTargetNames={affinityTargetNames}
 					isAdmin={isAdmin}
 					isInitialLoading={isInitialLoading}
 					logs={sortedLogs}
