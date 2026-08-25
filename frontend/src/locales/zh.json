@@ -1005,6 +1005,7 @@
 			"copy": "复制",
 			"copied": "已复制",
 			"empty": "无内容",
+			"imagePreview": "抓包图片预览",
 			"responseEmptyStream": "该流式请求没有可重建的响应，请查看“输出流”标签页。",
 			"expandChars": "展开（{{count}} 字符）",
 			"collapse": "收起",
