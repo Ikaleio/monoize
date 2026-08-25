@@ -952,11 +952,6 @@ mod tests {
             error_http_status: Some(502),
             duration_ms: None,
             ttfb_ms: None,
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: Some(serde_json::json!([
