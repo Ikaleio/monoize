@@ -3858,7 +3858,7 @@ mod tests {
             .await
             .expect("store creates");
         let user = store
-            .create_user("session-revocation", "password123", UserRole::User, &[])
+            .create_user("session-revocation", "password123", UserRole::User, None)
             .await
             .unwrap();
 
@@ -3946,7 +3946,7 @@ mod tests {
             .await
             .expect("store creates");
         let user = store
-            .create_user("admin-revocation", "password123", UserRole::User, &[])
+            .create_user("admin-revocation", "password123", UserRole::User, None)
             .await
             .unwrap();
 

@@ -146,7 +146,7 @@ async fn disabled_captcha_allows_login_without_a_token() {
             "captcha-admin",
             "admin-password-12",
             monoize::users::UserRole::Admin,
-            &[],
+            None,
         )
         .await
         .unwrap();

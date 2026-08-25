@@ -25,7 +25,8 @@ fn empty_api_key_update(expires_at: Option<&str>) -> UpdateApiKeyInput {
         model_limits_enabled: None,
         model_limits: None,
         ip_whitelist: None,
-        allowed_groups: None,
+        use_user_group: None,
+        group_ids: None,
         max_multiplier: None,
         transforms: None,
         model_redirects: None,
@@ -65,12 +66,12 @@ async fn topology_surfaces_require_an_admin_session() {
     let state = test_state().await;
     let admin = state
         .user_store
-        .create_user("topology_admin", "password123", UserRole::Admin, &[])
+        .create_user("topology_admin", "password123", UserRole::Admin, None)
         .await
         .expect("admin creates");
     let user = state
         .user_store
-        .create_user("topology_user", "password123", UserRole::User, &[])
+        .create_user("topology_user", "password123", UserRole::User, None)
         .await
         .expect("user creates");
     let admin_session = state
@@ -107,7 +108,7 @@ async fn api_key_expiry_update_rejects_invalid_rfc3339_before_writing() {
     let state = test_state().await;
     let user = state
         .user_store
-        .create_user("expiry_user", "password123", UserRole::User, &[])
+        .create_user("expiry_user", "password123", UserRole::User, None)
         .await
         .expect("user creates");
     let (key, _) = state
@@ -151,17 +152,17 @@ async fn admin_cannot_update_a_peer_admin_but_super_admin_can() {
     let state = test_state().await;
     let admin_a = state
         .user_store
-        .create_user("admin_a", "password-a", UserRole::Admin, &[])
+        .create_user("admin_a", "password-a", UserRole::Admin, None)
         .await
         .expect("first admin creates");
     let admin_b = state
         .user_store
-        .create_user("admin_b", "password-b", UserRole::Admin, &[])
+        .create_user("admin_b", "password-b", UserRole::Admin, None)
         .await
         .expect("second admin creates");
     let super_admin = state
         .user_store
-        .create_user("super_admin", "password-s", UserRole::SuperAdmin, &[])
+        .create_user("super_admin", "password-s", UserRole::SuperAdmin, None)
         .await
         .expect("super admin creates");
     let admin_session = state

@@ -2118,7 +2118,7 @@ mod today_usage_tests {
             .await
             .expect("store creates");
         let alice = store
-            .create_user("alice_capture", "password12", UserRole::User, &[])
+            .create_user("alice_capture", "password12", UserRole::User, None)
             .await
             .expect("alice created");
 

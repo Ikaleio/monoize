@@ -170,7 +170,7 @@ mod tests {
             balance_nano_usd: "0".to_string(),
             balance_unlimited: false,
             email: None,
-            allowed_groups: Vec::new(),
+            group_id: String::new(),
             billing_plan_id: None,
             next_grant_at: None,
         }
