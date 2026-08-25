@@ -152,6 +152,7 @@ async fn sub_account_key_reports_its_balance_instead_of_unlimited_owner_balance(
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
                 request_capture_mode: monoize::users::RequestCaptureMode::Off,
+                request_capture_retention: monoize::users::RequestCaptureRetention::default(),
             },
             true,
         )

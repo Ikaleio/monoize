@@ -589,6 +589,7 @@ async fn responses_streaming_chat_reasoning_content_emits_single_reasoning_lifec
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
                 enabled: true,
+                allow_missing_usage: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
