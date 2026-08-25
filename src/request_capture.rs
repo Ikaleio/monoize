@@ -1139,24 +1139,47 @@ impl RequestCaptureStore {
         let timestamp = created_at.format("%Y%m%dT%H%M%S%3fZ").to_string();
         let base_name = format!("{prefix}_{timestamp}");
         tokio::task::spawn_blocking(move || {
-            let (filename, payload) = match zstd::encode_all(&bytes[..], ZSTD_COMPRESSION_LEVEL) {
-                Ok(compressed) => (format!("{base_name}.json.zst"), compressed),
+            let (extension, payload) = match zstd::encode_all(&bytes[..], ZSTD_COMPRESSION_LEVEL) {
+                Ok(compressed) => (".json.zst", compressed),
                 Err(err) => {
                     tracing::warn!("zstd compression failed; storing raw capture dump: {err}");
-                    (format!("{base_name}.json"), bytes)
+                    (".json", bytes)
                 }
             };
             let size_bytes = payload.len() as i64;
             std::fs::create_dir_all(&*dump_dir).map_err(|err| err.to_string())?;
-            let final_path = dump_dir.join(&filename);
             // Appended (not `with_extension`) so multi-dot names survive; an
             // abandoned tmp file is bounded by RCD-R5a orphan cleanup.
             let tmp_path = dump_dir.join(format!(
-                "{filename}.tmp.{}",
+                "{base_name}{extension}.tmp.{}",
                 uuid::Uuid::new_v4().to_string().replace('-', "")
             ));
             std::fs::write(&tmp_path, payload).map_err(|err| err.to_string())?;
-            std::fs::rename(&tmp_path, &final_path).map_err(|err| err.to_string())?;
+            // RCD-S6a/RCD-S11: publish via hard_link, which atomically fails
+            // with AlreadyExists instead of overwriting. This is what keeps
+            // same-millisecond RCD-C16 fan-out sessions (same prefix, same
+            // timestamp) from silently destroying each other's dump.
+            let mut k: u32 = 0;
+            let filename = loop {
+                let candidate = if k == 0 {
+                    format!("{base_name}{extension}")
+                } else {
+                    format!("{base_name}_{k}{extension}")
+                };
+                match std::fs::hard_link(&tmp_path, dump_dir.join(&candidate)) {
+                    Ok(()) => break candidate,
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => k += 1,
+                    Err(_) => {
+                        // RCD-S11 fallback for filesystems without hard
+                        // links: plain rename, which can overwrite on a
+                        // same-name race but never exposes a partial file.
+                        std::fs::rename(&tmp_path, dump_dir.join(&candidate))
+                            .map_err(|err| err.to_string())?;
+                        return Ok((candidate, size_bytes));
+                    }
+                }
+            };
+            let _ = std::fs::remove_file(&tmp_path);
             Ok::<(String, i64), String>((filename, size_bytes))
         })
         .await

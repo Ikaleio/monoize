@@ -76,9 +76,13 @@ RCD-S5. The dump directory MUST be created before the first dump write if it doe
 RCD-S6. Each dump filename MUST have one of these shapes:
 
 ```text
-{request_id_prefix}_{utc_timestamp_ms}.json.zst   (zstd-compressed dump, RCD-Z1)
-{request_id_prefix}_{utc_timestamp_ms}.json       (uncompressed dump, RCD-Z4 fallback only)
+{request_id_prefix}_{utc_timestamp_ms}.json.zst       (zstd-compressed dump, RCD-Z1)
+{request_id_prefix}_{utc_timestamp_ms}_{k}.json.zst   (RCD-S6a collision disambiguation, k >= 1)
+{request_id_prefix}_{utc_timestamp_ms}.json           (uncompressed dump, RCD-Z4 fallback only)
+{request_id_prefix}_{utc_timestamp_ms}_{k}.json       (RCD-S6a fallback disambiguation, k >= 1)
 ```
+
+RCD-S6a. When the undisambiguated RCD-S6 filename already exists in the dump directory, the write MUST select the smallest integer `k >= 1` for which `{request_id_prefix}_{utc_timestamp_ms}_{k}` with the same extension does not exist. Final filename selection MUST be atomic against concurrent dump writes: two concurrent writes MUST NOT resolve to the same final filename, and a final-name file MUST never be observable in a partially written state. Precondition making this rule reachable: RCD-C16 fan-out sub-request sessions share one request-id prefix and can persist within the same millisecond.
 
 RCD-S7. `request_id_prefix` MUST be derived from the first eight Unicode scalar values of the Monoize request id when a request id is present.
 
@@ -88,7 +92,7 @@ RCD-S9. If a request id is absent or shorter than eight scalar values, `request_
 
 RCD-S10. `utc_timestamp_ms` MUST be a UTC timestamp with millisecond precision formatted as `YYYYMMDDTHHMMSSmmmZ`.
 
-RCD-S11. A dump write MUST use a temporary file followed by an atomic rename into the final filename when the operating system supports rename within the dump directory.
+RCD-S11. A dump write MUST fully write a temporary file first and then publish it under the final filename with one atomic filesystem operation that fails (rather than overwrites) when the final filename already exists, when the operating system supports such an operation within the dump directory; an `already exists` publication failure re-enters RCD-S6a name selection with the next `k`.
 
 RCD-S12. Dump write failure MUST be logged and MUST NOT change the HTTP response returned to the downstream client.
 
