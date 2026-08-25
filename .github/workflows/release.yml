@@ -168,6 +168,33 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+      - name: Stage npm platform package
+        shell: bash
+        run: |
+          binary="target/$TARGET/release/monoize"
+          if [[ "$TARGET" == *-pc-windows-msvc ]]; then
+            binary="${binary}.exe"
+          fi
+          bun npm/scripts/package.ts stage-platform \
+            --tag "$RELEASE_TAG" \
+            --target "$TARGET" \
+            --binary "$binary" \
+            --output-dir npm-stage
+          bun npm/scripts/package.ts pack \
+            --packages-dir npm-stage \
+            --output-dir npm-dist
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Upload npm platform package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-${{ matrix.target }}
+          path: npm-dist/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   verify:
     name: Verify complete release set
     needs: [validate, build]
@@ -211,6 +238,111 @@ jobs:
         run: gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+
+  package-npm:
+    name: Verify npm package set
+    needs: [validate, build, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+
+      - name: Test TypeScript launcher
+        run: bun test npm/tests
+
+      - name: Download npm platform packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: npm-*
+          path: npm-dist
+          merge-multiple: true
+
+      - name: Build root npm package
+        shell: bash
+        run: |
+          bun npm/scripts/package.ts stage-root \
+            --tag "$RELEASE_TAG" \
+            --output-dir npm-stage
+          bun npm/scripts/package.ts pack \
+            --packages-dir npm-stage \
+            --output-dir npm-dist
+
+      - name: Verify complete npm package set
+        run: bun npm/scripts/package.ts verify --tag "$RELEASE_TAG" --directory npm-dist
+
+      - name: Install pnpm for compatibility verification
+        shell: bash
+        run: npm install --prefix target/npm-tools --ignore-scripts --no-audit --no-fund pnpm@10.33.0
+        env:
+          npm_config_cache: ${{ github.workspace }}/target/npm-tool-cache
+
+      - name: Verify Bun, npm, and pnpm installation
+        shell: bash
+        run: >-
+          bun npm/scripts/verify-clients.ts
+          --tag "$RELEASE_TAG"
+          --directory npm-dist
+          --pnpm target/npm-tools/node_modules/.bin/pnpm
+
+      - name: Upload complete npm package set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-package-set
+          path: npm-dist/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish-npm:
+    name: Publish npm package set
+    if: github.event_name == 'release'
+    needs: [validate, package-npm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          persist-credentials: false
+
+      - name: Download npm package set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-package-set
+          path: npm-dist
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+
+      - name: Configure npm authentication
+        shell: bash
+        run: npm config set //registry.npmjs.org/:_authToken="$NODE_AUTH_TOKEN" --location=user
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/monoize-npmrc
+
+      - name: Publish platform packages, then root package
+        shell: bash
+        run: bun npm/scripts/package.ts publish --tag "$RELEASE_TAG" --directory npm-dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/monoize-npmrc
 
   build-container:
     name: Build container ${{ matrix.platform }}

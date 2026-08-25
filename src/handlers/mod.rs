@@ -925,6 +925,7 @@ struct MonoizeAttempt {
     extra_headers: Option<std::collections::BTreeMap<String, String>>,
     /// CM-AFF-2: derive per-request session affinity for this Channel.
     session_affinity_auto: bool,
+    allow_missing_usage: bool,
     /// CM-AFF-1a/1b: client header or decoded-body conversation identifier.
     client_session_id: Option<String>,
     /// CM-AFF-2 rule 2: `mono-*` digest of instructions plus the first two

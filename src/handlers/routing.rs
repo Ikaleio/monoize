@@ -711,6 +711,7 @@ pub(super) async fn collect_provider_attempts(
                 &channel.base_url,
                 channel.session_affinity_auto,
             ),
+            allow_missing_usage: channel.allow_missing_usage,
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,

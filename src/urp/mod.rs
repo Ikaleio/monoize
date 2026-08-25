@@ -1022,7 +1022,7 @@ pub struct OutputDetails {
     pub modality_breakdown: Option<ModalityBreakdown>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,

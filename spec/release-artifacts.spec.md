@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Purpose:** Build and attach native Monoize binaries when a GitHub Release is published.
-- **Scope:** Applies to `.github/workflows/release.yml` and `scripts/package_release.py`.
+- **Scope:** Applies to `.github/workflows/release.yml`, `scripts/package_release.py`, and the native inputs used by the npm package set.
 
 ## 1. Trigger and authority
 
@@ -97,3 +97,7 @@ RA-S5. The verify command MUST recompute and compare every archive checksum. A m
 RA-S6. After RA-S4 and RA-S5 succeed, the workflow MUST upload all twelve files to the triggering GitHub Release. A rerun MAY overwrite same-name assets on that Release.
 
 RA-S7. The release workflow MUST NOT run `deploy.sh`, copy files to `/opt/monoize`, restart PM2, or mutate a Monoize database.
+
+RA-S8. Each native build row MUST make its compiled executable available to the matching npm platform-package staging step. npm packaging and publication MUST follow `spec/npm-cli-distribution.spec.md`.
+
+RA-S9. Failure to publish an npm package MUST NOT delete or replace a verified native GitHub Release asset.

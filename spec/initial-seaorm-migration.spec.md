@@ -301,6 +301,8 @@ ISM4.12g. Migration `m20260823_000034_channel_egress_proxy` MUST add nullable TE
 ISM4.12h. Migration `m20260823_000035_channel_extra_headers` MUST add nullable TEXT column `extra_headers` to `monoize_channels` on SQLite and PostgreSQL; existing rows MUST read as NULL (no extra headers) (`channel-management.spec.md` CP-INV-15). The down migration MUST drop the column.
 ISM4.12i. Migration `m20260823_000036_channel_session_affinity_auto` MUST add nullable INTEGER column `session_affinity_auto` to `monoize_channels` on SQLite and PostgreSQL; existing rows MUST read as NULL (disabled) (`channel-management.spec.md` CM-AFF-2). The down migration MUST drop the column.
 
+ISM4.12j. Migration `m20260825_000043_channel_allow_missing_usage` MUST add INTEGER column `allow_missing_usage` with `NOT NULL DEFAULT 0` to `monoize_channels` on SQLite and PostgreSQL. Existing rows MUST read as `false`. The down migration MUST drop the column.
+
 ISM4.12j. Migration `m20260823_000037_billing_plan_cron_schedule` MUST replace `billing_plans.period_seconds` with `billing_plans.schedule` (`billing-plan-subscriptions.spec.md` BP-D5). Existing `users.next_grant_at` values MUST be left unchanged. The down migration MUST restore `period_seconds`.
 
 ISM4.12k. Migration `m20260825_000042_groups_registry` MUST create `monoize_groups`, seed exactly one default group, backfill `users.group_id`, `api_keys.use_user_group`, `api_keys.group_ids`, `monoize_providers.group_ids`, and `billing_plans.group_ids` from the legacy label columns, and drop `users.allowed_groups`, `api_keys.allowed_groups`, `api_keys.token_group`, `monoize_providers.groups`, and `billing_plans.allowed_groups` (`groups-registry.spec.md` §4).

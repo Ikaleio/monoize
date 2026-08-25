@@ -219,7 +219,7 @@ MB-C4. A successful billing snapshot MUST persist `billing_breakdown_json` with:
 - `base_charge_nano`
 - `final_charge_nano`
 
-MB-C5. A billable non-stream response without normalized usage MUST be rejected before delivery. A pass-through stream without terminal normalized usage MUST settle from an estimate whose input quantity is `ceil(serialized_upstream_request_utf8_bytes / 4)` and whose output quantity is `ceil(decoded_visible_output_utf8_bytes / 4)`. The resulting billing snapshot MUST contain `estimated = true`.
+MB-C5. A billable non-stream response or buffered synthetic stream without normalized usage MUST be rejected before delivery when the selected Channel has `allow_missing_usage = false`. A pass-through stream without terminal normalized usage MUST settle from an estimate whose input quantity is `ceil(serialized_upstream_request_utf8_bytes / 4)` and whose output quantity is `ceil(decoded_visible_output_utf8_bytes / 4)` when the selected Channel has `allow_missing_usage = false`; the resulting billing snapshot MUST contain `estimated = true`. When the selected Channel has `allow_missing_usage = true`, each of these missing-usage cases MUST instead settle with normalized input and output token quantities of zero and a total charge of zero. Present upstream usage MUST always take precedence over this Channel flag.
 
 MB-C6. Once pass-through stream bytes have been delivered, a settlement error MUST NOT be converted into a successful zero-charge snapshot. Monoize MUST finalize the request log as an explicit billing failure containing the billing error code. The server MUST NOT claim that an error response was delivered downstream after the terminal stream event has already been sent.
 

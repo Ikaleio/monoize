@@ -51,6 +51,7 @@ A channel object MUST include:
 - `api_key: string` (write-only: MUST NOT be returned by list/get APIs)
 - `weight: integer >= 0`
 - `enabled: boolean`
+- `allow_missing_usage: boolean` (default `false`)
 - `models: Record<string, { redirect: string | null, multiplier: string }>`
 
 Runtime projection fields MAY be returned by list/get APIs:
@@ -126,6 +127,10 @@ Channel automatic session affinity flag MAY be present:
 
 - `session_affinity_auto: boolean | null`. `true` enables automatic session affinity. `false` disables it. `null` or absent selects the URL-based default in CM-AFF-0. When effective automatic session affinity is enabled, every proxied upstream request issued for this Channel MUST carry an `x-session-affinity` header per CM-AFF-1 through CM-AFF-2.
 
+Channel missing-usage billing flag MUST be present:
+
+- `allow_missing_usage: boolean`. `false` preserves the normal requirement for normalized upstream usage. `true` permits this Channel to settle a response without normalized upstream usage as zero usage.
+
 ## 2. Invariants
 
 CP-INV-1. `channels.length >= 1`.
@@ -180,6 +185,12 @@ The Channel's effective automatic session affinity MUST use this order:
 3. If `session_affinity_auto` is `null` or absent, enable it only for a direct Cloudflare Workers AI Channel.
 
 CM-HDR-1. Every upstream request issued for a Channel (proxy traffic and the liveness probe of §3.8) MUST send the Channel's persisted `extra_headers` entries in addition to the authentication and protocol-specific headers. When an entry name collides with an authentication or protocol-specific header, the request MUST be rejected at configuration time by CP-INV-15 rather than silently overridden at runtime.
+
+CM-USAGE-1. If a selected Channel returns a response without normalized upstream usage and `allow_missing_usage = true`, Monoize MUST substitute `Usage { input_tokens: 0, output_tokens: 0, input_details: null, output_details: null, extra_body: {} }` for settlement and request-log finalization.
+
+CM-USAGE-2. If `allow_missing_usage = false`, missing normalized upstream usage MUST follow the existing endpoint-specific rejection or stream-estimation rule in `metered-billing.spec.md` MB-C5.
+
+CM-USAGE-3. If normalized upstream usage is present, `allow_missing_usage` MUST NOT change that usage or the resulting charge.
 
 CM-AFF-1. If the Channel `extra_headers` contains an explicit `x-session-affinity` entry, that value MUST be sent verbatim and client passthrough (CM-AFF-1a), request-body identifiers (CM-AFF-1b), and automatic derivation (CM-AFF-2) MUST NOT run.
 
@@ -241,7 +252,7 @@ All endpoints require an authenticated dashboard admin session.
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, allow_missing_usage?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
   - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -367,3 +378,5 @@ CP-FE-11. A Provider overview model badge MUST use the following severity order:
 CP-FE-12. A Provider overview model-status detail overlay MUST open on hover or focus for a fine pointer and on tap for a coarse pointer. It MUST list every `breaker_channels` Channel name and every `unpriced_channels` Channel name. A red badge MUST state that zero of the eligible Channels are available.
 
 CP-FE-13. A Channel `unhealthy` status detail overlay MUST identify a Channel-level breaker when `per_model_circuit_break = false`. When `per_model_circuit_break = true`, it MUST list `_unhealthy_models`. A Channel `probing` status detail overlay MUST list `_probing_models`. Each overlay MUST show `_cooldown_until` when present.
+
+CP-FE-14. The Channel editor MUST expose `allow_missing_usage` as a boolean switch. Its label or adjacent description MUST state that enabling it records zero usage and charges zero when the upstream omits usage.

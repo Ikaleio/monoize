@@ -235,6 +235,8 @@ DS43. Sidebar brand marks SHOULD use a neutral bordered surface rather than a so
 
 DS43a. In-app Monoize brand marks MUST render without an opaque dark or brand-colored plate inside the SVG. The M body MUST inherit `currentColor`. The red, orange, cyan, and celeste beam shapes MAY use fixed brand colors. Browser favicon assets MAY keep an opaque dark plate.
 
+DS43b. The dashboard sidebar header MUST render the Monoize brand mark inside a 32 px by 32 px surface. The logo SVG MUST fill that surface without wrapper padding. The SVG view box provides the mark's internal clear space. This rule MUST apply in both expanded and collapsed sidebar states and MUST NOT change the login-page brand mark.
+
 DS44. Sidebar mobile sheet content SHOULD match the desktop sidebar surface and border treatment.
 
 DS45. Sidebar motion and floating-card layout MUST be preserved unless a separate product specification changes them.

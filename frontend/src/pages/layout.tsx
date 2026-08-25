@@ -154,7 +154,7 @@ function Sidebar({
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             transition={springs.snappy}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground p-1.5 text-background shadow-sm"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background shadow-sm"
           >
             <MonoizeLogo className="h-full w-full" />
           </motion.div>

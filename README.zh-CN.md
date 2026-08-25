@@ -164,7 +164,31 @@ Provider、全局和 API Key Transform
 
 ## 快速开始
 
-安装稳定版 Rust 工具链和 [Bun](https://bun.sh/)。Release 构建会编译前端并把它嵌入可执行文件。
+使用 Bun 单次运行 Monoize：
+
+```bash
+bunx monoize
+```
+
+也可以全局安装：
+
+```bash
+bun add --global monoize
+monoize
+```
+
+同一个包也兼容 npm 和 pnpm：
+
+```bash
+npx monoize
+# 或：pnpm dlx monoize
+# 全局安装：npm install --global monoize
+# 全局安装：pnpm add --global monoize
+```
+
+包管理器只会安装与当前操作系统和 CPU 匹配的原生二进制文件。npm 包支持 GNU libc Linux、macOS 和 Windows 的 x86-64 与 ARM64 环境。
+
+如需从源码构建，请安装稳定版 Rust 工具链和 [Bun](https://bun.sh/)。Release 构建会编译前端并把它嵌入可执行文件。
 
 ```bash
 cargo build --release
@@ -270,6 +294,8 @@ Monoize 支持一个可写主机加若干只读从机的部署形态。所有节
 Linux 和 macOS 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证。每个压缩包都带有独立的 SHA-256 文件。六个平台全部构建成功且校验通过后，工作流才会上传文件。
 
 手动运行工作流可以执行相同的六平台预检。它不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
+
+该工作流还会构建七个 npm 压缩包：一个由 TypeScript 构建的启动器，以及六个平台包。Bun、npm 或 pnpm 正常安装时，会根据 `os` 和 `cpu` 元数据选择一个平台包。发布该包集合需要配置 `NPM_TOKEN` Actions secret。准确的 npm 约束见 [npm CLI 分发规范](spec/npm-cli-distribution.spec.md)。
 
 ## 开发与验证
 

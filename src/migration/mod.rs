@@ -49,6 +49,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260824_000040_drop_request_log_visible_tps::Migration),
             Box::new(m20260824_000041_request_capture_records::Migration),
             Box::new(m20260825_000042_groups_registry::Migration),
+            Box::new(m20260825_000043_channel_allow_missing_usage::Migration),
         ]
     }
 }
@@ -227,6 +228,7 @@ mod m20260824_000039_api_keys_plaintext_only;
 mod m20260824_000040_drop_request_log_visible_tps;
 mod m20260824_000041_request_capture_records;
 mod m20260825_000042_groups_registry;
+mod m20260825_000043_channel_allow_missing_usage;
 
 #[cfg(test)]
 mod tests {
