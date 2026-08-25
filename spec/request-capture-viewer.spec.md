@@ -129,6 +129,15 @@ RCV-F13. The tree MUST support multi-level collapse: every object and array node
 
 RCV-F14. A string leaf longer than 400 characters MUST render truncated with a localized expand/collapse control; expanding never mutates the underlying data.
 
+RCV-F14a. Inline image preview. A string leaf is image-bearing iff one of these holds:
+
+1. it starts with `data:image/` followed by a media subtype and `;base64,`, or
+2. it is at least 64 characters long and starts with one of these base64 image signatures: `iVBORw0KGgo` (PNG, preview media type `image/png`), `/9j/` (JPEG, `image/jpeg`), `R0lGOD` (GIF, `image/gif`), `UklGR` (WEBP, `image/webp`).
+
+For every image-bearing string leaf, the JSON tree MUST render one inline image preview directly below the (RCV-F14-truncated) string text, built as an `img` element whose source is the string itself for case 1, or `data:{media_type};base64,{string}` for case 2. The preview MUST be bounded to at most 160 px height with preserved aspect ratio, MUST have a localized accessible alt text (`requestLogs.capture.imagePreview`), and MUST NOT mutate the underlying dump data. A payload the browser cannot decode MUST collapse the preview element without breaking the surrounding tree. Detection MUST inspect only the string prefix (no full-string decode before render).
+
+RCV-F14b. Multipart capture objects (`request-capture-dumps.spec.md` RCD-D16) render through the same JSON tree: no dedicated widget is required. Their `data_base64` file-part values are covered by RCV-F14a case 2 when the bytes are an image, and by RCV-F14 truncation otherwise.
+
 RCV-F15. Expand/collapse transitions MUST use non-linear easing from the project motion tokens (`easeOutExpo` enter, `easeInOutQuart` exit) via `framer-motion`; durations MUST be within `0.16s`-`0.30s`. Linear easing MUST NOT be used.
 
 RCV-F16. The Output Stream view MUST render one row per captured frame, monospace, each row independently expandable when its content exceeds one line, with the frame index visible. When the attempt records frame truncation (`downstream_sse_frames_truncation.truncated == true`), the list MUST show a localized truncation notice with the omitted counts.

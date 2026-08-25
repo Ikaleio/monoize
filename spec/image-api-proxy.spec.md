@@ -127,6 +127,8 @@ IM16. Partial success policy:
 
 IM17. The order of items in the response `data[]` array is not required to match the order of sub-requests. Results MAY appear in completion order.
 
+IM18. Request capture for Image API sub-requests follows `request-capture-dumps.spec.md` RCD-C16 (one capture session per sub-request), RCD-D4a (multipart `raw_input` for edits), and RCD-D10c (stream-collected reconstruction for the IM11 internal-stream path).
+
 ## 5. Response mapping
 
 ### 5.1 Image extraction from URP response
