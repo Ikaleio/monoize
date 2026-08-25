@@ -27,12 +27,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct AutoCacheOpenAiToolUseTransform;
+pub struct CacheOpenAiToolUseTransform;
 
 #[async_trait]
-impl Transform for AutoCacheOpenAiToolUseTransform {
+impl Transform for CacheOpenAiToolUseTransform {
     fn type_id(&self) -> &'static str {
-        "auto_cache_openai_tool_use"
+        "cache_openai_tool_use"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Auto-cache: OpenAI tool results"), ("zh", "自动缓存：OpenAI 工具结果")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Inserts explicit OpenAI prompt-cache breakpoints on eligible tool-result content blocks for explicit-breakpoint GPT models."),
+            ("zh", "为支持显式缓存断点的 GPT 模型，在符合条件的工具结果内容块上插入显式 prompt-cache 断点。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -269,7 +280,7 @@ fn tool_result_content_extra_body(content: &ToolResultContent) -> &HashMap<Strin
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(AutoCacheOpenAiToolUseTransform),
+    factory: || Box::new(CacheOpenAiToolUseTransform),
 });
 
 #[cfg(test)]
@@ -379,7 +390,7 @@ mod tests {
     }
 
     async fn apply_transform(req: &mut UrpRequest, provider_type: ProviderType) {
-        let transform = AutoCacheOpenAiToolUseTransform;
+        let transform = CacheOpenAiToolUseTransform;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
         transform

@@ -483,7 +483,7 @@ async fn create_api_key_rejects_disallowed_transform() {
                 "name": "unsafe-transform-key",
                 "transforms": [
                     {
-                        "transform": "set_field",
+                        "transform": "field_set",
                         "enabled": true,
                         "models": ["gpt-5.4-fast"],
                         "phase": "request",
@@ -520,25 +520,25 @@ async fn create_api_key_allows_new_response_transforms() {
                 "name": "safe-transform-key",
                 "transforms": [
                     {
-                        "transform": "plaintext_reasoning_to_summary",
+                        "transform": "reasoning_content_to_summary",
                         "enabled": true,
                         "phase": "response",
                         "config": {}
                     },
                     {
-                        "transform": "assistant_markdown_images_to_output",
+                        "transform": "image_markdown_to_output",
                         "enabled": true,
                         "phase": "response",
                         "config": {}
                     },
                     {
-                        "transform": "assistant_output_images_to_markdown",
+                        "transform": "image_output_to_markdown",
                         "enabled": true,
                         "phase": "response",
                         "config": { "template": "![preview]({{src}})" }
                     },
                     {
-                        "transform": "compress_assistant_output_images",
+                        "transform": "image_compress_output",
                         "enabled": true,
                         "phase": "response",
                         "config": { "max_edge_px": 1024, "jpeg_quality": 80 }

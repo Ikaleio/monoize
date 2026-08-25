@@ -17,16 +17,27 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct AutoCacheToolUseTransform;
+pub struct CacheAnthropicToolUseTransform;
 
 /// When the user returns tool results, find the last User message before
 /// the Assistant's ToolCall and add cache_control to its last part.
 /// This makes long tool-call chains benefit from caching.
 /// Respects the max-4 cache breakpoint limit.
 #[async_trait]
-impl Transform for AutoCacheToolUseTransform {
+impl Transform for CacheAnthropicToolUseTransform {
     fn type_id(&self) -> &'static str {
-        "auto_cache_tool_use"
+        "cache_anthropic_tool_use"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Auto-cache: Anthropic tool results"), ("zh", "自动缓存：Anthropic 工具结果")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "On tool-result submissions, inserts an Anthropic ephemeral cache_control breakpoint on the latest user node before the tool-call run."),
+            ("zh", "在提交工具结果时，于工具调用串前最近的 user 节点插入 Anthropic ephemeral cache_control 缓存断点。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -146,5 +157,5 @@ fn node_has_cache_control(node: &Node) -> bool {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(AutoCacheToolUseTransform),
+    factory: || Box::new(CacheAnthropicToolUseTransform),
 });

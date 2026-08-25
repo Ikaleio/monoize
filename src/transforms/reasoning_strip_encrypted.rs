@@ -1,4 +1,4 @@
-//! `strip_encrypted_reasoning` response-phase transform.
+//! `reasoning_strip_encrypted` response-phase transform.
 //!
 //! Drops opaque `encrypted` reasoning payloads from `Reasoning` nodes,
 //! reasoning deltas, and reasoning-bearing envelope-extra control events.
@@ -41,12 +41,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct StripEncryptedReasoningTransform;
+pub struct ReasoningStripEncryptedTransform;
 
 #[async_trait]
-impl Transform for StripEncryptedReasoningTransform {
+impl Transform for ReasoningStripEncryptedTransform {
     fn type_id(&self) -> &'static str {
-        "strip_encrypted_reasoning"
+        "reasoning_strip_encrypted"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: strip encrypted payloads"), ("zh", "推理：移除加密载荷")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Removes encrypted reasoning payloads from response nodes, stream events, and passthrough state while preserving plaintext reasoning."),
+            ("zh", "从响应节点、流事件与透传状态中移除加密推理载荷，保留明文推理内容。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -161,7 +172,7 @@ fn envelope_is_reasoning(extra_body: &HashMap<String, Value>) -> bool {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(StripEncryptedReasoningTransform),
+    factory: || Box::new(ReasoningStripEncryptedTransform),
 });
 
 #[cfg(test)]
@@ -192,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn strips_encrypted_from_reasoning_node_in_response() {
-        let transform = StripEncryptedReasoningTransform;
+        let transform = ReasoningStripEncryptedTransform;
         let cfg = transform.parse_config(json!({})).unwrap();
         let mut state = transform.init_state();
         let (_tmp, context) = ctx().await;
@@ -247,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn clears_encrypted_on_reasoning_delta_stream_event() {
-        let transform = StripEncryptedReasoningTransform;
+        let transform = ReasoningStripEncryptedTransform;
         let cfg = transform.parse_config(json!({})).unwrap();
         let mut state: Box<dyn TransformState> = Box::new(NoState);
         let (_tmp, context) = ctx().await;
@@ -287,7 +298,7 @@ mod tests {
 
     #[tokio::test]
     async fn clears_encrypted_content_on_reasoning_envelope_extra_node_start() {
-        let transform = StripEncryptedReasoningTransform;
+        let transform = ReasoningStripEncryptedTransform;
         let cfg = transform.parse_config(json!({})).unwrap();
         let mut state: Box<dyn TransformState> = Box::new(NoState);
         let (_tmp, context) = ctx().await;
@@ -322,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn strips_encrypted_in_response_done_output() {
-        let transform = StripEncryptedReasoningTransform;
+        let transform = ReasoningStripEncryptedTransform;
         let cfg = transform.parse_config(json!({})).unwrap();
         let mut state: Box<dyn TransformState> = Box::new(NoState);
         let (_tmp, context) = ctx().await;
@@ -364,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn ignores_request_phase_data() {
-        let transform = StripEncryptedReasoningTransform;
+        let transform = ReasoningStripEncryptedTransform;
         let cfg = transform.parse_config(json!({})).unwrap();
         let mut state: Box<dyn TransformState> = Box::new(NoState);
         let (_tmp, context) = ctx().await;
@@ -412,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn registry_includes_strip_encrypted_reasoning() {
         let registry = crate::transforms::registry();
-        assert!(registry.contains_key("strip_encrypted_reasoning"));
+        assert!(registry.contains_key("reasoning_strip_encrypted"));
         // Touch OrdinaryRole so the import is not dead-coded under cfg gates.
         let _ = OrdinaryRole::Assistant;
     }

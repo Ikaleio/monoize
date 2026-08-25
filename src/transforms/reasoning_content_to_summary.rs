@@ -31,12 +31,23 @@ impl TransformState for StreamState {
     }
 }
 
-pub struct PlaintextReasoningToSummaryTransform;
+pub struct ReasoningContentToSummaryTransform;
 
 #[async_trait]
-impl Transform for PlaintextReasoningToSummaryTransform {
+impl Transform for ReasoningContentToSummaryTransform {
     fn type_id(&self) -> &'static str {
-        "plaintext_reasoning_to_summary"
+        "reasoning_content_to_summary"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: content to summary"), ("zh", "推理：正文转摘要")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Moves plaintext reasoning content into the reasoning summary field on responses and streams."),
+            ("zh", "在响应与流中将明文推理正文移动到推理摘要字段。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -155,7 +166,7 @@ fn rewrite_reasoning_node(node: &mut Node) {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(PlaintextReasoningToSummaryTransform),
+    factory: || Box::new(ReasoningContentToSummaryTransform),
 });
 
 #[cfg(test)]
@@ -187,7 +198,7 @@ mod tests {
     async fn moves_plaintext_reasoning_to_summary_in_response() {
         let registry = registry();
         let rules = vec![crate::transforms::TransformRuleConfig {
-            transform: "plaintext_reasoning_to_summary".to_string(),
+            transform: "reasoning_content_to_summary".to_string(),
             enabled: true,
             models: None,
             phase: Phase::Response,
@@ -245,7 +256,7 @@ mod tests {
     async fn preserves_encrypted_reasoning_while_summarizing_plaintext_in_response() {
         let registry = registry();
         let rules = vec![crate::transforms::TransformRuleConfig {
-            transform: "plaintext_reasoning_to_summary".to_string(),
+            transform: "reasoning_content_to_summary".to_string(),
             enabled: true,
             models: None,
             phase: Phase::Response,
@@ -315,7 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn marks_stream_reasoning_delta_as_summary_when_not_encrypted() {
-        let transform = PlaintextReasoningToSummaryTransform;
+        let transform = ReasoningContentToSummaryTransform;
         let context = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
@@ -370,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn preserves_encrypted_reasoning_while_summarizing_stream_part_done() {
-        let transform = PlaintextReasoningToSummaryTransform;
+        let transform = ReasoningContentToSummaryTransform;
         let context = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();

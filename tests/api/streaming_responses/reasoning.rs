@@ -124,7 +124,7 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "strip_encrypted_reasoning".to_string(),
+                transform: "reasoning_strip_encrypted".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
@@ -341,7 +341,7 @@ async fn responses_streaming_applies_response_transform_from_provider() {
         circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
-            transform: "strip_reasoning".to_string(),
+            transform: "reasoning_strip_output".to_string(),
             enabled: true,
             models: None,
             phase: monoize::transforms::Phase::Response,
@@ -439,7 +439,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
         circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
-            transform: "split_sse_frames".to_string(),
+            transform: "stream_split_sse_frames".to_string(),
             enabled: true,
             models: None,
             phase: monoize::transforms::Phase::Response,
@@ -484,7 +484,7 @@ async fn responses_streaming_split_sse_frames_breaks_large_delta_frames() {
     let delta_events = text.matches("event: response.output_text.delta").count();
     assert!(
         delta_events >= 2,
-        "expected split_sse_frames to emit multiple delta events, body={text}"
+        "expected stream_split_sse_frames to emit multiple delta events, body={text}"
     );
     assert!(text.contains("event: response.completed"));
 

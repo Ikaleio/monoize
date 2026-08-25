@@ -35,12 +35,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct EnableOpenAiImageGenerationToolTransform;
+pub struct ImageEnableOpenAiGenerationToolTransform;
 
 #[async_trait]
-impl Transform for EnableOpenAiImageGenerationToolTransform {
+impl Transform for ImageEnableOpenAiGenerationToolTransform {
     fn type_id(&self) -> &'static str {
-        "enable_openai_image_generation_tool"
+        "image_enable_openai_generation_tool"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Image: enable OpenAI generation tool"), ("zh", "图像：启用 OpenAI 生成工具")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Ensures the OpenAI Responses image_generation tool descriptor exists on the request, optionally forcing streaming and tool choice."),
+            ("zh", "确保请求携带 OpenAI Responses image_generation 工具描述，可选强制流式与 tool_choice。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -172,7 +183,7 @@ impl Transform for EnableOpenAiImageGenerationToolTransform {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(EnableOpenAiImageGenerationToolTransform),
+    factory: || Box::new(ImageEnableOpenAiGenerationToolTransform),
 });
 
 #[cfg(test)]
@@ -201,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn appends_image_generation_tool_when_missing() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform
             .parse_config(json!({ "output_format": "png" }))
             .expect("config");
@@ -246,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn leaves_existing_image_generation_tool_unchanged() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
         let mut req = UrpRequest {
@@ -298,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn injects_arbitrary_extra_fields_into_image_generation_tool() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform
             .parse_config(json!({
                 "output_format": "png",
@@ -355,7 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn force_stream_sets_request_stream_true_without_duplicating_existing_tool() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform
             .parse_config(json!({
                 "force_stream": true,
@@ -407,7 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn force_tool_choice_selects_image_generation_tool() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform
             .parse_config(json!({
                 "force_tool_choice": true
@@ -455,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn force_stream_adds_partial_images_to_inserted_tool() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform
             .parse_config(json!({
                 "force_stream": true,
@@ -501,7 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn promotes_root_size_and_quality_into_image_generation_tool() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
         let mut req = UrpRequest {
@@ -546,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn extra_size_and_quality_override_promoted_root_fields() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform
             .parse_config(json!({
                 "extra": {
@@ -596,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_fields_override_conflicting_extra_entries() {
-        let transform = EnableOpenAiImageGenerationToolTransform;
+        let transform = ImageEnableOpenAiGenerationToolTransform;
         let config = transform
             .parse_config(json!({
                 "output_format": "jpeg",

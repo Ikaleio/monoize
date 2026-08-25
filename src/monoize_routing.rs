@@ -397,7 +397,8 @@ pub const DEFAULT_CHANNEL_PASSIVE_FAILURE_SAMPLE_MAX_ENTRIES: usize = 1024;
 pub const DEFAULT_DASHBOARD_GROUP_SCAN_BATCH_ROWS: usize = 400;
 pub const DEFAULT_PROVIDER_REORDER_MAX_IDS: usize = 199;
 const TRANSFORM_MIGRATION_BATCH_SIZE: usize = 199;
-const TRANSFORM_MIGRATION_MARKER: &str = "migration.provider_transform_rule_ids.v1";
+const TRANSFORM_MIGRATION_MARKER: &str = "migration.provider_transform_rule_ids.v2";
+const OBSOLETE_TRANSFORM_MIGRATION_MARKER: &str = "migration.provider_transform_rule_ids.v1";
 
 fn parse_positive_entry_limit(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())
@@ -1150,6 +1151,12 @@ impl MonoizeRoutingStore {
                 "complete".into(),
                 Utc::now().to_rfc3339().into(),
             ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.execute(self.db.stmt(
+            "DELETE FROM system_settings WHERE key = $1",
+            vec![OBSOLETE_TRANSFORM_MIGRATION_MARKER.into()],
         ))
         .await
         .map_err(|e| e.to_string())?;
@@ -2766,7 +2773,7 @@ mod tests {
             let raw: String = row.try_get("", "transforms").expect("transforms decode");
             let rules: Vec<TransformRuleConfig> =
                 serde_json::from_str(&raw).expect("transforms parse");
-            assert_eq!(rules[0].transform, "auto_cache_openai_prompt");
+            assert_eq!(rules[0].transform, "cache_openai_prompt");
         }
         let marker = db
             .read()

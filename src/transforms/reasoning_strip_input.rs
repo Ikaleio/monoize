@@ -1,22 +1,14 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData, strip_reasoning_nodes,
 };
-use crate::urp::{Node, OrdinaryRole};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
 
 #[derive(Debug, Deserialize)]
-struct Config {
-    #[serde(default = "default_content")]
-    content: String,
-}
-
-fn default_content() -> String {
-    " ".to_string()
-}
+struct Config {}
 
 impl TransformConfig for Config {
     fn as_any(&self) -> &dyn Any {
@@ -24,12 +16,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct AppendEmptyUserMessageTransform;
+pub struct ReasoningStripInputTransform;
 
 #[async_trait]
-impl Transform for AppendEmptyUserMessageTransform {
+impl Transform for ReasoningStripInputTransform {
     fn type_id(&self) -> &'static str {
-        "append_empty_user_message"
+        "reasoning_strip_input"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: strip from request input"), ("zh", "推理：移除请求输入中的推理")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Removes reasoning nodes from the request input before upstream encoding. Counterpart of reasoning_strip_output."),
+            ("zh", "在上游编码前移除请求输入中的推理节点。与 reasoning_strip_output 对应。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -43,9 +46,7 @@ impl Transform for AppendEmptyUserMessageTransform {
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": {
-                "content": { "type": "string", "description": "Text content for the padding user message. Defaults to a single space." }
-            },
+            "properties": {},
             "additionalProperties": false
         })
     }
@@ -65,32 +66,16 @@ impl Transform for AppendEmptyUserMessageTransform {
         data: UrpData<'_>,
         _phase: Phase,
         _context: &TransformRuntimeContext,
-        config: &dyn TransformConfig,
+        _config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
-        let cfg = config
-            .as_any()
-            .downcast_ref::<Config>()
-            .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         if let UrpData::Request(req) = data {
-            if req
-                .input
-                .last()
-                .is_some_and(|node| node.role() == Some(OrdinaryRole::Assistant))
-            {
-                req.input.push(Node::Text {
-                    id: None,
-                    role: OrdinaryRole::User,
-                    content: cfg.content.clone(),
-                    phase: None,
-                    extra_body: std::collections::HashMap::new(),
-                });
-            }
+            req.input = strip_reasoning_nodes(&req.input);
         }
         Ok(())
     }
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(AppendEmptyUserMessageTransform),
+    factory: || Box::new(ReasoningStripInputTransform),
 });

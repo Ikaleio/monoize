@@ -1,6 +1,6 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
-    TransformRuntimeContext, TransformScope, TransformState, UrpData, strip_reasoning_nodes,
+    TransformRuntimeContext, TransformState, UrpData,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 use std::any::Any;
 
 #[derive(Debug, Deserialize)]
-struct Config {}
+struct Config {
+    value: u64,
+}
 
 impl TransformConfig for Config {
     fn as_any(&self) -> &dyn Any {
@@ -16,26 +18,34 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct StripInputReasoningTransform;
+pub struct FieldOverrideMaxTokensTransform;
 
 #[async_trait]
-impl Transform for StripInputReasoningTransform {
+impl Transform for FieldOverrideMaxTokensTransform {
     fn type_id(&self) -> &'static str {
-        "strip_input_reasoning"
+        "field_override_max_tokens"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Field: override max tokens"), ("zh", "字段：覆盖最大输出 token")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Sets the request max output token limit to the configured value."),
+            ("zh", "将请求的最大输出 token 上限设置为配置值。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Request]
     }
 
-    fn supported_scopes(&self) -> &'static [TransformScope] {
-        &[TransformScope::Provider, TransformScope::ApiKey]
-    }
-
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": {},
+            "properties": { "value": { "type": "integer", "minimum": 1 } },
+            "required": ["value"],
             "additionalProperties": false
         })
     }
@@ -55,16 +65,20 @@ impl Transform for StripInputReasoningTransform {
         data: UrpData<'_>,
         _phase: Phase,
         _context: &TransformRuntimeContext,
-        _config: &dyn TransformConfig,
+        config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
+        let cfg = config
+            .as_any()
+            .downcast_ref::<Config>()
+            .ok_or_else(|| TransformError::Apply("invalid config type".to_string()))?;
         if let UrpData::Request(req) = data {
-            req.input = strip_reasoning_nodes(&req.input);
+            req.max_output_tokens = Some(cfg.value);
         }
         Ok(())
     }
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(StripInputReasoningTransform),
+    factory: || Box::new(FieldOverrideMaxTokensTransform),
 });

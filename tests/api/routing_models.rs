@@ -332,7 +332,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
         circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
-            transform: "set_field".to_string(),
+            transform: "field_set".to_string(),
             enabled: true,
             models: Some(vec!["normalized-transform-model".to_string()]),
             phase: monoize::transforms::Phase::Request,
@@ -443,7 +443,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
         circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
-            transform: "set_field".to_string(),
+            transform: "field_set".to_string(),
             enabled: true,
             models: Some(vec!["gpt-5.4-fast".to_string()]),
             phase: monoize::transforms::Phase::Request,
@@ -493,7 +493,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
     assert_eq!(
         upstream_body["service_tier"].as_str(),
         Some("fast"),
-        "conditional set_field should rewrite the matching service_tier before Responses encoding"
+        "conditional field_set should rewrite the matching service_tier before Responses encoding"
     );
 }
 

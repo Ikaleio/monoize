@@ -36,12 +36,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct ResolveImageUrlsTransform;
+pub struct ImageResolveUrlsTransform;
 
 #[async_trait]
-impl Transform for ResolveImageUrlsTransform {
+impl Transform for ImageResolveUrlsTransform {
     fn type_id(&self) -> &'static str {
-        "resolve_image_urls"
+        "image_resolve_urls"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Image: resolve URLs to base64"), ("zh", "图像：URL 解析为 base64")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Downloads request image URLs concurrently and replaces them with inline base64 sources; failed fetches leave nodes unchanged."),
+            ("zh", "并发下载请求中的图片 URL 并替换为内联 base64；下载失败的节点保持不变。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -151,7 +162,7 @@ impl Transform for ResolveImageUrlsTransform {
                     tracing::warn!(
                         node_idx,
                         error = %e,
-                        "resolve_image_urls: failed to fetch image, keeping original URL"
+                        "image_resolve_urls: failed to fetch image, keeping original URL"
                     );
                 }
             }

@@ -1251,7 +1251,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
@@ -1356,7 +1356,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,

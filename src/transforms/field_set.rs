@@ -26,7 +26,7 @@ fn extra_path_value<'a>(extra: &'a HashMap<String, Value>, path: &str) -> Option
     Some(current)
 }
 
-fn set_field(extra: &mut HashMap<String, Value>, path: &str, config: &Config) {
+fn field_set(extra: &mut HashMap<String, Value>, path: &str, config: &Config) {
     if config
         .when_equals
         .as_ref()
@@ -42,12 +42,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct SetFieldTransform;
+pub struct FieldSetTransform;
 
 #[async_trait]
-impl Transform for SetFieldTransform {
+impl Transform for FieldSetTransform {
     fn type_id(&self) -> &'static str {
-        "set_field"
+        "field_set"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Field: set"), ("zh", "字段：设置")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Writes a JSON value at the configured extra-body path, optionally only when the current value equals when_equals."),
+            ("zh", "在配置路径写入 JSON 值；配置 when_equals 时仅当当前值与其相等才写入。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -108,10 +119,10 @@ impl Transform for SetFieldTransform {
                             });
                     set_extra_path(&mut reasoning.extra_body, sub_path, cfg.value.clone());
                 } else {
-                    set_field(&mut req.extra_body, &cfg.path, cfg);
+                    field_set(&mut req.extra_body, &cfg.path, cfg);
                 }
             }
-            UrpData::Response(resp) => set_field(&mut resp.extra_body, &cfg.path, cfg),
+            UrpData::Response(resp) => field_set(&mut resp.extra_body, &cfg.path, cfg),
             UrpData::Stream(event) => match event {
                 crate::urp::UrpStreamEvent::ResponseStart { extra_body, .. }
                 | crate::urp::UrpStreamEvent::ResponseDone { extra_body, .. }
@@ -120,7 +131,7 @@ impl Transform for SetFieldTransform {
                 | crate::urp::UrpStreamEvent::NodeDone { extra_body, .. }
                 | crate::urp::UrpStreamEvent::ProviderControl { extra_body, .. }
                 | crate::urp::UrpStreamEvent::Error { extra_body, .. } => {
-                    set_field(extra_body, &cfg.path, cfg);
+                    field_set(extra_body, &cfg.path, cfg);
                 }
             },
         }
@@ -129,7 +140,7 @@ impl Transform for SetFieldTransform {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(SetFieldTransform),
+    factory: || Box::new(FieldSetTransform),
 });
 
 #[cfg(test)]
@@ -147,7 +158,7 @@ mod tests {
     #[test]
     fn conditional_set_field_replaces_only_exact_json_value() {
         let mut matching = HashMap::from([("service_tier".to_string(), json!("priority"))]);
-        set_field(
+        field_set(
             &mut matching,
             "service_tier",
             &config(Some(json!("priority"))),
@@ -156,12 +167,12 @@ mod tests {
 
         for preserved in [json!("default"), json!("fast"), json!(null), json!(1)] {
             let mut extra = HashMap::from([("service_tier".to_string(), preserved.clone())]);
-            set_field(&mut extra, "service_tier", &config(Some(json!("priority"))));
+            field_set(&mut extra, "service_tier", &config(Some(json!("priority"))));
             assert_eq!(extra["service_tier"], preserved);
         }
 
         let mut missing = HashMap::new();
-        set_field(
+        field_set(
             &mut missing,
             "service_tier",
             &config(Some(json!("priority"))),
@@ -172,7 +183,7 @@ mod tests {
     #[test]
     fn unconditional_set_field_preserves_existing_behavior() {
         let mut extra = HashMap::new();
-        set_field(&mut extra, "service_tier", &config(None));
+        field_set(&mut extra, "service_tier", &config(None));
         assert_eq!(extra["service_tier"], json!("fast"));
     }
 
@@ -181,15 +192,15 @@ mod tests {
         let cfg = config(Some(Value::Null));
 
         let mut matching = HashMap::from([("service_tier".to_string(), Value::Null)]);
-        set_field(&mut matching, "service_tier", &cfg);
+        field_set(&mut matching, "service_tier", &cfg);
         assert_eq!(matching["service_tier"], json!("fast"));
 
         let mut missing = HashMap::new();
-        set_field(&mut missing, "service_tier", &cfg);
+        field_set(&mut missing, "service_tier", &cfg);
         assert!(!missing.contains_key("service_tier"));
 
         let mut other = HashMap::from([("service_tier".to_string(), json!("priority"))]);
-        set_field(&mut other, "service_tier", &cfg);
+        field_set(&mut other, "service_tier", &cfg);
         assert_eq!(other["service_tier"], json!("priority"));
     }
 }

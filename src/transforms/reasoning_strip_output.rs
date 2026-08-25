@@ -18,7 +18,7 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct StripReasoningTransform;
+pub struct ReasoningStripOutputTransform;
 
 #[derive(Default)]
 struct StripState {
@@ -32,9 +32,20 @@ impl TransformState for StripState {
 }
 
 #[async_trait]
-impl Transform for StripReasoningTransform {
+impl Transform for ReasoningStripOutputTransform {
     fn type_id(&self) -> &'static str {
-        "strip_reasoning"
+        "reasoning_strip_output"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: strip from response output"), ("zh", "推理：移除响应输出中的推理")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Removes reasoning nodes from response output and stream events. Counterpart of reasoning_strip_input."),
+            ("zh", "移除响应输出与流事件中的推理节点。与 reasoning_strip_input 对应。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -137,5 +148,5 @@ fn strip_stream_reasoning(event: &mut UrpStreamEvent, state: &mut dyn TransformS
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(StripReasoningTransform),
+    factory: || Box::new(ReasoningStripOutputTransform),
 });

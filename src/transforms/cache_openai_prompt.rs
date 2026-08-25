@@ -52,12 +52,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct AutoCacheOpenAiPromptTransform;
+pub struct CacheOpenAiPromptTransform;
 
 #[async_trait]
-impl Transform for AutoCacheOpenAiPromptTransform {
+impl Transform for CacheOpenAiPromptTransform {
     fn type_id(&self) -> &'static str {
-        "auto_cache_openai_prompt"
+        "cache_openai_prompt"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Auto-cache: OpenAI prompt key"), ("zh", "自动缓存：OpenAI prompt 缓存键")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Derives a deterministic prompt_cache_key and retention for OpenAI Responses/Chat upstreams so repeated prompts hit the provider prompt cache."),
+            ("zh", "为 OpenAI Responses/Chat 上游生成确定性的 prompt_cache_key 与保留策略，使重复请求命中官方提示词缓存。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -249,7 +260,7 @@ fn to_value<T: serde::Serialize>(value: T) -> Result<Value, TransformError> {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(AutoCacheOpenAiPromptTransform),
+    factory: || Box::new(CacheOpenAiPromptTransform),
 });
 
 #[cfg(test)]
@@ -374,7 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn inserts_stable_openai_prompt_cache_fields_for_responses_provider() {
-        let transform = AutoCacheOpenAiPromptTransform;
+        let transform = CacheOpenAiPromptTransform;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
         let mut first = request_with_user_message("first question");
@@ -405,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn can_include_full_input_when_configured() {
-        let transform = AutoCacheOpenAiPromptTransform;
+        let transform = CacheOpenAiPromptTransform;
         let cfg = transform
             .parse_config(json!({ "include_full_input_in_key": true }))
             .expect("config");
@@ -434,7 +445,7 @@ mod tests {
 
     #[tokio::test]
     async fn does_not_run_for_non_openai_provider() {
-        let transform = AutoCacheOpenAiPromptTransform;
+        let transform = CacheOpenAiPromptTransform;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
         let mut req = request_with_user_message("question");
@@ -456,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn preserves_explicit_openai_cache_fields() {
-        let transform = AutoCacheOpenAiPromptTransform;
+        let transform = CacheOpenAiPromptTransform;
         let cfg = transform
             .parse_config(json!({ "retention": "in_memory" }))
             .expect("config");

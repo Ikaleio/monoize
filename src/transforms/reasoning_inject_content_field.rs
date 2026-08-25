@@ -26,12 +26,23 @@ impl TransformState for NoOpState {
     }
 }
 
-pub struct ReasoningContentDeltaTransform;
+pub struct ReasoningInjectContentFieldTransform;
 
 #[async_trait]
-impl Transform for ReasoningContentDeltaTransform {
+impl Transform for ReasoningInjectContentFieldTransform {
     fn type_id(&self) -> &'static str {
-        "reasoning_content_delta"
+        "reasoning_inject_content_field"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: inject reasoning_content field"), ("zh", "推理：注入 reasoning_content 字段")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Marks reasoning nodes and deltas so Chat Completions encoders emit OpenRouter/DeepSeek-compatible reasoning_content fields."),
+            ("zh", "标记推理节点与增量，使 Chat Completions 编码器输出 OpenRouter/DeepSeek 兼容的 reasoning_content 字段。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -156,7 +167,7 @@ fn mark_stream(event: &mut UrpStreamEvent) {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(ReasoningContentDeltaTransform),
+    factory: || Box::new(ReasoningInjectContentFieldTransform),
 });
 
 #[cfg(test)]
@@ -185,7 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn injects_plaintext_reasoning_content_when_present() {
-        let transform = ReasoningContentDeltaTransform;
+        let transform = ReasoningInjectContentFieldTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
@@ -225,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_to_summary_when_no_plaintext() {
-        let transform = ReasoningContentDeltaTransform;
+        let transform = ReasoningInjectContentFieldTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
@@ -265,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn does_not_inject_when_only_encrypted_reasoning_exists() {
-        let transform = ReasoningContentDeltaTransform;
+        let transform = ReasoningInjectContentFieldTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
@@ -302,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn marks_response_parts_with_plaintext_reasoning() {
-        let transform = ReasoningContentDeltaTransform;
+        let transform = ReasoningInjectContentFieldTransform;
         let ctx = context().await;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();

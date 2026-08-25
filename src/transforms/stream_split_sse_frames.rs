@@ -2,15 +2,22 @@ use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
 };
-use crate::urp::Node;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::any::Any;
-use std::collections::HashSet;
+
+pub const DEFAULT_MAX_FRAME_LENGTH: usize = 131_072;
 
 #[derive(Debug, Deserialize)]
-struct Config {}
+struct Config {
+    #[serde(default = "default_max_frame_length")]
+    max_frame_length: usize,
+}
+
+fn default_max_frame_length() -> usize {
+    DEFAULT_MAX_FRAME_LENGTH
+}
 
 impl TransformConfig for Config {
     fn as_any(&self) -> &dyn Any {
@@ -18,24 +25,27 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct StripOrphanedToolUseTransform;
+pub struct StreamSplitSseFramesTransform;
 
-/// Anthropic requires every `tool_use` block to have a corresponding
-/// `tool_result` immediately after. When conversations are truncated
-/// or the last assistant turn contains tool calls without follow-up
-/// results, the API rejects with 400. This transform collects all
-/// `tool_result` call_ids in the conversation, then removes any
-/// `Part::ToolCall` whose call_id has no matching result.
-/// If removing all ToolCall parts from an assistant message leaves it
-/// empty, the entire message is dropped.
 #[async_trait]
-impl Transform for StripOrphanedToolUseTransform {
+impl Transform for StreamSplitSseFramesTransform {
     fn type_id(&self) -> &'static str {
-        "strip_orphaned_tool_use"
+        "stream_split_sse_frames"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Stream: split oversized SSE frames"), ("zh", "流式：拆分超长 SSE 帧")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Splits oversized downstream SSE delta payloads into multiple protocol-valid events below the configured frame length."),
+            ("zh", "将超过配置长度的下游 SSE 增量载荷拆分为多个协议合法的事件。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
-        &[Phase::Request]
+        &[Phase::Response]
     }
 
     fn supported_scopes(&self) -> &'static [TransformScope] {
@@ -45,7 +55,12 @@ impl Transform for StripOrphanedToolUseTransform {
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": {},
+            "properties": {
+                "max_frame_length": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            },
             "additionalProperties": false
         })
     }
@@ -53,6 +68,11 @@ impl Transform for StripOrphanedToolUseTransform {
     fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
         let cfg: Config = serde_json::from_value(raw)
             .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        if cfg.max_frame_length == 0 {
+            return Err(TransformError::InvalidConfig(
+                "max_frame_length must be >= 1".to_string(),
+            ));
+        }
         Ok(Box::new(cfg))
     }
 
@@ -62,31 +82,16 @@ impl Transform for StripOrphanedToolUseTransform {
 
     async fn apply(
         &self,
-        data: UrpData<'_>,
+        _data: UrpData<'_>,
         _phase: Phase,
         _context: &TransformRuntimeContext,
         _config: &dyn TransformConfig,
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
-        if let UrpData::Request(req) = data {
-            let result_ids: HashSet<String> = req
-                .input
-                .iter()
-                .filter_map(|node| match node {
-                    Node::ToolResult { call_id, .. } => Some(call_id.clone()),
-                    _ => None,
-                })
-                .collect();
-
-            req.input.retain(|node| match node {
-                Node::ToolCall { call_id, .. } => result_ids.contains(call_id),
-                _ => true,
-            });
-        }
         Ok(())
     }
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(StripOrphanedToolUseTransform),
+    factory: || Box::new(StreamSplitSseFramesTransform),
 });

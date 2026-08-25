@@ -565,7 +565,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "enable_openai_image_generation_tool".to_string(),
+                transform: "image_enable_openai_generation_tool".to_string(),
                 enabled: true,
                 models: Some(vec!["gpt-image-test".to_string()]),
                 phase: monoize::transforms::Phase::Request,

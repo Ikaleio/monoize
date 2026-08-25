@@ -51,7 +51,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
@@ -318,14 +318,14 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             per_model_circuit_break: false,
             transforms: vec![
                 monoize::transforms::TransformRuleConfig {
-                    transform: "assistant_markdown_images_to_output".to_string(),
+                    transform: "image_markdown_to_output".to_string(),
                     enabled: true,
                     models: None,
                     phase: monoize::transforms::Phase::Response,
                     config: json!({}),
                 },
                 monoize::transforms::TransformRuleConfig {
-                    transform: "assistant_output_images_to_markdown".to_string(),
+                    transform: "image_output_to_markdown".to_string(),
                     enabled: true,
                     models: None,
                     phase: monoize::transforms::Phase::Response,

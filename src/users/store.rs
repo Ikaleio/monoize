@@ -85,32 +85,32 @@ fn canonicalize_ip_whitelist(entries: &[String]) -> Result<Vec<String>, String> 
 }
 
 const ALLOWED_API_KEY_REQUEST_TRANSFORMS: &[&str] = &[
-    "inject_system_prompt",
-    "system_to_developer_role",
-    "merge_consecutive_roles",
-    "append_empty_user_message",
-    "compress_user_message_images",
-    "enable_openai_image_generation_tool",
-    "strip_anthropic_billing_header",
-    "auto_cache_system",
-    "auto_cache_tool_use",
-    "auto_cache_openai_tool_use",
-    "auto_cache_user_id",
-    "auto_cache_openai_prompt",
+    "prompt_inject_system",
+    "role_system_to_developer",
+    "role_merge_consecutive",
+    "prompt_append_empty_user",
+    "image_compress_input",
+    "image_enable_openai_generation_tool",
+    "prompt_strip_anthropic_billing_header",
+    "cache_anthropic_system",
+    "cache_anthropic_tool_use",
+    "cache_openai_tool_use",
+    "cache_user_id",
+    "cache_openai_prompt",
 ];
 
 const ALLOWED_API_KEY_RESPONSE_TRANSFORMS: &[&str] = &[
-    "strip_reasoning",
-    "strip_encrypted_reasoning",
+    "reasoning_strip_output",
+    "reasoning_strip_encrypted",
     "reasoning_to_think_xml",
-    "think_xml_to_reasoning",
-    "split_sse_frames",
-    "plaintext_reasoning_to_summary",
-    "reasoning_content_delta",
+    "reasoning_from_think_xml",
+    "stream_split_sse_frames",
+    "reasoning_content_to_summary",
+    "reasoning_inject_content_field",
     "reasoning_summary_to_raw_cot",
-    "assistant_markdown_images_to_output",
-    "assistant_output_images_to_markdown",
-    "compress_assistant_output_images",
+    "image_markdown_to_output",
+    "image_output_to_markdown",
+    "image_compress_output",
 ];
 
 #[derive(Clone, Copy)]
@@ -339,7 +339,8 @@ impl UserStore {
     }
 
     async fn migrate_transform_rule_ids(&self) -> Result<(), String> {
-        const TRANSFORM_MIGRATION_MARKER: &str = "migration.api_key_transform_rule_ids.v1";
+        const TRANSFORM_MIGRATION_MARKER: &str = "migration.api_key_transform_rule_ids.v2";
+        const OBSOLETE_TRANSFORM_MIGRATION_MARKER: &str = "migration.api_key_transform_rule_ids.v1";
         const TRANSFORM_MIGRATION_CHUNK_SIZE: usize = 300;
         let marker = self
             .db
@@ -449,6 +450,12 @@ impl UserStore {
                 "complete".into(),
                 Utc::now().to_rfc3339().into(),
             ],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.execute(self.db.stmt(
+            "DELETE FROM system_settings WHERE key = $1",
+            vec![OBSOLETE_TRANSFORM_MIGRATION_MARKER.into()],
         ))
         .await
         .map_err(|e| e.to_string())?;
@@ -3238,10 +3245,23 @@ mod tests {
             .await
             .execute(db.stmt(
                 "DELETE FROM system_settings WHERE key = $1",
-                vec!["migration.api_key_transform_rule_ids.v1".into()],
+                vec!["migration.api_key_transform_rule_ids.v2".into()],
             ))
             .await
             .expect("migration marker clears");
+        // Seed the obsolete v1 marker to verify the v2 completion transaction removes it.
+        db.write()
+            .await
+            .execute(db.stmt(
+                "INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, $3)",
+                vec![
+                    "migration.api_key_transform_rule_ids.v1".into(),
+                    "complete".into(),
+                    Utc::now().to_rfc3339().into(),
+                ],
+            ))
+            .await
+            .expect("obsolete marker seeds");
 
         store
             .migrate_transform_rule_ids()
@@ -3257,8 +3277,21 @@ mod tests {
             let raw: String = row.try_get("", "transforms").expect("transforms decode");
             let transforms: Vec<TransformRuleConfig> =
                 serde_json::from_str(&raw).expect("transforms parse");
-            assert_eq!(transforms[0].transform, "strip_anthropic_billing_header");
+            assert_eq!(transforms[0].transform, "prompt_strip_anthropic_billing_header");
         }
+        let markers = db
+            .read()
+            .query_all(db.stmt(
+                "SELECT key, value FROM system_settings WHERE key LIKE 'migration.api_key_transform_rule_ids.%'",
+                vec![],
+            ))
+            .await
+            .expect("markers query");
+        assert_eq!(markers.len(), 1);
+        let marker_key: String = markers[0].try_get("", "key").expect("marker key");
+        let marker_value: String = markers[0].try_get("", "value").expect("marker value");
+        assert_eq!(marker_key, "migration.api_key_transform_rule_ids.v2");
+        assert_eq!(marker_value, "complete");
     }
 
     #[tokio::test]
@@ -4037,7 +4070,7 @@ mod tests {
     #[test]
     fn sanitize_api_key_transforms_drops_disallowed_rules() {
         let transforms = vec![TransformRuleConfig {
-            transform: "set_field".to_string(),
+            transform: "field_set".to_string(),
             enabled: true,
             models: Some(vec!["gpt-5.4-fast".to_string()]),
             phase: Phase::Request,
@@ -4054,7 +4087,7 @@ mod tests {
     #[test]
     fn validate_api_key_transforms_allows_image_compression() {
         let transforms = vec![TransformRuleConfig {
-            transform: "compress_user_message_images".to_string(),
+            transform: "image_compress_input".to_string(),
             enabled: true,
             models: None,
             phase: Phase::Request,
@@ -4071,7 +4104,7 @@ mod tests {
     #[test]
     fn validate_api_key_transforms_allows_openai_tool_cache_breakpoints() {
         let transforms = vec![TransformRuleConfig {
-            transform: "auto_cache_openai_tool_use".to_string(),
+            transform: "cache_openai_tool_use".to_string(),
             enabled: true,
             models: Some(vec!["gpt-5.6*".to_string()]),
             phase: Phase::Request,
@@ -4094,35 +4127,35 @@ mod tests {
         let sanitized = sanitize_api_key_transforms(transforms, false);
 
         assert_eq!(sanitized.len(), 1);
-        assert_eq!(sanitized[0].transform, "strip_anthropic_billing_header");
+        assert_eq!(sanitized[0].transform, "prompt_strip_anthropic_billing_header");
     }
 
     #[test]
     fn validate_api_key_transforms_allows_new_response_transforms() {
         let transforms = vec![
             TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,
                 config: json!({}),
             },
             TransformRuleConfig {
-                transform: "strip_encrypted_reasoning".to_string(),
+                transform: "reasoning_strip_encrypted".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,
                 config: json!({}),
             },
             TransformRuleConfig {
-                transform: "assistant_markdown_images_to_output".to_string(),
+                transform: "image_markdown_to_output".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,
                 config: json!({}),
             },
             TransformRuleConfig {
-                transform: "reasoning_content_delta".to_string(),
+                transform: "reasoning_inject_content_field".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,
@@ -4136,14 +4169,14 @@ mod tests {
                 config: json!({}),
             },
             TransformRuleConfig {
-                transform: "assistant_output_images_to_markdown".to_string(),
+                transform: "image_output_to_markdown".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,
                 config: json!({}),
             },
             TransformRuleConfig {
-                transform: "compress_assistant_output_images".to_string(),
+                transform: "image_compress_output".to_string(),
                 enabled: true,
                 models: None,
                 phase: Phase::Response,
@@ -4161,7 +4194,7 @@ mod tests {
     #[test]
     fn sanitize_api_key_transforms_preserves_disallowed_rules_for_admin() {
         let transforms = vec![TransformRuleConfig {
-            transform: "set_field".to_string(),
+            transform: "field_set".to_string(),
             enabled: true,
             models: Some(vec!["gpt-5.4-fast".to_string()]),
             phase: Phase::Request,

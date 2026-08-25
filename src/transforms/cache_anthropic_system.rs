@@ -17,15 +17,26 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct AutoCacheSystemTransform;
+pub struct CacheAnthropicSystemTransform;
 
 /// If the system prompt has no cache_control on any of its parts,
 /// add cache_control: {type: "ephemeral"} to its last part.
 /// Respects the max-4 cache breakpoint limit.
 #[async_trait]
-impl Transform for AutoCacheSystemTransform {
+impl Transform for CacheAnthropicSystemTransform {
     fn type_id(&self) -> &'static str {
-        "auto_cache_system"
+        "cache_anthropic_system"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Auto-cache: Anthropic system prompt"), ("zh", "自动缓存：Anthropic 系统提示词")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Inserts an Anthropic ephemeral cache_control breakpoint on the last system or developer node so the stable system prefix can be cached."),
+            ("zh", "在最后一个 system/developer 节点插入 Anthropic ephemeral cache_control 缓存断点，使稳定的系统前缀可以被缓存。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -118,5 +129,5 @@ fn node_has_cache_control(node: &Node) -> bool {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(AutoCacheSystemTransform),
+    factory: || Box::new(CacheAnthropicSystemTransform),
 });

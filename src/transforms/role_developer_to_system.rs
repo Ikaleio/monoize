@@ -1,8 +1,8 @@
 use crate::transforms::{
     NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
     TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    move_developer_to_system_nodes,
 };
-use crate::urp::Node;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -17,12 +17,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct MergeConsecutiveRolesTransform;
+pub struct RoleDeveloperToSystemTransform;
 
 #[async_trait]
-impl Transform for MergeConsecutiveRolesTransform {
+impl Transform for RoleDeveloperToSystemTransform {
     fn type_id(&self) -> &'static str {
-        "merge_consecutive_roles"
+        "role_developer_to_system"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Role: developer to system"), ("zh", "角色：developer 转 system")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Rewrites developer-role ordinary nodes to the system role. Inverse of role_system_to_developer."),
+            ("zh", "将 developer 角色的普通节点改写为 system 角色。与 role_system_to_developer 互逆。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -60,45 +71,12 @@ impl Transform for MergeConsecutiveRolesTransform {
         _state: &mut dyn TransformState,
     ) -> Result<(), TransformError> {
         if let UrpData::Request(req) = data {
-            req.input = merge_same_role_nodes(&req.input);
+            move_developer_to_system_nodes(&mut req.input);
         }
         Ok(())
     }
 }
 
-fn merge_same_role_nodes(nodes: &[Node]) -> Vec<Node> {
-    let mut merged: Vec<Node> = Vec::new();
-    for node in nodes {
-        if let (
-            Some(Node::Text {
-                role: last_role,
-                content: last_content,
-                phase: last_phase,
-                extra_body: last_extra,
-                ..
-            }),
-            Node::Text {
-                role,
-                content,
-                phase,
-                extra_body,
-                ..
-            },
-        ) = (merged.last_mut(), node)
-            && last_role == role
-            && last_phase == phase
-        {
-            last_content.push_str(content);
-            for (k, v) in extra_body {
-                last_extra.entry(k.clone()).or_insert_with(|| v.clone());
-            }
-            continue;
-        }
-        merged.push(node.clone());
-    }
-    merged
-}
-
 inventory::submit!(TransformEntry {
-    factory: || Box::new(MergeConsecutiveRolesTransform),
+    factory: || Box::new(RoleDeveloperToSystemTransform),
 });

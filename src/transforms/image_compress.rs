@@ -94,7 +94,7 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct CompressUserMessageImagesTransform;
+pub struct ImageCompressInputTransform;
 
 #[derive(Default)]
 struct AssistantStreamState {
@@ -107,12 +107,23 @@ impl TransformState for AssistantStreamState {
     }
 }
 
-pub struct CompressAssistantOutputImagesTransform;
+pub struct ImageCompressOutputTransform;
 
 #[async_trait]
-impl Transform for CompressUserMessageImagesTransform {
+impl Transform for ImageCompressInputTransform {
     fn type_id(&self) -> &'static str {
-        "compress_user_message_images"
+        "image_compress_input"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Image: compress request images"), ("zh", "图像：压缩请求图片")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Re-encodes and optionally resizes base64 user-message images in the request to reduce upstream payload size."),
+            ("zh", "对请求中 user 消息的 base64 图片重新编码并可选缩放，以减小上游请求体积。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -235,9 +246,20 @@ impl Transform for CompressUserMessageImagesTransform {
 }
 
 #[async_trait]
-impl Transform for CompressAssistantOutputImagesTransform {
+impl Transform for ImageCompressOutputTransform {
     fn type_id(&self) -> &'static str {
-        "compress_assistant_output_images"
+        "image_compress_output"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Image: compress response images"), ("zh", "图像：压缩响应图片")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Re-encodes and optionally resizes assistant output images in the response or stream."),
+            ("zh", "对响应或流中 assistant 输出的图片重新编码并可选缩放。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -1059,11 +1081,11 @@ fn resize_if_needed(image: DynamicImage, max_edge_px: Option<u32>) -> DynamicIma
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(CompressUserMessageImagesTransform),
+    factory: || Box::new(ImageCompressInputTransform),
 });
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(CompressAssistantOutputImagesTransform),
+    factory: || Box::new(ImageCompressOutputTransform),
 });
 
 #[cfg(test)]
@@ -1359,7 +1381,7 @@ mod tests {
             extra_body: HashMap::new(),
         };
         let rules = vec![crate::transforms::TransformRuleConfig {
-            transform: "compress_user_message_images".to_string(),
+            transform: "image_compress_input".to_string(),
             enabled: true,
             models: None,
             phase: Phase::Request,
@@ -1457,7 +1479,7 @@ mod tests {
             extra_body: HashMap::new(),
         };
         let rules = vec![crate::transforms::TransformRuleConfig {
-            transform: "compress_user_message_images".to_string(),
+            transform: "image_compress_input".to_string(),
             enabled: true,
             models: None,
             phase: Phase::Request,
@@ -1545,7 +1567,7 @@ mod tests {
             extra_body: HashMap::new(),
         };
         let rules = vec![crate::transforms::TransformRuleConfig {
-            transform: "compress_assistant_output_images".to_string(),
+            transform: "image_compress_output".to_string(),
             enabled: true,
             models: None,
             phase: Phase::Response,
@@ -1603,7 +1625,7 @@ mod tests {
             upstream_provider_type: None,
         };
         let rules = vec![crate::transforms::TransformRuleConfig {
-            transform: "compress_assistant_output_images".to_string(),
+            transform: "image_compress_output".to_string(),
             enabled: true,
             models: None,
             phase: Phase::Response,

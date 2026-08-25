@@ -621,7 +621,7 @@ async fn messages_streaming_plaintext_reasoning_to_summary_preserves_thinking_de
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
@@ -1300,7 +1300,7 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
@@ -1344,7 +1344,7 @@ async fn messages_stream_passthrough_transform_preserves_plaintext_reasoning_chu
     assert_eq!(
         thinking_deltas,
         vec!["think-a", "think-b"],
-        "plaintext_reasoning_to_summary must not merge transformed Messages thinking chunks: {text}"
+        "reasoning_content_to_summary must not merge transformed Messages thinking chunks: {text}"
     );
     assert!(
         payloads

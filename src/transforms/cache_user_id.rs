@@ -17,15 +17,26 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct AutoCacheUserIdTransform;
+pub struct CacheUserIdTransform;
 
 /// When cache fields exist in the request but no user_id is set,
 /// auto-fill metadata.user_id (Anthropic) and req.user (OpenAI)
 /// with the Monoize username injected via __monoize_username.
 #[async_trait]
-impl Transform for AutoCacheUserIdTransform {
+impl Transform for CacheUserIdTransform {
     fn type_id(&self) -> &'static str {
-        "auto_cache_user_id"
+        "cache_user_id"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Auto-cache: user identity"), ("zh", "自动缓存：用户标识")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Injects the Monoize username into Anthropic metadata.user_id and the OpenAI user field to improve provider cache affinity; never overwrites existing values."),
+            ("zh", "将 Monoize 用户名注入 Anthropic metadata.user_id 与 OpenAI user 字段以提升缓存亲和性；不会覆盖已有值。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -116,5 +127,5 @@ fn has_any_cache_control(req: &crate::urp::UrpRequest) -> bool {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(AutoCacheUserIdTransform),
+    factory: || Box::new(CacheUserIdTransform),
 });

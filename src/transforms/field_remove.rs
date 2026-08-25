@@ -18,12 +18,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct RemoveFieldTransform;
+pub struct FieldRemoveTransform;
 
 #[async_trait]
-impl Transform for RemoveFieldTransform {
+impl Transform for FieldRemoveTransform {
     fn type_id(&self) -> &'static str {
-        "remove_field"
+        "field_remove"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Field: remove"), ("zh", "字段：删除")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Removes the JSON value at the configured extra-body path from the request or response."),
+            ("zh", "从请求或响应的 extra_body 中删除配置路径上的 JSON 值。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -81,5 +92,5 @@ impl Transform for RemoveFieldTransform {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(RemoveFieldTransform),
+    factory: || Box::new(FieldRemoveTransform),
 });

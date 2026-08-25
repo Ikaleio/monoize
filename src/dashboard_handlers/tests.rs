@@ -1390,7 +1390,7 @@ async fn settings_store_round_trips_global_transforms_and_model_redirects() {
     assert_eq!(updated.global_transforms.len(), 1);
     assert_eq!(
         updated.global_transforms[0].transform,
-        "strip_anthropic_billing_header"
+        "prompt_strip_anthropic_billing_header"
     );
     assert_eq!(updated.global_transforms[0].phase, Phase::Request);
     assert_eq!(

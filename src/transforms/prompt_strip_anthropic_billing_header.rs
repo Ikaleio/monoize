@@ -20,12 +20,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct StripAnthropicBillingHeaderTransform;
+pub struct PromptStripAnthropicBillingHeaderTransform;
 
 #[async_trait]
-impl Transform for StripAnthropicBillingHeaderTransform {
+impl Transform for PromptStripAnthropicBillingHeaderTransform {
     fn type_id(&self) -> &'static str {
-        "strip_anthropic_billing_header"
+        "prompt_strip_anthropic_billing_header"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Prompt: strip Anthropic billing header"), ("zh", "提示词：移除 Anthropic 计费标记")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Removes x-anthropic-billing-header lines from system and developer text nodes, dropping nodes that become empty."),
+            ("zh", "从 system/developer 文本节点中移除 x-anthropic-billing-header 行，并删除因此变空的节点。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -103,7 +114,7 @@ fn strip_header_lines(content: &mut String) {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(StripAnthropicBillingHeaderTransform),
+    factory: || Box::new(PromptStripAnthropicBillingHeaderTransform),
 });
 
 #[cfg(test)]
@@ -132,7 +143,7 @@ mod tests {
 
     #[tokio::test]
     async fn strips_billing_header_from_system_text_nodes() {
-        let transform = StripAnthropicBillingHeaderTransform;
+        let transform = PromptStripAnthropicBillingHeaderTransform;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
         let mut req = UrpRequest {
@@ -185,7 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn removes_empty_system_node_after_stripping() {
-        let transform = StripAnthropicBillingHeaderTransform;
+        let transform = PromptStripAnthropicBillingHeaderTransform;
         let cfg = transform.parse_config(json!({})).expect("config");
         let mut state = transform.init_state();
         let mut req = UrpRequest {

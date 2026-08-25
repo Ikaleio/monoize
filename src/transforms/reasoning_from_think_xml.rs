@@ -31,12 +31,23 @@ impl TransformState for StreamState {
     }
 }
 
-pub struct ThinkXmlToReasoningTransform;
+pub struct ReasoningFromThinkXmlTransform;
 
 #[async_trait]
-impl Transform for ThinkXmlToReasoningTransform {
+impl Transform for ReasoningFromThinkXmlTransform {
     fn type_id(&self) -> &'static str {
-        "think_xml_to_reasoning"
+        "reasoning_from_think_xml"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: from think XML"), ("zh", "推理：解析 think XML")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Parses the configured think-tag XML out of assistant text and restores it as reasoning nodes. Inverse of reasoning_to_think_xml."),
+            ("zh", "从 assistant 文本中解析配置的 think 标签并还原为推理节点。与 reasoning_to_think_xml 互逆。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -229,5 +240,5 @@ fn apply_stream(event: &mut UrpStreamEvent, state: &mut StreamState, tag: &str) 
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(ThinkXmlToReasoningTransform),
+    factory: || Box::new(ReasoningFromThinkXmlTransform),
 });

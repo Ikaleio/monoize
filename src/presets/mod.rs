@@ -17,7 +17,7 @@ pub fn provider_presets() -> Value {
                 },
                 "transforms": [
                     {
-                        "transform": "system_to_developer_role",
+                        "transform": "role_system_to_developer",
                         "enabled": true,
                         "models": ["o1*", "o3*", "o4*"],
                         "phase": "request",

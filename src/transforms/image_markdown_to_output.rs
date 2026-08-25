@@ -18,7 +18,7 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct AssistantMarkdownImagesToOutputTransform;
+pub struct ImageMarkdownToOutputTransform;
 
 struct StreamTextNodeState {
     header_id: Option<String>,
@@ -57,9 +57,20 @@ impl TransformState for StreamState {
 }
 
 #[async_trait]
-impl Transform for AssistantMarkdownImagesToOutputTransform {
+impl Transform for ImageMarkdownToOutputTransform {
     fn type_id(&self) -> &'static str {
-        "assistant_markdown_images_to_output"
+        "image_markdown_to_output"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Image: Markdown to image nodes"), ("zh", "图像：Markdown 转图像节点")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Extracts Markdown image blocks from assistant text and converts them into ordinary assistant image nodes. Inverse of image_output_to_markdown."),
+            ("zh", "从 assistant 文本中提取 Markdown 图片语法并转换为标准的 assistant 图像节点。与 image_output_to_markdown 互逆。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -525,7 +536,7 @@ fn parse_markdown_image_source(url: &str) -> Option<ImageSource> {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(AssistantMarkdownImagesToOutputTransform),
+    factory: || Box::new(ImageMarkdownToOutputTransform),
 });
 
 #[cfg(test)]

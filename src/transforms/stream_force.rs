@@ -18,12 +18,23 @@ impl TransformConfig for Config {
     }
 }
 
-pub struct ForceStreamTransform;
+pub struct StreamForceTransform;
 
 #[async_trait]
-impl Transform for ForceStreamTransform {
+impl Transform for StreamForceTransform {
     fn type_id(&self) -> &'static str {
-        "force_stream"
+        "stream_force"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Stream: force streaming mode"), ("zh", "流式：强制流式模式")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Forces the upstream request stream flag to the configured enabled value."),
+            ("zh", "将上游请求的 stream 标志强制设置为配置的 enabled 值。"),
+        ]
     }
 
     fn supported_phases(&self) -> &'static [Phase] {
@@ -69,7 +80,7 @@ impl Transform for ForceStreamTransform {
 }
 
 inventory::submit!(TransformEntry {
-    factory: || Box::new(ForceStreamTransform),
+    factory: || Box::new(StreamForceTransform),
 });
 
 #[cfg(test)]
@@ -124,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn enabled_sets_request_stream_true_for_image_upstream_collection() {
-        let transform = ForceStreamTransform;
+        let transform = StreamForceTransform;
         let config = transform
             .parse_config(json!({ "enabled": true }))
             .expect("config");
@@ -147,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_sets_request_stream_false() {
-        let transform = ForceStreamTransform;
+        let transform = StreamForceTransform;
         let config = transform
             .parse_config(json!({ "enabled": false }))
             .expect("config");
