@@ -88,3 +88,5 @@ CAP-S1. The response Content Security Policy MUST allow `connect-src` only from 
 CAP-S2. The policy MUST allow Cap solver workers from same-origin URLs and `blob:` URLs.
 
 CAP-S3. Each HTTP response MUST receive a fresh script nonce. Embedded SPA entry responses MUST expose that nonce through a non-script metadata element. The dashboard client MUST set `CAP_SCRIPT_NONCE` to that value before loading the Cap widget. The policy MUST NOT add `'unsafe-inline'` to `script-src`.
+
+CAP-S4. The policy MUST include `'wasm-unsafe-eval'` in `script-src` so the Cap solver can compile its bundled WASM module. The policy MUST NOT include `'unsafe-eval'`.

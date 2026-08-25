@@ -334,7 +334,15 @@ async function publishArchive(
     if (remoteIntegrity !== localIntegrity) {
       throw new Error(`npm already contains monoize@${version} with different bytes`);
     }
-    await runNpm(["dist-tag", "add", `monoize@${version}`, distTag]);
+    const remoteTag = await npmOutput(["view", `monoize@${distTag}`, "version", "--json"]);
+    const taggedVersion = remoteTag.exitCode === 0 && remoteTag.stdout
+      ? JSON.parse(remoteTag.stdout) as unknown
+      : undefined;
+    if (taggedVersion !== version) {
+      throw new Error(
+        `npm already contains monoize@${version}, but dist-tag ${distTag} does not resolve to it`,
+      );
+    }
     return;
   }
 

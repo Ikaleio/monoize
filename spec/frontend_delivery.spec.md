@@ -40,7 +40,7 @@ FD-C2. The entry document MUST NOT contain inline `<script>` blocks or inline ev
 
 FD-C3. The backend MUST replace the entry document's CSP nonce placeholder with the request's fresh nonce before returning `index.html`. Hashed static assets MUST be returned without content substitution.
 
-FD-C4. The backend MUST set `script-src 'self' 'nonce-<request-nonce>'`. The nonce MUST differ between independent requests. The frontend MAY read the nonce from a metadata element and pass it to a library that creates inline scripts, but the frontend MUST NOT create its own executable inline script in `index.html`.
+FD-C4. The backend MUST set `script-src 'self' 'wasm-unsafe-eval' 'nonce-<request-nonce>'`. The nonce MUST differ between independent requests. The frontend MAY read the nonce from a metadata element and pass it to a library that creates inline scripts, but the frontend MUST NOT create its own executable inline script in `index.html`. The policy MUST NOT include `'unsafe-eval'`.
 
 ## 6. HTTP Caching
 

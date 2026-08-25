@@ -12,7 +12,7 @@ export interface NativeTarget {
 
 export const NATIVE_TARGETS: readonly NativeTarget[] = [
   {
-    rustTarget: "x86_64-unknown-linux-gnu",
+    rustTarget: "x86_64-unknown-linux-musl",
     packageAlias: "monoize-linux-x64",
     versionSuffix: "linux-x64",
     platform: "linux",
@@ -20,7 +20,7 @@ export const NATIVE_TARGETS: readonly NativeTarget[] = [
     executable: "monoize",
   },
   {
-    rustTarget: "aarch64-unknown-linux-gnu",
+    rustTarget: "aarch64-unknown-linux-musl",
     packageAlias: "monoize-linux-arm64",
     versionSuffix: "linux-arm64",
     platform: "linux",

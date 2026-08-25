@@ -24,111 +24,111 @@ export const homeContent: Record<Locale, HomeContent> = {
     readDocs: 'Read the docs',
     features: [
       {
-        title: 'Near-lossless protocol conversion',
+        title: 'Protocol conversion',
         description:
-          'Monoize decodes each protocol into one typed canonical form and encodes it for the upstream. Text, reasoning, tool calls, images, and usage keep their roles.',
+          'Monoize decodes each protocol into a typed canonical form and encodes it for the upstream. Text, reasoning, tool calls, images, and usage keep their roles.',
       },
       {
-        title: 'Request capture and inspection',
+        title: 'Request capture',
         description:
-          'Enable capture per request source. Inspect the exact downstream and upstream payloads of each attempt in a structured viewer.',
+          'Enable capture per request source. Inspect exact downstream and upstream payloads in a structured viewer.',
       },
       {
-        title: 'Configurable transforms',
+        title: 'Transforms',
         description:
-          '33 built-in transforms adjust requests and responses. Attach them to a Provider, an API key, or the global chain. Model globs select where each rule applies.',
+          '33 built-in transforms adjust requests and responses per Provider, per API key, or globally. Model globs select where each rule applies.',
       },
       {
-        title: 'Retry, fallback, circuit breaker',
+        title: 'Routing and reliability',
         description:
-          'Monoize retries failed channels and falls forward to the next route. Fallback stops after the first response byte, so streams never mix two generations.',
+          'Monoize retries failed channels and moves forward to the next route. Fallback stops after the first response byte.',
       },
     ],
   },
   zh: {
     tagline: 'AI API 看起来相似，但协议并不相同。',
     description:
-      'Monoize 是一个用 Rust 编写的 AI API 网关，支持 OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、Embeddings 和图像 API。它转换协议语义，将一个逻辑模型路由到多个上游渠道，并自动处理上游故障。',
+      'Monoize 是用 Rust 编写的 AI API 网关，支持 OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、Embeddings 与图像 API。它转换协议语义，将一个逻辑模型路由到多个上游 Channel，并在首字节前完成故障重试与回退。',
     getStarted: '快速开始',
     readDocs: '阅读文档',
     features: [
       {
-        title: '近乎无损的协议转换',
+        title: '协议语义转换',
         description:
-          'Monoize 将每种协议解码为统一的类型化内部表示，再编码为上游协议。文本、推理、工具调用、图像和用量各自保持原有语义。',
+          '将输入协议解码为统一的类型化内部表示，再编码为目标上游协议。文本、推理、工具调用、图像与用量保持原有角色。',
       },
       {
-        title: '请求捕获与检查',
+        title: '请求捕获',
         description:
-          '按请求来源开启捕获。在结构化查看器中检查每次尝试的下游与上游原始报文。',
+          '按请求来源开启捕获。在结构化查看器中检查每次尝试的下游与上游报文。',
       },
       {
-        title: '可配置的转换器',
+        title: 'Transform 变换',
         description:
-          '33 个内置转换器可修改请求和响应。可挂载到 Provider、API 密钥或全局链上，用模型通配符选择生效范围。',
+          '33 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。模型 glob 决定规则适用范围。',
       },
       {
-        title: '重试、回退与熔断',
+        title: '路由与可靠性',
         description:
-          'Monoize 重试失败渠道并前进到下一条路由。发出第一个响应字节后停止回退，流式输出不会混入两次生成。',
+          'Monoize 重试失败的 Channel 并前进到下一条路由。发出第一个响应字节后停止回落。',
       },
     ],
   },
   'zh-TW': {
     tagline: 'AI API 看起來相似，但協議並不相同。',
     description:
-      'Monoize 是一個以 Rust 撰寫的 AI API 閘道，支援 OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、Embeddings 與圖像 API。它轉換協議語意，將一個邏輯模型路由到多個上游渠道，並自動處理上游故障。',
+      'Monoize 是一個以 Rust 撰寫的 AI API 閘道，支援 OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、Embeddings 與圖像 API。它轉換協議語意，將一個邏輯模型路由到多個上游 Channel，並在首位元組前完成故障重試與備援。',
     getStarted: '快速開始',
     readDocs: '閱讀文件',
     features: [
       {
-        title: '近乎無損的協議轉換',
+        title: '協議語意轉換',
         description:
-          'Monoize 將每種協議解碼為統一的型別化內部表示，再編碼為上游協議。文字、推理、工具呼叫、圖像與用量各自保持原有語意。',
+          '將輸入協議解碼為統一的型別化內部表示，再編碼為目標上游協議。文字、推理、工具呼叫、圖像與用量保持原有角色。',
       },
       {
-        title: '請求擷取與檢查',
+        title: '請求擷取',
         description:
-          '依請求來源開啟擷取。在結構化檢視器中檢查每次嘗試的下游與上游原始封包。',
+          '依請求來源開啟擷取。在結構化檢視器中檢查每次嘗試的下游與上游封包。',
       },
       {
-        title: '可設定的轉換器',
+        title: 'Transform 變換',
         description:
-          '33 個內建轉換器可修改請求和回應。可掛載到 Provider、API 金鑰或全域鏈上，用模型萬用字元選擇生效範圍。',
+          '33 個內建 Transform 可依 Provider、API 金鑰或全域範圍修改請求和回應。模型 glob 決定規則適用範圍。',
       },
       {
-        title: '重試、備援與斷路器',
+        title: '路由與可靠性',
         description:
-          'Monoize 重試失敗渠道並前進到下一條路由。送出第一個回應位元組後停止備援，串流輸出不會混入兩次生成。',
+          'Monoize 重試失敗的 Channel 並前進到下一條路由。送出第一個回應位元組後停止備援。',
       },
     ],
   },
   ja: {
     tagline: 'AI API は似ていても、その契約は異なります。',
     description:
-      'Monoize は Rust 製の AI API ゲートウェイです。OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、埋め込み、画像 API に対応します。プロトコルの意味論を変換し、1 つの論理モデルを複数の上流チャネルにルーティングし、上流障害から自動的に回復します。',
+      'Monoize は Rust 製の AI API ゲートウェイです。OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、埋め込み、画像 API に対応します。プロトコルの意味論を変換し、1 つの論理モデルを複数の上流 Channel にルーティングし、上流障害から回復します。',
     getStarted: 'はじめる',
     readDocs: 'ドキュメントを読む',
     features: [
       {
-        title: 'ほぼ無損失のプロトコル変換',
+        title: 'プロトコル変換',
         description:
-          'Monoize は各プロトコルを型付きの正規表現形式にデコードし、上流プロトコルへエンコードします。テキスト、推論、ツール呼び出し、画像、使用量はそれぞれの役割を保持します。',
+          'Monoize は各プロトコルを型付きの内部表現にデコードし、上流プロトコルへエンコードします。テキスト、推論、ツール呼び出し、画像、使用量はそれぞれの役割を保持します。',
       },
       {
-        title: 'リクエストのキャプチャと検査',
+        title: 'リクエストキャプチャ',
         description:
-          'リクエスト元ごとにキャプチャを有効化できます。各試行の下流・上流ペイロードを構造化ビューアで確認できます。',
+          'リクエスト元ごとにキャプチャを有効化できます。構造化ビューアで各試行の下流・上流ペイロードを確認できます。',
       },
       {
-        title: '設定可能な変換ルール',
+        title: 'Transform 変換',
         description:
-          '33 個の組み込み変換がリクエストとレスポンスを調整します。Provider、API キー、グローバルチェーンに設定し、モデルグロブで適用範囲を選択します。',
+          '33 個の組み込み Transform が Provider、API キー、グローバルにリクエストとレスポンスを調整します。モデル glob で適用範囲を選択します。',
       },
       {
-        title: 'リトライ・フォールバック・サーキットブレーカー',
+        title: 'ルーティングと信頼性',
         description:
-          'Monoize は失敗したチャネルを再試行し、次のルートへ進みます。最初のレスポンスバイト送出後はフォールバックを停止し、ストリームに 2 つの生成が混ざりません。',
+          'Monoize は失敗した Channel を再試行し、次のルートへ進みます。最初のレスポンスバイト送出後はフォールバックを停止します。',
       },
     ],
   },

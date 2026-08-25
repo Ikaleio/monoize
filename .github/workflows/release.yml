@@ -82,11 +82,13 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             python: python3
+            builder_image: ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:ce75e9174325d4fbb3de85c309e2d7ca29f7500169bc4b5d2c611ff7e86d549a
           - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             python: python3
+            builder_image: ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:ecae5dd62d1c938c14f8071d36c16fa699860aace03bfb5284fb1216474d2643
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             python: python3
@@ -111,6 +113,7 @@ jobs:
           persist-credentials: false
 
       - name: Install stable Rust
+        if: runner.os != 'Linux'
         shell: bash
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
@@ -142,9 +145,47 @@ jobs:
         working-directory: frontend
         run: bun install --frozen-lockfile
 
-      - name: Build release binary
+      - name: Build non-Linux release binary
+        if: runner.os != 'Linux'
         shell: bash
         run: cargo build --locked --release --target "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Build static musl release binary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.cargo/registry" "$HOME/.cargo/git"
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/home/rust/src" \
+            --volume "$HOME/.cargo/registry:/root/.cargo/registry" \
+            --volume "$HOME/.cargo/git:/root/.cargo/git" \
+            --volume "$(command -v bun):/usr/local/bin/bun:ro" \
+            --workdir /home/rust/src \
+            --env RUSTFLAGS \
+            "$BUILDER_IMAGE" \
+            cargo build --locked --release --target "$TARGET"
+        env:
+          BUILDER_IMAGE: ${{ matrix.builder_image }}
+          RUSTFLAGS: -C link-arg=-static-libstdc++
+          TARGET: ${{ matrix.target }}
+
+      - name: Verify static musl linkage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          binary="target/$TARGET/release/monoize"
+          file "$binary"
+          if readelf --program-headers "$binary" | grep -q 'INTERP'; then
+            echo "$binary contains an ELF interpreter" >&2
+            exit 1
+          fi
+          if readelf --dynamic "$binary" | grep -q '(NEEDED)'; then
+            echo "$binary contains a dynamic-library dependency" >&2
+            exit 1
+          fi
+          echo "$binary has no ELF interpreter or dynamic-library dependency"
         env:
           TARGET: ${{ matrix.target }}
 
@@ -312,6 +353,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Check out release ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -330,19 +372,22 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Configure npm authentication
+      - name: Set up Node for npm Trusted Publishing
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.15.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install npm CLI for Trusted Publishing
         shell: bash
-        run: npm config set //registry.npmjs.org/:_authToken="$NODE_AUTH_TOKEN" --location=user
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/monoize-npmrc
+        run: |
+          npm install --global npm@12.0.2 --no-audit --no-fund
+          test "$(npm --version)" = "12.0.2"
 
       - name: Publish platform packages, then root package
         shell: bash
         run: bun npm/scripts/package.ts publish --tag "$RELEASE_TAG" --directory npm-dist
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/monoize-npmrc
 
   build-container:
     name: Build container ${{ matrix.platform }}
@@ -366,12 +411,12 @@ jobs:
           - platform: linux/amd64
             runner: ubuntu-24.04
             artifact: amd64
-            native_target: x86_64-unknown-linux-gnu
+            native_target: x86_64-unknown-linux-musl
             cache-scope: linux-amd64
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
             artifact: arm64
-            native_target: aarch64-unknown-linux-gnu
+            native_target: aarch64-unknown-linux-musl
             cache-scope: linux-arm64
     env:
       IMAGE_NAME: ${{ needs.validate.outputs.image }}

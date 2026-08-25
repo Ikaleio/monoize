@@ -5,18 +5,17 @@ description: 用 Rust 编写的 AI API 网关：转换协议语义，将一个�
 
 ## 概述
 
-Monoize 是一个用 Rust 编写的 AI API 网关。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Embeddings 和图像格式的请求，将请求转发到你配置的某个上游 Channel（通道），并按客户端使用的协议返回响应。
+Monoize 是用 Rust 编写的 AI API 网关。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Embeddings 和图像格式的请求。它将请求转发到配置的上游 Channel，并按客户端使用的协议返回响应。
 
-Monoize 转换的是协议语义，而不是字段名。它先把每个请求解码为统一的类型化内部表示，再编码为选定的上游协议。响应沿同一路径反向转换。文本、推理、加密推理、工具调用、工具结果、图像、用量和流事件边界在转换中各自保持原有语义。
+Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求解码为统一的类型化内部表示，再编码为选定的上游协议。响应沿同一路径反向转换。文本、推理、加密推理、工具调用、工具结果、图像、用量和流边界在转换中保持原有角色。
 
-## 核心能力
+## 核心功能
 
-- **协议转换。** 任何受支持的下游端点都可以调用任何已配置的上游类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。
-- **路由与可靠性。** 一个逻辑模型可以匹配多个有序的 Provider（服务提供者）。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在发出第一个响应字节后停止回退。参见[路由与可靠性](/zh/docs/routing)。
-- **变换（Transform）。** 33 个内置变换可按 Provider、API 密钥或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
-- **请求捕获。** 捕获功能默认关闭，开启后会保存每次上游尝试的完整报文。结构化查看器展示每一跳。参见[请求日志](/zh/docs/request-logs)。
-- **仪表盘。** 内嵌的 Web 仪表盘管理 Provider、Channel、模型、API 密钥、用户、计费和日志。参见[仪表盘](/zh/docs/dashboard)。
-
+- **协议转换：** 支持使用任意受支持的下游端点调用任意配置的上游 Channel 类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。
+- **路由与可靠性：** 一个逻辑模型可以匹配多个有序 Provider。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在发出第一个响应字节后停止回落。参见[路由与可靠性](/zh/docs/routing)。
+- **Transform 变换：** 33 个内置 Transform 可按 Provider、API Key 或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
+- **请求捕获：** 捕获功能默认关闭。开启后，Monoize 会记录每次上游尝试的报文。结构化查看器展示每一跳。参见[请求日志](/zh/docs/request-logs)。
+- **仪表盘：** 内嵌 Web 仪表盘管理 Provider、Channel、模型、API Key、用户、计费和日志。参见[仪表盘](/zh/docs/dashboard)。
 ## 支持的端点
 
 | 方法 | 端点 | 协议 |
@@ -46,12 +45,11 @@ Monoize 转换的是协议语义，而不是字段名。它先把每个请求解
 
 ## 限制
 
-- Monoize 只转发工具定义和工具调用，不在本地执行工具。
+- Monoize 转发工具定义和工具调用，不在本地执行工具。
 - Monoize 不提供 OpenAI Files、向量存储或本地检索。
-- 发出第一个下游字节后回退即结束。Monoize 不会在可见流中途切换 Provider。
-- 跨协议族转换保留可表示的语义。没有安全目标表示的提供商私有嵌套字段会被移除。
-- 图像压缩默认关闭。除非配置 `image_resolve_urls` 变换，Monoize 不会抓取远程图像 URL。
-
+- 发出第一个下游字节后回落即结束。Monoize 不会在活动流中途切换 Provider。
+- 跨协议族转换保留受支持的语义。没有目标表示的 Provider 专用嵌套字段会被移除。
+- 图像压缩默认关闭。除非配置 `image_resolve_urls` Transform，Monoize 不会抓取远程图像 URL。
 ## 下一步
 
 <Cards>

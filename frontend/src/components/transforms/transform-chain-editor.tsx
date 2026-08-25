@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowDownUp, ArrowUpDown, GripVertical, Plus, Settings2, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Phase, TransformRegistryItem, TransformRuleConfig } from "@/lib/api";
@@ -134,6 +134,10 @@ function PhaseChainSection({
   const selectedAddType = available.some((item) => item.type_id === addType)
     ? addType
     : (available[0]?.type_id ?? "");
+  const selectedAddItem = available.find((item) => item.type_id === selectedAddType);
+  const selectedAddName = selectedAddItem
+    ? resolveLocalizedText(selectedAddItem.name, i18n.language, selectedAddItem.type_id)
+    : "";
 
   const title = phase === "request" ? t("transforms.requestChain") : t("transforms.responseChain");
   const PhaseIcon = phase === "request" ? ArrowUpDown : ArrowDownUp;
@@ -170,41 +174,51 @@ function PhaseChainSection({
           <h3 className="text-sm font-medium">{title}</h3>
           <Badge variant="secondary" className="text-xs">{rules.length}</Badge>
         </div>
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
           <Select value={selectedAddType} onValueChange={setAddType} disabled={available.length === 0}>
-            <SelectTrigger className="h-8 min-w-0 flex-1 sm:w-[260px] sm:flex-none">
-              <SelectValue placeholder={t("transforms.selectTransform")} />
+            <SelectTrigger
+              className="h-9 min-w-0 w-full sm:w-[260px]"
+              aria-label={t("transforms.selectTransform")}
+            >
+              <SelectValue placeholder={t("transforms.selectTransform")}>
+                {selectedAddName ? (
+                  <span className="block min-w-0 truncate text-left">{selectedAddName}</span>
+                ) : undefined}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {available.map((item) => {
-                const name = resolveLocalizedText(item.name, i18n.language, item.type_id);
-                const description = resolveLocalizedText(item.description, i18n.language, "");
-                return (
-                  <SelectItem key={item.type_id} value={item.type_id}>
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate text-sm">{name}</span>
-                      <span className="truncate font-mono text-[10px] text-muted-foreground">
-                        {item.type_id}
-                      </span>
-                      {description && (
-                        <span className="max-w-[280px] truncate text-xs text-muted-foreground">
-                          {description}
+              <SelectGroup>
+                {available.map((item) => {
+                  const name = resolveLocalizedText(item.name, i18n.language, item.type_id);
+                  const description = resolveLocalizedText(item.description, i18n.language, "");
+                  return (
+                    <SelectItem key={item.type_id} value={item.type_id}>
+                      <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="truncate text-sm">{name}</span>
+                        <span className="truncate font-mono text-[10px] text-muted-foreground">
+                          {item.type_id}
                         </span>
-                      )}
-                    </span>
-                  </SelectItem>
-                );
-              })}
+                        {description && (
+                          <span className="max-w-[280px] truncate text-xs text-muted-foreground">
+                            {description}
+                          </span>
+                        )}
+                      </span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectGroup>
             </SelectContent>
           </Select>
           <Button
             type="button"
             size="sm"
             variant="outline"
+            className="w-full sm:w-auto"
             onClick={addRule}
             disabled={!selectedAddType}
           >
-            <Plus className="mr-1 h-4 w-4" />
+            <Plus data-icon="inline-start" />
             {t("transforms.add")}
           </Button>
         </div>

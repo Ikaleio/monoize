@@ -15,8 +15,8 @@ NCD-P3. The platform package versions and metadata MUST use this table:
 
 | Rust target | Optional-dependency alias | Package version suffix | `os` | `cpu` | Executable |
 | --- | --- | --- | --- | --- | --- |
-| `x86_64-unknown-linux-gnu` | `monoize-linux-x64` | `linux-x64` | `linux` | `x64` | `bin/monoize` |
-| `aarch64-unknown-linux-gnu` | `monoize-linux-arm64` | `linux-arm64` | `linux` | `arm64` | `bin/monoize` |
+| `x86_64-unknown-linux-musl` | `monoize-linux-x64` | `linux-x64` | `linux` | `x64` | `bin/monoize` |
+| `aarch64-unknown-linux-musl` | `monoize-linux-arm64` | `linux-arm64` | `linux` | `arm64` | `bin/monoize` |
 | `x86_64-apple-darwin` | `monoize-darwin-x64` | `darwin-x64` | `darwin` | `x64` | `bin/monoize` |
 | `aarch64-apple-darwin` | `monoize-darwin-arm64` | `darwin-arm64` | `darwin` | `arm64` | `bin/monoize` |
 | `x86_64-pc-windows-msvc` | `monoize-win32-x64` | `win32-x64` | `win32` | `x64` | `bin/monoize.exe` |
@@ -32,7 +32,7 @@ NCD-P6. The root package MUST expose `monoize` through `bin/monoize.js`. A platf
 
 NCD-P7. The root package MUST require Node.js 18 or later. Its published JavaScript MUST also execute under Bun.
 
-NCD-P8. Linux npm packages contain GNU libc binaries. Alpine Linux and other musl-only systems are not supported by this package set.
+NCD-P8. Linux npm packages MUST contain statically linked musl executables. A Linux executable MUST NOT contain an ELF interpreter or a dynamic-library `DT_NEEDED` entry. It MUST run without a host GNU libc, musl libc, `libgcc`, or `libstdc++` shared library. The Linux packages therefore support both GNU-libc and musl-based Linux distributions on the matching CPU architecture.
 
 ## 2. Launcher behavior
 
@@ -72,13 +72,15 @@ NCD-R6. A platform package publication MUST use a non-`latest` npm dist-tag. Pub
 
 NCD-R7. The root package publication MUST use the `latest` npm dist-tag. It MUST occur only after all six platform publications succeed.
 
-NCD-R8. npm authentication MUST use the `NPM_TOKEN` Actions secret. The token MUST NOT be written to a repository file or an Actions artifact.
+NCD-R8. npm publication MUST use npm Trusted Publishing through GitHub Actions OpenID Connect (OIDC). The publication job MUST run on a GitHub-hosted runner with `contents: read` and `id-token: write`. The job MUST NOT read an `NPM_TOKEN` Actions secret or write a registry authentication token.
+
+NCD-R8a. The npm publication job MUST use Node.js `24.15.0` and npm CLI `12.0.2`. It MUST configure `https://registry.npmjs.org` as the registry before publication.
 
 NCD-R9. The npm packaging job MUST run the TypeScript unit tests before it creates the root tarball. A test, build, pack, or package-set verification failure MUST prevent root-package publication.
 
 NCD-R10. The npm packaging job MUST serve the seven generated tarballs from an ephemeral local npm registry and install the root tarball with Bun, npm, and pnpm on one supported runner. Each installation MUST contain the root package, the one matching platform alias, no non-matching platform alias, and the `monoize` binary link. Each client MUST download exactly one platform tarball. This verification MUST use installation scripts disabled.
 
-NCD-R11. A publication rerun MUST compare the local SHA-512 integrity with any existing npm version. An identical existing version MUST be reused and assigned the required dist-tag. A different existing version MUST fail publication and MUST NOT be overwritten.
+NCD-R11. A publication rerun MUST compare the local SHA-512 integrity with any existing npm version. If the bytes are identical and the required dist-tag already resolves to that version, publication MUST skip that version. Different bytes, a missing required dist-tag, or a required dist-tag that resolves to another version MUST fail publication. The workflow MUST NOT overwrite an existing version or run a separate dist-tag mutation command.
 
 ## 4. User commands
 

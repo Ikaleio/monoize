@@ -34,7 +34,7 @@ CI-R9. The image MUST declare these Open Container Initiative labels:
 
 ## 2. Build inputs
 
-CI-B1. The runtime base image MUST be Ubuntu 24.04, referenced by a multi-platform manifest digest. Ubuntu 24.04 is the same major distribution as the native linux runners in `release-artifacts.spec.md` RA-M1, so a copied native linux executable's GNU libc requirement is satisfied.
+CI-B1. The runtime base image MUST be Ubuntu 24.04, referenced by a multi-platform manifest digest. The Monoize executable copied into the image MUST be the static musl executable produced by the matching Linux row in `release-artifacts.spec.md` RA-M1.
 
 CI-B2. The image build MUST NOT install Rust, Bun, clang, cmake, or a C/C++ toolchain.
 
@@ -44,8 +44,8 @@ CI-B4. Each platform container job MUST download the native Release archive for 
 
 | Container platform | Native Rust target |
 | --- | --- |
-| `linux/amd64` | `x86_64-unknown-linux-gnu` |
-| `linux/arm64` | `aarch64-unknown-linux-gnu` |
+| `linux/amd64` | `x86_64-unknown-linux-musl` |
+| `linux/arm64` | `aarch64-unknown-linux-musl` |
 
 CI-B5. The image build MUST copy that extracted executable to `/usr/local/bin/monoize` with mode `0755`. It MUST NOT run `cargo`, `bun`, `rustc`, or compile Monoize from source.
 

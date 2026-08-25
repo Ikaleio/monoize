@@ -36,7 +36,7 @@ class PackageReleaseTests(unittest.TestCase):
         return path
 
     def test_tar_package_is_deterministic_and_has_required_modes(self) -> None:
-        target = "x86_64-unknown-linux-gnu"
+        target = "x86_64-unknown-linux-musl"
         self.write_binary(target)
         archive, checksum = package_release.package_release(self.root, "v1.0.0", target, self.output)
         first_archive = archive.read_bytes()
@@ -81,7 +81,7 @@ class PackageReleaseTests(unittest.TestCase):
             )
 
     def test_tag_must_match_cargo_version(self) -> None:
-        target = "x86_64-unknown-linux-gnu"
+        target = "x86_64-unknown-linux-musl"
         self.write_binary(target)
         with self.assertRaises(package_release.ReleasePackagingError):
             package_release.package_release(self.root, "v1.0.1", target, self.output)
@@ -95,7 +95,7 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertEqual(len(entries), 12)
 
         archive = self.output / package_release.archive_name(
-            "v1.0.0", "x86_64-unknown-linux-gnu"
+            "v1.0.0", "x86_64-unknown-linux-musl"
         )
         archive.write_bytes(archive.read_bytes() + b"corrupt")
         with self.assertRaises(package_release.ReleasePackagingError):

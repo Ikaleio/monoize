@@ -1,9 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
-# Runtime image. The workflow copies the ubuntu-24.04 native linux
-# executable into this context as ./monoize (CI-B4 through CI-B6).
-# Do not cargo-build here: Bookworm glibc cannot load that binary, and
-# Ubuntu 24.04 can.
+# Runtime image. The workflow copies one static musl Linux executable
+# into this context as ./monoize (CI-B4 through CI-B6).
 
 FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
 
@@ -18,7 +16,7 @@ LABEL org.opencontainers.image.title="Monoize" \
       org.opencontainers.image.revision="${REVISION}"
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates curl libstdc++6 \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --user-group --home-dir /app --shell /usr/sbin/nologin monoize \
     && install --directory --owner monoize --group monoize /app/data

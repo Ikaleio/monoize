@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use sea_orm::{ConnectionTrait, DatabaseTransaction, DbBackend, Statement, TransactionTrait, Value};
+use sea_orm::{
+    ConnectionTrait, DatabaseTransaction, DbBackend, Statement, TransactionTrait, Value,
+};
 use sea_orm_migration::prelude::*;
 use uuid::Uuid;
 
@@ -559,8 +561,8 @@ mod tests {
     }
 
     /// GM-1..GM-8 on a populated legacy database: run the full stack up (empty
-    /// path), revert one step to the legacy label schema, plant legacy label
-    /// arrays, then re-run the migration and verify every mapping rule.
+    /// path), revert through this migration to the legacy label schema, plant
+    /// legacy label arrays, then re-run the migration and verify every mapping rule.
     #[tokio::test]
     async fn groups_registry_migration_maps_populated_legacy_labels() {
         let db = DbPool::connect("sqlite::memory:")
@@ -630,9 +632,15 @@ mod tests {
 
         {
             let write = db.write().await;
-            Migrator::down(&*write, Some(1))
+            let down_steps = Migrator::migrations()
+                .into_iter()
+                .rev()
+                .position(|migration| migration.name() == "m20260825_000042_groups_registry")
+                .map(|index| index + 1)
+                .expect("groups registry migration is registered");
+            Migrator::down(&*write, Some(down_steps as u32))
                 .await
-                .expect("one-step down restores legacy schema");
+                .expect("down through groups registry restores legacy schema");
         }
 
         // Plant legacy labels exactly as the pre-registry system stored them.
@@ -706,7 +714,10 @@ mod tests {
         assert_eq!(
             scalar(
                 &db,
-                &format!("SELECT group_id AS value FROM users WHERE id = '{}'", user.id)
+                &format!(
+                    "SELECT group_id AS value FROM users WHERE id = '{}'",
+                    user.id
+                )
             )
             .await,
             ids["beta"]

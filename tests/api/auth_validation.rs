@@ -261,7 +261,9 @@ async fn public_settings_and_csp_publish_only_cap_public_configuration() {
         .to_string();
     assert!(first_csp.contains("connect-src 'self' http://127.0.0.1:"));
     assert!(first_csp.contains("worker-src 'self' blob:"));
+    assert!(first_csp.contains("script-src 'self' 'wasm-unsafe-eval' 'nonce-"));
     assert!(!first_csp.contains("script-src 'self' 'unsafe-inline'"));
+    assert!(!first_csp.contains("'unsafe-eval'"));
     let body: Value =
         serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["captcha_enabled"], json!(true));

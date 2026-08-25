@@ -6,109 +6,102 @@
 
 **AI APIs look alike. Their contracts differ.**
 
-Monoize is a Rust gateway for OpenAI Responses, Chat Completions, Anthropic Messages, Gemini, embeddings, and image APIs. It converts protocol semantics. It routes one logical model across multiple upstream channels. It handles the failure modes that appear between real clients and real gateways.
+Monoize is a Rust gateway for OpenAI Responses, Chat Completions, Anthropic Messages, Gemini, embeddings, and image APIs. It converts protocol semantics. It routes one logical model across multiple upstream channels. It handles failures between clients and upstreams.
 
 [English](README.md) · [简体中文](README.zh-CN.md)
-
 </div>
 
 ## The problem
 
-An AI API gateway does more than rename JSON fields.
+An AI API gateway does more than map JSON fields.
 
 Responses, Chat Completions, and Messages use different data models for conversation history, reasoning, tools, usage, errors, and streaming. A converter can return HTTP 200 and still corrupt the conversation. It can drop encrypted reasoning, attach a delta to the wrong content block, duplicate a stream event, or turn a tool result into assistant text.
 
-Routing adds another state machine. A gateway must retry a failed channel. It must move to the next provider. It must stop retrying after it commits response bytes to the client. If a gateway switches upstreams after that point, it splices two different generations into one stream.
+Routing also requires a state machine. A gateway must retry a failed channel. It must move to the next provider. It must stop retrying after it sends the first response byte to the client. If a gateway switches upstreams after that point, it splices two different generations into one stream.
 
-Clients and upstream gateways also differ in their boundary behavior. Claude Code, OpenRouter-compatible clients, Codex WebSocket clients, DeepSeek tool loops, image providers, and provider-specific SSE implementations each expose different assumptions.
+Clients and upstreams also differ in boundary behavior. Claude Code, OpenRouter-compatible clients, Codex WebSocket clients, DeepSeek tool loops, image providers, and provider SSE implementations make different assumptions.
 
-Large inline images add a separate cost. Upload time and upstream image preprocessing can dominate time to first token. When every retry carries the same oversized base64 payload, this cost grows.
-
+Inline images add latency. Upload time and upstream image preprocessing increase time to first token. When every retry carries the same base64 payload, this cost multiplies.
 ## Where common converters fail
 
-Format support is not protocol correctness. These public examples were checked on 2026-08-10:
+Format support does not equal protocol correctness. These public examples were checked on 2026-08-10:
 
-- OpenAI defines `encrypted_content` as the state needed to preserve reasoning in stateless multi-turn flows. At New API commit [`823e263`](https://github.com/QuantumNous/new-api/commit/823e26304a396854ace30b52b98ec497c2dd9c36), the Responses output DTO [cannot represent that field](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/dto/openai_response.go#L327-L339). The Responses-to-Chat converter [reads only reasoning text](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/relayconvert/internal/oai_responses/to_oai_chat_resp.go#L212-L229). Format conversion therefore still drops encrypted reasoning. See the [OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses) for why that state must be replayed.
-- LiteLLM issue [#32357](https://github.com/BerriAI/litellm/issues/32357) reports an Anthropic adapter that emits `message_start` twice and sends `thinking_delta` inside a text block. Anthropic SDKs discard that reasoning because the event violates the block lifecycle.
-- New API issue [#5480](https://github.com/QuantumNous/new-api/issues/5480) documents streaming relay paths that retain the complete generated text only to estimate tokens. Memory then grows with output length and concurrency.
+- OpenAI uses `encrypted_content` to preserve reasoning across stateless multi-turn requests. In New API commit [`823e263`](https://github.com/QuantumNous/new-api/commit/823e26304a396854ace30b52b98ec497c2dd9c36), the Responses output DTO [cannot represent that field](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/dto/openai_response.go#L327-L339). The Responses-to-Chat converter [reads only reasoning text](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/relayconvert/internal/oai_responses/to_oai_chat_resp.go#L212-L229). The conversion drops encrypted reasoning. See the [OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses).
+- LiteLLM issue [#32357](https://github.com/BerriAI/litellm/issues/32357) reports an Anthropic adapter that emits `message_start` twice and sends `thinking_delta` inside a text block. Anthropic SDKs discard that reasoning because the event violates block lifecycle rules.
+- New API issue [#5480](https://github.com/QuantumNous/new-api/issues/5480) documents streaming relay paths that retain complete generated text in memory to count tokens. Proxy memory grows with output length and concurrency.
 
-These are design failures, not missing aliases. Monoize addresses them in the protocol model, stream state machines, routing rules, and resource bounds.
-
+Monoize addresses these issues in its protocol model, stream state machines, routing rules, and resource bounds.
 ## What Monoize does
 
-### It converts semantics, not field names
+### Semantic protocol conversion
 
-Monoize decodes each supported protocol into URP v2. URP v2 is a flat and typed canonical representation. It keeps text, reasoning summary, raw reasoning, encrypted reasoning, tool calls, tool results, images, files, refusals, usage, and control boundaries as distinct nodes.
+Monoize decodes each supported protocol into URP v2. URP v2 is a flat, typed representation. It separates text, reasoning summaries, raw reasoning, encrypted reasoning, tool calls, tool results, images, files, refusals, usage, and control boundaries into distinct nodes.
 
-The selected upstream adapter then encodes those nodes into the target protocol. The response follows the same path in reverse.
+The selected upstream adapter encodes these nodes into the target protocol. The response follows the same path in reverse.
 
-This design gives these guarantees:
+This design provides these properties:
 
-- The full Responses, Chat Completions, and Messages request/response matrix is tested in streaming and non-streaming modes.
-- Encrypted reasoning remains separate from visible reasoning. Optional `mz2` envelopes preserve opaque reasoning across otherwise incompatible replay formats.
+- The Responses, Chat Completions, and Messages matrix is tested in streaming and non-streaming modes.
+- Encrypted reasoning remains separate from visible reasoning. Optional `mz2` envelopes preserve opaque reasoning across incompatible replay formats.
 - Tool-call IDs, parallel calls, multipart tool results, and assistant history keep their roles.
-- Responses output-item lifecycles and Messages content-block lifecycles remain ordered and balanced.
-- Unknown same-family fields can pass through. Monoize strips unsafe nested fields at cross-family boundaries, so they do not enter an invalid request.
+- Responses output items and Messages content blocks maintain balanced lifecycle events.
+- Unknown fields within the same protocol family pass through. Monoize strips unsafe nested fields at cross-family boundaries to avoid invalid requests.
 
-The [protocol test matrix](spec/urp-v2-flat-protocol-test-matrix.spec.md) defines the normative cases and their tests.
+See the [protocol test matrix](spec/urp-v2-flat-protocol-test-matrix.spec.md) for test cases.
 
-### It retries before it commits a stream
+### Retry before commit
 
-A logical model can match several ordered Providers. Each Provider can contain several weighted Channels.
+A logical model can match several ordered Providers. Each Provider contains weighted Channels.
 
-Monoize tries these routes as a bounded waterfall:
+Monoize evaluates routes in a bounded waterfall:
 
 1. Select the first matching Provider.
 2. Select an eligible Channel by weight and affinity.
-3. Retry retryable failures within the configured budgets.
-4. When the current route is exhausted, move forward to the next eligible route.
-5. Stop fallback after the first downstream response byte.
+3. Retry retryable failures within configured budgets.
+4. When the current route is exhausted, advance to the next route.
+5. Stop fallback after sending the first response byte.
 
-Network failures, timeouts, `429`, and selected `5xx` responses let the waterfall move forward. Client errors such as `400`, `401`, `403`, and `422` stop the waterfall. Circuit breakers, passive health state, active probes, cooldowns, and model affinity keep known-bad channels out of the hot path.
+Network errors, timeouts, `429`, and selected `5xx` responses advance the waterfall. Client errors such as `400`, `401`, `403`, and `422` stop the waterfall. Circuit breakers, passive health checks, active probes, cooldowns, and model affinity exclude unhealthy channels from the path.
 
-Monoize never switches providers in the middle of a visible stream. The exact transition rules are defined in the [routing specification](spec/monoize-upstream-routing.spec.md).
+Monoize never switches providers in the middle of a visible stream. Transition rules are defined in the [routing specification](spec/monoize-upstream-routing.spec.md).
+### Boundary transforms
 
-### It handles client and gateway quirks at the boundary
-
-The core adapters cover normal protocol conversion. Ordered transforms handle behavior that belongs to one client, provider, model, or API key.
+Core adapters handle standard protocol conversion. Ordered transforms handle behavior specific to a client, provider, model, or API key.
 
 Examples include:
 
-- OpenRouter-compatible structured reasoning and final usage chunks.
+- OpenRouter structured reasoning and trailing usage chunks.
 - DeepSeek reasoning replay during tool loops.
 - Anthropic thinking blocks and signatures.
 - Codex Responses WebSocket sessions and `/v1/responses/compact`.
-- Data-URL images converted to provider-native image sources.
-- SSE frame splitting for clients with small line buffers.
-- Orphaned tool-call cleanup and consecutive-role repair.
-- Role mapping for `system` and `developer`.
-- Prompt-cache breakpoints for system prompts, tool use, and OpenAI tools.
-- Provider-specific header removal, model suffixes, and token-budget mapping.
+- Converting data-URL images to provider-native image sources.
+- Splitting SSE frames for clients with small line buffers.
+- Cleaning up orphaned tool calls and repairing consecutive identical roles.
+- Role mapping between `system` and `developer`.
+- Prompt-cache breakpoints for system prompts, tools, and OpenAI schemas.
+- Removing provider-specific headers, adding model suffixes, and mapping token budgets.
 
-Transforms can run at Provider, global, or API-key scope. Model globs select where each rule applies. See the [transform specification](spec/urp-transform-system.spec.md).
+Transforms can run at Provider, global, or API-key scope. Model globs select matching rules. See the [transform specification](spec/urp-transform-system.spec.md).
+### Request image compression
 
-### It reduces large-image overhead before the upstream call
+`compress_user_message_images` is an opt-in request transform. It resizes and recompresses inline user images before routing them upstream. Supported output formats include JPEG, PNG, WebP, and JPEG XL.
 
-`compress_user_message_images` is an opt-in request transform. It can resize and recompress inline user images before routing them upstream. Supported output modes include JPEG, PNG, WebP, and JPEG XL.
+The transform preserves the image node and provider-specific detail hints. It skips unsupported formats and remote URLs. Input bytes, decoded pixels, concurrent encodes, cache entries, and cache bytes have explicit bounds.
 
-The transform preserves the image node and its provider-specific detail hints. It skips unsupported or remote URL sources. Input bytes, decoded pixels, concurrent encodes, cache entries, and cache bytes have explicit limits.
+The transform reduces request size and image-related TTFT. Cached results avoid duplicate encoding during retries and repeated requests.
+### Low forwarding overhead
 
-The transform reduces request size and the avoidable part of image-heavy TTFT. Cached results also remove duplicate encode work across retries and repeated requests.
+Monoize reduces proxy overhead:
 
-### It runs with significantly less forwarding overhead
+- Rust and Tokio handle asynchronous I/O without an interpreter on the request path.
+- The default stream path decodes and encodes incrementally through bounded channels.
+- Usage estimation updates counters as deltas arrive, without buffering the complete response text.
+- Rate-limit keys, health state, affinity, API-key caches, request capture, WebSocket history, and image transforms have explicit memory bounds.
+- A release build embeds the React dashboard. One process serves the API, the dashboard, and Prometheus metrics.
 
-Monoize is significantly more efficient on the forwarding hot path than common API forwarding gateways.
+Some response transforms intentionally use buffered streaming. Replicate also uses that path. The default bridge remains incremental.
 
-- Rust and Tokio handle concurrent I/O without a language runtime or per-request interpreter work.
-- The normal stream path decodes and re-encodes incrementally through bounded channels.
-- Usage estimation updates counters as deltas arrive. It does not retain the complete generated text merely to count it.
-- Rate-limit keys, routing health, affinity, API-key caches, request capture, WebSocket history, discovery bodies, and image transforms all have explicit bounds.
-- A release build embeds the React dashboard. One process serves the API, the dashboard, and metrics.
-
-Some response transforms intentionally select buffered synthetic streaming. Replicate also uses that path. The default protocol bridge remains incremental.
-
-This comparison concerns proxy-side CPU, memory, and latency. It does not claim to make an upstream model generate tokens faster. See [stream usage accounting](src/handlers/usage.rs) and the [runtime resource bounds](spec/runtime-resource-bounds.spec.md).
-
+This comparison concerns proxy-side CPU, memory, and latency. It does not claim to make an upstream model generate tokens faster. See [stream usage accounting](src/handlers/usage.rs) and [runtime resource bounds](spec/runtime-resource-bounds.spec.md).
 ## Supported surface
 
 ### Downstream endpoints
@@ -187,7 +180,7 @@ npx monoize
 # global: pnpm add --global monoize
 ```
 
-The package manager installs only the native binary for the current operating system and CPU. The npm package supports GNU libc Linux, macOS, and Windows on x86-64 and ARM64.
+The package manager installs only the native binary for the current operating system and CPU. The npm package supports GNU-libc and musl-based Linux distributions, macOS, and Windows on x86-64 and ARM64. Linux packages use static musl executables and do not depend on the host libc or `libstdc++`.
 
 To build from source, install a stable Rust toolchain and [Bun](https://bun.sh/). A release build compiles the frontend and embeds it in the executable.
 
@@ -296,7 +289,7 @@ Linux and macOS assets use `tar.gz`. Windows assets use `zip`. Every archive inc
 
 A manual workflow run executes the same six-platform preflight. It does not change a GitHub Release. The exact asset contract is defined in the [release artifact specification](spec/release-artifacts.spec.md).
 
-The workflow also builds seven npm tarballs: one TypeScript-derived launcher and six platform packages. A normal Bun, npm, or pnpm installation selects one platform package through `os` and `cpu` metadata. Publishing the package set requires the `NPM_TOKEN` Actions secret. The exact npm contract is defined in the [npm CLI distribution specification](spec/npm-cli-distribution.spec.md).
+The workflow also builds seven npm tarballs: one TypeScript-derived launcher and six platform packages. A normal Bun, npm, or pnpm installation selects one platform package through `os` and `cpu` metadata. The npm publication job authenticates through npm Trusted Publishing and GitHub Actions OIDC; it does not use a long-lived npm token. The exact npm contract is defined in the [npm CLI distribution specification](spec/npm-cli-distribution.spec.md).
 
 ## Development and verification
 

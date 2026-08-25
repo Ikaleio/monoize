@@ -19,6 +19,8 @@ TCU-2. Localized-text resolution for a localized-text object `M` and active UI l
 
 TCU-2a. The chain editors and the config dialog MUST display the resolved `name` as the primary label for a registered transform. The raw `type_id` MUST remain visible as secondary monospace text. The resolved `description` MUST be displayed in the config dialog header area and in the add-transform selector list.
 
+TCU-2b. A closed add-transform selector MUST render the selected transform as one line of resolved `name` text. The text MUST truncate inside the trigger when it exceeds the available width. The closed trigger MUST NOT render the selected transform's `type_id` or description. The open selector list MUST continue to render the resolved name, `type_id`, and description required by TCU-2a.
+
 ## 2. Config dialog widget mapping
 
 TCU-3. The config dialog MUST derive one field editor per property of `config_schema.properties`. The widget is selected by the first matching rule:
@@ -76,6 +78,8 @@ TCU-9. Saved config production is exact:
 ## 4. Layout, data flow, and resilience
 
 TCU-10. The config dialog MUST remain operable at viewport width `375px`: field labels stack above widgets, the dialog body scrolls vertically inside the viewport, and touch targets for add/remove/move/clear actions are at least `44px` on coarse pointers.
+
+TCU-10a. Each phase section's add-transform controls MUST form one vertical group below the `sm` breakpoint. The selector and add button MUST each use the full group width. At the `sm` breakpoint and above, the controls MUST form one horizontal row with a `260px` selector and a content-width add button. Selector content MUST remain inside the selector border at every supported width.
 
 TCU-11. The transform registry MUST be fetched through the shared SWR hook (`useTransformRegistry`). Surfaces that render transform chains while the registry is loading MUST render skeleton placeholders instead of empty chain state, and chain mutations MUST keep the existing optimistic-update behavior of their host forms (dialog-local draft state applied to the parent form value on save).
 
