@@ -320,7 +320,10 @@ The section MUST follow `spec/api-key-model-redirects.spec.md` FR-8 through FR-1
 
 PG-L1. `/playground` page MUST be accessible from the main navigation sidebar (below Token Management).
 
-PG-L2. The page MUST follow standard dashboard layout patterns: `PageWrapper`, `text-3xl` heading, motion animations.
+PG-L2. The playground page layout follows `playground.spec.md` §9: a full-height chat
+shell inside the dashboard content pane with its own internal scroll container and
+`framer-motion` animations. It intentionally has no `PageHeader`/`text-3xl` heading
+block.
 
 ## 4. Token Management Page
 
