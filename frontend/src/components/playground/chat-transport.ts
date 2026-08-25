@@ -36,6 +36,28 @@ export function sanitizeForModel(messages: UIMessage[]): UIMessage[] {
   });
 }
 
+/**
+ * Maps a stream failure to human-readable text (PG-CHAT2 step 6). Provider
+ * error chunks arrive as plain objects (not Error instances), so the `message`
+ * field is extracted before falling back to JSON serialization.
+ */
+export function describeStreamError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const record = error as { message?: unknown; error?: { message?: unknown } };
+    if (typeof record.message === "string") return record.message;
+    if (record.error && typeof record.error.message === "string") {
+      return record.error.message;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
+
 function parseFinite(value: string): number | undefined {
   if (!value.trim()) return undefined;
   const parsed = Number(value);
@@ -100,8 +122,7 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
     return toUIMessageStream({
       stream: result.fullStream,
       // Default onError masks messages; the playground surfaces upstream error text.
-      onError: (error) =>
-        error instanceof Error ? error.message : String(error),
+      onError: describeStreamError,
     });
   }
 

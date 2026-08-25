@@ -154,7 +154,10 @@ PG-CHAT2. `MonoizeChatTransport.sendMessages` MUST:
    finite number; `maxOutputTokens` set iff `playground_max_tokens` parses as a positive
    integer; and the abort signal from the chat.
 6. Return `toUIMessageStream(...)` of the resulting stream with an `onError` mapper
-   that returns the thrown error's message (upstream error text must reach the UI).
+   that maps the failure to human-readable text (upstream error text must reach the
+   UI): an `Error` maps to its `message`; a non-Error object maps to its string
+   `message` field, else its nested `error.message` string field, else its JSON
+   serialization; any other value maps to `String(value)`.
 
 PG-CHAT3. Outgoing-message sanitation: `file` parts of **assistant** messages MUST be
 excluded from the converted model messages. If exclusion leaves an assistant message

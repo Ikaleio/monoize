@@ -15,12 +15,15 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function sseResponse(chunks: string[]) {
+function sseResponse(chunks: string[], delayMs = 0) {
   const encoder = new TextEncoder();
   return new Response(
     new ReadableStream({
-      start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      async start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
         controller.close();
       },
     }),
@@ -269,15 +272,35 @@ Bun.serve({
 
       if (body.stream === true) {
         const text = `${collectChatText(messages)}${echoSuffix(body)}`;
-        const chunk = {
+        const base = {
           id: `chatcmpl_mock_${Date.now()}`,
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
           model,
-          choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
         };
-        const chunks = [`data: ${JSON.stringify(chunk)}\n\n`, `data: [DONE]\n\n`];
-        return sseResponse(chunks);
+        // Word-level deltas plus a terminal finish_reason chunk: Monoize
+        // rejects streams that hit [DONE] without a terminal finish_reason.
+        const words = text.match(/\S+\s*/g) ?? [];
+        const chunks = [
+          `data: ${JSON.stringify({
+            ...base,
+            choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+          })}\n\n`,
+          ...words.map(
+            (word) =>
+              `data: ${JSON.stringify({
+                ...base,
+                choices: [{ index: 0, delta: { content: word }, finish_reason: null }],
+              })}\n\n`,
+          ),
+          `data: ${JSON.stringify({
+            ...base,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 8, completion_tokens: 16, total_tokens: 24 },
+          })}\n\n`,
+          `data: [DONE]\n\n`,
+        ];
+        return sseResponse(chunks, 45);
       }
 
       return jsonResponse(toolAwareChatResponse(model, messages, body));
