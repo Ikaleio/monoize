@@ -1660,6 +1660,16 @@ STR3k.1. For the duplicate-suppression rule in STR3k, two message items MUST be 
 
 In that case, different message `id` values MUST NOT cause Monoize to emit a second output item lifecycle or a second `response.completed.response.output[]` entry.
 
+STR3k.2. For the duplicate-suppression rule in STR3k, two reasoning items MUST be treated as the same logical output item when all of the following conditions hold:
+
+- both items have `type = "reasoning"`;
+- both items have the same aggregated reasoning text, where aggregated reasoning text is the in-order concatenation of the `text` values of `content[]` parts with `type = "reasoning_text"`, and an item whose concatenation is empty falls back to its item-level `text` string;
+- both items have the same ordered sequence of `summary[]` entry `text` values, where an absent `summary` field equals an empty `summary` array;
+- both items have the same `encrypted_content` value, where an absent field, a JSON `null`, and an empty string are all equal;
+- both items have the same `source` value, under the same absence rule as `encrypted_content`.
+
+In that case, different reasoning `id` values MUST NOT cause Monoize to emit a second output item lifecycle or a second `response.completed.response.output[]` entry. In particular, when cross-protocol adaptation assigns a synthetic id to the terminal reasoning node (for example Chat Completions `reasoning_content` adaptation), that terminal reasoning item MUST NOT duplicate an already-completed streamed reasoning lifecycle that satisfies these conditions.
+
 STR3l. Downstream `/v1/responses` SSE MUST preserve externally visible item identity continuity. In particular, deltas and terminal item payloads for the same logical output item MUST use the same `item_id`.
 
 STR3m. Downstream `/v1/responses` SSE MUST preserve `phase` on reconstructed message items and text deltas when that metadata is present in URP v2 `Text` nodes.

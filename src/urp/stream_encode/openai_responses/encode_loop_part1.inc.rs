@@ -2904,12 +2904,39 @@ fn responses_message_text_signature(item: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+// STR3k.2: a terminal reasoning item re-encoded from ResponseDone.output may
+// differ from the already-streamed done item in synthetic `id` and in
+// empty-vs-absent field shape (e.g. `summary: []` vs no `summary` key), so the
+// comparison must normalize those shapes instead of using raw JSON equality.
 fn responses_reasoning_items_semantically_match(left: &Value, right: &Value) -> bool {
-    ["encrypted_content", "source"]
-        .iter()
-        .all(|field| left.get(*field) == right.get(*field))
-        && reasoning_text_from_item(left) == reasoning_text_from_item(right)
-        && left.get("summary") == right.get("summary")
+    ["encrypted_content", "source"].iter().all(|field| {
+        normalized_reasoning_scalar(left, field) == normalized_reasoning_scalar(right, field)
+    }) && reasoning_text_from_item(left) == reasoning_text_from_item(right)
+        && reasoning_summary_texts(left) == reasoning_summary_texts(right)
+}
+
+/// Optional reasoning-item scalar under STR3k.2 absence rules: an absent key,
+/// JSON `null`, and an empty string are all the same "absent" value.
+fn normalized_reasoning_scalar<'a>(item: &'a Value, field: &str) -> Option<&'a Value> {
+    match item.get(field) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if value.is_empty() => None,
+        other => other,
+    }
+}
+
+/// Ordered `summary[]` entry texts of a reasoning item; an absent `summary`
+/// field equals an empty array (STR3k.2).
+fn reasoning_summary_texts(item: &Value) -> Vec<&str> {
+    item.get("summary")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[allow(clippy::too_many_arguments)]
