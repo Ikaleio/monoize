@@ -757,6 +757,19 @@ pub struct ChannelTodayUsage {
     pub today_cost_nano_usd: i128,
 }
 
+/// Live-usage aggregate window (`user-live-usage.spec.md` LU-4).
+pub const LIVE_USAGE_WINDOW_SECONDS: i64 = 60;
+
+/// Rolling 60-second per-user request-log aggregate
+/// (`user-live-usage.spec.md` LU-6).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UserLiveUsage {
+    pub rpm: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+}
+
 pub use utils::{format_nano_to_usd, parse_nano_usd, parse_usd_to_nano};
 
 #[cfg(test)]

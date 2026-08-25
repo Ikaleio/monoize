@@ -658,6 +658,18 @@
 		"dark": "深色",
 		"system": "跟隨系統"
 	},
+	"userMenu": {
+		"balance": "餘額",
+		"plan": "方案",
+		"grant": "額度",
+		"nextReset": "下次重置",
+		"remainingOfGrant": "方案額度剩餘比例",
+		"liveUsage": "最近 60 秒",
+		"rpm": "RPM",
+		"tpm": "TPM",
+		"cacheHit": "快取命中",
+		"liveUsageError": "即時用量載入失敗"
+	},
 	"userSettings": {
 		"title": "設定",
 		"description": "管理您的帳戶設定與偏好",

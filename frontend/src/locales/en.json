@@ -661,6 +661,18 @@
 		"dark": "Dark",
 		"system": "System"
 	},
+	"userMenu": {
+		"balance": "Balance",
+		"plan": "Plan",
+		"grant": "Grant",
+		"nextReset": "Next reset",
+		"remainingOfGrant": "Remaining of plan grant",
+		"liveUsage": "Last 60s",
+		"rpm": "RPM",
+		"tpm": "TPM",
+		"cacheHit": "Cache hit",
+		"liveUsageError": "Failed to load live usage"
+	},
 	"userSettings": {
 		"title": "Settings",
 		"description": "Manage your account settings and preferences",

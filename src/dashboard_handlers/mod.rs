@@ -18,8 +18,8 @@ mod tests;
 
 pub use admin::{get_admin_overview, get_metrics};
 pub use analytics_request_logs::{
-    AnalyticsQuery, RequestLogsQuery, get_dashboard_analytics, list_my_request_logs,
-    stream_request_logs,
+    AnalyticsQuery, RequestLogsQuery, get_dashboard_analytics, get_my_live_usage,
+    list_my_request_logs, stream_request_logs,
 };
 pub use api_keys::{
     ApiKeyCreatedResponse, ApiKeyResponse, BatchDeleteApiKeysRequest, CreateApiKeyRequest,

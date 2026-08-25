@@ -658,6 +658,18 @@
 		"dark": "ダーク",
 		"system": "システム"
 	},
+	"userMenu": {
+		"balance": "残高",
+		"plan": "プラン",
+		"grant": "付与額",
+		"nextReset": "次回リセット",
+		"remainingOfGrant": "プラン付与額の残り",
+		"liveUsage": "直近 60 秒",
+		"rpm": "RPM",
+		"tpm": "TPM",
+		"cacheHit": "キャッシュ命中",
+		"liveUsageError": "リアルタイム使用量の取得に失敗しました"
+	},
 	"userSettings": {
 		"title": "設定",
 		"description": "アカウント設定とプリファレンスの管理",

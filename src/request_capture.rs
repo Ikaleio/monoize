@@ -1218,6 +1218,8 @@ mod tests {
         assert_eq!(bytes.len() as i64, record.size_bytes);
         let payload: Value = serde_json::from_slice(&bytes).expect("dump is JSON");
         assert_eq!(payload["version"], 2);
+        // RCD-D3a: the recorded id is the canonical transform id, so the
+        // legacy `force_stream` alias in the configured rule is canonicalized.
         assert_eq!(
             payload["attempts"][0]["transform_chain"],
             json!([{"scope": "global", "transform": "stream_force", "phase": "request"}])

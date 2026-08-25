@@ -36,9 +36,13 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
     size of unsent durable metering spool files, when the replica metering
     pipeline is present.
   - `replicas`: array of objects, one per replica that has sent at least one
-    heartbeat to this primary (empty on replica nodes and on primaries with
-    ingest disabled). Each object:
-    - `id`: string, the replica process identity;
+    heartbeat to this primary and has not been evicted per
+    `primary-replica-deployment.spec.md` M4a (entries older than
+    `360 * MONOIZE_METERING_SHIP_INTERVAL_SECONDS` are removed on read;
+    the array is empty on replica nodes and on primaries with ingest
+    disabled). Each object:
+    - `id`: string, the stable replica deployment identity
+      (`primary-replica-deployment.spec.md` M9);
     - `hostname`: string;
     - `listen`: string, the replica listen address;
     - `version`: string;
