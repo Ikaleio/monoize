@@ -85,12 +85,12 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             python: python3
-            linker: x86_64-linux-musl-gcc
+            linker: x86_64-unknown-linux-musl-gcc
             builder_image: ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:ce75e9174325d4fbb3de85c309e2d7ca29f7500169bc4b5d2c611ff7e86d549a
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             python: python3
-            linker: aarch64-linux-musl-gcc
+            linker: aarch64-unknown-linux-musl-gcc
             builder_image: ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:ecae5dd62d1c938c14f8071d36c16fa699860aace03bfb5284fb1216474d2643
           - runner: macos-15-intel
             target: x86_64-apple-darwin
@@ -555,8 +555,21 @@ jobs:
           path: ${{ runner.temp }}/digests
           merge-multiple: true
 
+      - name: Detect available platform digests
+        id: digest-set
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest_count=$(find "$RUNNER_TEMP/digests" -maxdepth 1 -type f | wc -l)
+          if [[ "$digest_count" -gt 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping container publication because no platform digest is available."
+          fi
+
       - name: Log in to GHCR
-        if: ${{ steps.digests.outcome == 'success' }}
+        if: ${{ steps.digest-set.outputs.available == 'true' }}
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.0.0
         with:
           registry: ghcr.io
@@ -564,11 +577,11 @@ jobs:
           password: ${{ github.token }}
 
       - name: Set up Docker Buildx
-        if: ${{ steps.digests.outcome == 'success' }}
+        if: ${{ steps.digest-set.outputs.available == 'true' }}
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.0.0
 
       - name: Create and verify container manifest
-        if: ${{ steps.digests.outcome == 'success' }}
+        if: ${{ steps.digest-set.outputs.available == 'true' }}
         shell: bash
         run: |
           tags=("$IMAGE_NAME:$CONTAINER_TAG")
