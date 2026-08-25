@@ -1003,6 +1003,7 @@ mod tests {
             user_role: UserRole::User,
             api_key_id: Some("key-1".to_string()),
             api_key_name: Some("test key".to_string()),
+            internal_source: None,
             max_multiplier: None,
             transforms: Vec::new(),
             model_redirects: Vec::new(),

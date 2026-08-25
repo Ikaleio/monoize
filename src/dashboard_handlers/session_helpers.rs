@@ -38,7 +38,7 @@ fn extract_session_from_cookie(headers: &HeaderMap) -> Option<String> {
         })
 }
 
-pub(super) async fn get_current_user(headers: &HeaderMap, state: &AppState) -> AppResult<User> {
+pub(crate) async fn get_current_user(headers: &HeaderMap, state: &AppState) -> AppResult<User> {
     let token = extract_session_token(headers).ok_or_else(|| {
         AppError::new(
             StatusCode::UNAUTHORIZED,

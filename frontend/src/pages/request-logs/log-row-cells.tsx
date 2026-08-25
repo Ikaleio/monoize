@@ -97,10 +97,13 @@ export function LogRowCells({
 		costTooltipOpenChange(open)
 	}
 
-	const isConnectivityTest =
-		log.request_kind === 'active_probe_connectivity' && !log.api_key.name
-	const tokenDisplay =
-		isConnectivityTest ? t('requestLogs.connectivityTest') : log.api_key.name || '-'
+	const internalSourceDisplay =
+		!log.api_key.name && log.request_kind === 'playground' ?
+			t('requestLogs.playgroundSource')
+		: !log.api_key.name && log.request_kind === 'active_probe_connectivity' ?
+			t('requestLogs.modelProbe')
+		: null
+	const tokenDisplay = internalSourceDisplay || log.api_key.name || '-'
 	const durationMs = getDurationMs(log)
 	const ttfbMs = getTtfbMs(log)
 	const duration = formatDuration(durationMs)

@@ -1175,6 +1175,12 @@ async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::
         .filter(|value| !value.is_empty())
     {
         api_key
+    } else if headers
+        .get("x-monoize-internal-source")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "playground")
+    {
+        return authenticate_playground_session(headers, state).await;
     } else {
         return Err(AppError::new(
             StatusCode::UNAUTHORIZED,
@@ -1190,6 +1196,98 @@ async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::
         .ok_or_else(|| AppError::new(StatusCode::UNAUTHORIZED, "unauthorized", "invalid token"))?;
     check_ip_whitelist(&auth_result, headers)?;
     Ok(auth_result)
+}
+
+async fn authenticate_playground_session(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> AppResult<crate::auth::AuthResult> {
+    let user = crate::dashboard_handlers::session_helpers::get_current_user(headers, state).await?;
+    let selected_group = match headers.get("x-monoize-playground-group") {
+        Some(value) => Some(
+            value
+                .to_str()
+                .map_err(|_| {
+                    AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_playground_group",
+                        "playground group header is not valid text",
+                    )
+                })?
+                .trim()
+                .to_string(),
+        )
+        .filter(|value| !value.is_empty()),
+        None => None,
+    };
+
+    let group_id = selected_group
+        .clone()
+        .unwrap_or_else(|| user.group_id.clone());
+    let group = state
+        .user_store
+        .get_group_by_id(&group_id)
+        .await
+        .map_err(|error| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error))?
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::FORBIDDEN,
+                "playground_group_forbidden",
+                "playground routing group is unavailable",
+            )
+        })?;
+
+    if selected_group.is_some()
+        && !user.role.can_manage_users()
+        && !group.user_selectable
+        && group.id != user.group_id
+    {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            "playground_group_forbidden",
+            "playground routing group is not selectable",
+        ));
+    }
+
+    if let Some(plan_id) = user.billing_plan_id.as_deref() {
+        let plan = state
+            .user_store
+            .get_billing_plan_by_id(plan_id)
+            .await
+            .map_err(|error| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?;
+        if let Some(plan) = plan.filter(|plan| plan.enabled && !plan.group_ids.is_empty()) {
+            if !plan.group_ids.iter().any(|allowed| allowed == &group_id) {
+                return Err(AppError::new(
+                    StatusCode::FORBIDDEN,
+                    "playground_group_forbidden",
+                    "playground routing group is excluded by the billing plan",
+                ));
+            }
+        }
+    }
+
+    Ok(crate::auth::AuthResult {
+        tenant_id: user.id.clone(),
+        user_id: Some(user.id),
+        username: Some(user.username),
+        user_role: user.role,
+        api_key_id: None,
+        api_key_name: None,
+        internal_source: Some(crate::auth::InternalRequestSource::Playground),
+        max_multiplier: None,
+        transforms: Vec::new(),
+        model_redirects: Vec::new(),
+        effective_groups: Some(vec![group_id]),
+        model_limits_enabled: false,
+        model_limits: Vec::new(),
+        ip_whitelist: Vec::new(),
+        sub_account_enabled: false,
+        sub_account_balance_nano: "0".to_string(),
+        reasoning_envelope_enabled: true,
+        request_capture_mode: crate::users::RequestCaptureMode::Off,
+    })
 }
 
 async fn ensure_balance_before_forward(

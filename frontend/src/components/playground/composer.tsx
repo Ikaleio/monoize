@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AnimatePresence, useReducedMotion } from "framer-motion";
 import {
   ArrowUp,
+  FileText,
   ImageIcon,
   MessageSquare,
   Paperclip,
@@ -12,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { motion, springs } from "@/components/ui/motion";
 import { cn } from "@/lib/utils";
-import type { ApiKey, Group, ModelMetadataRecord } from "@/lib/api";
+import type { Group, ModelMetadataRecord } from "@/lib/api";
 import type { PlaygroundPrefs } from "./prefs";
 import type { ComposerAttachment } from "./use-image-generation";
 import { GroupSelector } from "./group-selector";
@@ -88,16 +89,13 @@ export interface ComposerProps {
   canSend: boolean;
   /** True while a chat stream or image request is in flight (stop affordance). */
   isBusy: boolean;
-  blockedHint: string | null;
   prefs: PlaygroundPrefs;
   setPref: (name: keyof PlaygroundPrefs, value: string) => void;
   groups: Group[];
   groupsLoading: boolean;
   models: ModelMetadataRecord[];
   modelsLoading: boolean;
-  apiKeys: ApiKey[];
-  keysLoading: boolean;
-  resolvedKeyId: string | null;
+  isDraggingFiles: boolean;
 }
 
 export function Composer({
@@ -112,16 +110,13 @@ export function Composer({
   onStop,
   canSend,
   isBusy,
-  blockedHint,
   prefs,
   setPref,
   groups,
   groupsLoading,
   models,
   modelsLoading,
-  apiKeys,
-  keysLoading,
-  resolvedKeyId,
+  isDraggingFiles,
 }: ComposerProps) {
   const { t } = useTranslation();
   const shouldReduceMotion = useReducedMotion();
@@ -152,7 +147,12 @@ export function Composer({
 
   return (
     <div className="mx-auto w-full max-w-3xl">
-      <div className="rounded-2xl border bg-card shadow-sm transition-colors focus-within:border-ring/60">
+      <div
+        className={cn(
+          "rounded-2xl border bg-card shadow-sm transition-colors focus-within:border-ring/60",
+          isDraggingFiles && "border-ring bg-accent/30 ring-2 ring-ring/20",
+        )}
+      >
         <AnimatePresence initial={false}>
           {attachments.length > 0 && (
             <motion.div
@@ -166,13 +166,26 @@ export function Composer({
                 {attachments.map((attachment) => (
                   <div
                     key={attachment.id}
-                    className="relative h-16 w-16 overflow-hidden rounded-lg border"
+                    className={cn(
+                      "relative h-16 overflow-hidden rounded-lg border bg-muted/40",
+                      attachment.file.type.startsWith("image/") ? "w-16" : "w-28",
+                    )}
+                    title={attachment.file.name}
                   >
-                    <img
-                      src={attachment.url}
-                      alt={attachment.file.name}
-                      className="h-full w-full object-cover"
-                    />
+                    {attachment.file.type.startsWith("image/") ? (
+                      <img
+                        src={attachment.url}
+                        alt={attachment.file.name}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full min-w-0 items-center gap-2 px-2 pr-5">
+                        <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 truncate text-xs">
+                          {attachment.file.name}
+                        </span>
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => onRemoveAttachment(attachment.id)}
@@ -246,7 +259,7 @@ export function Composer({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept={mode === "image" ? "image/*" : undefined}
               multiple
               className="hidden"
               onChange={(e) => {
@@ -264,12 +277,7 @@ export function Composer({
               <Paperclip className="h-4 w-4" />
             </Button>
             <ModeToggle mode={mode} onModeChange={onModeChange} disabled={isBusy} />
-            <SettingsPopover
-              prefs={prefs}
-              setPref={setPref}
-              apiKeys={apiKeys}
-              resolvedKeyId={resolvedKeyId}
-            />
+            <SettingsPopover prefs={prefs} setPref={setPref} />
             <Button
               size="icon"
               aria-label={isBusy ? t("playground.stop") : t("playground.send")}
@@ -301,22 +309,6 @@ export function Composer({
           </div>
         </div>
       </div>
-
-      <AnimatePresence initial={false}>
-        {blockedHint && (
-          <motion.p
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={shouldReduceMotion ? { duration: 0 } : springs.smooth}
-            className="overflow-hidden px-2 pt-1.5 text-xs text-warning-foreground"
-          >
-            {blockedHint}
-          </motion.p>
-        )}
-      </AnimatePresence>
-
-      {keysLoading && attachments.length === 0 && !blockedHint && null}
     </div>
   );
 }

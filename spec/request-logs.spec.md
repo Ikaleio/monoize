@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-- **Purpose:** Record and expose per-request metadata for all API-key-authenticated proxy requests.
+- **Purpose:** Record and expose per-request metadata for API-key-authenticated and classified internal proxy requests.
 - **Scope:** Applies to all forwarding endpoints (responses, chat completions, messages, embeddings) and the dashboard request-logs API.
 
 ## 1. Data model
@@ -53,7 +53,7 @@ A request log row has:
   - `upstream_type: string?`
   - `upstream_param: string?`
   Historical rows MAY omit `provider_name`, `channel_name`, `attempt_number`, and the `upstream_*` fields.
-- `request_kind: string?` (classification of log source; null for normal client requests. `"active_probe_connectivity"` for active health-probe connectivity tests)
+- `request_kind: string?` (classification of log source; null for normal API-key client requests, `"playground"` for dashboard Playground requests, and `"active_probe_connectivity"` for active health-probe model probes)
 - `effective_provider_type: string?` (effective upstream type used for the selected attempt; null when no attempt was selected)
 - `affinity_hit: boolean?` (true when request routing used an eligible affinity binding; false when affinity was evaluated but no binding was used; null when affinity did not run)
 - `affinity_key_hash: string?` (short hash of the affinity cache key; raw affinity key material MUST NOT be stored)
@@ -243,7 +243,12 @@ RL18f. Before dispatch, an active probe MUST arm its reservation with a terminal
 
 RL18g. When the process-local background-shutdown flag becomes true, the active-probe scheduler MUST stop before the next probe dispatch. A probe already dispatched MUST complete the RL18f transition before the scheduler exits. The final shutdown flush MUST occur only after the scheduler's shared task-tracker registration has completed.
 
-RL19. For active probe logs, `api_key_id` MUST be null and UI token column label MUST be rendered as a localized "Connectivity Test" string.
+RL19. For active probe logs, `api_key_id` MUST be null and the UI token column label MUST be rendered as a localized "Model Probe" string.
+
+RL20. Dashboard Playground forwarding requests MUST use the normal request-log lifecycle,
+MUST persist `request_kind = "playground"`, and MUST persist `api_key_id = null`. The UI
+token column label for these rows MUST be rendered as a localized "Playground" string.
+Neither internal-source label may be exposed through the API-key management endpoints.
 
 ## 3. Dashboard endpoint
 

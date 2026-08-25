@@ -289,7 +289,9 @@ fn broadcast_pending_snapshot(
         request_ip: request_ip.map(ToOwned::to_owned),
         reasoning_effort: None,
         tried_providers_json: None,
-        request_kind: None,
+        request_kind: auth
+            .internal_source
+            .map(|source| source.request_kind().to_string()),
         effective_provider_type: effective_provider_type.map(ToOwned::to_owned),
         affinity_hit,
         affinity_key_hash: affinity_key_hash.map(ToOwned::to_owned),
@@ -607,7 +609,9 @@ pub(super) fn spawn_request_log(
         request_ip,
         reasoning_effort,
         tried_providers_json,
-        request_kind: None,
+        request_kind: auth
+            .internal_source
+            .map(|source| source.request_kind().to_string()),
         effective_provider_type: Some(effective_provider_type),
         affinity_hit,
         affinity_key_hash,
@@ -710,7 +714,9 @@ pub(super) fn spawn_request_log_error(
         request_ip,
         reasoning_effort,
         tried_providers_json,
-        request_kind: None,
+        request_kind: auth
+            .internal_source
+            .map(|source| source.request_kind().to_string()),
         effective_provider_type: Some(effective_provider_type),
         affinity_hit,
         affinity_key_hash,
@@ -805,7 +811,9 @@ pub(super) fn spawn_request_log_stream_terminal_error(
         request_ip,
         reasoning_effort,
         tried_providers_json,
-        request_kind: None,
+        request_kind: auth
+            .internal_source
+            .map(|source| source.request_kind().to_string()),
         effective_provider_type: Some(effective_provider_type),
         affinity_hit,
         affinity_key_hash,
@@ -897,7 +905,9 @@ pub(super) fn spawn_request_log_error_no_attempt(
         request_ip,
         reasoning_effort,
         tried_providers_json,
-        request_kind: None,
+        request_kind: auth
+            .internal_source
+            .map(|source| source.request_kind().to_string()),
         effective_provider_type: None,
         affinity_hit: None,
         affinity_key_hash: None,

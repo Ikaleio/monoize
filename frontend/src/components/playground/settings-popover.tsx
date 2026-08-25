@@ -1,31 +1,19 @@
 import { useTranslation } from "react-i18next";
-import { Check, KeyRound, Settings2 } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Separator } from "@/components/ui/separator";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
-import type { ApiKey } from "@/lib/api";
 import type { PlaygroundPrefs } from "./prefs";
-import { isEligibleKey } from "./auth";
 
 interface SettingsPopoverProps {
   prefs: PlaygroundPrefs;
   setPref: (name: keyof PlaygroundPrefs, value: string) => void;
-  apiKeys: ApiKey[];
-  resolvedKeyId: string | null;
 }
 
-export function SettingsPopover({
-  prefs,
-  setPref,
-  apiKeys,
-  resolvedKeyId,
-}: SettingsPopoverProps) {
+export function SettingsPopover({ prefs, setPref }: SettingsPopoverProps) {
   const { t } = useTranslation();
-  const eligibleKeys = apiKeys.filter((key) => isEligibleKey(key));
 
   return (
     <Popover>
@@ -39,7 +27,13 @@ export function SettingsPopover({
           <Settings2 className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-80" align="end">
+      <PopoverContent
+        side="top"
+        sideOffset={8}
+        align="end"
+        collisionPadding={16}
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain"
+      >
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="playground-system-prompt" className="text-xs">
@@ -85,65 +79,6 @@ export function SettingsPopover({
                 className="h-8 text-sm"
               />
             </div>
-          </div>
-
-          <Separator />
-
-          <div className="space-y-2">
-            <Label className="flex items-center gap-1.5 text-xs">
-              <KeyRound className="h-3.5 w-3.5" />
-              {t("playground.apiKey")}
-            </Label>
-            <div className="max-h-44 space-y-1 overflow-y-auto">
-              <button
-                type="button"
-                onClick={() => setPref("apiKeyId", "")}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent",
-                  prefs.apiKeyId === "" && "bg-accent/60",
-                )}
-              >
-                <span className="min-w-0 flex-1 truncate">
-                  {t("playground.apiKeyAuto")}
-                </span>
-                <Check
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0",
-                    prefs.apiKeyId === "" ? "opacity-100" : "opacity-0",
-                  )}
-                />
-              </button>
-              {eligibleKeys.map((key) => (
-                <button
-                  key={key.id}
-                  type="button"
-                  onClick={() => setPref("apiKeyId", key.id)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent",
-                    prefs.apiKeyId === key.id && "bg-accent/60",
-                  )}
-                >
-                  <span className="min-w-0 flex-1 truncate">{key.name}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                    {key.key_prefix}…
-                  </span>
-                  {key.id === resolvedKeyId && (
-                    <span className="shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground">
-                      {t("playground.activeKey")}
-                    </span>
-                  )}
-                  <Check
-                    className={cn(
-                      "h-3.5 w-3.5 shrink-0",
-                      prefs.apiKeyId === key.id ? "opacity-100" : "opacity-0",
-                    )}
-                  />
-                </button>
-              ))}
-            </div>
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              {t("playground.apiKeyScopeHint")}
-            </p>
           </div>
         </div>
       </PopoverContent>

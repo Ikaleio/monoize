@@ -9,7 +9,7 @@ mod groups;
 mod model_registry;
 mod providers;
 mod request_captures;
-mod session_helpers;
+pub(crate) mod session_helpers;
 mod settings;
 mod users;
 

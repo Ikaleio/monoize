@@ -10,13 +10,11 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 export interface ChatRequestConfig {
   model: string;
-  apiKey: string | null;
+  group: string;
   systemPrompt: string;
   temperature: string;
   maxTokens: string;
 }
-
-export type MissingConfigReason = "model" | "key";
 
 /**
  * Strips assistant `file` parts before model conversion (PG-CHAT3): generated
@@ -77,32 +75,36 @@ function parsePositiveInt(value: string): number | undefined {
  * time so selector changes apply to regenerations too.
  */
 export class MonoizeChatTransport implements ChatTransport<UIMessage> {
-  private readonly getConfig: () => ChatRequestConfig;
-  private readonly missingConfigMessage: (reason: MissingConfigReason) => string;
+  private config: ChatRequestConfig;
+  private missingModelMessage: string;
 
-  constructor(
-    getConfig: () => ChatRequestConfig,
-    missingConfigMessage: (reason: MissingConfigReason) => string,
-  ) {
-    this.getConfig = getConfig;
-    this.missingConfigMessage = missingConfigMessage;
+  constructor(config: ChatRequestConfig, missingModelMessage: string) {
+    this.config = config;
+    this.missingModelMessage = missingModelMessage;
+  }
+
+  updateConfig(config: ChatRequestConfig, missingModelMessage: string) {
+    this.config = config;
+    this.missingModelMessage = missingModelMessage;
   }
 
   async sendMessages(
     options: Parameters<ChatTransport<UIMessage>["sendMessages"]>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
-    const config = this.getConfig();
+    const config = this.config;
     if (!config.model.trim()) {
-      throw new Error(this.missingConfigMessage("model"));
+      throw new Error(this.missingModelMessage);
     }
-    if (!config.apiKey) {
-      throw new Error(this.missingConfigMessage("key"));
-    }
-
     const provider = createOpenAICompatible({
       name: "monoize",
       baseURL: `${window.location.origin}/api/v1`,
-      apiKey: config.apiKey,
+      headers: {
+        "x-monoize-internal-source": "playground",
+        ...(config.group.trim()
+          ? { "x-monoize-playground-group": config.group.trim() }
+          : {}),
+      },
+      fetch: (input, init) => fetch(input, { ...init, credentials: "include" }),
     });
 
     const systemPrompt = config.systemPrompt.trim();

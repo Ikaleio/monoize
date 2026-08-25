@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Copy,
   Download,
+  FileText,
   Pencil,
   RefreshCcw,
   Trash2,
@@ -170,6 +171,10 @@ export function ChatMessage({
     (part): part is Extract<typeof part, { type: "file" }> =>
       part.type === "file" && part.mediaType.startsWith("image"),
   );
+  const fileParts = message.parts.filter(
+    (part): part is Extract<typeof part, { type: "file" }> =>
+      part.type === "file" && !part.mediaType.startsWith("image"),
+  );
   const reasoningParts = message.parts.filter(
     (part): part is Extract<typeof part, { type: "reasoning" }> =>
       part.type === "reasoning" && part.text.trim().length > 0,
@@ -284,6 +289,23 @@ export function ChatMessage({
                 alt={part.filename ?? t("playground.attachmentAlt")}
                 className="max-h-48 rounded-xl border object-contain"
               />
+            ))}
+          </div>
+        )}
+        {fileParts.length > 0 && (
+          <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
+            {fileParts.map((part, index) => (
+              <a
+                key={index}
+                href={part.url}
+                download={part.filename || "attachment"}
+                className="flex max-w-64 items-center gap-2 rounded-xl border bg-muted/50 px-3 py-2 text-left text-xs transition-colors hover:bg-muted"
+              >
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 truncate">
+                  {part.filename || t("playground.attachmentFile")}
+                </span>
+              </a>
             ))}
           </div>
         )}

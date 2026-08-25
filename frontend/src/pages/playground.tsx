@@ -3,22 +3,16 @@ import { useTranslation } from "react-i18next";
 import { useChat } from "@ai-sdk/react";
 import type { FileUIPart, UIMessage } from "ai";
 import { AnimatePresence, useReducedMotion } from "framer-motion";
-import { KeyRound, RefreshCcw, SquarePen, X } from "lucide-react";
+import { RefreshCcw, SquarePen, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { LayoutGroup, motion, springs } from "@/components/ui/motion";
 import {
-  createApiKeyOptimistic,
-  useApiKeys,
   useCurrentUser,
   useDashboardGroups,
   useMarketplaceModels,
 } from "@/lib/swr";
-import { resolvePlaygroundKey } from "@/components/playground/auth";
-import {
-  MonoizeChatTransport,
-  type ChatRequestConfig,
-} from "@/components/playground/chat-transport";
+import { MonoizeChatTransport } from "@/components/playground/chat-transport";
 import { Composer, type ComposerMode } from "@/components/playground/composer";
 import { MessageList } from "@/components/playground/message-list";
 import {
@@ -47,65 +41,72 @@ export function PlaygroundPage() {
   const [mode, setMode] = useState<ComposerMode>("chat");
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  const [creatingKey, setCreatingKey] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const dragDepthRef = useRef(0);
 
   useEffect(() => purgeLegacyPlaygroundKeys(), []);
 
-  const { data: apiKeys, isLoading: keysLoading } = useApiKeys();
   const { data: groups, isLoading: groupsLoading } = useDashboardGroups();
   const { data: models, isLoading: modelsLoading } = useMarketplaceModels();
   const { data: user } = useCurrentUser();
 
   const modelForMode = mode === "image" ? prefs.imageModel : prefs.chatModel;
-  const resolution = useMemo(
-    () =>
-      resolvePlaygroundKey(
-        apiKeys,
-        prefs.apiKeyId,
-        prefs.group,
-        user?.group_id ?? "",
-        modelForMode.trim(),
-      ),
-    [apiKeys, prefs.apiKeyId, prefs.group, user?.group_id, modelForMode],
-  );
+  const selectableGroups = useMemo(() => {
+    if (!groups || !user) return [];
+    const planGroups =
+      user.billing_plan?.enabled && user.billing_plan.group_ids.length > 0
+        ? new Set(user.billing_plan.group_ids)
+        : null;
+    return groups.filter((group) => {
+      const userMaySelect =
+        user.role === "admin" ||
+        user.role === "super_admin" ||
+        group.user_selectable ||
+        group.id === user.group_id;
+      return userMaySelect && (!planGroups || planGroups.has(group.id));
+    });
+  }, [groups, user]);
 
   useEffect(() => {
-    if (!groups || !prefs.group) return;
-    if (!groups.some((group) => group.id === prefs.group)) {
+    if (!groups || !user || !prefs.group) return;
+    if (!selectableGroups.some((group) => group.id === prefs.group)) {
       setPref("group", "");
     }
-  }, [groups, prefs.group, setPref]);
+  }, [groups, user, selectableGroups, prefs.group, setPref]);
 
-  // Refs let the memoized transport observe the latest selector state at call
-  // time (PG-CHAT2 step 1) without recreating the useChat instance.
-  const configRef = useRef<ChatRequestConfig>({
-    model: "",
-    apiKey: null,
-    systemPrompt: "",
-    temperature: "",
-    maxTokens: "",
-  });
-  configRef.current = {
-    model: prefs.chatModel,
-    apiKey: resolution.key?.key ?? null,
-    systemPrompt: prefs.systemPrompt,
-    temperature: prefs.temperature,
-    maxTokens: prefs.maxTokens,
-  };
-  const tRef = useRef(t);
-  tRef.current = t;
-
-  const transport = useMemo(
+  const [transport] = useState(
     () =>
       new MonoizeChatTransport(
-        () => configRef.current,
-        (reason) =>
-          tRef.current(
-            reason === "model" ? "playground.errorNoModel" : "playground.errorNoKey",
-          ),
+        {
+          model: prefs.chatModel,
+          group: prefs.group,
+          systemPrompt: prefs.systemPrompt,
+          temperature: prefs.temperature,
+          maxTokens: prefs.maxTokens,
+        },
+        t("playground.errorNoModel"),
       ),
-    [],
   );
+  useEffect(() => {
+    transport.updateConfig(
+      {
+        model: prefs.chatModel,
+        group: prefs.group,
+        systemPrompt: prefs.systemPrompt,
+        temperature: prefs.temperature,
+        maxTokens: prefs.maxTokens,
+      },
+      t("playground.errorNoModel"),
+    );
+  }, [
+    transport,
+    t,
+    prefs.chatModel,
+    prefs.group,
+    prefs.systemPrompt,
+    prefs.temperature,
+    prefs.maxTokens,
+  ]);
 
   const {
     messages,
@@ -131,53 +132,116 @@ export function PlaygroundPage() {
 
   const trimmedText = text.trim();
   const canSend =
-    resolution.key !== null &&
     modelForMode.trim().length > 0 &&
     (status === "ready" || status === "error") &&
     !imageBusy &&
     (trimmedText.length > 0 || (mode === "chat" && attachments.length > 0));
 
-  const selectedGroupName = groups?.find((group) => group.id === prefs.group)?.name;
-  const blockedHint =
-    resolution.reason === "no-group-key"
-      ? t("playground.groupKeyBlocked", { group: selectedGroupName ?? prefs.group })
-      : resolution.reason === "no-model-key"
-        ? t("playground.modelKeyBlocked", { model: modelForMode })
-        : null;
+  const handleAddFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const incoming = Array.from(files);
+      const accepted =
+        mode === "image"
+          ? incoming.filter((file) => file.type.startsWith("image/"))
+          : incoming;
+      if (accepted.length !== incoming.length) {
+        toast.error(t("playground.imageFilesOnly"));
+      }
+      const staged = await Promise.all(
+        accepted.map(async (file) => ({
+          id: playgroundMessageId(),
+          file,
+          url: await readAsDataUrl(file),
+        })),
+      );
+      if (staged.length > 0) {
+        setAttachments((prev) => [...prev, ...staged]);
+      }
+    },
+    [mode, t],
+  );
 
-  const handleAddFiles = useCallback(async (files: FileList) => {
-    const imageFiles = Array.from(files).filter((file) =>
-      file.type.startsWith("image/"),
-    );
-    const staged = await Promise.all(
-      imageFiles.map(async (file) => ({
-        id: playgroundMessageId(),
-        file,
-        url: await readAsDataUrl(file),
-      })),
-    );
-    if (staged.length > 0) {
-      setAttachments((prev) => [...prev, ...staged]);
-    }
+  const handleModeChange = useCallback(
+    (nextMode: ComposerMode) => {
+      if (nextMode === "image") {
+        setAttachments((current) => {
+          const imagesOnly = current.filter((attachment) =>
+            attachment.file.type.startsWith("image/"),
+          );
+          if (imagesOnly.length !== current.length) {
+            toast.error(t("playground.imageFilesOnly"));
+          }
+          return imagesOnly;
+        });
+      }
+      setMode(nextMode);
+    },
+    [t],
+  );
+
+  const handleDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDraggingFiles(true);
   }, []);
+
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (dragDepthRef.current === 0) return;
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingFiles(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!event.dataTransfer.types.includes("Files")) return;
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setIsDraggingFiles(false);
+      if (event.dataTransfer.files.length > 0) {
+        void handleAddFiles(event.dataTransfer.files);
+      }
+    },
+    [handleAddFiles],
+  );
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLDivElement>) => {
+      const files = Array.from(event.clipboardData.items)
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+      if (files.length === 0) return;
+      event.preventDefault();
+      void handleAddFiles(files);
+    },
+    [handleAddFiles],
+  );
 
   const handleRemoveAttachment = useCallback((id: string) => {
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
   }, []);
 
   const handleSend = useCallback(() => {
-    if (!canSend || !resolution.key) return;
+    if (!canSend) return;
     if (mode === "image") {
       images.generate({
         prompt: trimmedText,
         model: prefs.imageModel.trim(),
-        apiKey: resolution.key.key,
+        group: prefs.group,
         attachment: attachments[0] ?? null,
       });
     } else {
       const files: FileUIPart[] = attachments.map((attachment) => ({
         type: "file",
-        mediaType: attachment.file.type || "image/png",
+        mediaType: attachment.file.type || "application/octet-stream",
         filename: attachment.file.name,
         url: attachment.url,
       }));
@@ -189,11 +253,11 @@ export function PlaygroundPage() {
     setAttachments([]);
   }, [
     canSend,
-    resolution.key,
     mode,
     images,
     trimmedText,
     prefs.imageModel,
+    prefs.group,
     attachments,
     sendMessage,
   ]);
@@ -277,21 +341,17 @@ export function PlaygroundPage() {
     clearError();
   }, [stop, images, setMessages, clearError]);
 
-  const handleCreateKey = useCallback(async () => {
-    setCreatingKey(true);
-    try {
-      await createApiKeyOptimistic({ name: "Playground" }, apiKeys ?? []);
-    } catch (error) {
-      toast.error((error as Error).message || t("common.error"));
-    } finally {
-      setCreatingKey(false);
-    }
-  }, [apiKeys, t]);
-
   const layoutTransition = shouldReduceMotion ? { duration: 0 } : springs.smooth;
 
   return (
-    <div className="flex h-[calc(100dvh-5.5rem)] flex-col lg:h-[calc(100dvh-3rem)]">
+    <div
+      className="flex h-[calc(100dvh-5.5rem)] flex-col lg:h-[calc(100dvh-3rem)]"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      onPasteCapture={handlePaste}
+    >
       <LayoutGroup>
         {conversationEmpty ? (
           <>
@@ -307,19 +367,6 @@ export function PlaygroundPage() {
               <p className="mt-2 text-sm text-muted-foreground">
                 {t("playground.greetingHint")}
               </p>
-              {resolution.reason === "no-keys" && !keysLoading && (
-                <div className="mx-auto mt-6 flex max-w-md flex-col items-center gap-3 rounded-2xl border border-dashed px-6 py-5">
-                  <KeyRound className="h-5 w-5 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">
-                    {t("playground.noKeysHint")}
-                  </p>
-                  <Button size="sm" onClick={handleCreateKey} disabled={creatingKey}>
-                    {creatingKey
-                      ? t("playground.creatingKey")
-                      : t("playground.createKey")}
-                  </Button>
-                </div>
-              )}
             </motion.div>
           </>
         ) : (
@@ -395,7 +442,7 @@ export function PlaygroundPage() {
         >
           <Composer
             mode={mode}
-            onModeChange={setMode}
+            onModeChange={handleModeChange}
             text={text}
             onTextChange={setText}
             attachments={attachments}
@@ -405,16 +452,13 @@ export function PlaygroundPage() {
             onStop={handleStop}
             canSend={canSend}
             isBusy={busy}
-            blockedHint={blockedHint}
             prefs={prefs}
             setPref={setPref}
-            groups={groups ?? []}
-            groupsLoading={groupsLoading && !groups}
+            groups={selectableGroups}
+            groupsLoading={(groupsLoading && !groups) || !user}
             models={models ?? []}
             modelsLoading={modelsLoading && !models}
-            apiKeys={apiKeys ?? []}
-            keysLoading={keysLoading && !apiKeys}
-            resolvedKeyId={resolution.key?.id ?? null}
+            isDraggingFiles={isDraggingFiles}
           />
         </motion.div>
 

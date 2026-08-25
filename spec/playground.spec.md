@@ -4,14 +4,15 @@
 
 - Product name: Monoize.
 - Scope: ephemeral chatbot playground accessible at `/dashboard/playground`.
-- This revision replaces the previous message-row + BYOK playground design entirely.
+- This revision replaces the previous API-key-resolving playground design entirely.
 
 ## 1. Purpose
 
 The Playground is a session-only chatbot for the local Monoize instance. It supports
 streamed chat completions, multimodal user attachments, image generation, and image
-editing through the Monoize forwarding endpoints. It is a pure-frontend feature: the
-conversation is never persisted to any backend store.
+editing through the Monoize forwarding endpoints. Conversation state is a frontend-only
+feature and is never persisted to any backend store. Forwarding authentication is supplied
+by the authenticated dashboard session.
 
 ## 2. Session and Persistence Model
 
@@ -27,75 +28,53 @@ PG-STATE2. Exactly these preference keys MAY be persisted in `localStorage`:
 | `playground_group` | string | Selected routing group id; empty/absent means "auto". |
 | `playground_chat_model` | string | Selected chat model id. |
 | `playground_image_model` | string | Selected image model id. |
-| `playground_api_key_id` | string | Id of an explicitly user-selected API key; empty/absent means automatic key resolution. |
 | `playground_temperature` | string | Decimal string; empty/absent means "omit from request". |
 | `playground_max_tokens` | string | Integer string; empty/absent means "omit from request". |
 | `playground_system_prompt` | string | System prompt text; empty means "no system message". |
 
-PG-STATE3. On first mount the page MUST delete the legacy keys `playground_api_key` and
-`playground_model` from `localStorage` so no previously pasted API-key secret remains
-stored client-side.
+PG-STATE3. On first mount the page MUST delete the legacy keys `playground_api_key`,
+`playground_api_key_id`, and `playground_model` from `localStorage`. No API-key secret or
+API-key identifier may remain as Playground state.
 
 ## 3. Authentication (no BYOK)
 
-PG-AUTH1. Dashboard data (API keys, groups, marketplace models, session user) MUST be
-fetched with the authenticated dashboard session through the existing SWR hooks
-(`useApiKeys`, `useDashboardGroups`, `useMarketplaceModels`, `useCurrentUser`).
+PG-AUTH1. Dashboard groups, marketplace models, and the session user MUST be fetched with
+the authenticated dashboard session through `useDashboardGroups`,
+`useMarketplaceModels`, and `useCurrentUser`. The Playground MUST NOT list or create API
+keys.
 
 PG-AUTH2. Forwarding requests (`/api/v1/chat/completions`, `/api/v1/images/generations`,
-`/api/v1/images/edits`) MUST authenticate with `Authorization: Bearer <full key>` where
-`<full key>` is the `key` field of one of the user's own API keys returned by
-`GET /api/dashboard/tokens`.
+`/api/v1/images/edits`) MUST omit `Authorization` and `x-api-key`, include browser
+credentials, and send `x-monoize-internal-source: playground`. When a non-auto routing
+group is selected, the request MUST also send `x-monoize-playground-group: <group-id>`.
 
-PG-AUTH3. The page MUST NOT render any free-form secret input for API keys or upstream
-provider keys, and MUST NOT store API-key secret values in `localStorage` (only the key
-id per PG-STATE2).
+PG-AUTH3. The forwarding server MUST accept `x-monoize-internal-source: playground` only
+when no API-key credential is present and the `monoize_session` HttpOnly cookie identifies
+an enabled dashboard user. The resulting authentication object MUST have `api_key_id =
+null`, `api_key_name = null`, and internal source `playground`. No API-key row, token,
+secret, prefix, or identifier is created for this authentication mode.
 
-PG-AUTH4. An API key is *time-eligible* iff `enabled == true` and `expires_at` is absent,
-invalid, or in the future at resolution time. A time-eligible key is *model-compatible*
-with selected model id `m` iff `m` is empty, `model_limits_enabled == false`,
-`model_limits == []`, or `m ∈ model_limits`. These model-limit semantics MUST equal the
-forwarding endpoint's `model_not_allowed` check.
+PG-AUTH4. For an auto group request, the effective routing group list MUST equal the
+session user's current group after the billing-plan group ceiling is applied. For an
+explicit group request, the effective routing group list MUST equal only that group after
+the same billing-plan ceiling is applied.
 
-PG-AUTH5. Key resolution is a pure function of time-eligible keys `K` in list order,
-model-compatible subset `E`, persisted `playground_api_key_id = k`, selected group id
-`g`, and the session user's group id `u`:
+PG-AUTH5. An explicit group is permitted iff the group exists and at least one condition
+is true: the session user is an administrator, the group has `user_selectable = true`, or
+the group id equals the session user's current group id. A non-permitted group MUST return
+HTTP `403` before upstream dispatch. A group removed by a non-empty enabled billing-plan
+group ceiling MUST return HTTP `403` before upstream dispatch.
 
-1. If `K` is empty, resolve to "none" with reason `no-keys`.
-2. If `E` is empty, resolve to "none" with reason `no-model-key`.
-3. If `g` is "auto":
-   - if `k` identifies a member of `E`, resolve to that key;
-   - otherwise resolve to `E[0]`.
-4. If `g` is a group id, define:
-   - `C1` = keys in `E` with `use_user_group == false` and `group_ids == [g]`;
-   - `C2` = keys in `E` with `use_user_group == false`, `g ∈ group_ids`, and
-     `|group_ids| > 1`;
-   - `C3` = keys in `E` with (`use_user_group == true` or `group_ids == []`) and `u == g`;
-   - if `k` identifies a member of `C1 ∪ C2 ∪ C3`, resolve to that key;
-   - otherwise resolve to the first member of `C1`, else of `C2`, else of `C3`,
-     else "none" with reason `no-group-key`.
+PG-AUTH6. Playground internal authentication MUST bill the session user's main balance.
+It MUST NOT enable API-key sub-account billing, model allowlists, key transforms, key model
+redirects, key IP allowlists, key multiplier ceilings, or key request capture.
 
-PG-AUTH6. When resolution yields reason `no-keys`, the empty-state hero MUST show
-a single-action prompt that creates an API key via
-`POST /api/dashboard/tokens` with body `{ "name": "Playground" }`, revalidates the
-API-key SWR cache, and resolves to the created key. No other backend mutation is allowed.
+PG-AUTH7. Playground requests MUST be admitted to the normal request-log lifecycle with
+`request_kind = "playground"`. This classification is metadata; it is not an API key and
+MUST NOT be accepted as an API-key credential.
 
-PG-AUTH7. When resolution yields reason `no-group-key`, the composer send action MUST be
-blocked. An inline hint MUST identify the selected group name as the cause. When resolution
-yields reason `no-model-key`, the composer send action MUST be blocked. An inline hint MUST
-identify the selected model id as the cause.
-
-PG-AUTH8. Routing-scope semantics MUST be documented in the key-picker UI as follows:
-the effective routing groups of a request are derived from the API key and owning user
-(`api-key-authentication.spec.md` §4). Selecting group `g` guarantees the request is
-authorized for `g` and prefers the narrowest matching key (`C1` before `C2` before `C3`).
-Only a key with `use_user_group == false` and `group_ids == [g]` restricts routing to
-exactly `g`.
-
-PG-AUTH9. A compact key picker (inside the composer settings popover) MUST list each
-eligible key with name and `key_prefix`, plus an "auto" option. Picking a key writes
-`playground_api_key_id`; picking "auto" clears it. The picker MUST NOT display full key
-secrets.
+PG-AUTH8. The Playground MUST NOT render an API-key picker, missing-key state, or
+API-key-creation action.
 
 ## 4. Selectors
 
@@ -105,8 +84,8 @@ model. Selectors MUST NOT be free-text-only inputs.
 
 PG-SEL2. Group selector:
 
-- Options are "auto" plus every `Group` from `GET /api/dashboard/groups`, in response
-  order.
+- Options are "auto" plus every `Group` from `GET /api/dashboard/groups` that satisfies
+  PG-AUTH5 and the enabled billing-plan group ceiling, in response order.
 - Each option MUST use `Group.id` as its value and render `Group.name` as its label.
 - Selection persists the group id to `playground_group` (empty string for "auto").
 - If a non-empty persisted id does not match a returned `Group.id`, the page MUST clear
@@ -135,9 +114,9 @@ contains at least one of:
 The image-model selector MUST list image models in a group before all remaining models.
 The chat-model selector lists all models unsegmented.
 
-PG-SEL5. While any of the backing SWR hooks (`useApiKeys`, `useDashboardGroups`,
-`useMarketplaceModels`) is loading with no cached data, the corresponding selector
-trigger MUST render as a skeleton pill instead of an interactive control.
+PG-SEL5. While either selector backing hook (`useDashboardGroups` or
+`useMarketplaceModels`) is loading with no cached data, the corresponding selector trigger
+MUST render as a skeleton pill instead of an interactive control.
 
 ## 5. Chat Execution (AI SDK)
 
@@ -147,14 +126,14 @@ default HTTP transport.
 
 PG-CHAT2. `MonoizeChatTransport.sendMessages` MUST:
 
-1. Read the current chat model id, resolved API key, system prompt, temperature, and
+1. Read the current chat model id, selected group id, system prompt, temperature, and
    max-tokens values at call time (latest selector state applies to every request,
    including regenerations).
-2. Reject with an error carrying a translatable reason when the model is empty or the
-   resolved key is "none".
+2. Reject with an error carrying a translatable reason when the model is empty.
 3. Build an OpenAI-compatible provider via `createOpenAICompatible` from
-   `@ai-sdk/openai-compatible` with `baseURL = <origin>/api/v1` and
-   `apiKey = <full key value>`, so the upstream call is
+   `@ai-sdk/openai-compatible` with `baseURL = <origin>/api/v1`, no `apiKey`, the
+   PG-AUTH2 headers, and a fetch implementation with `credentials = "include"`, so the
+   upstream call is
    `POST /api/v1/chat/completions` with `stream: true` against the local Monoize
    instance.
 4. Convert UI messages with `convertToModelMessages` after applying PG-CHAT3
@@ -183,9 +162,10 @@ between the message list and the composer showing the error message, with a retr
 that calls `regenerate()` and a dismiss action that calls `clearError()`. No toast is
 shown for chat request errors.
 
-PG-CHAT6. User attachments: the composer accepts image files (`image/*`). In chat mode,
-send MUST call `sendMessage({ text, files })` so attachments become user-message `file`
-parts (data URLs) that convert to image parts for the upstream request.
+PG-CHAT6. User attachments: chat mode accepts images and ordinary files. Send MUST call
+`sendMessage({ text, files })` so attachments become user-message `file` parts with their
+original media type, file name, and data URL. Image mode accepts image files only because
+its edit endpoint requires an image source.
 
 ## 6. Message Operations
 
@@ -224,12 +204,14 @@ action executes an image request instead of a chat request.
 
 PG-IMG2. Image send with no attachment MUST call
 `POST /api/v1/images/generations` with JSON body
-`{ "model": <image model>, "prompt": <composer text>, "n": 1 }`.
+`{ "model": <image model>, "prompt": <composer text>, "n": 1 }` and the PG-AUTH2
+credentials and headers.
 
 PG-IMG3. Image send with at least one attachment MUST call
 `POST /api/v1/images/edits` as `multipart/form-data` with fields `model`, `prompt`,
 `n = 1`, and `image` = the first attachment file. Additional attachments beyond the
 first are ignored for the upstream call (the endpoint accepts a single source image).
+The request MUST use the PG-AUTH2 credentials and headers.
 
 PG-IMG4. On image send the frontend MUST synchronously append a user message (prompt
 text plus attachment file parts) to the chat state, and render a pending assistant
@@ -266,17 +248,29 @@ settings popover trigger, and the send/stop action.
 PG-CMP2. Enter submits and Shift+Enter inserts a newline on fine-pointer devices. On
 coarse-pointer devices Enter inserts a newline and only the send button submits.
 
-PG-CMP3. Send is enabled iff: a model for the active mode is selected, key resolution
-does not yield "none", `status` is `ready`/`error`, no image request is pending, and the
+PG-CMP3. Send is enabled iff: a model for the active mode is selected, `status` is
+`ready`/`error`, no image request is pending, and the
 trimmed text is non-empty (chat mode also allows empty text with ≥ 1 attachment).
 
 PG-CMP4. The settings popover contains: system prompt (multiline), temperature (number,
-range 0–2, step 0.1, clearable), max tokens (positive integer, clearable), and the key
-picker (PG-AUTH9). Each field persists per PG-STATE2 on change.
+range 0–2, step 0.1, clearable), and max tokens (positive integer, clearable). Each field
+persists per PG-STATE2 on change. The popover MUST align its end edge to the trigger,
+prefer opening above the trigger, keep at least 16 CSS pixels from every viewport edge,
+and use internal vertical scrolling when its content exceeds the collision-computed
+available height.
 
 PG-CMP5. A "new chat" action MUST be visible whenever the conversation is non-empty; it
 clears the chat state, any pending image job, and composer attachments. It MUST NOT
 clear persisted preferences.
+
+PG-CMP6. The Playground root MUST accept attachment files from all three input paths:
+the file-picker action, a file drag-and-drop anywhere inside the page, and a clipboard
+paste event whose clipboard contains one or more files. A clipboard paste without files
+MUST preserve normal textarea text paste behavior. All three paths MUST apply PG-CHAT6's
+mode restriction. Switching from chat mode to image mode MUST remove staged non-image
+files. Each staged image MUST render an image thumbnail; each staged non-image file MUST
+render a file icon and its truncated file name. Every staged attachment MUST expose the
+same remove action.
 
 ## 9. Layout
 
@@ -312,6 +306,10 @@ labeled through i18n, separate from the answer text.
 PG-RD3. `file` parts with an `image` media type render as rounded images constrained to
 the message column (max height `24rem`), with the PG-MSG1 image actions.
 
+PG-RD4. A user-message `file` part with a non-image media type MUST render as a compact
+downloadable file row containing a file icon and the original file name. It MUST NOT be
+passed to an image element.
+
 ## 11. Motion
 
 PG-MO1. All animations use `framer-motion` with the shared spring presets from
@@ -341,7 +339,7 @@ in `en.json`, `zh.json`, `zh-TW.json`, and `ja.json`.
 
 ## 13. Constraints
 
-PG-C1. The Playground performs no backend mutation except PG-AUTH6 key creation.
+PG-C1. The Playground performs no dashboard configuration mutation.
 
 PG-C2. The Playground MUST NOT implement its own SSE parser for chat; streaming is
 handled by the AI SDK provider/`streamText` pipeline (PG-CHAT2).

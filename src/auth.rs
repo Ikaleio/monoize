@@ -2,8 +2,20 @@ use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{RequestCaptureMode, UserStore, resolve_effective_groups};
 
-/// Result of authentication containing the tenant_id and optionally the user_id
-/// if authenticated via database API key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InternalRequestSource {
+    Playground,
+}
+
+impl InternalRequestSource {
+    pub const fn request_kind(self) -> &'static str {
+        match self {
+            Self::Playground => "playground",
+        }
+    }
+}
+
+/// Forwarding authorization resolved from an API key or an internal dashboard source.
 #[derive(Clone, Debug)]
 pub struct AuthResult {
     pub tenant_id: String,
@@ -12,6 +24,7 @@ pub struct AuthResult {
     pub user_role: crate::users::UserRole,
     pub api_key_id: Option<String>,
     pub api_key_name: Option<String>,
+    pub internal_source: Option<InternalRequestSource>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<crate::users::CompiledModelRedirectRule>,
@@ -66,6 +79,7 @@ impl AuthState {
                             user_role: user.role,
                             api_key_id: Some(api_key.id),
                             api_key_name: Some(api_key.name),
+                            internal_source: None,
                             max_multiplier: api_key.max_multiplier,
                             transforms: api_key.transforms,
                             model_redirects: api_key.compiled_model_redirects,

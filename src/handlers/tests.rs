@@ -101,6 +101,7 @@ fn build_test_auth_with_role(
         user_role,
         api_key_id: None,
         api_key_name: None,
+        internal_source: None,
         max_multiplier: None,
         transforms: Vec::new(),
         model_redirects: Vec::new(),

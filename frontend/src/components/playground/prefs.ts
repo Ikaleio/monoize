@@ -5,20 +5,22 @@ export const PLAYGROUND_PREF_KEYS = {
   group: "playground_group",
   chatModel: "playground_chat_model",
   imageModel: "playground_image_model",
-  apiKeyId: "playground_api_key_id",
   temperature: "playground_temperature",
   maxTokens: "playground_max_tokens",
   systemPrompt: "playground_system_prompt",
 } as const;
 
 /** Legacy keys removed on mount (PG-STATE3) so no pasted secret survives. */
-export const PLAYGROUND_LEGACY_KEYS = ["playground_api_key", "playground_model"];
+export const PLAYGROUND_LEGACY_KEYS = [
+  "playground_api_key",
+  "playground_api_key_id",
+  "playground_model",
+];
 
 export interface PlaygroundPrefs {
   group: string;
   chatModel: string;
   imageModel: string;
-  apiKeyId: string;
   temperature: string;
   maxTokens: string;
   systemPrompt: string;
@@ -64,7 +66,6 @@ export function usePlaygroundPrefs(): [
     group: readPref("group"),
     chatModel: readPref("chatModel"),
     imageModel: readPref("imageModel"),
-    apiKeyId: readPref("apiKeyId"),
     temperature: readPref("temperature"),
     maxTokens: readPref("maxTokens"),
     systemPrompt: readPref("systemPrompt"),
