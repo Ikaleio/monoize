@@ -18,6 +18,8 @@ DOC-4. The build output MUST be deployable to Vercel and Cloudflare Pages as a s
 
 DOC-5. Content pages MUST be MDX files under `docs/content/docs`.
 
+DOC-6. The Vercel Git build MUST continue when the current commit changes at least one path under `docs/`. The build MUST be ignored when the current commit changes no path under `docs/`.
+
 ## 2. Locales
 
 DOC-10. The site MUST support exactly these locales: `en` (default), `zh`, `zh-TW`, `ja`. They match the frontend locale set in `frontend/src/locales`.

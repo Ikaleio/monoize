@@ -1,3 +1,11 @@
 {
-  "redirects": [{ "source": "/", "destination": "/en", "permanent": false }]
+	"$schema": "https://openapi.vercel.sh/vercel.json",
+	"ignoreCommand": "git diff HEAD^ HEAD --quiet -- .",
+	"redirects": [
+		{
+			"source": "/",
+			"destination": "/en",
+			"permanent": false
+		}
+	]
 }
