@@ -26,7 +26,6 @@ A channel record MUST include:
 - `api_key: string`
 - `weight: integer` where `weight >= 0` and default `1`
 - `enabled: boolean` default `true`
-- `groups: string[]` default `[]`
 
 Runtime-only state MUST be maintained in memory:
 
@@ -43,11 +42,16 @@ Channel-level passive breaker override fields MAY be present:
 
 ### 2.1a Provider Group Semantics
 
-CG-1. `groups` is an array of opaque string labels on the provider. `provider.groups = []` means the provider is public.
+CG-1. `group_ids` is an array of first-class group ids on the provider
+(`groups-registry.spec.md`). Every persisted provider row has at least one group id
+(GR-I2); there is no "public provider" tier.
 
-CG-2. On create/update, provider `groups` MUST be canonicalized by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+CG-2. On create/update, provider `group_ids` MUST be canonicalized and validated per
+GR-C1..GR-C3. A canonicalized empty array MUST be stored as `[default_group_id]`.
 
-CG-3. If a stored provider row has `groups` absent, null, empty string, or serialized empty array, routing and read models MUST treat it as `[]` for backward compatibility.
+CG-3. Stored `group_ids` decoding follows GR-C4. A decoded `[]` (possible only on rows
+written outside the API) matches no request groups and is therefore never eligible for
+API-key traffic.
 
 ### 2.2 Channel Model Entry
 
@@ -69,7 +73,7 @@ A provider record MUST include:
 - `circuit_breaker_enabled: boolean` default `true`
 - `per_model_circuit_break: boolean` default `false`
 - `channels: Channel[]` where `length >= 1`
-- `groups: string[]` (default empty; provider-level group labels for routing eligibility)
+- `group_ids: string[]` (provider-level group ids for routing eligibility; stored non-empty per CG-2)
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
 
 Implementation-specific extension:
@@ -147,13 +151,13 @@ The router MUST read:
 
 RRP-0. Channel multipliers and request/API-key multiplier ceilings MUST be parsed and compared as exact decimals. They MUST NOT be converted through `f32` or `f64`. JSON responses and stored routing policy MUST use canonical decimal strings.
 
-RRP-1. `effective_groups` is the request-scoped group filter produced by `api-key-authentication.spec.md` §4.
+RRP-1. `effective_groups` is the request-scoped ordered group-id filter produced by `api-key-authentication.spec.md` §4.
 
-RRP-2. If `effective_groups == null`, the request is unrestricted by group filtering and may use all enabled providers, subject to the other routing rules.
+RRP-2. If `effective_groups == null` (internal system traffic only), the request is unrestricted by group filtering and may use all enabled providers, subject to the other routing rules.
 
-RRP-3. If `effective_groups != null`, the request is restricted to providers whose `groups` match. When `effective_groups` is non-empty, public providers (groups=[]) are NOT eligible — only providers whose `groups` explicitly overlap with `effective_groups` are eligible. When `effective_groups` is empty (`[]`), only public providers (groups=[]) are eligible.
+RRP-3. If `effective_groups != null`, the request is restricted to providers whose `group_ids` overlap `effective_groups` (`database-provider-routing.spec.md` R-GRP-1). Group order defines provider-ordering preference per R-GRP-2.
 
-RRP-4. If `effective_groups == []`, only public providers are group-eligible.
+RRP-4. If `effective_groups == []`, no provider is group-eligible.
 
 ## 4. Routing Algorithm
 

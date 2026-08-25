@@ -26,30 +26,44 @@ An API key row has:
 - `model_limits_enabled: boolean`
 - `model_limits: string[]`
 - `ip_whitelist: string[]`
-- `group: string`
-- `allowed_groups: string[]`
+- `use_user_group: boolean`
+- `group_ids: string[]` (ordered group ids, see `groups-registry.spec.md`)
 - `max_multiplier: string?` (canonical positive base-10 decimal string)
 - `transforms: TransformRuleConfig[]`
 - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"`
 
 ### 1.2 Group-scoped routing fields
 
-TM-GRP-1. The existing API key `group` field remains a separate field persisted as `api_keys.token_group`. This spec MUST NOT reinterpret that field as `allowed_groups`.
+TM-GRP-1. `use_user_group = true` means the key inherits the owning user's single group at
+request-authentication time and the stored `group_ids` value is ignored. The legacy
+`token_group` and `allowed_groups` columns no longer exist (`groups-registry.spec.md`
+GR-D7).
 
-TM-GRP-2. `allowed_groups` is a routing authorization field. It MUST use the same JSON TEXT array storage pattern used for other string-array columns such as `model_limits` and `ip_whitelist`.
+TM-GRP-2. `group_ids` is an **ordered** JSON TEXT array of group ids. Order is significant:
+it defines the routing preference order per `database-provider-routing.spec.md` R-GRP-2.
 
-TM-GRP-3. `allowed_groups = []` on an API key means the key inherits the owning user's group ceiling at request-authentication time.
+TM-GRP-3. On API key create/update, the server MUST canonicalize `group_ids` per
+`groups-registry.spec.md` GR-C1 (trim, drop empties, dedupe preserving first-occurrence
+order) and validate it per GR-C2/GR-C3 (at most 32 entries; every id must exist).
 
-TM-GRP-4. On API key create/update, the server MUST canonicalize `allowed_groups` by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+TM-GRP-4. On API key create/update, when the effective `use_user_group` value is `false`,
+the canonicalized `group_ids` MUST be non-empty; otherwise the mutation MUST be rejected
+with HTTP `400` and code `invalid_request`. When the effective `use_user_group` value is
+`true`, the stored `group_ids` MUST be replaced by `[]`.
 
-TM-GRP-5. On API key create/update, subset validation against the owning user's `allowed_groups` MUST be applied after canonicalization:
+TM-GRP-5. Group selection permission on create/update, applied after canonicalization:
 
-- if the owning user's `allowed_groups == []`, any canonicalized API key `allowed_groups` array is valid;
-- otherwise, every element of the API key's canonicalized `allowed_groups` array MUST be a member of the owning user's `allowed_groups` array.
+- if the requesting user's role satisfies `can_manage_system()` (`admin` or
+  `super_admin`), any registered group id is selectable;
+- otherwise every element of `group_ids` MUST reference a group with
+  `user_selectable = 1` OR equal the owning user's current `group_id`.
 
-TM-GRP-6. API key create/update requests that violate TM-GRP-5 MUST be rejected with HTTP `400` and code `invalid_request`.
+TM-GRP-6. API key create/update requests that violate TM-GRP-3 through TM-GRP-5 MUST be
+rejected with HTTP `400` and code `invalid_request`.
 
-TM-GRP-7. If a stored API key row has `allowed_groups` absent, null, empty string, or serialized empty array, runtime MUST treat it as `[]` for backward compatibility.
+TM-GRP-7. Stored `group_ids` decoding follows `groups-registry.spec.md` GR-C4; stored
+`use_user_group` MUST be integer `0` or `1`, and any other persisted value MUST fail the
+read.
 
 TM-IP-1. Every non-empty `ip_whitelist` entry on create or update MUST parse as either an exact IPv4/IPv6 address or an IPv4/IPv6 CIDR network. Any invalid entry MUST reject the mutation with HTTP `400` and code `invalid_request`.
 
@@ -59,7 +73,7 @@ TM-STORAGE-1. API-key dashboard reads and forwarding authentication MUST fail wi
 
 TM-STORAGE-2. Persisted `enabled`, `sub_account_enabled`, `model_limits_enabled`, and `reasoning_envelope_enabled` values MUST be integer `0` or integer `1`. A null value, incompatible database type, or any other integer MUST fail the read. It MUST NOT be replaced by a default value.
 
-TM-STORAGE-3. `allowed_groups` compatibility is limited to TM-GRP-7. Any other malformed or wrongly typed persisted `allowed_groups` value MUST fail the read and MUST NOT be treated as unrestricted or inherited access.
+TM-STORAGE-3. `group_ids` compatibility is limited to TM-GRP-7. Any other malformed or wrongly typed persisted `group_ids` or `use_user_group` value MUST fail the read and MUST NOT be treated as unrestricted or inherited access.
 
 TM-STORAGE-4. A present, non-null `request_capture_mode` MUST equal `"off"`, `"capture-all"`, or `"capture-only-abnormal"`. Any other value or incompatible database type MUST fail the read instead of falling back to `request_capture_enabled` or `"off"`. An absent or null value retains the `"off"` compatibility behavior defined by `request-capture-dumps.spec.md` RCD-C8.
 
@@ -95,8 +109,8 @@ All endpoints in this spec require an authenticated dashboard session.
   - `model_limits_enabled: boolean` (default false)
   - `model_limits: string[]` (default empty)
   - `ip_whitelist: string[]` (default empty)
-  - `group: string` (default `"default"`)
-  - `allowed_groups: string[]` (default empty, meaning inherit from owning user)
+  - `use_user_group: boolean` (default true, meaning inherit the owning user's group)
+  - `group_ids: string[]` (default empty; required non-empty when `use_user_group` is false)
   - `max_multiplier: string?` (default null)
   - `transforms: TransformRuleConfig[]` (default empty)
   - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"` (default `"off"`)
@@ -128,8 +142,8 @@ TM-CREATE-5. `POST /api/dashboard/tokens` MUST read only the `api_key_max_per_us
   - `model_limits_enabled`
   - `model_limits`
   - `ip_whitelist`
-  - `group`
-  - `allowed_groups`
+  - `use_user_group`
+  - `group_ids`
   - `max_multiplier`
   - `transforms`
   - `request_capture_mode`

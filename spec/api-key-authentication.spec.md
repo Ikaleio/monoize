@@ -57,28 +57,48 @@ AKP3. If database validation fails or is skipped, Monoize MUST return:
 
 ## 4. Effective group resolution
 
-AKG1. The owning user row MUST be read as if it contains `allowed_groups: string[]`. `[]` means the user grants access to all channel groups. Any write path that persists `users.allowed_groups` MUST canonicalize it by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+Groups are first-class registry rows (`groups-registry.spec.md`). All group values in this
+section are group **ids** (UUID strings), never names.
 
-AKG2. For backward compatibility, if `users.allowed_groups` is absent, null, empty string, or serialized empty array, authentication MUST treat it as `[]`.
+AKG1. The owning user row MUST be read as if it contains `group_id: string` (the user's
+single group id). Authentication MUST NOT join the `monoize_groups` table; a dangling
+`group_id` simply matches no provider downstream.
 
-AKG2a. A non-empty `users.allowed_groups` storage value MUST decode as a JSON array of strings. A malformed JSON value, a non-array JSON value, a non-string array element, or a storage value with an incompatible database type MUST fail authentication with an internal storage error. It MUST NOT be converted to `[]`.
+AKG2. The authenticated API key row MUST be read as if it contains
+`use_user_group: boolean` and `group_ids: string[]` (ordered). Persisted `use_user_group`
+MUST be integer `0` or `1`; any other value or incompatible type MUST fail authentication
+with an internal storage error.
 
-AKG3. The authenticated API key row MUST be read as if it contains `allowed_groups: string[]`. `[]` means inherit from the owning user at request-authentication time.
+AKG2a. A stored `api_keys.group_ids` value that is absent, null, empty string, or a
+serialized empty array decodes as `[]`. Every other value MUST decode as a JSON array of
+strings; malformed JSON, a non-array JSON value, a non-string element, or an incompatible
+database type MUST fail authentication with an internal storage error. It MUST NOT be
+converted to `[]`.
 
-AKG3a. The compatibility values in AKG2 also apply to `api_keys.allowed_groups`. Every other non-empty value MUST decode as a JSON array of strings. A malformed JSON value, a non-array JSON value, a non-string array element, or a storage value with an incompatible database type MUST fail authentication with an internal storage error. It MUST NOT be converted to `[]`.
+AKG3. The billing-plan layer is read as `plan_group_ids: string[] | absent` from the
+enabled plan referenced by the user (`billing-plan-subscriptions.spec.md` BP-R2: a
+disabled or missing plan contributes no restriction). Storage decoding follows AKG2a.
 
-AKG4. The authenticated context MUST represent request-scoped group access as `effective_groups: string[] | null`. `null` means the request is unrestricted by group filtering. A non-null array means the request is restricted to the named groups in that array.
+AKG4. The authenticated context MUST represent request-scoped group access as
+`effective_groups: string[] | null` where the array is an **ordered** list of group ids.
+`null` is reserved for system-originated internal traffic (request-capture replay,
+probes); API-key authentication MUST always produce a non-null array.
 
 AKG5. Authentication MUST resolve `effective_groups` as follows:
 
-1. If `user.allowed_groups == []` and `api_key.allowed_groups == []`, `effective_groups = null`.
-2. If `user.allowed_groups == []` and `api_key.allowed_groups != []`, `effective_groups = api_key.allowed_groups`.
-3. If `user.allowed_groups != []` and `api_key.allowed_groups == []`, `effective_groups = user.allowed_groups`.
-4. If both arrays are non-empty, `effective_groups = intersection(user.allowed_groups, api_key.allowed_groups)`.
+1. `base = [user.group_id]` if `api_key.use_user_group` is true OR `api_key.group_ids == []`;
+   otherwise `base = api_key.group_ids` with order preserved.
+2. If `plan_group_ids` is present and non-empty, `effective_groups` = the elements of
+   `base` that are members of `plan_group_ids`, in `base` order. Otherwise
+   `effective_groups = base`.
 
-AKG6. When `effective_groups` is non-null, the attached array MUST be canonicalized: lowercase, trimmed, non-empty, deduplicated, sorted ascending.
+AKG6. The attached array MUST be deduplicated preserving first occurrence order. Elements
+MUST NOT be lowercased, sorted, or otherwise rewritten; group ids are opaque and their
+order defines routing preference (`database-provider-routing.spec.md` R-GRP-2).
 
-AKG7. Authentication MUST succeed even when `effective_groups = []`. The downstream routing consequence is that only public channels are group-eligible for that request.
+AKG7. Authentication MUST succeed even when `effective_groups = []` (the plan ceiling
+excluded every base group). The downstream routing consequence is that zero providers are
+group-eligible for that request.
 
 ## 5. Error response uniformity
 

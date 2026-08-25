@@ -34,8 +34,11 @@ DL5. Sidebar main navigation (always visible to authenticated users) MUST includ
 
 DL6. Sidebar admin navigation group (visible only when user role is `admin` or `super_admin`) MUST include exactly:
 
+- `/dashboard/admin`
 - `/dashboard/providers`
 - `/dashboard/models`
+- `/dashboard/plans`
+- `/dashboard/groups`
 - `/dashboard/users`
 - `/dashboard/admin-settings`
 
@@ -61,7 +64,7 @@ PL3. Provider list MUST support drag-and-drop reordering and persist order throu
 
 PL4. Provider detail/editor MUST display:
 
-- provider-level fields: `name`, `enabled`, `max_retries`
+- provider-level fields: `name`, `enabled`, `max_retries`, and `group_ids` edited through the shared unordered multi-select group selector (GS rules, §11); freeform group text entry MUST NOT be offered
 - channel master list: name, type, base URL, weight, enabled, model count, and runtime health
 - selected Channel detail editor with per-model controls for: logical model, redirect target, multiplier, and delete
 - channel runtime health indicator: healthy/probing/unhealthy
@@ -132,7 +135,7 @@ PL12a. Provider list card header metadata badges MUST render through a collapsed
 
 - The header badge preview MUST render no more than 3 badges before a `+N` overflow badge.
 - The preview row MUST NOT wrap.
-- The complete popover list MUST include channel type, enabled state, unpriced warning, and each provider group badge represented by the provider.
+- The complete popover list MUST include channel type, enabled state, unpriced warning, and one badge per provider `group_ids` entry showing the group name resolved from `GET /api/dashboard/groups` (raw id fallback for unknown ids).
 
 PL13. The selected Channel model section MUST include an explicit "Fetch upstream" action that opens a model-diff selection dialog before insertion.
 
@@ -364,9 +367,11 @@ AK10. API key restriction indicators in `/dashboard/tokens` MUST render as a non
 - The restriction preview MUST NOT render long help text inside the table cell.
 - The complete popover list MUST include model-limit, IP whitelist, max-multiplier, and request-capture badges when those restrictions are active.
 
-AK11. In the `/dashboard/tokens` list table, the API key name and allowed-group badge collection MUST render in a single non-wrapping inline row inside the name cell.
+AK11. In the `/dashboard/tokens` list table, the API key name and its group badge collection MUST render in a single non-wrapping inline row inside the name cell.
 
-- The allowed-group badge collection MUST remain adjacent to the API key name and MUST NOT move below the name.
+- A key with `use_user_group = true` MUST NOT render group badges (it follows the owner's group).
+- A key with `use_user_group = false` MUST render its `group_ids` in stored order as name badges resolved from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to the raw id.
+- The group badge collection MUST remain adjacent to the API key name and MUST NOT move below the name.
 - If the inline row exceeds the available viewport width, the table container MUST handle overflow through horizontal scrolling.
 
 ## 5. Dashboard Home Page
@@ -450,10 +455,15 @@ UP4. The users table body in `/dashboard/users` MUST use virtualized rendering v
 - Table body rows MUST be rendered via `itemContent` callback.
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 
-UP5. In the `/dashboard/users` list table, the username text and allowed-group badge collection MUST render in a single non-wrapping inline row inside the user cell.
+UP5. In the `/dashboard/users` list table, the username text and the user's group badge MUST render in a single non-wrapping inline row inside the user cell.
 
 - If horizontal space is insufficient, the username text MAY truncate.
-- The allowed-group badge collection MUST remain single-line and MUST NOT move below the username.
+- The group badge MUST display the group **name** resolved from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to the raw id.
+- The group badge MUST remain single-line and MUST NOT move below the username.
+
+UP12. The user create and edit dialogs MUST select the user's group through the shared
+single-select group selector (GS rules, §11). They MUST NOT offer freeform group text
+entry.
 
 UP6. The users table MUST include columns for assigned billing plan, UTC-calendar-day spend,
 and UTC-calendar-day call count, in addition to the existing user/role/balance/status columns.
@@ -487,8 +497,8 @@ US2. The billing card MUST show:
 - assigned plan name, or an explicit none label when `billing_plan` is null.
 
 US3. When `billing_plan` is non-null, the billing card MUST also show grant amount,
-period, `next_grant_at` when present, and `billing_plan.allowed_groups` (empty array
-renders as unrestricted).
+period, `next_grant_at` when present, and `billing_plan.group_ids` rendered as group
+names (empty array renders as unrestricted).
 
 US4. The billing card MUST use the same skeleton/loading contract as the rest of `/settings`
 when the user object has not yet resolved. It MUST NOT require a page close/reopen to
@@ -503,21 +513,32 @@ AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized renderi
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 - Select-all checkbox MUST remain in the fixed header; per-row checkboxes MUST remain in `itemContent`.
 
-AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include both the existing legacy `group` text input and a distinct `allowed_groups` chip input.
+AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include a group section
+containing exactly:
 
-AK6. The `allowed_groups` chip input MUST follow the same interaction contract as the provider/user group editors:
+- a "use the owner's user group" switch bound to `use_user_group` (default on for create);
+- when the switch is off, the shared ordered multi-select group selector (GS rules, §11)
+  bound to `group_ids`.
 
-- freeform text entry;
-- `Enter`, comma, and blur commit pending draft labels;
-- selected labels render as removable chips;
-- suggestion buttons are sourced from `GET /api/dashboard/groups`;
-- suggestion buttons for labels already selected in the current draft MUST be hidden.
+The dialogs MUST NOT offer freeform group text entry and MUST NOT render a legacy `group`
+text input.
 
-AK6a. Typed commits, chip removals, and suggestion clicks in the API-key `allowed_groups` editor MUST apply against the latest in-session chip draft. A typed commit MUST NOT resurrect labels the user has already removed from the current draft.
+AK6. When `use_user_group` is on, the `group_ids` selector MUST be hidden or disabled and
+the mutation payload MUST send `use_user_group: true`. When it is off, the mutation payload
+MUST send `use_user_group: false` and the ordered `group_ids` array exactly as displayed.
 
-AK7. The API key `allowed_groups` helper text MUST explain that an empty array means the key inherits the owning user's `allowed_groups`. If the authenticated dashboard user payload exposes `allowed_groups`, the dialog MUST render that value as a non-authoritative hint only. The frontend MUST NOT block save with client-side subset validation.
+AK6a. Selection, removal, and reordering in the API-key group selector MUST apply against
+the latest in-session draft. A reorder MUST NOT resurrect groups the user removed from the
+current draft.
 
-AK8. If `POST /api/dashboard/tokens` or `PUT /api/dashboard/tokens/{key_id}` returns a validation error for `allowed_groups` subset rules, the frontend MUST surface the server-provided message in a toast and MUST keep the dialog open with the current draft state intact.
+AK7. The group section helper text MUST explain that group order is the routing preference
+order (earlier groups are tried first) and that the owner-group switch inherits the user's
+single group. Non-admin callers MUST only be offered options with `user_selectable = true`
+plus their own current group; admin callers MUST be offered every group.
+
+AK8. If `POST /api/dashboard/tokens` or `PUT /api/dashboard/tokens/{key_id}` returns a
+group validation error, the frontend MUST surface the server-provided message in a toast
+and MUST keep the dialog open with the current draft state intact.
 
 ## 9. Billing Plans Page
 
@@ -531,3 +552,59 @@ BP-UI3. After a successful reset, the users-list SWR cache and the session user 
 MUST be revalidated so `/dashboard/users` and the sidebar balance reflect the new
 balances without a page close/reopen. On failure, the dialog MUST remain available and
 the UI MUST surface the server error.
+
+BP-UI4. Plan create and edit dialogs MUST select `group_ids` through the shared
+unordered multi-select group selector (GS rules, §11) instead of freeform text. The plan
+list MUST render `group_ids` as group-name badges; an empty array renders the localized
+unrestricted label.
+
+## 11. Groups Management Page and Shared Group Selector
+
+### 11.1 Groups page
+
+GP1. `/dashboard/groups` is an admin page (nav per DL6). It MUST list every registry row
+from `GET /api/dashboard/groups` in the returned order and MUST render a skeleton
+placeholder while the list is loading.
+
+GP2. Each row MUST display: name, description (muted, truncated with title attribute),
+a default-group badge when `is_default` is true, a user-selectable indicator, and
+`sort_order`.
+
+GP3. The page MUST offer create, edit, and delete actions bound to
+`POST /api/dashboard/groups`, `PUT /api/dashboard/groups/{id}`, and
+`DELETE /api/dashboard/groups/{id}`. Create/edit dialogs MUST expose exactly: name,
+description, user-selectable switch, and sort-order number input.
+
+GP4. The delete action for the default group MUST be disabled. Deleting any other group
+MUST open a confirmation dialog that names the group and states the cascade consequences
+(members move to the default group; keys/providers/plans drop the group).
+
+GP5. Every mutation MUST apply an SWR optimistic update to the groups cache and roll back
+on error with a toast showing the server message. After success the groups cache MUST be
+revalidated together with the users, tokens, providers, and billing-plans caches (their
+badges resolve group names).
+
+### 11.2 Shared group selector (GS)
+
+GS1. One shared selector component MUST serve users (single mode), API keys (ordered
+multi mode), providers (unordered multi mode), and billing plans (unordered multi mode).
+
+GS2. Options MUST come from the SWR cache of `GET /api/dashboard/groups`. While the list
+is loading, the selector MUST render a skeleton control, not an empty option list.
+
+GS3. Every option row MUST display the group name and, when non-empty, its description.
+The default group option MUST carry a default badge.
+
+GS4. Single mode MUST behave as an exclusive select and produce exactly one group id.
+
+GS5. Multi mode MUST render selected groups as removable chips and unselected options as
+toggleable rows. In ordered multi mode the chips MUST support drag-and-drop reordering
+(HTML5 drag events, consistent with the provider list reorder interaction) and the emitted
+array order MUST equal the visual chip order. In unordered multi mode the emitted order is
+the selection order and no drag affordance is shown.
+
+GS6. When a selected id has no matching registry row (deleted concurrently), the chip MUST
+render the raw id and remain removable.
+
+GS7. The selector MUST NOT perform freeform text creation of groups. Group creation happens
+only on `/dashboard/groups`.
