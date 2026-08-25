@@ -6,7 +6,7 @@
 
 **AI API 看起来相似，但协议并不相同。**
 
-Monoize 是一个用 Rust 编写的 AI API 网关。它支持 OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、Embeddings 和图像 API。它转换协议语义，将一个逻辑模型路由到多个上游渠道，并处理真实客户端与真实网关之间的兼容问题。
+Monoize 是一个用 Rust 编写的 AI API 网关。它支持 OpenAI Responses、Chat Completions、Anthropic Messages、Gemini、Embeddings 和图像 API。它转换协议语义。它把一个逻辑模型路由到多个上游 Channel。它处理真实客户端与真实网关之间的兼容问题。
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -18,17 +18,17 @@ AI API 网关不能只改几个 JSON 字段名。
 
 Responses、Chat Completions 和 Messages 对对话历史、推理、工具、用量、错误和流事件有不同定义。一次转换即使返回 HTTP 200，也可能破坏对话状态。它可能漏掉加密推理，把增量放进错误的内容块，重复发送流事件，或把工具结果变成助手文本。
 
-路由本身也是一个状态机。网关需要重试失败渠道，继续尝试下一个 Provider，并在向客户端发出响应字节后停止回落。此后再切换上游，会把两次不同生成拼进同一条流。
+路由本身也是一个状态机。网关需要重试失败的 Channel。它需要继续尝试下一个 Provider。它需要在向客户端发出响应字节后停止回落。此后再切换上游，会把两次不同的生成拼进同一条流。
 
 客户端和上游网关还存在各自的边界行为。Claude Code、OpenRouter 兼容客户端、Codex WebSocket 客户端、DeepSeek 工具循环、图像服务和不同的 SSE 实现都带有不同假设。
 
-内联大图会产生另一类开销。上传时间和上游图像预处理可能占据大部分首 Token 时间。每次重试都重复转发同一个超大 base64 请求体，只会让问题更严重。
+内联大图会产生另一类开销。上传时间和上游图像预处理可能占据大部分首 Token 时间。如果每次重试都重复转发同一个超大 base64 请求体，这项开销会进一步增加。
 
 ## 常见转换器为什么会出错
 
 支持一种格式，不等于正确实现一种协议。以下公开证据已于 2026-08-10 核对：
 
-- OpenAI 用 `encrypted_content` 保存无状态多轮推理所需的状态。在 New API 的 [`823e263`](https://github.com/QuantumNous/new-api/commit/823e26304a396854ace30b52b98ec497c2dd9c36) 提交中，Responses 输出 DTO [无法表示该字段](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/dto/openai_response.go#L327-L339)，Responses 到 Chat 的转换器也[只读取可见推理文本](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/relayconvert/internal/oai_responses/to_oai_chat_resp.go#L212-L229)。因此，它在格式转换时仍会漏掉加密推理。加密状态需要随后续输入重放，原因见 [OpenAI 推理指南](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses)。
+- OpenAI 用 `encrypted_content` 保存无状态多轮推理所需的状态。在 New API 的 [`823e263`](https://github.com/QuantumNous/new-api/commit/823e26304a396854ace30b52b98ec497c2dd9c36) 提交中，Responses 输出 DTO [无法表示该字段](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/dto/openai_response.go#L327-L339)。它的 Responses 到 Chat 转换器也[只读取可见推理文本](https://github.com/QuantumNous/new-api/blob/823e26304a396854ace30b52b98ec497c2dd9c36/relaykit/relayconvert/internal/oai_responses/to_oai_chat_resp.go#L212-L229)。因此，它在格式转换时仍会漏掉加密推理。加密状态需要随后续输入重放，原因见 [OpenAI 推理指南](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses)。
 - LiteLLM 的 [#32357](https://github.com/BerriAI/litellm/issues/32357) 报告指出，其 Anthropic 适配器会重复发送 `message_start`，并把 `thinking_delta` 放进文本块。事件违反内容块生命周期后，Anthropic SDK 会丢弃这段推理。
 - New API 的 [#5480](https://github.com/QuantumNous/new-api/issues/5480) 记录了多条流式转发路径为估算 Token 而保留完整生成文本的问题。内存会随输出长度和并发数增长。
 
@@ -42,10 +42,10 @@ Monoize 先把每种受支持的协议解码为 URP v2。URP v2 是一个扁平�
 
 选中的上游适配器再把这些节点编码为目标协议。响应按相反方向经过同一条路径。
 
-这个设计提供了明确保证：
+这个设计提供以下保证：
 
 - Responses、Chat Completions 和 Messages 的完整请求与响应矩阵都覆盖流式和非流式测试。
-- 加密推理与可见推理保持分离。可选的 `mz2` 信封可以让不透明推理状态经过原本不兼容的重放格式。
+- 加密推理与可见推理保持分离。可选的 `mz2` 信封可以让不透明推理状态在原本不兼容的重放格式之间保留。
 - 工具调用 ID、并行调用、多段工具结果和助手历史不会失去角色。
 - Responses 输出项和 Messages 内容块的生命周期保持有序且闭合。
 - 同协议的未知字段可以保留。跨协议时，不安全的嵌套字段会被删除，不会泄漏进无效请求。
@@ -93,7 +93,7 @@ Transform 可以作用于 Provider、全局或 API Key。模型 glob 决定规�
 
 Transform 保留图像节点及其 Provider 专用细节参数。它会跳过不支持的来源和普通远程 URL。输入字节数、解码像素数、并发编码数、缓存条目数和缓存总字节数都有明确上限。
 
-它会减少请求体，并降低图像请求中可避免的 TTFT。缓存还会避免在重试或重复请求中再次执行相同编码。
+它会减小请求体积，并降低图像请求中可避免的 TTFT。缓存还会避免在重试或重复请求中再次执行相同编码。
 
 ### 显著降低转发开销
 
@@ -171,7 +171,7 @@ cargo build --release
 ./target/release/monoize
 ```
 
-打开 `http://localhost:8080`。第一个注册账户会成为 `super_admin`，即使公开注册已被关闭。然后：
+打开 `http://localhost:8080`。即使公开注册已被关闭，第一个注册账户仍会成为 `super_admin`。然后：
 
 1. 创建一个 Provider。
 2. 添加至少一个 Channel，并填写上游地址和凭据。
@@ -208,7 +208,7 @@ curl http://localhost:8080/v1/responses \
 
 ## 配置
 
-运行时引导使用环境变量。Provider、Channel、模型、路由策略、Transform、用户和 API Key 保存在数据库中，并通过控制台管理。
+运行时引导使用环境变量。Provider、Channel、模型、路由策略、Transform、用户和 API Key 保存在数据库中。控制台负责管理这些配置。
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -228,7 +228,7 @@ Monoize 支持 SQLite 和 PostgreSQL。业务表只支持由一个 Monoize 应�
 
 ### 主从部署
 
-Monoize 支持一个可写主机加若干只读从机、共享同一 PostgreSQL 数据库的部署形态（见 `spec/primary-replica-deployment.spec.md`）。从机仅服务 `/v1/**` 转发流量（不提供控制台），请求日志与计费扣减经内部鉴权接口集中上报主机落库；余额预检会扣除尚未上报的本地欠账以约束超支。故障切换为手动：将从机角色改为主机并重启即可提升。
+Monoize 支持一个可写主机加若干只读从机的部署形态。所有节点共享同一个 PostgreSQL 数据库（见 `spec/primary-replica-deployment.spec.md`）。从机只服务 `/v1/**` 转发流量，不提供控制台。从机通过带鉴权的内部接口，把请求日志和计费扣减上报主机落库。余额预检会扣除尚未上报的本地欠账，以约束超支。故障切换为手动操作：把从机角色改为主机并重启，即可完成提升。
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -266,9 +266,9 @@ Monoize 支持一个可写主机加若干只读从机、共享同一 PostgreSQL 
 
 发布 GitHub Release 时，如果标签等于 `v` 加 Cargo 包版本，[Release 工作流](.github/workflows/release.yml)会自动运行。它为 Linux、macOS 和 Windows 分别构建原生 x86-64 与 ARM64 二进制文件。
 
-Linux 和 macOS 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证，并带有独立的 SHA-256 文件。六个平台全部构建成功且校验通过后，工作流才会上传文件。
+Linux 和 macOS 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证。每个压缩包都带有独立的 SHA-256 文件。六个平台全部构建成功且校验通过后，工作流才会上传文件。
 
-手动运行工作流可以执行相同的六平台预检，但不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
+手动运行工作流可以执行相同的六平台预检。它不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
 
 ## 开发与验证
 
