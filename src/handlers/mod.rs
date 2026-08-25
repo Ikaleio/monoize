@@ -670,7 +670,8 @@ pub async fn create_embeddings(
                         started_at,
                     )
                     .await;
-                    let usage = parse_usage_from_embeddings_object(&value);
+                    let mut usage = parse_usage_from_embeddings_object(&value);
+                    substitute_zero_usage_if_allowed(&mut usage, &attempt);
                     let response_service_tier =
                         usage::response_service_tier(&value).map(str::to_string);
                     let charge = match usage.as_ref() {

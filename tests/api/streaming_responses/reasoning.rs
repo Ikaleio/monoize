@@ -93,7 +93,7 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
                 base_url,
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
-                enabled: true,
+	                enabled: true,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -125,7 +125,7 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "reasoning_strip_encrypted".to_string(),
-                enabled: true,
+	            enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
                 config: json!({}),
@@ -137,7 +137,7 @@ async fn responses_streaming_omits_multiple_reasoning_items_emptied_by_response_
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            enabled: true,
+	            enabled: true,
             priority: Some(-1),
         })
         .await

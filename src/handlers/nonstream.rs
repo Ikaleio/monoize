@@ -676,6 +676,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             }
                         },
                     };
+                    substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
                     if resp.usage.is_none() {
                         let err = AppError::new(
                             StatusCode::BAD_GATEWAY,

@@ -1226,7 +1226,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
                 base_url,
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
-                enabled: true,
+	                enabled: true,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1252,7 +1252,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
                 transform: "reasoning_content_to_summary".to_string(),
-                enabled: true,
+	                enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
                 config: json!({}),

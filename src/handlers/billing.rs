@@ -1862,3 +1862,12 @@ pub(super) async fn maybe_charge_response(
     )
     .await
 }
+
+pub(super) fn substitute_zero_usage_if_allowed(
+    usage: &mut Option<urp::Usage>,
+    attempt: &MonoizeAttempt,
+) {
+    if usage.is_none() && attempt.allow_missing_usage {
+        *usage = Some(urp::Usage::default());
+    }
+}

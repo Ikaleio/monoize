@@ -286,7 +286,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
                 base_url: upstream_addr,
                 api_key: Some("upstream-key".to_string()),
                 weight: 1,
-                enabled: true,
+	                enabled: true,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -320,7 +320,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-            enabled: true,
+	                enabled: true,
             priority: None,
         })
         .await

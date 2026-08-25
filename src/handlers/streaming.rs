@@ -457,6 +457,7 @@ pub(super) async fn forward_stream_typed(
                                 break 'channel_attempts;
                             }
                         };
+                        substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
                         if resp.usage.is_none() {
                             let err = AppError::new(
                                 StatusCode::BAD_GATEWAY,
@@ -1054,6 +1055,9 @@ pub(super) async fn forward_stream_typed(
                             let actual_upstream_usage = guard.usage.clone();
                             let (usage, is_estimated) = match guard.usage.clone() {
                                 Some(u) => (Some(u), false),
+                                None if attempt_for_log.allow_missing_usage => {
+                                    (Some(urp::Usage::default()), false)
+                                }
                                 None => {
                                     let visible_output_bytes = guard
                                         .visible_output_bytes
