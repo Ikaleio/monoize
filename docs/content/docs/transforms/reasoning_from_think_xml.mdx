@@ -1,0 +1,42 @@
+---
+title: "Reasoning: from think XML"
+description: Parse think-tag XML out of assistant text and restore it as reasoning.
+---
+
+## What it does
+
+This transform parses the configured XML tag, for example `<think>...</think>`, out of assistant text and restores the content as reasoning nodes. It is the inverse of `reasoning_to_think_xml`.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_from_think_xml` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- An upstream emits reasoning inline as think-tag text, and clients expect structured reasoning.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `tag` | string | Yes | — | The XML tag name to parse, for example `think`. |
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_from_think_xml",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "tag": "think"
+  }
+}
+```

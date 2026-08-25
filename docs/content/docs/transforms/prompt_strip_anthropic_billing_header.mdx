@@ -1,0 +1,38 @@
+---
+title: "Prompt: strip Anthropic billing header"
+description: Remove x-anthropic-billing-header lines from system and developer text.
+---
+
+## What it does
+
+This transform removes `x-anthropic-billing-header` lines from system and developer text nodes. A node that becomes empty is dropped.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `prompt_strip_anthropic_billing_header` |
+| Phase | `request` |
+| Scopes | Provider, Global, API key |
+
+## When to use
+
+- Clients built for Anthropic first-party billing inject billing header lines that other upstreams reject or echo.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "prompt_strip_anthropic_billing_header",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

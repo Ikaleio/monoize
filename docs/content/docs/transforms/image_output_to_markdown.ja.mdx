@@ -1,0 +1,41 @@
+---
+title: "画像: 画像ノードから Markdown へ"
+description: assistant 画像ノードを assistant テキスト内の Markdown リンクとして描画します。
+---
+
+## 動作
+
+この変換は assistant 画像ノードを Markdown 画像リンクとして assistant テキスト出力に追記します。`image_markdown_to_output` の逆変換です。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `image_output_to_markdown` |
+| フェーズ | `response` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- クライアントがプレーンテキストのみ描画し、構造化画像出力を表示できない。
+- チャットフロントエンドが Markdown を表示し、インライン画像プレビューが欲しい。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `template` | string | いいえ | — | 画像ごとに追記するテンプレート。プレースホルダー: `{{src}}`、`{{url}}`、`{{media_type}}`、`{{data}}` と `_urlencoded` 系。 |
+
+### ルール例
+
+```json
+{
+  "transform": "image_output_to_markdown",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,4 @@
+{
+  "title": "儀表板",
+  "pages": ["index", "providers-and-channels", "models", "api-keys"]
+}

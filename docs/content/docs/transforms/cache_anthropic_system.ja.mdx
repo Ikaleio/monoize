@@ -1,0 +1,43 @@
+---
+title: "自動キャッシュ: Anthropic システムプロンプト"
+description: システムプロンプトの後に Anthropic の cache_control ブレークポイントを挿入します。
+---
+
+## 動作
+
+この変換は、リクエストの最後の system または developer ノードに Anthropic の ephemeral `cache_control` ブレークポイントを挿入します。上流は安定したシステムプレフィックスをキャッシュし、以降のリクエストでキャッシュから読み取ります。
+
+リクエストに system または developer ノードがない場合、この変換は何も変更しません。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `cache_anthropic_system` |
+| フェーズ | `request` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 上流が Anthropic 互換で、キャッシュの書き込みと読み取りが割引料金で課金される。
+- クライアントが毎回、長く安定したシステムプロンプトを送信する。
+
+## 設定
+
+この変換にはオプションがありません。`config` には空オブジェクトを指定します。
+
+### ルール例
+
+```json
+{
+  "transform": "cache_anthropic_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {}
+}
+```
+
+`cache_anthropic_tool_use` と組み合わせると、ツールループ中に会話プレフィックスもキャッシュできます。

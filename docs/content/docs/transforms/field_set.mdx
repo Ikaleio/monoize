@@ -1,0 +1,48 @@
+---
+title: "Field: set"
+description: Write a JSON value at a configured path, optionally only when a condition matches.
+---
+
+## What it does
+
+This transform writes a JSON value at the configured extra-body path. With `when_equals` set, it writes only when the current value equals the given JSON value. Without `when_equals`, it always writes.
+
+Use it to add or replace provider-specific fields that the protocol conversion does not carry.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `field_set` |
+| Phase | `request`, `response` |
+| Scopes | Provider |
+
+## When to use
+
+- An upstream needs a vendor-specific field, for example a service tier or a thinking switch.
+- You want to normalize one field value for every request that a Provider serves.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `path` | string | Yes | — | Dot-separated extra-body path to write, for example `service_tier`. |
+| `value` | JSON | Yes | — | The JSON value written at the path. |
+| `when_equals` | JSON | No | — | When set, write only if the current value equals this JSON value. |
+
+### Example rule
+
+```json
+{
+  "transform": "field_set",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {
+    "path": "service_tier",
+    "value": "flex"
+  }
+}
+```

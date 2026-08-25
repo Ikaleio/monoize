@@ -1,0 +1,38 @@
+---
+title: "推理：正文轉摘要"
+description: 把明文推理正文移動到推理摘要欄位。
+---
+
+## 行為
+
+此變換在回應和串流中把明文推理正文移動到推理摘要欄位。只讀取摘要欄位的用戶端因此能看到推理內容。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `reasoning_content_to_summary` |
+| 階段 | `response` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 上游返回原始推理正文，但用戶端期望 Responses 風格的摘要。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "reasoning_content_to_summary",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

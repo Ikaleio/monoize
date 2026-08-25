@@ -1,0 +1,41 @@
+---
+title: Dashboard Overview
+description: Sign in to the embedded dashboard and find each management area.
+---
+
+## Access the dashboard
+
+Open the Monoize listen address in a browser. The default is `http://localhost:8080`. A release build serves the dashboard, the API, and metrics from one process.
+
+![Dashboard overview](/images/en/dashboard.webp)
+
+## Accounts and roles
+
+- Register the first account after installation. The first registered account becomes `super_admin`. This rule applies even when public registration is disabled.
+- `super_admin` can manage users, system settings, Providers, and billing.
+- `admin` accounts manage operational resources.
+- `user` accounts manage their own API keys, logs, and balance.
+
+## Management areas
+
+| Area | Purpose |
+| --- | --- |
+| Dashboard | Traffic, cost, and health overview |
+| Providers | Providers, Channels, model mapping, health, transforms |
+| Token Management | API keys, quotas, model restrictions, transforms |
+| Logs | Request logs and the capture viewer |
+| Models | Model metadata and pricing imported from Models.dev |
+| Users | Accounts, balances, and the billing ledger |
+| Settings | System settings, global transforms, request capture switch |
+
+## Language
+
+The dashboard supports English, 简体中文, 繁體中文, and 日本語. Change the language from the user menu.
+
+## Next steps
+
+<Cards>
+  <Card title="Providers and Channels" href="/en/docs/dashboard/providers-and-channels" description="Define where requests go." />
+  <Card title="Models" href="/en/docs/dashboard/models" description="Map logical models and set pricing." />
+  <Card title="API Keys" href="/en/docs/dashboard/api-keys" description="Create keys and set limits." />
+</Cards>

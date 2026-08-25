@@ -1,0 +1,63 @@
+---
+title: 変換ルールの概要
+description: Provider・API キー・グローバル単位でリクエストとレスポンスを調整する順序付きルール。
+---
+
+## 変換ルールとは
+
+変換ルール（Transform）は、Monoize が上流向けにエンコードする前にリクエストを修正するか、クライアントへ返す前にレスポンスを修正するルールです。変換は型付きの内部表現に作用し、生の JSON テキストには作用しません。したがって、同じ変換はどのプロトコルの組み合わせでも同じように動作します。
+
+Monoize には 33 個の組み込み変換があります。このセクションでは各変換に個別のページを用意しています。
+
+## 変換の設定場所
+
+| スコープ | 設定場所 | 適用対象 |
+| --- | --- | --- |
+| Provider | Provider の編集ダイアログ | その Provider が処理するすべてのリクエスト |
+| グローバル | **設定**のグローバル変換チェーン | すべてのリクエスト |
+| API キー | **トークン管理**のキー編集ダイアログ | そのキーを使うすべてのリクエスト |
+
+フェーズごとの実行順序: Provider チェーン、グローバルチェーン、API キーチェーンの順です。1 つのチェーン内ではリスト順に実行されます。前のルールの出力が次のルールの入力になります。
+
+すべての変換がすべてのスコープをサポートするわけではありません。API キースコープは、ルーティング・価格・トークン上限を変更しうる変換を除外します。各変換ページにサポートするスコープを記載しています。
+
+## ルールのフィールド
+
+各ルールには 5 つのフィールドがあります。
+
+```json
+{
+  "transform": "prompt_inject_system",
+  "enabled": true,
+  "phase": "request",
+  "models": ["gpt-4*"],
+  "config": { "content": "Answer in French.", "position": "append" }
+}
+```
+
+- `transform`: 変換タイプ ID。
+- `enabled`: 無効なルールはスキップされます。
+- `phase`: `request` または `response`。ルールは自分のフェーズでのみ実行されます。
+- `models`: 任意のグロブリスト。少なくとも 1 つのグロブが論理モデルに一致した場合のみ実行されます。`*` は任意の並びに、`?` は 1 文字に一致します。一致は大文字小文字を区別し、モデル名全体に固定されます。
+- `config`: 変換固有のオプション。ダッシュボードは各変換のスキーマからフォームを生成します。
+
+モデル一致は常にクライアントが要求した論理モデル名を使い、リダイレクト後の上流モデル名は使いません。
+
+## 変換ファミリー
+
+| ファミリー | 目的 | 変換 |
+| --- | --- | --- |
+| 自動キャッシュ | プロバイダー側のプロンプトキャッシュを改善 | `cache_anthropic_system`、`cache_anthropic_tool_use`、`cache_openai_prompt`、`cache_openai_tool_use`、`cache_user_id` |
+| フィールド | 生のリクエスト/レスポンスフィールドを設定・削除・制限 | `field_override_max_tokens`、`field_remove`、`field_set` |
+| 画像 | 画像の圧縮・変換・解決 | `image_compress_input`、`image_compress_output`、`image_enable_openai_generation_tool`、`image_markdown_to_output`、`image_output_to_markdown`、`image_resolve_urls` |
+| プロンプト | メッセージリストの整形 | `prompt_append_empty_user`、`prompt_inject_system`、`prompt_strip_anthropic_billing_header`、`prompt_strip_orphaned_tool_calls` |
+| 推論 | 推論内容の移動・削除・再エンコード | `reasoning_content_to_summary`、`reasoning_effort_to_budget`、`reasoning_effort_to_model_suffix`、`reasoning_from_think_xml`、`reasoning_inject_content_field`、`reasoning_strip_encrypted`、`reasoning_strip_input`、`reasoning_strip_output`、`reasoning_summary_to_raw_cot`、`reasoning_to_think_xml` |
+| ロール | メッセージロールの書き換え・結合 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
+| ストリーム | ストリーミング動作の制御 | `stream_force`、`stream_split_sse_frames` |
+
+## 変換の動作確認
+
+1. テスト用 API キーで[リクエストキャプチャ](/ja/docs/request-logs)を有効にします。
+2. ルールのモデルグロブに一致するリクエストを送信します。
+3. キャプチャビューアを開きます。変換前のリクエストとエンコード後の上流リクエストを比較します。
+4. ビューアには、実行された変換チェーンが各ルールのスコープ付きで順番に表示されます。

@@ -1,0 +1,45 @@
+---
+title: "欄位：刪除"
+description: 從請求或回應中刪除設定路徑上的 JSON 值。
+---
+
+## 行為
+
+此變換刪除設定的 extra_body 路徑上的 JSON 值。在請求階段編輯發往上游的封包；在回應階段編輯返回用戶端的封包。
+
+路徑不存在時，此變換不做任何修改。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `field_remove` |
+| 階段 | `request`, `response` |
+| 範圍 | Provider |
+
+## 適用場景
+
+- 上游拒絕用戶端發送的某個廠商私有欄位。
+- 你希望對某個 Provider 後面的用戶端隱藏某個回應欄位。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `path` | string | 是 | — | 要刪除的 extra_body 路徑，點號分隔，例如 `metadata.tags`。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "field_remove",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "path": "metadata"
+  }
+}
+```

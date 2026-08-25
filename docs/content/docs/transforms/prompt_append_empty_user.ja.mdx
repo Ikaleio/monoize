@@ -1,0 +1,41 @@
+---
+title: "プロンプト: 空の user メッセージを追加"
+description: 入力が assistant メッセージで終わる場合にパディング用 user メッセージを追加します。
+---
+
+## 動作
+
+リクエスト入力が assistant ノードで終わる場合、この変換はパディング用の user テキストノードを追加します。すでに user ノードで終わる入力は変更されずに通過します。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `prompt_append_empty_user` |
+| フェーズ | `request` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 最後のメッセージが assistant である会話を上流が拒否する。
+- クライアントが厳格な上流に assistant プリフィル形式のメッセージを送る。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `content` | string | いいえ | `" "` | パディング用 user メッセージのテキスト内容。デフォルトは半角スペース 1 つ。 |
+
+### ルール例
+
+```json
+{
+  "transform": "prompt_append_empty_user",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,62 @@
+---
+title: Monoize 是什麼
+description: 以 Rust 撰寫的 AI API 閘道：轉換協議語意，將一個邏輯模型路由到多個上游渠道。
+---
+
+## 概述
+
+Monoize 是一個以 Rust 撰寫的 AI API 閘道。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Embeddings 與圖像格式的請求，將請求轉發到你設定的某個上游 Channel（通道），並依客戶端使用的協議回傳回應。
+
+Monoize 轉換的是協議語意，而不是欄位名稱。它先把每個請求解碼為統一的型別化內部表示，再編碼為選定的上游協議。回應沿同一路徑反向轉換。文字、推理、加密推理、工具呼叫、工具結果、圖像、用量與串流事件邊界在轉換中各自保持原有語意。
+
+## 核心能力
+
+- **協議轉換。** 任何受支援的下游端點都可以呼叫任何已設定的上游類型。Monoize 在串流與非串流模式下轉換 Responses、Chat Completions、Messages、Gemini 與圖像協議。
+- **路由與可靠性。** 一個邏輯模型可以匹配多個有序的 Provider（服務供應商）。每個 Provider 包含帶權重的 Channel。Monoize 重試可重試的失敗，前進到下一條路由，並在送出第一個回應位元組後停止備援。參見[路由與可靠性](/zh-TW/docs/routing)。
+- **變換（Transform）。** 33 個內建變換可依 Provider、API 金鑰或全域範圍修改請求和回應。參見[變換](/zh-TW/docs/transforms)。
+- **請求擷取。** 擷取功能預設關閉，開啟後會保存每次上游嘗試的完整封包。結構化檢視器展示每一跳。參見[請求日誌](/zh-TW/docs/request-logs)。
+- **儀表板。** 內嵌的 Web 儀表板管理 Provider、Channel、模型、API 金鑰、使用者、計費與日誌。參見[儀表板](/zh-TW/docs/dashboard)。
+
+## 支援的端點
+
+| 方法 | 端點 | 協議 |
+| --- | --- | --- |
+| `GET` | `/v1/models` | OpenAI 相容模型列表 |
+| `POST` | `/v1/responses` | OpenAI Responses，支援串流與非串流 |
+| `GET` | `/v1/responses` | OpenAI Responses WebSocket 傳輸 |
+| `POST` | `/v1/responses/compact` | Responses 壓縮 |
+| `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
+| `POST` | `/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/embeddings` | Embeddings |
+| `POST` | `/v1/images/generations` | 圖像生成 |
+| `POST` | `/v1/images/edits` | Multipart 圖像編輯 |
+
+每個轉發端點都另有 `/api/v1/...` 別名。
+
+## 上游 Channel 類型
+
+| 類型 | 原生上游協議 |
+| --- | --- |
+| `responses` | OpenAI Responses 相容 |
+| `chat_completion` | OpenAI Chat Completions 相容 |
+| `messages` | Anthropic Messages 相容 |
+| `gemini` | Google Gemini 原生 |
+| `openai_image` | OpenAI 相容圖像 API |
+| `replicate` | Replicate predictions |
+
+## 限制
+
+- Monoize 只轉發工具定義和工具呼叫，不在本地執行工具。
+- Monoize 不提供 OpenAI Files、向量儲存或本地檢索。
+- 送出第一個下游位元組後備援即結束。Monoize 不會在可見串流中途切換 Provider。
+- 跨協議族轉換保留可表示的語意。沒有安全目標表示的供應商私有巢狀欄位會被移除。
+- 圖像壓縮預設關閉。除非設定 `image_resolve_urls` 變換，Monoize 不會抓取遠端圖像 URL。
+
+## 下一步
+
+<Cards>
+  <Card title="快速開始" href="/zh-TW/docs/quick-start" description="安裝 Monoize 並送出第一個請求。" />
+  <Card title="設定" href="/zh-TW/docs/configuration" description="環境變數與資料庫選項。" />
+  <Card title="儀表板" href="/zh-TW/docs/dashboard" description="建立 Provider、Channel、模型和 API 金鑰。" />
+  <Card title="變換" href="/zh-TW/docs/transforms" description="依 Provider、金鑰或模型修改請求和回應。" />
+</Cards>

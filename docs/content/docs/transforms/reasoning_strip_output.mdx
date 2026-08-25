@@ -1,0 +1,39 @@
+---
+title: "Reasoning: strip from response output"
+description: Remove reasoning nodes from response output and stream events.
+---
+
+## What it does
+
+This transform removes reasoning nodes from response output and stream events. Clients receive final answers without visible reasoning.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_strip_output` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- You do not want end users to see model reasoning.
+- A client breaks when it receives reasoning items.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_strip_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

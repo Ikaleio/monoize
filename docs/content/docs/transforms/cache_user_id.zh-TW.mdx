@@ -1,0 +1,41 @@
+---
+title: "自動快取：使用者標識"
+description: 將 Monoize 使用者名稱注入提供商的使用者欄位，以提升快取親和性。
+---
+
+## 行為
+
+此變換把 Monoize 使用者名稱寫入 Anthropic 的 `metadata.user_id` 欄位和 OpenAI 的 `user` 欄位。提供商使用這些欄位把同一使用者的請求路由到同一快取分片。
+
+用戶端已經設定值時，此變換絕不覆蓋。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `cache_user_id` |
+| 階段 | `request` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 上游按使用者身分對提示詞快取分片。
+- 多個終端使用者共享一個 Monoize 部署，且快取命中率偏低。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "cache_user_id",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,38 @@
+---
+title: "Reasoning: inject reasoning_content field"
+description: Emit OpenRouter/DeepSeek-compatible reasoning_content fields in Chat responses.
+---
+
+## What it does
+
+This transform marks reasoning nodes and deltas so the Chat Completions encoder emits `reasoning_content` fields compatible with OpenRouter and DeepSeek clients.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_inject_content_field` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Chat clients read `reasoning_content` and would drop reasoning otherwise.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_inject_content_field",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

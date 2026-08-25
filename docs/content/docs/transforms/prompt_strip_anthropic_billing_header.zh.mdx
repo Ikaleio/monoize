@@ -1,0 +1,38 @@
+---
+title: "提示词：移除 Anthropic 计费标记"
+description: 从 system 和 developer 文本中移除 x-anthropic-billing-header 行。
+---
+
+## 行为
+
+此变换从 system 和 developer 文本节点中移除 `x-anthropic-billing-header` 行。因此变空的节点会被删除。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `prompt_strip_anthropic_billing_header` |
+| 阶段 | `request` |
+| 范围 | Provider, 全局, API 密钥 |
+
+## 适用场景
+
+- 为 Anthropic 官方计费构建的客户端注入了计费标记行，其他上游会拒绝或回显这些行。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "prompt_strip_anthropic_billing_header",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

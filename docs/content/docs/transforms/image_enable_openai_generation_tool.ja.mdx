@@ -1,0 +1,48 @@
+---
+title: "画像: OpenAI 生成ツールの有効化"
+description: リクエストに OpenAI Responses の image_generation ツールを確実に含めます。
+---
+
+## 動作
+
+この変換は、リクエストに OpenAI Responses の `image_generation` ツール記述子がない場合に追加します。ストリーミングの強制や tool_choice の強制も可能です。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `image_enable_openai_generation_tool` |
+| フェーズ | `request` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- クライアントはプレーンテキストのプロンプトを送るが、ルートは Responses 画像ツールで画像を生成すべきである。
+- クライアント自身がツールを設定できない。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | いいえ | `"png"` | `png`、`webp`、`jpeg` のいずれか。画像ツールに要求するフォーマット。 |
+| `action` | string | いいえ | — | 任意。ツール記述子に書き込む action 値。 |
+| `force_stream` | boolean | いいえ | `false` | 上流リクエストを部分画像付きストリーミングに強制します。 |
+| `force_tool_choice` | boolean | いいえ | `false` | tool_choice を画像生成ツールに強制します。 |
+| `extra` | object | いいえ | `{}` | ツール記述子にマージする追加フィールド。 |
+
+### ルール例
+
+```json
+{
+  "transform": "image_enable_openai_generation_tool",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-image*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "force_tool_choice": true
+  }
+}
+```

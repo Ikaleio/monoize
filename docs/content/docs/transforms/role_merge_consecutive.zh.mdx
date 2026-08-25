@@ -1,0 +1,38 @@
+---
+title: "角色：合并连续同角色消息"
+description: 合并相邻且角色相同的消息。
+---
+
+## 行为
+
+此变换把相邻且角色相同的普通节点合并为一个节点。它绝不跨越工具结果或控制节点合并。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `role_merge_consecutive` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游拒绝连续两条同角色消息，例如连续两条 user 消息。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "role_merge_consecutive",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

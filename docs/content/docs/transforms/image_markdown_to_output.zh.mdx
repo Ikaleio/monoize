@@ -1,0 +1,39 @@
+---
+title: "图像：Markdown 转图像节点"
+description: 把 assistant 文本中的 Markdown 图片语法转换为真正的图像节点。
+---
+
+## 行为
+
+此变换从 assistant 文本中提取 Markdown 图片块（例如 `![alt](url)`），并转换为标准的 assistant 图像节点。它与 `image_output_to_markdown` 互逆。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `image_markdown_to_output` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游把生成的图像以文本中的 Markdown 链接返回。
+- 客户端期望结构化的图像输出，而不是文本链接。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "image_markdown_to_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,38 @@
+---
+title: "プロンプト: Anthropic 課金ヘッダーの除去"
+description: system と developer のテキストから x-anthropic-billing-header 行を削除します。
+---
+
+## 動作
+
+この変換は system と developer のテキストノードから `x-anthropic-billing-header` 行を削除します。空になったノードは除去されます。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `prompt_strip_anthropic_billing_header` |
+| フェーズ | `request` |
+| スコープ | Provider, グローバル, API キー |
+
+## 使いどころ
+
+- Anthropic 公式課金向けに作られたクライアントが課金ヘッダー行を注入し、他の上流がそれを拒否またはエコーする。
+
+## 設定
+
+この変換にはオプションがありません。`config` には空オブジェクトを指定します。
+
+### ルール例
+
+```json
+{
+  "transform": "prompt_strip_anthropic_billing_header",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

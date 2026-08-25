@@ -1,0 +1,41 @@
+---
+title: "圖像：圖像節點轉 Markdown"
+description: 把 assistant 圖像節點渲染為 assistant 文字中的 Markdown 連結。
+---
+
+## 行為
+
+此變換把 assistant 圖像節點渲染為 Markdown 圖片連結，追加到 assistant 文字輸出。它與 `image_markdown_to_output` 互逆。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `image_output_to_markdown` |
+| 階段 | `response` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 用戶端只渲染純文字，無法顯示結構化圖像輸出。
+- 聊天前端顯示 Markdown，你希望行內預覽圖像。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `template` | string | 否 | — | 每張圖片追加的範本。佔位符：`{{src}}`、`{{url}}`、`{{media_type}}`、`{{data}}` 及 `_urlencoded` 變體。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "image_output_to_markdown",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

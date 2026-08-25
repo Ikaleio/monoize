@@ -1,0 +1,45 @@
+---
+title: "流式：强制流式模式"
+description: 无视客户端请求，强制设置上游的 stream 标志。
+---
+
+## 行为
+
+此变换把上游请求的 `stream` 标志设置为配置值。客户端保持自己的模式：客户端请求非流式而上游流式时，Monoize 收集流并返回单个响应。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `stream_force` |
+| 阶段 | `request` |
+| 范围 | Provider |
+
+## 适用场景
+
+- 上游在长的非流式请求上超时，但流式正常。
+- 上游只支持一种模式。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `enabled` | boolean | 是 | — | 强制写入上游请求的 stream 标志值。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "stream_force",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "enabled": true
+  }
+}
+```
+
+此变换仅支持 Provider 范围，因为它改变请求执行模式。

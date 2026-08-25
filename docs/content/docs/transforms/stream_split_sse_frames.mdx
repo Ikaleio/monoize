@@ -1,0 +1,43 @@
+---
+title: "Stream: split oversized SSE frames"
+description: Split large SSE delta payloads into multiple protocol-valid events.
+---
+
+## What it does
+
+This transform splits downstream SSE delta payloads that exceed the configured frame length into multiple protocol-valid events. The visible text is unchanged; only the framing differs.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `stream_split_sse_frames` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- A client or proxy drops or truncates long SSE frames.
+- An upstream batches large deltas and clients need smoother incremental rendering.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `max_frame_length` | integer | No | — | Maximum SSE frame payload length. Frames above the limit are split. |
+
+### Example rule
+
+```json
+{
+  "transform": "stream_split_sse_frames",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "max_frame_length": 4096
+  }
+}
+```

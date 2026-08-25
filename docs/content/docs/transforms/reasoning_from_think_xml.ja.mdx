@@ -1,0 +1,42 @@
+---
+title: "推論: think XML から復元"
+description: assistant テキストから think タグの XML を解析し、推論として復元します。
+---
+
+## 動作
+
+この変換は assistant テキストから設定された XML タグ（例: `<think>...</think>`）を解析し、内容を推論ノードとして復元します。`reasoning_to_think_xml` の逆変換です。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `reasoning_from_think_xml` |
+| フェーズ | `response` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 上流が推論を think タグのテキストとしてインライン出力し、クライアントは構造化された推論を期待している。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `tag` | string | はい | — | 解析する XML タグ名。例: `think`。 |
+
+### ルール例
+
+```json
+{
+  "transform": "reasoning_from_think_xml",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "tag": "think"
+  }
+}
+```

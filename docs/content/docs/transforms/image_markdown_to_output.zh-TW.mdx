@@ -1,0 +1,39 @@
+---
+title: "圖像：Markdown 轉圖像節點"
+description: 把 assistant 文字中的 Markdown 圖片語法轉換為真正的圖像節點。
+---
+
+## 行為
+
+此變換從 assistant 文字中提取 Markdown 圖片區塊（例如 `![alt](url)`），並轉換為標準的 assistant 圖像節點。它與 `image_output_to_markdown` 互逆。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `image_markdown_to_output` |
+| 階段 | `response` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 上游把生成的圖像以文字中的 Markdown 連結返回。
+- 用戶端期望結構化的圖像輸出，而不是文字連結。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "image_markdown_to_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

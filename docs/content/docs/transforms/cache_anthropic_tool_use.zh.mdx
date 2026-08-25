@@ -1,0 +1,41 @@
+---
+title: "自动缓存：Anthropic 工具结果"
+description: 在智能体循环中，于每轮工具调用前插入 cache_control 缓存断点。
+---
+
+## 行为
+
+当请求提交工具结果时，此变换在工具调用串之前最近的 user 节点上插入 Anthropic ephemeral `cache_control` 缓存断点。在智能体循环中，不断增长的会话前缀在迭代之间保持缓存。
+
+没有工具结果的请求原样通过。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `cache_anthropic_tool_use` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 智能体客户端在 Anthropic 兼容上游上运行长工具循环。
+- 你希望每轮迭代从缓存中重读会话前缀，而不是按全价支付输入费用。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "cache_anthropic_tool_use",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {}
+}
+```

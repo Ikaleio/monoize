@@ -1,0 +1,50 @@
+---
+title: Providers and Channels
+description: Define upstream routes with ordered Providers and weighted Channels.
+---
+
+## Concepts
+
+- A **Provider** is a routing group. It defines routing order, retry budgets, health policy, and an ordered transform chain.
+- A **Channel** is one upstream endpoint inside a Provider. It holds the upstream type, base URL, credential, model mapping, weight, and timeout.
+
+A request first selects a Provider, then selects a Channel inside it. See [Routing and Reliability](/en/docs/routing) for the selection rules.
+
+![Provider list](/images/en/providers.webp)
+
+## Create a Provider
+
+1. Open **Providers** in the sidebar.
+2. Click the create button and enter a name.
+3. Set the retry options when the defaults do not fit:
+   - `max_retries`: total retry budget across the Provider. `-1` means unlimited within the route.
+   - `channel_max_retries`: retries inside one Channel before moving on. Default `0`.
+   - `channel_retry_interval_ms`: wait time between in-Channel retries. Default `0`.
+4. Keep `circuit_breaker_enabled` on unless you have a reason to disable it.
+
+## Add a Channel
+
+1. Open the Provider and click **Add Channel**.
+2. Select the upstream type: `responses`, `chat_completion`, `messages`, `gemini`, `openai_image`, or `replicate`.
+3. Enter the upstream base URL and API key.
+4. Set a weight. Traffic splits between eligible Channels in proportion to weight. Default `1`.
+5. Optional: set a per-Channel `proxy_url` to override the process-level upstream proxy.
+
+When you edit a Channel later, leave the API key field empty to keep the stored key.
+
+## Map models
+
+Each Channel lists the logical models it serves. A model entry has:
+
+- `redirect`: the real upstream model name. Leave empty to send the logical name unchanged.
+- `multiplier`: a positive decimal price multiplier for billing.
+
+A logical model routes to a Provider only when at least one enabled Channel inside it maps that model.
+
+## Provider transforms
+
+A Provider can hold an ordered list of transform rules. They run on every request that the Provider serves, after Provider selection and before upstream encoding. See [Transforms](/en/docs/transforms).
+
+## Groups
+
+Every Provider belongs to at least one group. API keys route only to Providers whose groups intersect the key's groups. Use groups to separate user tiers or environments.

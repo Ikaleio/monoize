@@ -1,0 +1,45 @@
+---
+title: "Field: override max tokens"
+description: Set the request max output token limit to a fixed value.
+---
+
+## What it does
+
+This transform sets the request max output token limit to the configured value. It replaces any limit the client sent.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `field_override_max_tokens` |
+| Phase | `request` |
+| Scopes | Provider |
+
+## When to use
+
+- An upstream rejects requests whose token limit exceeds its ceiling.
+- You want one Provider to cap output length regardless of client settings.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `value` | integer | Yes | — | The max output token limit written into the request. Minimum 1. |
+
+### Example rule
+
+```json
+{
+  "transform": "field_override_max_tokens",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "value": 8192
+  }
+}
+```
+
+This transform is Provider-scope only. It changes the output token ceiling, so API-key scope does not allow it.

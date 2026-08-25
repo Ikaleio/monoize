@@ -1,0 +1,41 @@
+---
+title: "图像：图像节点转 Markdown"
+description: 把 assistant 图像节点渲染为 assistant 文本中的 Markdown 链接。
+---
+
+## 行为
+
+此变换把 assistant 图像节点渲染为 Markdown 图片链接，追加到 assistant 文本输出。它与 `image_markdown_to_output` 互逆。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `image_output_to_markdown` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 客户端只渲染纯文本，无法显示结构化图像输出。
+- 聊天前端显示 Markdown，你希望内联预览图像。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `template` | string | 否 | — | 每张图片追加的模板。占位符：`{{src}}`、`{{url}}`、`{{media_type}}`、`{{data}}` 及 `_urlencoded` 变体。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "image_output_to_markdown",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

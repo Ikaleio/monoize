@@ -1,0 +1,38 @@
+---
+title: "Reasoning: content to summary"
+description: Move plaintext reasoning content into the reasoning summary field.
+---
+
+## What it does
+
+This transform moves plaintext reasoning content into the reasoning summary field on responses and streams. Clients that read only the summary field then see the reasoning.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_content_to_summary` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- An upstream returns raw reasoning content but clients expect Responses-style summaries.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_content_to_summary",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

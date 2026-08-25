@@ -1,0 +1,38 @@
+---
+title: "推理：注入 reasoning_content 字段"
+description: 在 Chat 响应中输出 OpenRouter/DeepSeek 兼容的 reasoning_content 字段。
+---
+
+## 行为
+
+此变换标记推理节点与增量，使 Chat Completions 编码器输出与 OpenRouter 和 DeepSeek 客户端兼容的 `reasoning_content` 字段。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `reasoning_inject_content_field` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- Chat 客户端读取 `reasoning_content`，否则会丢弃推理内容。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "reasoning_inject_content_field",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

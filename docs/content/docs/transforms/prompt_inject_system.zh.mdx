@@ -1,0 +1,45 @@
+---
+title: "提示词：注入系统提示词"
+description: 把固定文本前置或追加到请求的系统提示词。
+---
+
+## 行为
+
+此变换把配置文本按配置位置加入请求的系统提示词。请求没有 system 节点时会创建一个。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `prompt_inject_system` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 你要强制执行组织级指令，例如语言或安全规则。
+- 某个 Provider 需要额外指令，且不应由客户端管理。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `content` | string | 是 | — | 注入系统提示词的文本。 |
+| `position` | string | 是 | — | `prepend` 放在现有提示词之前；`append` 放在之后。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "prompt_inject_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "content": "Answer concisely.",
+    "position": "append"
+  }
+}
+```

@@ -1,0 +1,55 @@
+---
+title: "画像: リクエスト画像の圧縮"
+description: 上流エンコード前に、user メッセージの base64 画像を再エンコードし、必要に応じてリサイズします。
+---
+
+## 動作
+
+この変換は user メッセージ内の base64 画像を再エンコードし、必要に応じて `max_edge_px` にリサイズします。ペイロードが小さいほどアップロードが速くなり、画像トークンのコストも下げられます。
+
+`skip_if_smaller` が有効な場合（デフォルト）、圧縮でサイズが減らない画像は元のバイト列を維持します。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `image_compress_input` |
+| フェーズ | `request` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- クライアントが大きな写真やスクリーンショットを送信し、上流リクエストがサイズ制限に達する。
+- コスト管理のために画像解像度を制限したい。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | いいえ | `"original"` | `original`、`jpg`、`jpegxl_lossless`、`jpegxl`、`webp_lossless`、`webp`、`png` のいずれか。 |
+| `max_edge_px` | integer | いいえ | — | 最大の幅または高さ（ピクセル）。省略すると元の寸法を維持します。 |
+| `jpeg_quality` | integer | いいえ | `80` | JPEG 出力の品質（1〜100）。 |
+| `jpegxl_quality` | integer | いいえ | `90` | 非可逆 JPEG XL 出力の品質（1〜99）。 |
+| `jpegxl_effort` | integer | いいえ | `7` | JPEG XL のエンコード労力（1〜10）。値が大きいほど圧縮が遅くなります。 |
+| `webp_quality` | integer | いいえ | `80` | 非可逆 WebP 出力の品質（1〜100）。 |
+| `skip_if_smaller` | boolean | いいえ | `true` | 圧縮でペイロードが小さくならない場合は元画像を維持します。 |
+
+### ルール例
+
+```json
+{
+  "transform": "image_compress_input",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "max_edge_px": 1568,
+    "webp_quality": 80
+  }
+}
+```
+
+環境変数 `MONOIZE_IMAGE_TRANSFORM_MAX_*` でデコード処理を制限できます。[設定](/ja/docs/configuration)を参照してください。

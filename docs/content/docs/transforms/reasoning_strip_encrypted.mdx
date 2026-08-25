@@ -1,0 +1,39 @@
+---
+title: "Reasoning: strip encrypted payloads"
+description: Remove encrypted reasoning payloads while keeping plaintext reasoning.
+---
+
+## What it does
+
+This transform removes encrypted reasoning payloads from response nodes, stream events, and passthrough state. Plaintext reasoning stays untouched.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_strip_encrypted` |
+| Phase | `response` |
+| Scopes | Provider, Global, API key |
+
+## When to use
+
+- Clients store conversation history and replay it to a different Provider that cannot decrypt the payloads.
+- You want smaller responses and do not need encrypted reasoning continuity.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_strip_encrypted",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,45 @@
+---
+title: "字段：删除"
+description: 从请求或响应中删除配置路径上的 JSON 值。
+---
+
+## 行为
+
+此变换删除配置的 extra_body 路径上的 JSON 值。在请求阶段编辑发往上游的报文；在响应阶段编辑返回客户端的报文。
+
+路径不存在时，此变换不做任何修改。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `field_remove` |
+| 阶段 | `request`, `response` |
+| 范围 | Provider |
+
+## 适用场景
+
+- 上游拒绝客户端发送的某个厂商私有字段。
+- 你希望对某个 Provider 后面的客户端隐藏某个响应字段。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `path` | string | 是 | — | 要删除的 extra_body 路径，点号分隔，例如 `metadata.tags`。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "field_remove",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "path": "metadata"
+  }
+}
+```

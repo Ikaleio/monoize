@@ -1,0 +1,45 @@
+---
+title: "欄位：覆蓋最大輸出 token"
+description: 把請求的最大輸出 token 上限設定為固定值。
+---
+
+## 行為
+
+此變換把請求的最大輸出 token 上限設定為設定值，取代用戶端發送的任何上限。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `field_override_max_tokens` |
+| 階段 | `request` |
+| 範圍 | Provider |
+
+## 適用場景
+
+- 上游拒絕 token 上限超過其天花板的請求。
+- 你希望某個 Provider 無視用戶端設定，統一限制輸出長度。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `value` | integer | 是 | — | 寫入請求的最大輸出 token 上限。最小值 1。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "field_override_max_tokens",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "value": 8192
+  }
+}
+```
+
+此變換僅支援 Provider 範圍。它改變輸出 token 上限，因此 API 金鑰範圍不允許使用。

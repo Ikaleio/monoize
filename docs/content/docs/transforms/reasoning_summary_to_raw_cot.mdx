@@ -1,0 +1,38 @@
+---
+title: "Reasoning: summary to raw CoT"
+description: Emit reasoning summaries as OpenWebUI-compatible raw chain-of-thought.
+---
+
+## What it does
+
+This transform marks reasoning summaries so the downstream Chat encoder emits them as OpenWebUI-compatible raw chain-of-thought fields.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_summary_to_raw_cot` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- OpenWebUI or a similar frontend shows the thinking panel only for raw chain-of-thought fields.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_summary_to_raw_cot",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

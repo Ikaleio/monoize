@@ -1,0 +1,146 @@
+---
+title: API エンドポイント
+description: OpenAI・Anthropic・埋め込み・画像クライアントから Monoize を呼び出します。
+---
+
+## ベース URL と認証
+
+リクエストは Monoize のリッスンアドレスに送信します。デフォルトは `http://localhost:8080` です。API キーは次のいずれかのヘッダーで送信します。
+
+```bash
+Authorization: Bearer sk-...
+# または
+x-api-key: sk-...
+```
+
+以下の各エンドポイントには `/api` プレフィックスの別名があります。例: `/api/v1/chat/completions`。クライアントが `/api` パスを固定している場合に別名を使います。
+
+どのエンドポイントも任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。
+
+## モデル一覧
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer sk-..."
+```
+
+レスポンスは、呼び出したキーが利用できる論理モデルを OpenAI のリスト形式で返します。
+
+## Chat Completions
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "messages": [{ "role": "user", "content": "Hello" }],
+    "stream": true
+  }'
+```
+
+`"stream": true` を設定するとサーバー送信イベントを使います。省略または `false` にすると単一の JSON レスポンスを返します。
+
+## Responses
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "input": "Hello",
+    "stream": true
+  }'
+```
+
+補足:
+
+- 上流がサーバー側状態を提供する場合、Monoize は `previous_response_id` チェーンをサポートします。セッションアフィニティを有効にすると、後続リクエストが同じ Channel に到達します。[ルーティングと信頼性](/ja/docs/routing)を参照してください。
+- `GET /v1/responses` は WebSocket トランスポートにアップグレードされます。
+- `POST /v1/responses/compact` は会話をコンパクト化します。
+
+## Anthropic Messages
+
+```bash
+curl http://localhost:8080/v1/messages \
+  -H "x-api-key: sk-..." \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "max_tokens": 1024,
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'
+```
+
+## Embeddings
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-embedding-model",
+    "input": "The quick brown fox"
+  }'
+```
+
+## 画像
+
+生成:
+
+```bash
+curl http://localhost:8080/v1/images/generations \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-image-model",
+    "prompt": "A lighthouse at dawn",
+    "size": "1024x1024"
+  }'
+```
+
+編集は `multipart/form-data` を使います。
+
+```bash
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer sk-..." \
+  -F model="my-image-model" \
+  -F prompt="Add a red boat" \
+  -F image[]=@input.png
+```
+
+## 公式 SDK の利用
+
+公式 SDK のベース URL を Monoize に向けます。
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="sk-...",
+)
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost:8080",
+    api_key="sk-...",
+)
+```
+
+## エラーレスポンス
+
+| HTTP ステータス | コード | 意味 |
+| --- | --- | --- |
+| `401` | `unauthorized` | API キーが未指定、無効、無効化済み、または期限切れ |
+| `402` | `insufficient_balance` | ユーザーまたはサブアカウントの残高が不足 |
+| `403` | `model_not_allowed` | キーのモデル制限が要求モデルを拒否 |
+| `403` | `ip_not_allowed` | クライアント IP がキーの IP ホワイトリストにない |
+| `502` | `upstream_error` | モデルを提供するルートがない、または適格なルートがすべて失敗 |
+
+上流のエラーテキストはクライアントに届く前にサニタイズされます。完全な詳細は[リクエストログ](/ja/docs/request-logs)で確認できます。

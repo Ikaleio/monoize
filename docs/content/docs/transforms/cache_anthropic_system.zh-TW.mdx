@@ -1,0 +1,43 @@
+---
+title: "自動快取：Anthropic 系統提示詞"
+description: 在系統提示詞之後插入 Anthropic cache_control 快取斷點。
+---
+
+## 行為
+
+此變換在請求的最後一個 system 或 developer 節點上插入 Anthropic ephemeral `cache_control` 快取斷點。上游隨後快取穩定的系統前綴，並在後續請求中直接讀取快取。
+
+請求中沒有 system 或 developer 節點時，此變換不做任何修改。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `cache_anthropic_system` |
+| 階段 | `request` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 上游相容 Anthropic 協議，且快取寫入和讀取按折扣價計費。
+- 用戶端在每個請求中都發送冗長且穩定的系統提示詞。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "cache_anthropic_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {}
+}
+```
+
+與 `cache_anthropic_tool_use` 組合使用，可以在工具迴圈中同時快取會話前綴。

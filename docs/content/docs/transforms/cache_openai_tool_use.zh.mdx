@@ -1,0 +1,41 @@
+---
+title: "自动缓存：OpenAI 工具结果"
+description: 为 GPT 模型在工具结果块上插入显式提示词缓存断点。
+---
+
+## 行为
+
+此变换在符合条件的工具结果内容块上插入显式的 OpenAI 提示词缓存断点。它针对支持显式缓存断点的 GPT 模型系列。
+
+没有符合条件的工具结果块的请求原样通过。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `cache_openai_tool_use` |
+| 阶段 | `request` |
+| 范围 | Provider, 全局, API 密钥 |
+
+## 适用场景
+
+- 智能体客户端在支持显式断点的 OpenAI 兼容上游上运行工具循环。
+- 你希望工具循环的前缀在迭代之间保持缓存。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "cache_openai_tool_use",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {}
+}
+```

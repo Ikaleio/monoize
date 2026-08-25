@@ -1,0 +1,51 @@
+---
+title: "推論: effort からモデルサフィックスへ"
+description: 推論 effort をサフィックスとして上流モデル名に追加します。
+---
+
+## 動作
+
+リクエストがサポート対象の推論 effort（`none`、`minimum`、`low`、`medium`、`high`、`xhigh`、`max`）を持つ場合、この変換は最初に一致したルールのサフィックスを上流モデル名に追加します。サフィックス内の `{effort}` は effort 値に置換されます。
+
+サポート対象の effort がないリクエストは変更されずに通過します。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `reasoning_effort_to_model_suffix` |
+| フェーズ | `request` |
+| スコープ | Provider |
+
+## 使いどころ
+
+- 上流が推論の強さをモデル名にエンコードしている（例: `model-high`）。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `rules` | array | はい | — | `{ pattern, suffix }` の順序付きルール。モデルに一致した最初のルールが適用されます。サフィックス内の `{effort}` は解決された effort に置換されます。 |
+
+### ルール例
+
+```json
+{
+  "transform": "reasoning_effort_to_model_suffix",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "rules": [
+      {
+        "pattern": "grok-*",
+        "suffix": "-{effort}"
+      }
+    ]
+  }
+}
+```
+
+この変換は上流モデル選択を変えるため、Provider スコープ専用です。

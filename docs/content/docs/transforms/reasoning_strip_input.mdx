@@ -1,0 +1,39 @@
+---
+title: "Reasoning: strip from request input"
+description: Remove reasoning nodes from the request input before upstream encoding.
+---
+
+## What it does
+
+This transform removes reasoning nodes from the request input before Monoize encodes the request for the upstream. It is the request-side counterpart of `reasoning_strip_output`.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_strip_input` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- An upstream rejects replayed reasoning items in the input.
+- You want to cut input token cost when clients replay full history including reasoning.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_strip_input",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

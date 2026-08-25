@@ -1,0 +1,48 @@
+---
+title: "Image: enable OpenAI generation tool"
+description: Ensure the OpenAI Responses image_generation tool exists on the request.
+---
+
+## What it does
+
+This transform adds the OpenAI Responses `image_generation` tool descriptor to the request when it is missing. It can also force streaming and force the tool choice.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `image_enable_openai_generation_tool` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Clients send plain text prompts but the route should produce images through the Responses image tool.
+- A client cannot configure tools itself.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | No | `"png"` | `png`, `webp`, or `jpeg`. Format requested from the image tool. |
+| `action` | string | No | — | Optional action value written into the tool descriptor. |
+| `force_stream` | boolean | No | `false` | Force the upstream request to stream with partial images. |
+| `force_tool_choice` | boolean | No | `false` | Force tool choice to the image generation tool. |
+| `extra` | object | No | `{}` | Extra fields merged into the tool descriptor. |
+
+### Example rule
+
+```json
+{
+  "transform": "image_enable_openai_generation_tool",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-image*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "force_tool_choice": true
+  }
+}
+```

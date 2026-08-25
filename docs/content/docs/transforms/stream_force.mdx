@@ -1,0 +1,45 @@
+---
+title: "Stream: force streaming mode"
+description: Force the upstream stream flag regardless of the client request.
+---
+
+## What it does
+
+This transform sets the upstream request `stream` flag to the configured value. The client keeps its own mode: when a client asks for a non-streaming response and the upstream streams, Monoize collects the stream and returns one response.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `stream_force` |
+| Phase | `request` |
+| Scopes | Provider |
+
+## When to use
+
+- An upstream times out on long non-streaming requests but works when streaming.
+- An upstream supports only one mode.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `enabled` | boolean | Yes | — | The stream flag value forced onto the upstream request. |
+
+### Example rule
+
+```json
+{
+  "transform": "stream_force",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "enabled": true
+  }
+}
+```
+
+This transform is Provider-scope only, because it changes the request execution mode.

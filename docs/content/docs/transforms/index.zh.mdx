@@ -1,0 +1,63 @@
+---
+title: 变换总览
+description: 按 Provider、API 密钥或全局范围修改请求和响应的有序规则。
+---
+
+## 什么是变换
+
+变换（Transform）是一条规则：在 Monoize 为上游编码之前修改请求，或在返回客户端之前修改响应。变换作用于类型化的内部表示，而不是原始 JSON 文本。因此同一个变换对任何协议组合的行为都一致。
+
+Monoize 内置 33 个变换。本节为每个变换提供独立页面。
+
+## 变换挂载位置
+
+| 范围 | 配置位置 | 生效对象 |
+| --- | --- | --- |
+| Provider | Provider 编辑对话框 | 该 Provider 服务的每个请求 |
+| 全局 | **设置**中的全局变换链 | 每个请求 |
+| API 密钥 | **令牌管理**中的密钥编辑对话框 | 使用该密钥的每个请求 |
+
+每个阶段的执行顺序：先 Provider 链，再全局链，最后 API 密钥链。同一条链内按列表顺序执行。前一条规则的输出是后一条规则的输入。
+
+并非每个变换都支持所有范围。API 密钥范围排除了可能改变路由、价格或 token 上限的变换。每个变换页面都列出了它支持的范围。
+
+## 规则字段
+
+每条规则有五个字段：
+
+```json
+{
+  "transform": "prompt_inject_system",
+  "enabled": true,
+  "phase": "request",
+  "models": ["gpt-4*"],
+  "config": { "content": "Answer in French.", "position": "append" }
+}
+```
+
+- `transform`：变换类型 ID。
+- `enabled`：禁用的规则被跳过。
+- `phase`：`request` 或 `response`。规则只在自己的阶段执行。
+- `models`：可选的通配符列表。至少一个通配符匹配逻辑模型时规则才执行。`*` 匹配任意序列；`?` 匹配单个字符。匹配区分大小写且锚定完整模型名。
+- `config`：变换专属选项。仪表盘根据每个变换的 schema 渲染表单。
+
+模型匹配始终使用客户端请求的逻辑模型名，而不是重定向后的上游模型名。
+
+## 变换分类
+
+| 分类 | 用途 | 变换 |
+| --- | --- | --- |
+| 自动缓存 | 提升提供商侧提示词缓存命中 | `cache_anthropic_system`、`cache_anthropic_tool_use`、`cache_openai_prompt`、`cache_openai_tool_use`、`cache_user_id` |
+| 字段 | 设置、删除或限制原始请求/响应字段 | `field_override_max_tokens`、`field_remove`、`field_set` |
+| 图像 | 压缩、转换或解析图像 | `image_compress_input`、`image_compress_output`、`image_enable_openai_generation_tool`、`image_markdown_to_output`、`image_output_to_markdown`、`image_resolve_urls` |
+| 提示词 | 调整消息列表 | `prompt_append_empty_user`、`prompt_inject_system`、`prompt_strip_anthropic_billing_header`、`prompt_strip_orphaned_tool_calls` |
+| 推理 | 移动、移除或重编码推理内容 | `reasoning_content_to_summary`、`reasoning_effort_to_budget`、`reasoning_effort_to_model_suffix`、`reasoning_from_think_xml`、`reasoning_inject_content_field`、`reasoning_strip_encrypted`、`reasoning_strip_input`、`reasoning_strip_output`、`reasoning_summary_to_raw_cot`、`reasoning_to_think_xml` |
+| 角色 | 改写或合并消息角色 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
+| 流式 | 控制流式行为 | `stream_force`、`stream_split_sse_frames` |
+
+## 验证变换效果
+
+1. 为测试用 API 密钥开启[请求捕获](/zh/docs/request-logs)。
+2. 发送一个与规则模型通配符匹配的请求。
+3. 打开捕获查看器。对比变换前的请求与编码后的上游请求。
+4. 查看器还会按顺序列出实际执行的变换链及每条规则的范围。

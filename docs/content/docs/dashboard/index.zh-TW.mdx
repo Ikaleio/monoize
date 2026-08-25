@@ -1,0 +1,41 @@
+---
+title: 儀表板概覽
+description: 登入內嵌儀表板並瞭解各個管理區域。
+---
+
+## 存取儀表板
+
+在瀏覽器開啟 Monoize 的監聽位址，預設是 `http://localhost:8080`。release 建置在同一程序中提供儀表板、API 和指標。
+
+![儀表板概覽](/images/en/dashboard.webp)
+
+## 帳號與角色
+
+- 安裝後註冊第一個帳號。第一個註冊的帳號自動成為 `super_admin`。即使公開註冊已關閉，此規則仍然生效。
+- `super_admin` 可以管理使用者、系統設定、Provider 和計費。
+- `admin` 帳號管理營運資源。
+- `user` 帳號管理自己的 API 金鑰、日誌和餘額。
+
+## 管理區域
+
+| 區域 | 用途 |
+| --- | --- |
+| 儀表板 | 流量、費用和健康狀態總覽 |
+| 服務供應商 | Provider、Channel、模型對應、健康狀態、變換 |
+| Token 管理 | API 金鑰、配額、模型限制、變換 |
+| 日誌 | 請求日誌與擷取檢視器 |
+| 模型資料庫 | 從 Models.dev 匯入的模型中繼資料與定價 |
+| 使用者管理 | 帳號、餘額與計費流水 |
+| 系統設定 | 系統設定、全域變換、請求擷取開關 |
+
+## 語言
+
+儀表板支援 English、简体中文、繁體中文和日本語。在使用者選單中切換語言。
+
+## 下一步
+
+<Cards>
+  <Card title="Provider 與 Channel" href="/zh-TW/docs/dashboard/providers-and-channels" description="定義請求的轉發目標。" />
+  <Card title="模型" href="/zh-TW/docs/dashboard/models" description="對應邏輯模型並設定定價。" />
+  <Card title="API 金鑰" href="/zh-TW/docs/dashboard/api-keys" description="建立金鑰並設定限制。" />
+</Cards>

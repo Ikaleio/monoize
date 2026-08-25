@@ -1,0 +1,50 @@
+---
+title: Provider 與 Channel
+description: 用有序的 Provider 和帶權重的 Channel 定義上游路由。
+---
+
+## 概念
+
+- **Provider（服務供應商）** 是一個路由群組。它定義路由順序、重試預算、健康策略和有序的變換鏈。
+- **Channel（通道）** 是 Provider 內的一個上游端點。它保存上游類型、基底 URL、憑證、模型對應、權重和逾時。
+
+請求先選擇 Provider，再在其中選擇 Channel。選擇規則參見[路由與可靠性](/zh-TW/docs/routing)。
+
+![Provider 列表](/images/en/providers.webp)
+
+## 建立 Provider
+
+1. 在側邊欄開啟**服務供應商**。
+2. 點擊建立按鈕並輸入名稱。
+3. 預設值不合適時調整重試選項：
+   - `max_retries`：整個 Provider 的重試總預算。`-1` 表示該路由內不限制。
+   - `channel_max_retries`：切換前在單個 Channel 內的重試次數。預設 `0`。
+   - `channel_retry_interval_ms`：Channel 內重試的間隔時間。預設 `0`。
+4. 除非有明確理由，保持 `circuit_breaker_enabled` 開啟。
+
+## 新增 Channel
+
+1. 開啟 Provider 並點擊**新增 Channel**。
+2. 選擇上游類型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image` 或 `replicate`。
+3. 填寫上游基底 URL 和 API 金鑰。
+4. 設定權重。流量按權重比例在符合條件的 Channel 之間分配。預設 `1`。
+5. 可選：為單個 Channel 設定 `proxy_url`，覆寫程序層級上游代理。
+
+之後編輯 Channel 時，API 金鑰留空則保持原有金鑰不變。
+
+## 對應模型
+
+每個 Channel 列出它服務的邏輯模型。模型條目包含：
+
+- `redirect`：真實的上游模型名稱。留空則按邏輯名稱原樣送出。
+- `multiplier`：用於計費的正數價格乘數。
+
+只有當 Provider 內至少有一個已啟用的 Channel 對應了某個邏輯模型時，該模型才會路由到這個 Provider。
+
+## Provider 變換
+
+Provider 可以持有一組有序的變換規則。它們在 Provider 選定之後、上游編碼之前，作用於該 Provider 服務的每個請求。參見[變換](/zh-TW/docs/transforms)。
+
+## 群組
+
+每個 Provider 至少屬於一個群組。API 金鑰只會路由到群組有交集的 Provider。用群組來區分使用者等級或環境。

@@ -1,0 +1,45 @@
+---
+title: "字段：覆盖最大输出 token"
+description: 把请求的最大输出 token 上限设置为固定值。
+---
+
+## 行为
+
+此变换把请求的最大输出 token 上限设置为配置值，替换客户端发送的任何上限。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `field_override_max_tokens` |
+| 阶段 | `request` |
+| 范围 | Provider |
+
+## 适用场景
+
+- 上游拒绝 token 上限超过其天花板的请求。
+- 你希望某个 Provider 无视客户端设置，统一限制输出长度。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `value` | integer | 是 | — | 写入请求的最大输出 token 上限。最小值 1。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "field_override_max_tokens",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "value": 8192
+  }
+}
+```
+
+此变换仅支持 Provider 范围。它改变输出 token 上限，因此 API 密钥范围不允许使用。

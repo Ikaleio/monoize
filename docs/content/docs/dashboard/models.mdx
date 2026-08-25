@@ -1,0 +1,43 @@
+---
+title: Models
+description: Logical models, upstream redirects, metadata, and pricing.
+---
+
+## Logical models
+
+Clients request a logical model name. Monoize resolves that name against your Providers and Channels. The name your clients see never has to match an upstream vendor name.
+
+One logical model can map to several Channels across several Providers. This gives you failover and load splitting without client changes.
+
+![Model database](/images/en/models.webp)
+
+## Redirects
+
+A Channel model entry can set `redirect` to the real upstream model name.
+
+Example: clients call `my-fast-model`. Channel A redirects it to `gpt-4o-mini`. Channel B redirects it to `claude-3-5-haiku-20241022`. Billing and logs always show the logical name.
+
+## Model metadata and pricing
+
+The **Models** page stores model metadata: context window, capabilities, and per-token prices. Monoize imports metadata and prices from [Models.dev](https://models.dev).
+
+Billing uses:
+
+1. the model's base price from the metadata table;
+2. multiplied by the Channel model entry's `multiplier`.
+
+Charges accumulate in nano-dollars in each user's ledger.
+
+## Model listing
+
+`GET /v1/models` returns the logical models available to the calling API key. The result reflects key model restrictions and group membership.
+
+## Model globs
+
+Transform rules and some restrictions accept model glob patterns:
+
+- `*` matches any sequence of characters, including an empty one.
+- `?` matches exactly one character.
+- Matching is case-sensitive and anchored to the full model name.
+
+Example: `gpt-4*` matches `gpt-4o` and `gpt-4o-mini`. It does not match `o4-mini`.

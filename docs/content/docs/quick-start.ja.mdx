@@ -1,0 +1,83 @@
+---
+title: クイックスタート
+description: Monoize をインストールし、最初のアカウントを作成して最初のリクエストを送信します。
+---
+
+## 前提条件
+
+インストール方法を 1 つ選択します。
+
+- **Docker。** 公開イメージは Linux x86-64 と ARM64 に対応します。
+- **リリースバイナリ。** GitHub Releases ページから Linux、macOS、Windows 用アーカイブをダウンロードします。
+- **ソースからビルド。** 安定版 Rust ツールチェーンと [Bun](https://bun.sh/) をインストールします。release ビルドは React ダッシュボードをコンパイルして実行ファイルに埋め込みます。
+
+## Docker で実行
+
+永続化した SQLite ボリュームを付けてイメージを実行します。
+
+```bash
+docker run -d \
+  --name monoize \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v monoize-data:/app/data \
+  ghcr.io/ikaleio/monoize:latest
+```
+
+PostgreSQL や既定以外の SQLite パスを使う場合は、`-e` で `MONOIZE_DATABASE_DSN` を設定します。
+
+## ソースからビルド
+
+```bash
+cargo build --release
+./target/release/monoize
+```
+
+サーバーは既定で `0.0.0.0:8080` を待ち受けます。アドレスは `MONOIZE_LISTEN` で変更します。
+
+## 最初のアカウントを作成
+
+1. ブラウザで `http://localhost:8080` を開きます。
+2. アカウントを登録します。最初に登録したアカウントが `super_admin` になります。公開登録が無効の場合でも、この規則は適用されます。
+
+## ルートを設定
+
+ダッシュボードで次の手順を完了します。
+
+1. Provider を作成します。[Provider と Channel](/ja/docs/dashboard/providers-and-channels) を参照してください。
+2. 上流のベース URL と認証情報を持つ Channel を 1 つ以上追加します。
+3. 論理モデル名を Channel に対応付けます。
+4. API キーを作成します。[API キー](/ja/docs/dashboard/api-keys) を参照してください。
+
+## 最初のリクエストを送信
+
+対応する任意のプロトコルで論理モデルを呼び出します。OpenAI Responses の例：
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H 'Authorization: Bearer sk-your-monoize-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "your-logical-model",
+    "input": "こんにちは",
+    "stream": true
+  }'
+```
+
+Chat Completions の例：
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H 'Authorization: Bearer sk-your-monoize-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "your-logical-model",
+    "messages": [{ "role": "user", "content": "こんにちは" }]
+  }'
+```
+
+下流プロトコルは上流 Channel タイプと一致する必要はありません。Monoize が両者を変換します。
+
+## リクエストを確認
+
+ダッシュボードの**ログ**ページを開きます。リクエストのステータス、レイテンシ、トークン使用量、料金が表示されます。[リクエストログ](/ja/docs/request-logs) を参照してください。

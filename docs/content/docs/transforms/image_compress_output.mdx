@@ -1,0 +1,50 @@
+---
+title: "Image: compress response images"
+description: Re-encode and optionally resize assistant output images in responses and streams.
+---
+
+## What it does
+
+This transform re-encodes assistant output images in the response or stream and optionally resizes them. The options match `image_compress_input`.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `image_compress_output` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Image-generation responses are large and clients pay for transfer.
+- You want a uniform output format, for example WebP, regardless of the upstream format.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | No | `"original"` | `original`, `jpg`, `jpegxl_lossless`, `jpegxl`, `webp_lossless`, `webp`, or `png`. |
+| `max_edge_px` | integer | No | — | Maximum width or height in pixels. Omit to keep the original dimensions. |
+| `jpeg_quality` | integer | No | `80` | Quality 1-100 for JPEG output. |
+| `jpegxl_quality` | integer | No | `90` | Quality 1-99 for lossy JPEG XL output. |
+| `jpegxl_effort` | integer | No | `7` | JPEG XL encoding effort 1-10. Higher values compress more slowly. |
+| `webp_quality` | integer | No | `80` | Quality 1-100 for lossy WebP output. |
+| `skip_if_smaller` | boolean | No | `true` | Keep the original image when compression does not reduce the payload size. |
+
+### Example rule
+
+```json
+{
+  "transform": "image_compress_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*image*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "webp_quality": 80
+  }
+}
+```

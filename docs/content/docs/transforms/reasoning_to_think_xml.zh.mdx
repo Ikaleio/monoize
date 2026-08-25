@@ -1,0 +1,43 @@
+---
+title: "推理：转为 think XML"
+description: 把推理内容用 think 标签包裹后并入 assistant 文本。
+---
+
+## 行为
+
+此变换把推理节点内容转换为使用配置标签包裹的 assistant 文本，例如 `<think>...</think>`。它与 `reasoning_from_think_xml` 互逆。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `reasoning_to_think_xml` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 客户端只渲染 assistant 文本，而你仍希望推理可见。
+- 下游工具从文本中解析 think 标签。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `tag` | string | 是 | — | 包裹推理文本的 XML 标签名，例如 `think`。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "reasoning_to_think_xml",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "tag": "think"
+  }
+}
+```

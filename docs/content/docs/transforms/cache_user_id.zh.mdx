@@ -1,0 +1,41 @@
+---
+title: "自动缓存：用户标识"
+description: 将 Monoize 用户名注入提供商的用户字段，以提升缓存亲和性。
+---
+
+## 行为
+
+此变换把 Monoize 用户名写入 Anthropic 的 `metadata.user_id` 字段和 OpenAI 的 `user` 字段。提供商使用这些字段把同一用户的请求路由到同一缓存分片。
+
+客户端已经设置值时，此变换绝不覆盖。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `cache_user_id` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游按用户身份对提示词缓存分片。
+- 多个终端用户共享一个 Monoize 部署，且缓存命中率偏低。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "cache_user_id",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

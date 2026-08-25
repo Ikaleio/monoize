@@ -1,0 +1,50 @@
+---
+title: "Auto-cache: OpenAI prompt key"
+description: Derive a deterministic prompt_cache_key so repeated prompts hit the OpenAI prompt cache.
+---
+
+## What it does
+
+This transform computes a deterministic `prompt_cache_key` from the request content and attaches it, together with a retention hint, for OpenAI Responses and Chat Completions upstreams. Repeated prompts with the same prefix then hit the provider prompt cache.
+
+The transform never overwrites a `prompt_cache_key` that the client already set.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `cache_openai_prompt` |
+| Phase | `request` |
+| Scopes | Provider, Global, API key |
+
+## When to use
+
+- The upstream is OpenAI-compatible and prices cached input tokens lower.
+- Clients do not set `prompt_cache_key` themselves.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `retention` | string | No | `"24h"` | `24h` or `in_memory`. Cache retention hint sent to the upstream. |
+| `key_prefix` | string | No | `"mzpc"` | Prefix of the generated `prompt_cache_key`. |
+| `key_mode` | string | No | `"prefix"` | `prefix` derives the key from the conversation prefix. `identity` uses one key per identity. |
+| `include_user_in_key` | boolean | No | `false` | Mix the Monoize user into the key so users never share cache entries. |
+| `include_full_input_in_key` | boolean | No | `false` | Hash the full input instead of the stable prefix. |
+
+### Example rule
+
+```json
+{
+  "transform": "cache_openai_prompt",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {
+    "retention": "24h",
+    "key_mode": "prefix"
+  }
+}
+```

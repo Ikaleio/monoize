@@ -1,0 +1,62 @@
+---
+title: What is Monoize
+description: A Rust gateway that converts AI API protocols and routes one logical model across many upstream channels.
+---
+
+## Overview
+
+Monoize is an AI API gateway written in Rust. It accepts requests in OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, embeddings, and image formats. It forwards each request to one of your configured upstream Channels. It returns the response in the protocol the client used.
+
+Monoize converts protocol semantics, not field names. It decodes each request into one typed internal representation. It then encodes that representation for the selected upstream protocol. The response follows the same path in reverse. Text, reasoning, encrypted reasoning, tool calls, tool results, images, usage, and stream boundaries keep their roles across the conversion.
+
+## Key capabilities
+
+- **Protocol conversion.** Call any supported endpoint with any configured upstream type. Monoize converts between Responses, Chat Completions, Messages, Gemini, and image protocols in streaming and non-streaming modes.
+- **Routing and reliability.** A logical model can match several ordered Providers. Each Provider contains weighted Channels. Monoize retries retryable failures, moves forward to the next route, and stops fallback after the first response byte. See [Routing and Reliability](/en/docs/routing).
+- **Transforms.** 33 built-in transforms adjust requests and responses per Provider, per API key, or globally. See [Transforms](/en/docs/transforms).
+- **Request capture.** Capture is off by default. When you enable it, Monoize stores the exact payload of each upstream attempt. A structured viewer shows every hop. See [Request Logs](/en/docs/request-logs).
+- **Dashboard.** An embedded web dashboard manages Providers, Channels, models, API keys, users, billing, and logs. See [Dashboard](/en/docs/dashboard).
+
+## Supported endpoints
+
+| Method | Endpoint | Contract |
+| --- | --- | --- |
+| `GET` | `/v1/models` | OpenAI-compatible model list |
+| `POST` | `/v1/responses` | OpenAI Responses, streaming or non-streaming |
+| `GET` | `/v1/responses` | OpenAI Responses WebSocket transport |
+| `POST` | `/v1/responses/compact` | Responses compaction |
+| `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
+| `POST` | `/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/embeddings` | Embeddings |
+| `POST` | `/v1/images/generations` | Image generation |
+| `POST` | `/v1/images/edits` | Multipart image edits |
+
+Every forwarding endpoint also has an `/api/v1/...` alias.
+
+## Upstream Channel types
+
+| Type | Native upstream contract |
+| --- | --- |
+| `responses` | OpenAI Responses-compatible |
+| `chat_completion` | OpenAI Chat Completions-compatible |
+| `messages` | Anthropic Messages-compatible |
+| `gemini` | Google Gemini native |
+| `openai_image` | OpenAI-compatible image API |
+| `replicate` | Replicate predictions |
+
+## Limits
+
+- Monoize forwards tool definitions and tool calls. It does not execute tools.
+- Monoize does not provide OpenAI Files, vector stores, or local retrieval.
+- Fallback ends after the first downstream byte. Monoize never switches Providers in the middle of a visible stream.
+- Cross-family conversion preserves representable semantics. Provider-specific nested fields with no safe target representation are removed.
+- Image compression is off by default. Monoize does not fetch remote image URLs unless you configure the `image_resolve_urls` transform.
+
+## Next steps
+
+<Cards>
+  <Card title="Quick Start" href="/en/docs/quick-start" description="Install Monoize and send the first request." />
+  <Card title="Configuration" href="/en/docs/configuration" description="Environment variables and database options." />
+  <Card title="Dashboard" href="/en/docs/dashboard" description="Create Providers, Channels, models, and API keys." />
+  <Card title="Transforms" href="/en/docs/transforms" description="Adjust requests and responses per Provider, key, or model." />
+</Cards>

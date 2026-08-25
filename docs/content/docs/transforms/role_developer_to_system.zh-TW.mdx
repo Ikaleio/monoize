@@ -1,0 +1,38 @@
+---
+title: "角色：developer 轉 system"
+description: 把 developer 角色的訊息改寫為 system 角色。
+---
+
+## 行為
+
+此變換把 developer 角色的普通節點改寫為 system 角色。它與 `role_system_to_developer` 互逆。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `role_developer_to_system` |
+| 階段 | `request` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 上游不接受較新 OpenAI 用戶端發送的 `developer` 角色。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "role_developer_to_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

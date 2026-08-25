@@ -1,0 +1,63 @@
+---
+title: 變換總覽
+description: 按 Provider、API 金鑰或全域範圍修改請求和回應的有序規則。
+---
+
+## 什麼是變換
+
+變換（Transform）是一條規則：在 Monoize 為上游編碼之前修改請求，或在返回用戶端之前修改回應。變換作用於型別化的內部表示，而不是原始 JSON 文字。因此同一個變換對任何協議組合的行為都一致。
+
+Monoize 內建 33 個變換。本節為每個變換提供獨立頁面。
+
+## 變換掛載位置
+
+| 範圍 | 設定位置 | 生效對象 |
+| --- | --- | --- |
+| Provider | Provider 編輯對話框 | 該 Provider 服務的每個請求 |
+| 全域 | **設定**中的全域變換鏈 | 每個請求 |
+| API 金鑰 | **令牌管理**中的金鑰編輯對話框 | 使用該金鑰的每個請求 |
+
+每個階段的執行順序：先 Provider 鏈，再全域鏈，最後 API 金鑰鏈。同一條鏈內按列表順序執行。前一條規則的輸出是後一條規則的輸入。
+
+並非每個變換都支援所有範圍。API 金鑰範圍排除了可能改變路由、價格或 token 上限的變換。每個變換頁面都列出了它支援的範圍。
+
+## 規則欄位
+
+每條規則有五個欄位：
+
+```json
+{
+  "transform": "prompt_inject_system",
+  "enabled": true,
+  "phase": "request",
+  "models": ["gpt-4*"],
+  "config": { "content": "Answer in French.", "position": "append" }
+}
+```
+
+- `transform`：變換類型 ID。
+- `enabled`：停用的規則被跳過。
+- `phase`：`request` 或 `response`。規則只在自己的階段執行。
+- `models`：可選的萬用字元列表。至少一個萬用字元匹配邏輯模型時規則才執行。`*` 匹配任意序列；`?` 匹配單一字元。匹配區分大小寫且錨定完整模型名。
+- `config`：變換專屬選項。儀表板根據每個變換的 schema 渲染表單。
+
+模型匹配始終使用用戶端請求的邏輯模型名，而不是重新導向後的上游模型名。
+
+## 變換分類
+
+| 分類 | 用途 | 變換 |
+| --- | --- | --- |
+| 自動快取 | 提升提供商側提示詞快取命中 | `cache_anthropic_system`、`cache_anthropic_tool_use`、`cache_openai_prompt`、`cache_openai_tool_use`、`cache_user_id` |
+| 欄位 | 設定、刪除或限制原始請求/回應欄位 | `field_override_max_tokens`、`field_remove`、`field_set` |
+| 圖像 | 壓縮、轉換或解析圖像 | `image_compress_input`、`image_compress_output`、`image_enable_openai_generation_tool`、`image_markdown_to_output`、`image_output_to_markdown`、`image_resolve_urls` |
+| 提示詞 | 調整訊息列表 | `prompt_append_empty_user`、`prompt_inject_system`、`prompt_strip_anthropic_billing_header`、`prompt_strip_orphaned_tool_calls` |
+| 推理 | 移動、移除或重編碼推理內容 | `reasoning_content_to_summary`、`reasoning_effort_to_budget`、`reasoning_effort_to_model_suffix`、`reasoning_from_think_xml`、`reasoning_inject_content_field`、`reasoning_strip_encrypted`、`reasoning_strip_input`、`reasoning_strip_output`、`reasoning_summary_to_raw_cot`、`reasoning_to_think_xml` |
+| 角色 | 改寫或合併訊息角色 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
+| 串流 | 控制串流行為 | `stream_force`、`stream_split_sse_frames` |
+
+## 驗證變換效果
+
+1. 為測試用 API 金鑰開啟[請求擷取](/zh-TW/docs/request-logs)。
+2. 發送一個與規則模型萬用字元匹配的請求。
+3. 開啟擷取檢視器。對比變換前的請求與編碼後的上游請求。
+4. 檢視器還會按順序列出實際執行的變換鏈及每條規則的範圍。
