@@ -6,7 +6,8 @@ import {
   type UIMessage,
   type UIMessageChunk,
 } from "ai";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createOpenAI } from "@ai-sdk/openai";
+import { withRawReasoningRewrite } from "@/components/playground/responses-sse";
 
 export type ChatRequestAuth =
   | { mode: "internal"; group: string }
@@ -22,21 +23,38 @@ export interface ChatRequestConfig {
 }
 
 /**
- * Strips assistant `file` parts before model conversion (PG-CHAT3): generated
- * images cannot be replayed as assistant content on chat-completions upstreams,
- * and an empty assistant message would be rejected, so a literal "[image]"
- * placeholder is substituted when stripping empties the message.
+ * Strips assistant `file` and `reasoning` parts before model conversion
+ * (PG-CHAT3): generated images cannot be replayed as assistant content, and
+ * reasoning is never replayed because Monoize may route each request to a
+ * different upstream. When stripping empties a message, a literal "[image]"
+ * text part is substituted if a file part was removed (the message showed an
+ * image); otherwise the message is dropped from the outgoing conversation.
  */
 export function sanitizeForModel(messages: UIMessage[]): UIMessage[] {
-  return messages.map((message) => {
-    if (message.role !== "assistant") return message;
-    const parts = message.parts.filter((part) => part.type !== "file");
-    if (parts.length === 0) {
-      return { ...message, parts: [{ type: "text" as const, text: "[image]" }] };
+  const result: UIMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      result.push(message);
+      continue;
     }
-    if (parts.length === message.parts.length) return message;
-    return { ...message, parts };
-  });
+    const parts = message.parts.filter(
+      (part) => part.type !== "file" && part.type !== "reasoning",
+    );
+    if (parts.length === 0) {
+      const hadFile = message.parts.some((part) => part.type === "file");
+      if (hadFile) {
+        result.push({
+          ...message,
+          parts: [{ type: "text" as const, text: "[image]" }],
+        });
+      }
+      continue;
+    }
+    result.push(
+      parts.length === message.parts.length ? message : { ...message, parts },
+    );
+  }
+  return result;
 }
 
 /**
@@ -74,10 +92,12 @@ function parsePositiveInt(value: string): number | undefined {
 }
 
 /**
- * ChatTransport that runs the AI SDK OpenAI-compatible provider in the browser
- * against the local Monoize proxy (`POST /api/v1/chat/completions`), bypassing
- * any UI-message server protocol (PG-CHAT1/PG-CHAT2). Config is read at call
- * time so selector changes apply to regenerations too.
+ * ChatTransport that runs the AI SDK OpenAI Responses model in the browser
+ * against the local Monoize proxy (`POST /api/v1/responses`), bypassing any
+ * UI-message server protocol (PG-CHAT1/PG-CHAT2). Config is read at call time
+ * so selector changes apply to regenerations too. The provider fetch is
+ * wrapped with the PG-CHAT7 raw-reasoning SSE adapter so open-source CoT
+ * (`response.reasoning_text.*`) surfaces as reasoning UI parts.
  */
 export class MonoizeChatTransport implements ChatTransport<UIMessage> {
   private config: ChatRequestConfig;
@@ -105,7 +125,8 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
     }
 
     const internal = config.auth.mode === "internal";
-    const provider = createOpenAICompatible({
+    const rewriteFetch = withRawReasoningRewrite(globalThis.fetch.bind(globalThis));
+    const provider = createOpenAI({
       name: "monoize",
       baseURL: `${window.location.origin}/api/v1`,
       ...(internal
@@ -117,14 +138,17 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
                 : {}),
             },
             fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-              fetch(input, { ...init, credentials: "include" }),
+              rewriteFetch(input, { ...init, credentials: "include" }),
           }
-        : { apiKey: config.auth.apiKey }),
+        : {
+            apiKey: config.auth.apiKey,
+            fetch: rewriteFetch,
+          }),
     });
 
     const systemPrompt = config.systemPrompt.trim();
     const result = streamText({
-      model: provider.chatModel(config.model.trim()),
+      model: provider.responses(config.model.trim()),
       messages: await convertToModelMessages(sanitizeForModel(options.messages)),
       ...(systemPrompt ? { system: systemPrompt } : {}),
       ...(parseFinite(config.temperature) !== undefined
@@ -134,6 +158,16 @@ export class MonoizeChatTransport implements ChatTransport<UIMessage> {
         ? { maxOutputTokens: parsePositiveInt(config.maxTokens) }
         : {}),
       abortSignal: options.abortSignal,
+      providerOptions: {
+        openai: {
+          // Reasoning summaries are opt-in on the Responses API; "auto" makes
+          // reasoning-capable models return them without a user toggle
+          // (PG-CHAT2a). The playground is ephemeral, so responses are never
+          // stored server-side.
+          reasoningSummary: "auto",
+          store: false,
+        },
+      },
     });
 
     return toUIMessageStream({
