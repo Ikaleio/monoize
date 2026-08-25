@@ -676,7 +676,8 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                             }
                         },
                     };
-                    substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
+                    let missing_usage_substituted =
+                        substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
                     if resp.usage.is_none() {
                         let err = AppError::new(
                             StatusCode::BAD_GATEWAY,
@@ -842,6 +843,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                         &attempt,
                         &logical_model,
                         &resp,
+                        missing_usage_substituted,
                         request_id.as_deref(),
                     )
                     .await

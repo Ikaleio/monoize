@@ -1009,7 +1009,8 @@ async fn execute_stream_collected_image_typed(
                         }
                     };
 
-                    substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
+                    let missing_usage_substituted =
+                        substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
 
                     if let Err(err) = validate_image_subrequest_response(&resp) {
                         let same_channel_retryable = is_same_channel_retryable_app_error(&err);
@@ -1084,6 +1085,7 @@ async fn execute_stream_collected_image_typed(
                         &attempt,
                         &logical_model,
                         &resp,
+                        missing_usage_substituted,
                         request_id.as_deref(),
                     )
                     .await

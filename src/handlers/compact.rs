@@ -173,7 +173,8 @@ pub async fn compact_response(
                     )
                     .await;
                     let mut usage = parse_usage_from_responses_object(&value);
-                    substitute_zero_usage_if_allowed(&mut usage, &attempt);
+                    let missing_usage_substituted =
+                        substitute_zero_usage_if_allowed(&mut usage, &attempt);
                     let response_service_tier =
                         usage::response_service_tier(&value).map(str::to_string);
                     let charge = match usage.as_ref() {
@@ -186,6 +187,7 @@ pub async fn compact_response(
                                 &attempt,
                                 &logical_model,
                                 usage,
+                                missing_usage_substituted,
                                 response_service_tier.as_deref(),
                                 request_id.as_deref(),
                             )

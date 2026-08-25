@@ -671,7 +671,8 @@ pub async fn create_embeddings(
                     )
                     .await;
                     let mut usage = parse_usage_from_embeddings_object(&value);
-                    substitute_zero_usage_if_allowed(&mut usage, &attempt);
+                    let missing_usage_substituted =
+                        substitute_zero_usage_if_allowed(&mut usage, &attempt);
                     let response_service_tier =
                         usage::response_service_tier(&value).map(str::to_string);
                     let charge = match usage.as_ref() {
@@ -683,6 +684,7 @@ pub async fn create_embeddings(
                                 &attempt,
                                 &logical_model,
                                 usage_row,
+                                missing_usage_substituted,
                                 response_service_tier.as_deref(),
                                 request_id.as_deref(),
                             )

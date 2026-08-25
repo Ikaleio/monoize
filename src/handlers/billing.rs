@@ -1579,9 +1579,13 @@ pub(super) async fn maybe_charge_usage(
     attempt: &MonoizeAttempt,
     logical_model: &str,
     usage: &urp::Usage,
+    skip_charge: bool,
     response_service_tier: Option<&str>,
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
+    if skip_charge {
+        return Ok(ChargeComputation::default());
+    }
     maybe_charge_usage_with_output(
         state,
         auth,
@@ -1812,10 +1816,14 @@ pub(super) async fn maybe_charge_stream_usage(
     attempt: &MonoizeAttempt,
     logical_model: &str,
     usage: &urp::Usage,
+    skip_charge: bool,
     output: &[urp::Node],
     response_service_tier: Option<&str>,
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
+    if skip_charge {
+        return Ok(ChargeComputation::default());
+    }
     maybe_charge_usage_with_output(
         state,
         auth,
@@ -1835,8 +1843,12 @@ pub(super) async fn maybe_charge_response(
     attempt: &MonoizeAttempt,
     logical_model: &str,
     response: &urp::UrpResponse,
+    skip_charge: bool,
     request_id: Option<&str>,
 ) -> AppResult<ChargeComputation> {
+    if skip_charge {
+        return Ok(ChargeComputation::default());
+    }
     let Some(usage) = response.usage.as_ref() else {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
@@ -1866,8 +1878,10 @@ pub(super) async fn maybe_charge_response(
 pub(super) fn substitute_zero_usage_if_allowed(
     usage: &mut Option<urp::Usage>,
     attempt: &MonoizeAttempt,
-) {
+) -> bool {
     if usage.is_none() && attempt.allow_missing_usage {
         *usage = Some(urp::Usage::default());
+        return true;
     }
+    false
 }

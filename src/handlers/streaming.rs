@@ -457,7 +457,8 @@ pub(super) async fn forward_stream_typed(
                                 break 'channel_attempts;
                             }
                         };
-                        substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
+                        let missing_usage_substituted =
+                            substitute_zero_usage_if_allowed(&mut resp.usage, &attempt);
                         if resp.usage.is_none() {
                             let err = AppError::new(
                                 StatusCode::BAD_GATEWAY,
@@ -626,6 +627,7 @@ pub(super) async fn forward_stream_typed(
                                         &attempt_for_log,
                                         &logical_model_for_stream,
                                         &resp,
+                                        missing_usage_substituted,
                                         request_id_for_log.as_deref(),
                                     )
                                     .await
@@ -1047,45 +1049,49 @@ pub(super) async fn forward_stream_typed(
                             actual_upstream_usage,
                             usage,
                             is_estimated,
+                            missing_usage_substituted,
                             terminal_diagnostics,
                             response_id,
                             response_service_tier,
                         ) = {
                             let guard = runtime_metrics.lock().await;
                             let actual_upstream_usage = guard.usage.clone();
-                            let (usage, is_estimated) = match guard.usage.clone() {
-                                Some(u) => (Some(u), false),
-                                None if attempt_for_log.allow_missing_usage => {
-                                    (Some(urp::Usage::default()), false)
-                                }
-                                None => {
-                                    let visible_output_bytes = guard
-                                        .visible_output_bytes
-                                        .max(terminal_visible_output_bytes);
-                                    let estimated_output_tokens =
-                                        estimated_tokens_from_utf8_bytes(visible_output_bytes);
-                                    tracing::warn!(
-                                        estimated_input_tokens,
-                                        estimated_output_tokens,
-                                        "upstream stream ended without usage; billing from estimate"
-                                    );
-                                    (
-                                        Some(urp::Usage {
-                                            input_tokens: estimated_input_tokens,
-                                            output_tokens: estimated_output_tokens,
-                                            input_details: None,
-                                            output_details: None,
-                                            extra_body: std::collections::HashMap::new(),
-                                        }),
-                                        true,
-                                    )
-                                }
-                            };
+                            let (usage, is_estimated, missing_usage_substituted) =
+                                match guard.usage.clone() {
+                                    Some(u) => (Some(u), false, false),
+                                    None if attempt_for_log.allow_missing_usage => {
+                                        (Some(urp::Usage::default()), false, true)
+                                    }
+                                    None => {
+                                        let visible_output_bytes = guard
+                                            .visible_output_bytes
+                                            .max(terminal_visible_output_bytes);
+                                        let estimated_output_tokens =
+                                            estimated_tokens_from_utf8_bytes(visible_output_bytes);
+                                        tracing::warn!(
+                                            estimated_input_tokens,
+                                            estimated_output_tokens,
+                                            "upstream stream ended without usage; billing from estimate"
+                                        );
+                                        (
+                                            Some(urp::Usage {
+                                                input_tokens: estimated_input_tokens,
+                                                output_tokens: estimated_output_tokens,
+                                                input_details: None,
+                                                output_details: None,
+                                                extra_body: std::collections::HashMap::new(),
+                                            }),
+                                            true,
+                                            false,
+                                        )
+                                    }
+                                };
                             (
                                 guard.ttfb_ms,
                                 actual_upstream_usage,
                                 usage,
                                 is_estimated,
+                                missing_usage_substituted,
                                 guard.terminal.clone(),
                                 guard.response_id.clone(),
                                 guard.response_service_tier.clone(),
@@ -1284,6 +1290,7 @@ pub(super) async fn forward_stream_typed(
                             &attempt_for_log,
                             &model_for_log,
                             usage_row,
+                            missing_usage_substituted,
                             &settled_output,
                             response_service_tier.as_deref(),
                             request_id_for_log.as_deref(),
