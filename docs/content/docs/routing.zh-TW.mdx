@@ -9,7 +9,7 @@ description: Monoize 如何選擇路由、重試失敗、前進備援和熔斷�
 
 1. **模型重新導向。** 先執行 API 金鑰規則，再執行全域規則。第一條匹配的規則重寫模型名。
 2. **Provider 選擇。** Monoize 收集滿足以下條件的已啟用 Provider：至少有一個已啟用、權重大於零的 Channel 服務該模型，且群組與金鑰群組有交集。群組順序決定優先順序；同一群組內按 Provider 優先級排序。
-3. **Channel 選擇。** 在選中的 Provider 內，Monoize 按權重隨機排序候選 Channel。Channel \(i\) 被首先嘗試的機率為：
+3. **Channel 選擇。** 在選中的 Provider 內，Monoize 按權重隨機排序候選 Channel。Channel $i$ 被首先嘗試的機率為：
 
 ```math
 P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}

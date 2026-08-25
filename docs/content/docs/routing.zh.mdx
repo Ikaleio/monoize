@@ -9,7 +9,7 @@ description: Monoize 如何选择路由、重试失败、前进回退和熔断�
 
 1. **模型重定向。** 先执行 API 密钥规则，再执行全局规则。第一条匹配的规则重写模型名。
 2. **Provider 选择。** Monoize 收集满足以下条件的已启用 Provider：至少有一个已启用、权重大于零的 Channel 服务该模型，且分组与密钥分组有交集。分组顺序决定优先顺序；同一分组内按 Provider 优先级排序。
-3. **Channel 选择。** 在选中的 Provider 内，Monoize 按权重随机排序候选 Channel。Channel \(i\) 被首先尝试的概率为：
+3. **Channel 选择。** 在选中的 Provider 内，Monoize 按权重随机排序候选 Channel。Channel $i$ 被首先尝试的概率为：
 
 ```math
 P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}

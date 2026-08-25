@@ -9,7 +9,7 @@ For each request, Monoize resolves the route in this order:
 
 1. **Model redirects.** API-key rules run first, then global rules. The first match rewrites the model name.
 2. **Provider selection.** Monoize collects enabled Providers that serve the model through at least one enabled Channel with weight greater than zero, and whose groups intersect the key's groups. Group order sets the preference order; inside one group, Provider priority applies.
-3. **Channel selection.** Inside the chosen Provider, Monoize orders eligible Channels by weighted randomization. The probability that Channel \(i\) is tried first is:
+3. **Channel selection.** Inside the chosen Provider, Monoize orders eligible Channels by weighted randomization. The probability that Channel $i$ is tried first is:
 
 ```math
 P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}
