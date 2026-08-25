@@ -1,5 +1,32 @@
 import { describe, expect, test } from 'bun:test'
 import { formatCacheHitRate, planRemainingFraction } from '../src/lib/live-usage'
+import en from '../src/locales/en.json'
+import ja from '../src/locales/ja.json'
+import zh from '../src/locales/zh.json'
+import zhTw from '../src/locales/zh-TW.json'
+
+describe('user-center menu locale keys (dashboard-ui-layout.spec.md DL3d/DL3e)', () => {
+	const keys = [
+		'balance',
+		'plan',
+		'grant',
+		'nextReset',
+		'remainingOfGrant',
+		'liveUsage',
+		'rpm',
+		'tpm',
+		'cacheHit',
+		'liveUsageError'
+	] as const
+
+	test('every userMenu key resolves in every shipped locale', () => {
+		for (const locale of [en, zh, zhTw, ja]) {
+			for (const key of keys) {
+				expect(locale.userMenu[key]).toBeTruthy()
+			}
+		}
+	})
+})
 
 describe('cache hit rate formatting (user-live-usage.spec.md LU-11)', () => {
 	test('null and undefined render as em dash, never 0%', () => {
