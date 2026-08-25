@@ -20,6 +20,10 @@ DSA6. The dashboard browser MUST determine its authenticated state by calling `G
 
 DSA7. Logout MUST invalidate the server session identified by the cookie and MUST expire the `monoize_session` cookie.
 
+DSA8. If a dashboard endpoint requires authentication and the request contains neither a `monoize_session` cookie nor a Bearer session token, the backend MUST return HTTP `401` with code `unauthorized` and message `missing dashboard session`.
+
+DSA9. A dashboard API response with HTTP `401` and error code `unauthorized` MUST invalidate the browser's authenticated state. The dashboard MUST clear cached authenticated data and navigate to `/login` instead of rendering the response error in the current page.
+
 ## 2. Non-browser clients
 
-DSA8. The backend MAY accept `Authorization: Bearer <session-token>` for non-browser dashboard clients. This compatibility MUST NOT cause the dashboard browser to expose or persist the token.
+DSA10. The backend MAY accept `Authorization: Bearer <session-token>` for non-browser dashboard clients. This compatibility MUST NOT cause the dashboard browser to expose or persist the token.

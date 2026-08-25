@@ -16,6 +16,8 @@ CAP-C4. If exactly one external Cap variable is non-empty, or the endpoint is in
 
 CAP-C5. `GET /api/dashboard/settings/public` MUST return `captcha_enabled`. When it is `true`, `cap_api_endpoint` MUST equal `/api/dashboard/captcha/` in built-in mode and the normalized external endpoint in external mode. When it is `false`, `cap_api_endpoint` MUST be `null`.
 
+CAP-C6. Updating `captcha_enabled` through the authenticated system settings API MUST NOT create, rotate, or delete any dashboard session. The session that authorizes the update MUST remain valid after the update succeeds.
+
 ## 2. Authentication request contract
 
 CAP-A1. `POST /api/dashboard/auth/login` and `POST /api/dashboard/auth/register` MUST accept an optional `captcha_token: string` in the JSON request body.

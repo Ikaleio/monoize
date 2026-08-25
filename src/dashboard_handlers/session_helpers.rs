@@ -43,7 +43,7 @@ pub(super) async fn get_current_user(headers: &HeaderMap, state: &AppState) -> A
         AppError::new(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
-            "missing authorization header",
+            "missing dashboard session",
         )
     })?;
 

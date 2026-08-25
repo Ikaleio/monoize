@@ -334,7 +334,7 @@ pub async fn logout(
             AppError::new(
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
-                "missing authorization header",
+                "missing dashboard session",
             )
         })?;
 

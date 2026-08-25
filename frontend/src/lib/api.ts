@@ -1,5 +1,22 @@
 const API_BASE = "/api/dashboard";
 
+type UnauthorizedHandler = () => void;
+
+const unauthorizedHandlers = new Set<UnauthorizedHandler>();
+
+export function subscribeDashboardUnauthorized(handler: UnauthorizedHandler): () => void {
+  unauthorizedHandlers.add(handler);
+  return () => {
+    unauthorizedHandlers.delete(handler);
+  };
+}
+
+function notifyDashboardUnauthorized(): void {
+  for (const handler of unauthorizedHandlers) {
+    handler();
+  }
+}
+
 export interface UserBillingPlan {
   id: string;
   name: string;
@@ -696,6 +713,9 @@ class ApiClient {
     const data = await response.json();
 
     if (!response.ok) {
+      if (response.status === 401 && data.error?.code === "unauthorized") {
+        notifyDashboardUnauthorized();
+      }
       throw new Error(data.error?.message || data.error?.code || "Request failed");
     }
 

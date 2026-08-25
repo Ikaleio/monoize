@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, subscribeDashboardUnauthorized } from "@/lib/api";
 import type { User } from "@/lib/api";
 import { clearCache } from "@/lib/swr";
 
@@ -29,6 +29,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearCache();
     }
   };
+
+  useEffect(() => {
+    return subscribeDashboardUnauthorized(() => {
+      setUser(null);
+      void clearCache();
+    });
+  }, []);
 
   useEffect(() => {
     refreshUser().finally(() => setLoading(false));

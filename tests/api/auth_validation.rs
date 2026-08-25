@@ -141,10 +141,46 @@ async fn dashboard_auth_uses_builtin_cap_without_external_configuration() {
 async fn disabled_captcha_allows_login_without_a_token() {
     let ctx = setup().await;
     ctx.state
-        .settings_store
-        .set("captcha_enabled", "false")
+        .user_store
+        .create_user(
+            "captcha-admin",
+            "admin-password-12",
+            monoize::users::UserRole::Admin,
+            &[],
+        )
         .await
         .unwrap();
+    let cookie = dashboard_session_cookie(&ctx, "captcha-admin", "admin-password-12").await;
+
+    let update = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/dashboard/settings")
+                .header(CONTENT_TYPE, "application/json")
+                .header("cookie", &cookie)
+                .body(Body::from(json!({"captcha_enabled": false}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+
+    let me = ctx
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/dashboard/auth/me")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::OK);
 
     let response = ctx
         .router
@@ -169,6 +205,7 @@ async fn disabled_captcha_allows_login_without_a_token() {
 
     let public = ctx
         .router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/dashboard/settings/public")
@@ -181,6 +218,26 @@ async fn disabled_captcha_allows_login_without_a_token() {
         serde_json::from_slice(&public.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["captcha_enabled"], json!(false));
     assert!(body["cap_api_endpoint"].is_null());
+}
+
+#[tokio::test]
+async fn dashboard_auth_missing_session_uses_session_error() {
+    let ctx = setup().await;
+    let response = ctx
+        .router
+        .oneshot(
+            Request::builder()
+                .uri("/api/dashboard/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["error"]["code"], json!("unauthorized"));
+    assert_eq!(body["error"]["message"], json!("missing dashboard session"));
 }
 
 #[tokio::test]
