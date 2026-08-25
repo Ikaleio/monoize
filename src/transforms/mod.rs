@@ -147,7 +147,13 @@ pub fn canonicalize_transform_rule(rule: &mut TransformRuleConfig) -> bool {
 }
 
 pub fn canonicalize_transform_rules(rules: &mut [TransformRuleConfig]) -> bool {
-    rules.iter_mut().any(canonicalize_transform_rule)
+    // `Iterator::any` would short-circuit on the first rewritten rule and leave
+    // later stale IDs untouched, so every rule must be visited unconditionally.
+    let mut changed = false;
+    for rule in rules.iter_mut() {
+        changed |= canonicalize_transform_rule(rule);
+    }
+    changed
 }
 
 pub enum UrpData<'a> {
@@ -542,7 +548,7 @@ pub fn state_set_contains(state: &mut dyn TransformState, key: u32) -> bool {
 mod registry_tests {
     use super::{
         HISTORICAL_TRANSFORM_ID_MAP, TransformRuleConfig, canonical_transform_id,
-        canonicalize_transform_rule, registry,
+        canonicalize_transform_rule, canonicalize_transform_rules, registry,
     };
 
     /// TF-7a domain vocabulary.
@@ -714,5 +720,40 @@ mod registry_tests {
 
         assert!(canonicalize_transform_rule(&mut rule));
         assert_eq!(rule.transform, "prompt_strip_anthropic_billing_header");
+    }
+
+    /// Regression test: rewriting must not stop at the first stale rule
+    /// (TF-16 requires canonicalizing every persisted ID).
+    #[test]
+    fn canonicalizes_every_rule_in_a_chain_not_just_the_first() {
+        let rule = |transform: &str| TransformRuleConfig {
+            transform: transform.to_string(),
+            enabled: true,
+            models: None,
+            phase: super::Phase::Request,
+            config: serde_json::json!({}),
+        };
+        let mut rules = vec![
+            rule("strip_reasoning"),
+            rule("auto_cache_system"),
+            rule("prompt_inject_system"),
+            rule("set_field"),
+        ];
+
+        assert!(canonicalize_transform_rules(&mut rules));
+        assert_eq!(
+            rules
+                .iter()
+                .map(|r| r.transform.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "reasoning_strip_output",
+                "cache_anthropic_system",
+                "prompt_inject_system",
+                "field_set",
+            ]
+        );
+        // Idempotence: a second pass reports no change.
+        assert!(!canonicalize_transform_rules(&mut rules));
     }
 }
