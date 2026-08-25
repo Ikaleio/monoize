@@ -21,8 +21,9 @@ The page shows one card per transform with its name, ID, description, author, ph
 - The enabled switch on a card enables or disables the transform.
 - **Copy Authoring Skill** copies a complete authoring guide to the clipboard. Paste it into an AI assistant to generate scripts.
 
-A transform with `visibility: user` appears in chain editors for every user.
-A transform with `visibility: admin` (the default) appears only for administrators.
+`visibility: user` lets a non-admin attach the transform to an API-key chain.
+`visibility: admin` (the default) lets only an administrator attach the transform.
+`GET /api/dashboard/transforms/registry` requires an admin session and lists every enabled custom transform.
 A disabled or deleted transform never runs. Chains that still reference it skip it without error.
 
 ## Frontmatter

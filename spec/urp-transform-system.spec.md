@@ -208,7 +208,7 @@ TF-8. Every transform registry item returned by `/api/dashboard/transforms/regis
 
 TF-8a. `name` and `description` MUST each be a JSON object mapping a lowercase language code to a non-empty human-readable string. Both objects MUST contain at least the keys `en` and `zh`. For built-in transforms the values MUST come from the transform's `display_name()` and `display_description()` interface members; the registry endpoint MUST NOT synthesize display text from `type_id`. For custom `js:` transforms the plain-string name and description are mirrored into both keys per `spec/custom-js-transforms.spec.md` CJS-REG-2.
 
-TF-8c. The registry response additionally contains one item per enabled custom `js:` transform visible to the caller, shaped per `spec/custom-js-transforms.spec.md` CJS-REG-1 and CJS-REG-2.
+TF-8c. After SAC-1 authorization (`spec/security-access-control.spec.md`), the registry response additionally contains one item per enabled custom `js:` transform, shaped per `spec/custom-js-transforms.spec.md` CJS-REG-1 and CJS-REG-2. Visibility filtering of custom rules for non-admin API-key callers is defined in CJS-AKV-2.
 
 TF-8b. A `config_schema` string property MAY carry `"format": "multiline"` to request a multi-line text editor in the dashboard (see `transform-config-ui.spec.md` TCU-3 rule 4). Exactly these properties MUST carry `"format": "multiline"`: `prompt_inject_system` property `content`, `prompt_append_empty_user` property `content`, and `image_output_to_markdown` property `template`.
 

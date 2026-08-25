@@ -178,7 +178,7 @@ When you omit `configSchema`, the rule has an empty config object.
 
 - Choose the narrowest `phase`. Declare `request` or `response` instead of `both` when one phase is sufficient.
 - Choose the narrowest `scopes`. Omit `api_key` unless end users need the transform on their keys.
-- Set `visibility: user` only when non-admin users may attach the transform. The default `admin` hides it from user surfaces.
+- Set `visibility: user` only when non-admin users may attach the transform to an API-key chain. The default `admin` rejects non-admin attachment.
 - Keep `transform` fast. The wall-clock budget includes all fetch time.
 - Validate `ctx.config` values before use. Fail fast with a thrown `Error` and a clear message.
 - Do not store secrets in the script source. Administrators can read every script.

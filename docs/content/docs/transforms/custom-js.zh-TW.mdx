@@ -21,8 +21,9 @@ Monoize 在內嵌的 QuickJS 沙箱中執行指令碼，指令碼參與正常的
 - 卡片上的啟用開關可啟用或停用該變換。
 - **複製撰寫技能**將完整的撰寫指南複製到剪貼簿。貼給 AI 助手即可產生指令碼。
 
-`visibility: user` 的變換對所有使用者的鏈編輯器可見。
-`visibility: admin`（預設值）的變換只對管理員可見。
+`visibility: user` 允許非管理員把該變換掛到 API 金鑰鏈。
+`visibility: admin`（預設值）只允許管理員掛載該變換。
+`GET /api/dashboard/transforms/registry` 需要管理員工作階段，並列出所有已啟用的自訂變換。
 停用或已刪除的變換不會執行。仍引用它的鏈會將其略過，不報錯。
 
 ## Frontmatter

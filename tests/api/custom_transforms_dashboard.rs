@@ -276,7 +276,7 @@ async fn registry_visibility_filters_custom_transforms_by_caller() {
             .collect()
     };
 
-    // CJS-REG-1 case 1: admins see every enabled custom transform.
+    // CJS-REG-1 + SAC-1: admin session sees every enabled custom transform.
     let (status, items) = json_call(
         &ctx,
         CtMethod::GET,
@@ -311,8 +311,8 @@ async fn registry_visibility_filters_custom_transforms_by_caller() {
     assert!(builtin.get("custom").is_none());
     assert!(builtin.get("visibility").is_none());
 
-    // CJS-REG-1 case 2: non-admin sessions see user-visible ones only.
-    let (status, items) = json_call(
+    // SAC-3 / SAC-2: non-admin session is 403; missing session is 401.
+    let (status, _) = json_call(
         &ctx,
         CtMethod::GET,
         "/api/dashboard/transforms/registry",
@@ -320,11 +320,8 @@ async fn registry_visibility_filters_custom_transforms_by_caller() {
         None,
     )
     .await;
-    assert_eq!(status, CtStatusCode::OK);
-    assert_eq!(custom_ids(&items), vec!["js:echo-marker"]);
-
-    // No session behaves like a non-admin caller.
-    let (status, items) = json_call(
+    assert_eq!(status, CtStatusCode::FORBIDDEN);
+    let (status, _) = json_call(
         &ctx,
         CtMethod::GET,
         "/api/dashboard/transforms/registry",
@@ -332,8 +329,7 @@ async fn registry_visibility_filters_custom_transforms_by_caller() {
         None,
     )
     .await;
-    assert_eq!(status, CtStatusCode::OK);
-    assert_eq!(custom_ids(&items), vec!["js:echo-marker"]);
+    assert_eq!(status, CtStatusCode::UNAUTHORIZED);
 
     // CJS-REG-4: disabled custom transforms disappear for every caller.
     let (status, _) = json_call(

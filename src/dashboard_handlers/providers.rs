@@ -1135,23 +1135,11 @@ pub async fn get_transform_registry(
         })
         .collect();
 
-    // CJS-REG-1: admins see every enabled custom transform; everyone else
-    // (non-admin session or no valid session) sees user-visible ones only.
-    let caller_is_admin =
-        match crate::dashboard_handlers::session_helpers::get_current_user(&headers, &state).await
-        {
-            Ok(user) => user.role.can_manage_system(),
-            Err(_) => false,
-        };
+    // CJS-REG-1 + SAC-1: admin session already required; list every enabled
+    // custom transform. Visibility is returned (CJS-REG-2) and enforced at
+    // API-key validate/sanitize (CJS-AKV-2), not here.
     let snapshot = state.custom_transform_store.snapshot();
     for entry in snapshot.values() {
-        if !caller_is_admin
-            && entry.visibility != crate::custom_transforms::CustomTransformVisibility::User
-        {
-            continue;
-        }
-        // CJS-REG-2: plain name/description strings mirrored into both
-        // required locale keys; scopes are exactly the declared scopes.
         items.push(json!({
             "type_id": entry.id,
             "name": { "en": entry.name, "zh": entry.name },

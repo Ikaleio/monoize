@@ -10,7 +10,8 @@
   the admin dashboard management page, and the copyable authoring skill document.
 - Dependencies: `spec/urp-transform-system.spec.md` (transform interface, pipeline,
   registry endpoint), `spec/transform-config-ui.spec.md` (registry item consumption),
-  `spec/dashboard-ui-layout.spec.md` (navigation and page shell).
+  `spec/dashboard-ui-layout.spec.md` (navigation and page shell),
+  `spec/security-access-control.spec.md` (registry authorization SAC-1 through SAC-4).
 
 ## 1. Identity and namespace
 
@@ -307,12 +308,11 @@ provided.
 
 ## 9. Registry exposure and visibility
 
-CJS-REG-1. `GET /api/dashboard/transforms/registry` returns built-in items (TF-8) plus
-one item per **enabled** custom transform visible to the caller:
-
-1. a caller whose session resolves to an admin user sees every enabled custom transform;
-2. every other caller (non-admin session or no valid session) sees only enabled custom
-   transforms with `visibility = user`.
+CJS-REG-1. `GET /api/dashboard/transforms/registry` is authorized by
+`security-access-control.spec.md` SAC-1 through SAC-4. After that check succeeds, the
+response is the built-in items (TF-8) plus one item per **enabled** custom transform,
+regardless of `visibility`. Non-admin attachment of custom `js:` rules is gated by
+CJS-AKV-2, not by this endpoint.
 
 CJS-REG-2. A custom registry item carries the TF-8 fields plus two marker fields:
 

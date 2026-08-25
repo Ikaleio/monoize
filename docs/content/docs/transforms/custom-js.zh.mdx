@@ -21,8 +21,9 @@ Monoize 在内嵌的 QuickJS 沙箱中运行脚本，脚本参与正常的变换
 - 卡片上的启用开关可启用或禁用该变换。
 - **复制编写技能**将完整的编写指南复制到剪贴板。把它粘贴给 AI 助手即可生成脚本。
 
-`visibility: user` 的变换对所有用户的链编辑器可见。
-`visibility: admin`（默认值）的变换只对管理员可见。
+`visibility: user` 允许非管理员把该变换挂到 API 密钥链。
+`visibility: admin`（默认值）只允许管理员挂载该变换。
+`GET /api/dashboard/transforms/registry` 需要管理员会话，并列出所有已启用的自定义变换。
 禁用或已删除的变换不会执行。仍引用它的链会将其跳过，不报错。
 
 ## Frontmatter
