@@ -929,6 +929,7 @@ struct MonoizeAttempt {
     /// CM-AFF-2: derive per-request session affinity for this Channel.
     session_affinity_auto: bool,
     allow_missing_usage: bool,
+    allow_unpriced_server_tools: bool,
     /// CM-AFF-1a/1b: client header or decoded-body conversation identifier.
     client_session_id: Option<String>,
     /// CM-AFF-2 rule 2: `mono-*` digest of instructions plus the first two

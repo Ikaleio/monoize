@@ -29,6 +29,8 @@ description: 用有序的 Provider 和帶權重的 Channel 定義上游路由。
 3. 填寫上游基底 URL 和 API 金鑰。
 4. 設定權重。流量按權重比例在符合條件的 Channel 之間分配。預設 `1`。
 5. 可選：為單個 Channel 設定 `proxy_url`，覆寫程序層級上游代理。
+6. 僅在 Channel 可能不回傳 Usage 時啟用**允許缺少 Usage**。Monoize 將記錄零用量並收取零費用。
+7. 僅在缺少工具計費資料時可接受零工具費的情況下，啟用**允許未定價內建工具**。Token 費用和已定價工具費用仍正常收取。
 
 之後編輯 Channel 時，API 金鑰留空則保持原有金鑰不變。
 

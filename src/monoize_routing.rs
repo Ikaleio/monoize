@@ -114,6 +114,8 @@ pub struct MonoizeChannel {
     pub enabled: bool,
     #[serde(default)]
     pub allow_missing_usage: bool,
+    #[serde(default)]
+    pub allow_unpriced_server_tools: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +210,8 @@ pub struct CreateMonoizeChannelInput {
     pub enabled: bool,
     #[serde(default)]
     pub allow_missing_usage: bool,
+    #[serde(default)]
+    pub allow_unpriced_server_tools: bool,
     #[serde(default)]
     pub passive_failure_count_threshold_override: Option<u32>,
     #[serde(default)]
@@ -893,6 +897,13 @@ fn decode_channel_row(
             row.try_get::<i32>("", "allow_missing_usage")
                 .map_err(|e| e.to_string())?,
         )?,
+        allow_unpriced_server_tools: decode_database_bool(
+            "channel",
+            &id,
+            "allow_unpriced_server_tools",
+            row.try_get::<i32>("", "allow_unpriced_server_tools")
+                .map_err(|e| e.to_string())?,
+        )?,
         _healthy: None,
         _last_success_at: None,
         _health_status: None,
@@ -1201,7 +1212,8 @@ impl MonoizeRoutingStore {
                             active_probe_success_threshold_override, active_probe_model_override,
                             affinity_enabled_override, affinity_idle_ttl_seconds_override,
                             affinity_failback_mode_override, affinity_failback_delay_seconds_override,
-                            proxy_url, extra_headers, session_affinity_auto, allow_missing_usage
+                            proxy_url, extra_headers, session_affinity_auto, allow_missing_usage,
+                            allow_unpriced_server_tools
                      FROM monoize_channels{provider_filter}
                      ORDER BY created_at ASC"
                 ),
@@ -1409,6 +1421,7 @@ impl MonoizeRoutingStore {
                           c.extra_headers,
                           c.session_affinity_auto,
                           c.allow_missing_usage,
+                          c.allow_unpriced_server_tools,
                           cm.redirect, cm.multiplier
                    FROM monoize_channels c
                    JOIN monoize_providers p ON p.id = c.provider_id
@@ -1485,6 +1498,7 @@ impl MonoizeRoutingStore {
                           c.affinity_failback_mode_override, c.affinity_failback_delay_seconds_override,
                           c.proxy_url, c.extra_headers, c.session_affinity_auto,
                           c.allow_missing_usage,
+                          c.allow_unpriced_server_tools,
                           cm.model_name, cm.redirect, cm.multiplier
                    FROM monoize_channels c
                    JOIN monoize_providers p ON p.id = c.provider_id
@@ -2106,12 +2120,17 @@ impl MonoizeRoutingStore {
                     normalized_extra_headers_json(input.extra_headers.as_ref()).into(),
                     opt_bool_to_value(input.session_affinity_auto),
                     SeaValue::Int(Some(if input.allow_missing_usage { 1 } else { 0 })),
+                    SeaValue::Int(Some(if input.allow_unpriced_server_tools {
+                        1
+                    } else {
+                        0
+                    })),
                     now.clone().into(),
                     now.clone().into(),
                 ]);
                 rows.push(format!(
                     "({})",
-                    (start..start + 26)
+                    (start..start + 27)
                         .map(|index| format!("${index}"))
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -2131,6 +2150,7 @@ impl MonoizeRoutingStore {
                       extra_headers,
                       session_affinity_auto,
                       allow_missing_usage,
+                      allow_unpriced_server_tools,
                       created_at, updated_at)
                      VALUES {}",
                     rows.join(", ")

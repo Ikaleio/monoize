@@ -79,7 +79,7 @@ MB-P4. If no pattern matches, the request has no billable pricing.
 
 MB-P5. Migration `m20260619_000020_default_pricing_profile` MUST rename stored pricing profile value `legacy` to `default` in `billing_rate_records.pricing_profile` and in the `pricing_profile_model_patterns` system setting. Runtime pricing selection MUST NOT treat `legacy` as an alias for `default`.
 
-MB-P6. When the selected profile has no complete eligible rate matrix for a normalized pricing model, Monoize MAY try one additional fallback profile from `model_metadata_records.models_dev_provider` for the same normalized model. The fallback MUST be used only when it differs from the selected profile. The fallback MUST use the same `provider_type`, `model_pattern`, context-tier, meter-rate, and completeness rules as the selected profile. Monoize MUST persist the profile that actually matched in `billing_breakdown_json`.
+MB-P6. When the selected profile has no complete eligible token-rate matrix for a normalized pricing model, Monoize MAY try one additional fallback profile from `model_metadata_records.models_dev_provider` for the same normalized model. The fallback MUST be used only when it differs from the selected profile. The fallback MUST use the same `provider_type`, `model_pattern`, context-tier, and token-rate completeness rules as the selected profile. Monoize MUST check actual server-native meter usage against the selected profile during response settlement. Monoize MUST persist the profile that actually matched in `billing_breakdown_json`.
 
 MB-P7. When MB-P6 yields more than one candidate profile, rate rows for all candidate profiles MUST be loaded in one set-based database query for that model and provider type.
 
@@ -135,7 +135,7 @@ MB-R11. Settlement MUST select the service tier from the non-empty `service_tier
 
 MB-R12. If the settled service tier is absent or equals `default`, a rate row with `service_tier` equal to null or `default` is eligible. If the settled service tier has any other value, only a rate row with the same non-null `service_tier` is eligible. A null or `default` row MUST NOT act as a fallback for a different settled service tier.
 
-MB-R13. For a non-default settled service tier, the matrix MUST contain matching dimensionless `input_uncached` and `output` token rows. It MUST also contain a matching meter row for each requested server-native usage class. If one of these rows is absent, settlement MUST fail with HTTP `403` and code `model_pricing_required`.
+MB-R13. For a non-default settled service tier, the matrix MUST contain matching dimensionless `input_uncached` and `output` token rows. It MUST also contain a matching meter row for each server-native usage class that the response actually used under MB-M5a, unless the selected Channel has `allow_unpriced_server_tools = true`. If one required row is absent, settlement MUST fail with code `model_pricing_required`.
 
 ## 4. Token Billing
 
@@ -180,15 +180,26 @@ MB-M1. Server-native tool meter charges MUST be based only on:
 
 MB-M2. Monoize MUST NOT charge a server-native tool from local wall-clock measurement.
 
-MB-M3. Duration, session, and billed-minute meters MUST require an authoritative upstream billed quantity. If the request enabled such a meter class and upstream usage does not provide the billed quantity, billing MUST reject with HTTP `403` and code `model_pricing_required`.
+MB-M3. Duration, session, and billed-minute meters MUST require an authoritative upstream billed quantity. If the response actually used such a meter class under MB-M5a and upstream usage does not provide the billed quantity, billing MUST fail with code `model_pricing_required` unless the selected Channel has `allow_unpriced_server_tools = true`.
 
 MB-M4. Call-count meters MAY use decoded native provider events when no authoritative provider usage counter exists.
 
-MB-M5. If a request enables a server-native tool and no eligible meter rate exists for its `usage_class`, preflight MUST reject the request with HTTP `403` and code `model_pricing_required`.
+MB-M5. A server-native tool descriptor in a request MUST NOT require a matching meter rate during routing preflight. Routing preflight MUST validate the token-rate matrix without assuming that the model will call an enabled tool.
+
+MB-M5a. A requested server-native `usage_class` is actually used when at least one of these conditions is true:
+
+- normalized upstream usage contains a positive authoritative quantity for that class;
+- decoded terminal URP output contains a matching provider-native tool item.
+
+An enabled tool with neither condition MUST have zero meter quantity. It MUST NOT require a meter rate or an authoritative quantity.
+
+MB-M5b. If an actually used server-native `usage_class` has no eligible meter rate, settlement MUST fail with code `model_pricing_required` unless the selected Channel has `allow_unpriced_server_tools = true`. A non-stream response MUST return HTTP `403` before response-body delivery. A buffered synthetic stream MUST reject before emitting its first response event. The Channel exemption behavior is defined by channel-management.spec.md CM-USAGE-4 through CM-USAGE-6.
 
 MB-M6. For each meter `usage_class`, billing MUST apply only the first eligible row under MB-R2 whose context tier, service tier, modality, and cache-TTL dimensions match the settled usage. A lower-priority duplicate row for the same class and selected dimensions MUST NOT create another line item.
 
 MB-M7. Pass-through streaming MUST retain the decoded terminal URP output nodes until settlement. When authoritative provider meter usage is absent, MB-M4 MUST count call meters from those retained nodes using the same rule as non-stream settlement.
+
+MB-M8. Before a pass-through stream forwards its normal terminal completion event, Monoize MUST evaluate MB-M3 and MB-M5b when terminal usage and output make the actual meter classes observable. On failure, Monoize MUST omit the normal terminal completion event and emit the protocol-correct terminal error event. Non-terminal stream events that were already delivered remain delivered. If the stream does not expose enough terminal data for this check, MB-C6 applies during post-response settlement.
 
 ## 6. Charge Formula
 
@@ -213,6 +224,7 @@ MB-C4. A successful billing snapshot MUST persist `billing_breakdown_json` with:
 - `version = 2`
 - `token_line_items[]`
 - `meter_line_items[]`
+- `ignored_server_tool_usage_classes[]`
 - selected `context_tier`
 - selected `service_tier`
 - `provider_multiplier`

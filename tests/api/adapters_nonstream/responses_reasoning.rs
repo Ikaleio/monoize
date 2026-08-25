@@ -544,6 +544,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,

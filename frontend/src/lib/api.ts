@@ -308,6 +308,7 @@ export interface MonoizeChannel {
   weight: number;
   enabled: boolean;
   allow_missing_usage: boolean;
+  allow_unpriced_server_tools: boolean;
   passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
@@ -392,6 +393,7 @@ export interface CreateMonoizeChannelInput {
   weight?: number;
   enabled?: boolean;
   allow_missing_usage?: boolean;
+  allow_unpriced_server_tools?: boolean;
   passive_failure_count_threshold_override?: number | null;
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;

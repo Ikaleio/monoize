@@ -288,6 +288,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -321,7 +322,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	                enabled: true,
+            enabled: true,
             priority: None,
         })
         .await
@@ -376,6 +377,7 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,

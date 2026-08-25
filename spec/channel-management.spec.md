@@ -52,6 +52,7 @@ A channel object MUST include:
 - `weight: integer >= 0`
 - `enabled: boolean`
 - `allow_missing_usage: boolean` (default `false`)
+- `allow_unpriced_server_tools: boolean` (default `false`)
 - `models: Record<string, { redirect: string | null, multiplier: string }>`
 
 Runtime projection fields MAY be returned by list/get APIs:
@@ -131,6 +132,10 @@ Channel missing-usage billing flag MUST be present:
 
 - `allow_missing_usage: boolean`. `false` preserves the normal requirement for normalized upstream usage. `true` permits this Channel to settle a response without normalized upstream usage as zero usage.
 
+Channel unpriced-server-tool flag MUST be present:
+
+- `allow_unpriced_server_tools: boolean`. `false` rejects an actually used server-native tool when its meter rate or required authoritative quantity is absent. `true` permits that usage class with zero tool charge. An eligible meter rate and quantity MUST still produce the normal tool charge.
+
 ## 2. Invariants
 
 CP-INV-1. `channels.length >= 1`.
@@ -192,6 +197,12 @@ CM-USAGE-2. If `allow_missing_usage = false`, missing normalized upstream usage 
 
 CM-USAGE-3. If normalized upstream usage is present, `allow_missing_usage` MUST NOT change that usage or the resulting charge.
 
+CM-USAGE-4. `allow_unpriced_server_tools` MUST default to `false`. When it is `false`, metered-billing.spec.md MB-M3 and MB-M5b MUST remain fail-closed.
+
+CM-USAGE-5. When `allow_unpriced_server_tools = true`, an actually used server-native usage class with no eligible meter rate MUST be omitted from meter charges. An actually used duration, session, or billed-minute class with no authoritative quantity MUST also be omitted from meter charges. Other token and meter classes MUST settle normally.
+
+CM-USAGE-6. A version 2 billing breakdown that applies CM-USAGE-5 MUST include the omitted class in `ignored_server_tool_usage_classes`. This field MUST be an array of unique usage-class strings in request descriptor order.
+
 CM-AFF-1. If the Channel `extra_headers` contains an explicit `x-session-affinity` entry, that value MUST be sent verbatim and client passthrough (CM-AFF-1a), request-body identifiers (CM-AFF-1b), and automatic derivation (CM-AFF-2) MUST NOT run.
 
 CM-AFF-1a. When effective automatic session affinity is enabled and CM-AFF-1 does not apply, and the incoming client request carries a session-affinity-style header, the gateway MUST pass that client value through as the upstream `x-session-affinity` header. The client headers are read in this order and the first present, non-empty one wins:
@@ -252,7 +263,7 @@ All endpoints require an authenticated dashboard admin session.
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, allow_missing_usage?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, allow_missing_usage?: boolean, allow_unpriced_server_tools?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
   - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -380,3 +391,5 @@ CP-FE-12. A Provider overview model-status detail overlay MUST open on hover or 
 CP-FE-13. A Channel `unhealthy` status detail overlay MUST identify a Channel-level breaker when `per_model_circuit_break = false`. When `per_model_circuit_break = true`, it MUST list `_unhealthy_models`. A Channel `probing` status detail overlay MUST list `_probing_models`. Each overlay MUST show `_cooldown_until` when present.
 
 CP-FE-14. The Channel editor MUST expose `allow_missing_usage` as a boolean switch. Its label or adjacent description MUST state that enabling it records zero usage and charges zero when the upstream omits usage.
+
+CP-FE-15. The Channel editor MUST expose `allow_unpriced_server_tools` as a boolean switch directly below `allow_missing_usage`. Its label MUST identify unpriced built-in tool billing. Its description MUST state that only tool usage without a usable rate or required quantity receives zero tool charge.

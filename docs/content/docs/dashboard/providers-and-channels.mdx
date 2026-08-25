@@ -29,6 +29,8 @@ A request first selects a Provider, then selects a Channel inside it. See [Routi
 3. Enter the upstream base URL and API key.
 4. Set a weight. Traffic splits between eligible Channels in proportion to weight. Default `1`.
 5. Optional: set a per-Channel `proxy_url` to override the process-level upstream proxy.
+6. Enable **Allow missing usage** only when a Channel can omit usage. Monoize then records zero usage and charges zero.
+7. Enable **Allow unpriced built-in tools** only when missing tool meter data can receive zero tool charge. Token charges and priced tool charges still apply.
 
 When you edit a Channel later, leave the API key field empty to keep the stored key.
 

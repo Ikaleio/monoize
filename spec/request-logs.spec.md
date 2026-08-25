@@ -214,6 +214,7 @@ RL16a. For metered billing snapshots, `billing_breakdown_json.version` MUST equa
 
 - `token_line_items: array`
 - `meter_line_items: array`
+- `ignored_server_tool_usage_classes: array`
 - `tier.context_tier: string | null`
 - `tier.service_tier: string | null`
 - `base_charge_nano: string`

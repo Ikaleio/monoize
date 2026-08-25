@@ -232,6 +232,7 @@ fn dashboard_provider_response_includes_groups_and_channel_hides_api_key() {
         weight: 1,
         enabled: true,
         allow_missing_usage: false,
+        allow_unpriced_server_tools: false,
         passive_failure_count_threshold_override: None,
         passive_cooldown_seconds_override: None,
         passive_window_seconds_override: None,

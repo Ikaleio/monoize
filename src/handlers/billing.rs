@@ -31,7 +31,7 @@ impl BillingRateResolutionSnapshot {
             .get(&(normalized_upstream.clone(), provider_type.clone()))
             .cloned()
             .flatten()
-            && billing_rate_matrix_allows_request(&resolution, &[]).is_ok_and(|complete| complete)
+            && billing_rate_matrix_allows_request(&resolution).is_ok_and(|complete| complete)
         {
             return Some(resolution);
         }
@@ -51,6 +51,7 @@ impl BillingRateResolutionSnapshot {
 pub(super) struct MatrixChargeComponents {
     pub(super) token_line_items: Vec<Value>,
     pub(super) meter_line_items: Vec<Value>,
+    pub(super) ignored_server_tool_usage_classes: Vec<String>,
     pub(super) context_tier: Option<String>,
     pub(super) service_tier: Option<String>,
     pub(super) base_charge: i128,
@@ -524,7 +525,7 @@ fn resolve_billing_rate_matrix_from_snapshot(
             pricing_model: model.to_string(),
             rates: profile_rates,
         };
-        if billing_rate_matrix_allows_request(&resolution, &[]).unwrap_or(false) {
+        if billing_rate_matrix_allows_request(&resolution).unwrap_or(false) {
             return Some(resolution);
         }
         if first_non_empty.is_none() {
@@ -536,7 +537,6 @@ fn resolve_billing_rate_matrix_from_snapshot(
 
 pub(super) fn billing_rate_matrix_allows_request(
     resolution: &BillingRateResolution,
-    server_tool_usage_classes: &[String],
 ) -> Result<bool, String> {
     for rate in &resolution.rates {
         let unit_price = rate.unit_price_nano()?;
@@ -597,37 +597,6 @@ pub(super) fn billing_rate_matrix_allows_request(
                     ));
                 }
             }
-        }
-    }
-    for usage_class in server_tool_usage_classes {
-        let meter_matches_tier = |context_tier: Option<&str>| {
-            resolution.rates.iter().any(|rate| {
-                rate.rate_kind == "meter"
-                    && rate.usage_class == *usage_class
-                    && rate.modality.is_none()
-                    && rate.cache_ttl.is_none()
-                    && rate
-                        .service_tier
-                        .as_deref()
-                        .is_none_or(|tier| tier == "default")
-                    && match (rate.context_tier.as_deref(), context_tier) {
-                        (None | Some("default"), _) => true,
-                        (Some(rate_tier), Some(tier)) => rate_tier == tier,
-                        (Some(_), None) => false,
-                    }
-            })
-        };
-        let has_meter = if context_tiers.is_empty() {
-            meter_matches_tier(None)
-        } else {
-            context_tiers
-                .iter()
-                .all(|tier| meter_matches_tier(Some(tier)))
-        };
-        if !has_meter {
-            return Err(format!(
-                "meter rate required for server-native tool usage class: {usage_class}"
-            ));
         }
     }
     Ok(true)
@@ -1173,12 +1142,35 @@ fn decoded_provider_item_count(output: Option<&[urp::Node]>, usage_class: &str) 
         .count() as u64
 }
 
+fn server_tool_meter_unit(usage_class: &str) -> &'static str {
+    match usage_class {
+        "code_interpreter_duration" | "code_execution_duration" => "billed_minute",
+        _ => "call",
+    }
+}
+
+fn actual_server_tool_usage_classes(
+    usage: &urp::Usage,
+    output: Option<&[urp::Node]>,
+    requested_usage_classes: &[String],
+) -> Vec<String> {
+    requested_usage_classes
+        .iter()
+        .filter(|usage_class| {
+            authoritative_meter_quantity(usage, usage_class, server_tool_meter_unit(usage_class))
+                .is_some_and(|quantity| quantity > 0)
+                || decoded_provider_item_count(output, usage_class) > 0
+        })
+        .cloned()
+        .collect()
+}
+
 fn add_meter_lines(
     line_items: &mut Vec<Value>,
     rates: &[DbBillingRateRecord],
     usage: &urp::Usage,
     output: Option<&[urp::Node]>,
-    requested_usage_classes: &[String],
+    actual_usage_classes: &[String],
     context_tier: Option<&str>,
     service_tier: Option<&str>,
 ) -> Result<i128, String> {
@@ -1192,7 +1184,7 @@ fn add_meter_lines(
             continue;
         }
         let authoritative = authoritative_meter_quantity(usage, &rate.usage_class, &rate.unit);
-        if requested_usage_classes
+        if actual_usage_classes
             .iter()
             .any(|usage_class| usage_class == &rate.usage_class)
             && rate
@@ -1258,49 +1250,100 @@ fn add_meter_lines(
     Ok(total)
 }
 
-fn ensure_settled_service_tier_rates(
+fn classify_settled_server_tool_rates(
     rates: &[DbBillingRateRecord],
+    usage: &urp::Usage,
     context_tier: Option<&str>,
     service_tier: Option<&str>,
-    requested_usage_classes: &[String],
-) -> Result<(), String> {
-    let Some(service_tier) = service_tier.filter(|tier| *tier != "default") else {
-        return Ok(());
-    };
+    actual_usage_classes: &[String],
+    allow_unpriced_server_tools: bool,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    if let Some(service_tier) = service_tier.filter(|tier| *tier != "default") {
+        for usage_class in ["input_uncached", "output"] {
+            if find_rate(
+                rates,
+                "token",
+                usage_class,
+                None,
+                context_tier,
+                Some(service_tier),
+                None,
+            )
+            .is_none()
+            {
+                return Err(format!(
+                    "missing token rate for usage_class={usage_class}, context_tier={context_tier:?}, service_tier={service_tier:?}"
+                ));
+            }
+        }
+    }
 
-    for usage_class in ["input_uncached", "output"] {
-        if find_rate(
+    let mut billable_usage_classes = Vec::new();
+    let mut ignored_usage_classes = Vec::new();
+    for usage_class in actual_usage_classes {
+        let Some(rate) = find_rate(
             rates,
-            "token",
+            "meter",
             usage_class,
             None,
             context_tier,
-            Some(service_tier),
+            service_tier,
             None,
-        )
-        .is_none()
-        {
-            return Err(format!(
-                "missing token rate for usage_class={usage_class}, context_tier={context_tier:?}, service_tier={service_tier:?}"
-            ));
-        }
-    }
-
-    for usage_class in requested_usage_classes {
-        let has_meter = rates.iter().any(|rate| {
-            rate.rate_kind == "meter"
-                && rate.usage_class == *usage_class
-                && rate.modality.is_none()
-                && rate.cache_ttl.is_none()
-                && rate_matches_dimension(rate, None, context_tier, Some(service_tier), None)
-        });
-        if !has_meter {
+        ) else {
+            if allow_unpriced_server_tools {
+                ignored_usage_classes.push(usage_class.clone());
+                continue;
+            }
             return Err(format!(
                 "missing meter rate for usage_class={usage_class}, context_tier={context_tier:?}, service_tier={service_tier:?}"
             ));
+        };
+        if rate
+            .match_json
+            .get("requires_authoritative_usage")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && authoritative_meter_quantity(usage, usage_class, &rate.unit).is_none()
+        {
+            if allow_unpriced_server_tools {
+                ignored_usage_classes.push(usage_class.clone());
+                continue;
+            }
+            return Err(format!(
+                "authoritative usage required for meter usage_class={usage_class}"
+            ));
         }
+        billable_usage_classes.push(usage_class.clone());
     }
-    Ok(())
+    Ok((billable_usage_classes, ignored_usage_classes))
+}
+
+pub(super) fn validate_actual_server_tool_meter_requirements(
+    usage: &urp::Usage,
+    output: Option<&[urp::Node]>,
+    response_service_tier: Option<&str>,
+    resolution: &BillingRateResolution,
+    requested_usage_classes: &[String],
+    allow_unpriced_server_tools: bool,
+) -> Result<(), String> {
+    let actual_usage_classes =
+        actual_server_tool_usage_classes(usage, output, requested_usage_classes);
+    if actual_usage_classes.is_empty() {
+        return Ok(());
+    }
+    let context_tier = determine_context_tier(usage, &resolution.rates)?;
+    let service_tier = response_service_tier
+        .map(str::trim)
+        .filter(|tier| !tier.is_empty());
+    classify_settled_server_tool_rates(
+        &resolution.rates,
+        usage,
+        context_tier.as_deref(),
+        service_tier,
+        &actual_usage_classes,
+        allow_unpriced_server_tools,
+    )
+    .map(|_| ())
 }
 
 pub(super) fn calculate_rate_matrix_charge_components(
@@ -1311,6 +1354,26 @@ pub(super) fn calculate_rate_matrix_charge_components(
     provider_multiplier: Multiplier,
     requested_usage_classes: &[String],
 ) -> Result<MatrixChargeComponents, String> {
+    calculate_rate_matrix_charge_components_with_policy(
+        usage,
+        output,
+        response_service_tier,
+        resolution,
+        provider_multiplier,
+        requested_usage_classes,
+        false,
+    )
+}
+
+pub(super) fn calculate_rate_matrix_charge_components_with_policy(
+    usage: &urp::Usage,
+    output: Option<&[urp::Node]>,
+    response_service_tier: Option<&str>,
+    resolution: &BillingRateResolution,
+    provider_multiplier: Multiplier,
+    requested_usage_classes: &[String],
+    allow_unpriced_server_tools: bool,
+) -> Result<MatrixChargeComponents, String> {
     let input_details = usage.input_details.as_ref();
     let output_details = usage.output_details.as_ref();
     let context_tier = determine_context_tier(usage, &resolution.rates)?;
@@ -1320,12 +1383,17 @@ pub(super) fn calculate_rate_matrix_charge_components(
         .map(str::to_string);
     let context_tier_ref = context_tier.as_deref();
     let service_tier_ref = service_tier.as_deref();
-    ensure_settled_service_tier_rates(
-        &resolution.rates,
-        context_tier_ref,
-        service_tier_ref,
-        requested_usage_classes,
-    )?;
+    let actual_usage_classes =
+        actual_server_tool_usage_classes(usage, output, requested_usage_classes);
+    let (billable_usage_classes, ignored_server_tool_usage_classes) =
+        classify_settled_server_tool_rates(
+            &resolution.rates,
+            usage,
+            context_tier_ref,
+            service_tier_ref,
+            &actual_usage_classes,
+            allow_unpriced_server_tools,
+        )?;
 
     let cached_tokens = input_details.map(|d| d.cache_read_tokens).unwrap_or(0);
     let cache_creation_tokens = input_details.map(|d| d.cache_creation_tokens).unwrap_or(0);
@@ -1520,7 +1588,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
         &resolution.rates,
         usage,
         output,
-        requested_usage_classes,
+        &billable_usage_classes,
         context_tier_ref,
         service_tier_ref,
     )?;
@@ -1533,6 +1601,7 @@ pub(super) fn calculate_rate_matrix_charge_components(
     Ok(MatrixChargeComponents {
         token_line_items,
         meter_line_items,
+        ignored_server_tool_usage_classes,
         context_tier,
         service_tier,
         base_charge,
@@ -1561,6 +1630,7 @@ fn build_matrix_billing_breakdown(
         },
         "token_line_items": components.token_line_items,
         "meter_line_items": components.meter_line_items,
+        "ignored_server_tool_usage_classes": components.ignored_server_tool_usage_classes,
         "base_charge_nano": components.base_charge.to_string(),
         "final_charge_nano": components.final_charge.to_string(),
     })
@@ -1638,13 +1708,14 @@ async fn maybe_charge_usage_with_output(
         return Ok(ChargeComputation::default());
     };
 
-    let components = match calculate_rate_matrix_charge_components(
+    let components = match calculate_rate_matrix_charge_components_with_policy(
         usage,
         output,
         response_service_tier,
         &resolution,
         attempt.model_multiplier,
         &attempt.server_tool_usage_classes,
+        attempt.allow_unpriced_server_tools,
     ) {
         Ok(v) => v,
         Err(err) => {

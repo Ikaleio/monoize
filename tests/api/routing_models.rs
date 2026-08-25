@@ -214,6 +214,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: Some(1),
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -245,7 +246,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	            enabled: true,
+            enabled: true,
             priority: Some(-10),
         })
         .await
@@ -310,6 +311,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
             weight: 1,
             enabled: true,
             allow_missing_usage: false,
+            allow_unpriced_server_tools: false,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,
@@ -422,6 +424,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
             weight: 1,
             enabled: true,
             allow_missing_usage: false,
+            allow_unpriced_server_tools: false,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
             passive_window_seconds_override: None,

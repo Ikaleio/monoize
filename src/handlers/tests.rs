@@ -43,7 +43,7 @@ fn test_rate(
         cache_ttl: cache_ttl.map(str::to_string),
         match_json,
         priority: 0,
-	        enabled: true,
+        enabled: true,
         raw_json: serde_json::json!({}),
         updated_at: chrono::Utc::now(),
     }
@@ -72,7 +72,7 @@ fn test_meter_rate(
         cache_ttl: None,
         match_json,
         priority: 0,
-	                enabled: true,
+        enabled: true,
         raw_json: serde_json::json!({}),
         updated_at: chrono::Utc::now(),
     }
@@ -398,7 +398,7 @@ async fn seed_group_routing_provider(
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
             group_ids,
             channels,
@@ -451,6 +451,7 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
         weight: 1,
         enabled: true,
         allow_missing_usage: false,
+        allow_unpriced_server_tools: false,
         passive_failure_count_threshold_override: None,
         passive_cooldown_seconds_override: None,
         passive_window_seconds_override: None,
@@ -499,7 +500,7 @@ async fn routing_uses_channel_model_multiplier_and_redirect_per_attempt() {
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_ids: Vec::new(),
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
         })
         .await
@@ -725,10 +726,7 @@ fn rate_matrix_selects_short_vs_long_context_tier() {
             threshold,
         ),
     ]);
-    assert!(
-        billing_rate_matrix_allows_request(&resolution, &Vec::new())
-            .expect("tiered matrix has threshold")
-    );
+    assert!(billing_rate_matrix_allows_request(&resolution).expect("tiered matrix has threshold"));
     let usage = urp::Usage {
         input_tokens: 128001,
         output_tokens: 10,
@@ -989,7 +987,7 @@ fn rate_matrix_preflight_rejects_invalid_prices_and_missing_dimensionless_defaul
         test_rate("output", "output", 1, None, None, None, json!({})),
     ]);
     assert!(
-        billing_rate_matrix_allows_request(&invalid_price, &Vec::new())
+        billing_rate_matrix_allows_request(&invalid_price)
             .expect_err("negative candidate price must fail preflight")
             .contains("negative unit_price")
     );
@@ -1015,7 +1013,7 @@ fn rate_matrix_preflight_rejects_invalid_prices_and_missing_dimensionless_defaul
         ),
     ]);
     assert_eq!(
-        billing_rate_matrix_allows_request(&modality_only, &Vec::new()),
+        billing_rate_matrix_allows_request(&modality_only),
         Ok(false)
     );
 }
@@ -1334,7 +1332,7 @@ fn rate_matrix_counts_call_meter_from_decoded_native_events_and_requires_duratio
             serde_json::json!({ "requires_authoritative_usage": true }),
         ),
     ]);
-    let err = calculate_rate_matrix_charge_components(
+    let unused_duration = calculate_rate_matrix_charge_components(
         &usage,
         None,
         None,
@@ -1342,9 +1340,91 @@ fn rate_matrix_counts_call_meter_from_decoded_native_events_and_requires_duratio
         Multiplier::ONE,
         &["code_interpreter_duration".to_string()],
     )
-    .expect_err("duration meter must require authoritative usage");
+    .expect("an enabled but unused duration tool has no meter quantity");
+    assert_eq!(unused_duration.base_charge, 2);
+    assert!(unused_duration.meter_line_items.is_empty());
+
+    let duration_output = vec![urp::Node::ProviderItem {
+        id: None,
+        origin_protocol: urp::ProviderProtocol::Responses,
+        role: urp::OrdinaryRole::Assistant,
+        item_type: "code_interpreter_call".to_string(),
+        body: serde_json::json!({}),
+        extra_body: HashMap::new(),
+    }];
+    let err = calculate_rate_matrix_charge_components(
+        &usage,
+        Some(&duration_output),
+        None,
+        &duration_resolution,
+        Multiplier::ONE,
+        &["code_interpreter_duration".to_string()],
+    )
+    .expect_err("an actually used duration meter must require authoritative usage");
 
     assert!(err.contains("authoritative usage required"));
+}
+
+#[test]
+fn rate_matrix_requires_meter_rate_only_after_server_tool_use() {
+    let resolution = test_resolution(vec![
+        test_rate("input", "input_uncached", 1, None, None, None, json!({})),
+        test_rate("output", "output", 1, None, None, None, json!({})),
+    ]);
+    let usage = urp::Usage {
+        input_tokens: 1,
+        output_tokens: 1,
+        input_details: None,
+        output_details: None,
+        extra_body: HashMap::new(),
+    };
+    let requested = ["web_search".to_string()];
+
+    let unused = calculate_rate_matrix_charge_components(
+        &usage,
+        None,
+        None,
+        &resolution,
+        Multiplier::ONE,
+        &requested,
+    )
+    .expect("an enabled but unused server tool must not require a meter rate");
+    assert_eq!(unused.base_charge, 2);
+
+    let output = vec![urp::Node::ProviderItem {
+        id: None,
+        origin_protocol: urp::ProviderProtocol::Responses,
+        role: urp::OrdinaryRole::Assistant,
+        item_type: "web_search_call".to_string(),
+        body: json!({}),
+        extra_body: HashMap::new(),
+    }];
+    let err = calculate_rate_matrix_charge_components(
+        &usage,
+        Some(&output),
+        None,
+        &resolution,
+        Multiplier::ONE,
+        &requested,
+    )
+    .expect_err("an actually used server tool must have a meter rate");
+    assert!(err.contains("missing meter rate for usage_class=web_search"));
+
+    let exempt = calculate_rate_matrix_charge_components_with_policy(
+        &usage,
+        Some(&output),
+        None,
+        &resolution,
+        Multiplier::ONE,
+        &requested,
+        true,
+    )
+    .expect("the Channel exemption must allow an unpriced actual server tool");
+    assert_eq!(exempt.base_charge, 2);
+    assert_eq!(
+        exempt.ignored_server_tool_usage_classes,
+        vec!["web_search".to_string()]
+    );
 }
 
 #[test]
@@ -1527,7 +1607,7 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_ids: Vec::new(),
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
@@ -1537,6 +1617,7 @@ async fn resolve_model_suffix_preserves_reasoning_effort_on_attempt_base_request
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 weight: 1,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
@@ -1653,7 +1734,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_ids: Vec::new(),
-	            enabled: true,
+            enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
@@ -1663,6 +1744,7 @@ async fn build_monoize_attempts_rejects_unpriced_models_before_forwarding() {
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 weight: 1,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
@@ -1734,7 +1816,7 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
             group_ids: Vec::new(),
-	            enabled: true,
+            enabled: true,
             priority: Some(0),
             channels: vec![CreateMonoizeChannelInput {
                 id: None,
@@ -1744,6 +1826,7 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 weight: 1,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
@@ -1784,7 +1867,7 @@ async fn build_monoize_attempts_rejects_admin_unpriced_models_without_pricing() 
 }
 
 #[tokio::test]
-async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
+async fn build_monoize_attempts_allows_declared_server_tool_without_meter_rate() {
     let runtime = RuntimeConfig {
         listen: "127.0.0.1:0".to_string(),
         metrics_path: "/metrics".to_string(),
@@ -1824,6 +1907,7 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 weight: 1,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
@@ -1857,13 +1941,12 @@ async fn build_monoize_attempts_rejects_admin_missing_server_tool_meter_rate() {
     let mut req = build_test_routing_request("gpt-priced");
     req.server_tool_usage_classes = vec!["web_search".to_string()];
     let auth = build_test_auth_with_role(None, UserRole::Admin);
-    let err = build_monoize_attempts(&state, &req, &auth)
+    let attempts = build_monoize_attempts(&state, &req, &auth)
         .await
-        .expect_err("missing meter rate must reject admin");
+        .expect("declaring a server tool must not require a meter rate");
 
-    assert_eq!(err.status, StatusCode::FORBIDDEN);
-    assert_eq!(err.code, "model_pricing_required");
-    assert!(err.message.contains("meter rate required"));
+    assert_eq!(attempts.len(), 1);
+    assert!(attempts[0].billable_pricing_available);
 }
 
 #[tokio::test]
@@ -1907,6 +1990,7 @@ async fn build_monoize_attempts_accepts_redirected_model_when_logical_fallback_i
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 weight: 1,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
@@ -2038,6 +2122,7 @@ async fn build_monoize_attempts_uses_metadata_pricing_profile_fallback() {
                 api_key: Some("secret".to_string()),
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 weight: 1,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
@@ -2148,6 +2233,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             api_key: Some("secret".to_string()),
             enabled: true,
             allow_missing_usage: false,
+            allow_unpriced_server_tools: false,
             weight: 1,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
@@ -2188,6 +2274,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             api_key: Some("secret".to_string()),
             enabled: true,
             allow_missing_usage: false,
+            allow_unpriced_server_tools: false,
             weight: 1,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
@@ -2228,6 +2315,7 @@ async fn build_monoize_attempts_filters_providers_by_effective_groups_before_hea
             api_key: Some("secret".to_string()),
             enabled: true,
             allow_missing_usage: false,
+            allow_unpriced_server_tools: false,
             weight: 1,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
@@ -2329,6 +2417,7 @@ async fn execute_nonstream_typed_keeps_bad_gateway_when_groups_filter_every_chan
             api_key: Some("secret".to_string()),
             enabled: true,
             allow_missing_usage: false,
+            allow_unpriced_server_tools: false,
             weight: 1,
             passive_failure_count_threshold_override: None,
             passive_cooldown_seconds_override: None,
@@ -2819,11 +2908,7 @@ fn midstream_terminal_failure_class_maps_breaker_relevant_signals() {
         Some(routing::RetryableFailureClass::Transient)
     );
     assert_eq!(
-        routing::midstream_terminal_failure_class(
-            403,
-            Some("rate_limit_exceeded"),
-            None
-        ),
+        routing::midstream_terminal_failure_class(403, Some("rate_limit_exceeded"), None),
         Some(routing::RetryableFailureClass::Persistent)
     );
     assert_eq!(
@@ -2878,7 +2963,11 @@ fn upstream_adapter_failure_classification_uses_upstream_prefix() {
         let err = AppError::new(StatusCode::BAD_GATEWAY, code, "adapter failure");
         assert!(routing::is_upstream_adapter_failure(&err), "{code}");
     }
-    for code in ["invalid_upstream_response", "encode_error", "internal_error"] {
+    for code in [
+        "invalid_upstream_response",
+        "encode_error",
+        "internal_error",
+    ] {
         let err = AppError::new(StatusCode::BAD_GATEWAY, code, "internal failure");
         assert!(!routing::is_upstream_adapter_failure(&err), "{code}");
     }
@@ -3181,8 +3270,10 @@ async fn midstream_terminal_failure_samples_health_and_clears_affinity_only_on_t
     attempt.affinity_hit = Some(true);
     attempt.affinity_key = Some("v1|api_key:k|model:gpt-affinity|prefix:mid".to_string());
     attempt.origin_key = routing::channel_origin_key("https://midstream.example");
-    attempt.origin_peer_channel_ids =
-        vec!["midstream-channel".to_string(), "midstream-peer".to_string()];
+    attempt.origin_peer_channel_ids = vec![
+        "midstream-channel".to_string(),
+        "midstream-peer".to_string(),
+    ];
     attempt.routing_config_revision = state
         .routing_config_revision
         .load(std::sync::atomic::Ordering::Acquire);
@@ -3376,6 +3467,7 @@ fn affinity_test_attempt(
         extra_headers: None,
         session_affinity_auto: false,
         allow_missing_usage: false,
+        allow_unpriced_server_tools: false,
         client_session_id: None,
         derived_session_affinity: None,
         session_affinity_value: None,

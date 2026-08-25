@@ -1543,6 +1543,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1574,7 +1575,7 @@ async fn billing_model_field_does_not_affect_upstream_charge() {
             request_timeout_ms_override: None,
             extra_fields_whitelist: None,
             strip_cross_protocol_nested_extra: None,
-	                enabled: true,
+            enabled: true,
             priority: Some(-50),
         })
         .await
@@ -1696,6 +1697,7 @@ async fn redirected_model_pricing_falls_back_to_logical_model_when_upstream_unpr
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,
@@ -1849,6 +1851,7 @@ async fn suffixed_model_pricing_uses_base_model_metadata_without_separate_alias_
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,

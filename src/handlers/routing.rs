@@ -266,26 +266,14 @@ pub(super) async fn build_monoize_attempts_for_provider_type(
                 attempt.provider_type,
             ) {
                 Some(resolution) => {
-                    let allowed = billing_rate_matrix_allows_request(
-                        &resolution,
-                        &urp.server_tool_usage_classes,
-                    );
+                    let allowed = billing_rate_matrix_allows_request(&resolution);
                     match allowed {
                         Ok(true) => Ok(Some(resolution)),
                         Ok(false) => Ok(None),
                         Err(error) => Err(error),
                     }
                 }
-                None => {
-                    if urp.server_tool_usage_classes.is_empty() {
-                        Ok(None)
-                    } else {
-                        Err(format!(
-                            "meter rate required for server-native tool usage class: {}",
-                            urp.server_tool_usage_classes.join(", ")
-                        ))
-                    }
-                }
+                None => Ok(None),
             };
             pricing_cache.insert(cache_key, priced.clone());
             priced
@@ -712,6 +700,7 @@ pub(super) async fn collect_provider_attempts(
                 channel.session_affinity_auto,
             ),
             allow_missing_usage: channel.allow_missing_usage,
+            allow_unpriced_server_tools: channel.allow_unpriced_server_tools,
             client_session_id: None,
             derived_session_affinity: None,
             session_affinity_value: None,
@@ -1290,10 +1279,10 @@ pub(super) fn classify_channel_health_failure(
     }
 
     if has_signal(&[
-            "rate_limit_error",
-            "rate_limit_exceeded",
-            "too_many_requests",
-        ]) {
+        "rate_limit_error",
+        "rate_limit_exceeded",
+        "too_many_requests",
+    ]) {
         return Some(RetryableFailureClass::RateLimited);
     }
 

@@ -26,6 +26,7 @@ export type ChannelRow = {
 	weight: string
 	enabled: boolean
 	allow_missing_usage: boolean
+	allow_unpriced_server_tools: boolean
 	models: ModelRow[]
 	passive_failure_count_threshold_override: string
 	passive_cooldown_seconds_override: string
@@ -105,6 +106,7 @@ export function emptyChannelRow(): ChannelRow {
 		weight: '1',
 		enabled: true,
 		allow_missing_usage: false,
+		allow_unpriced_server_tools: false,
 		models: [],
 		passive_failure_count_threshold_override: '',
 		passive_cooldown_seconds_override: '',
@@ -179,6 +181,7 @@ export function fromProvider(provider: Provider): ProviderForm {
 			weight: String(channel.weight),
 			enabled: channel.enabled,
 			allow_missing_usage: channel.allow_missing_usage ?? false,
+			allow_unpriced_server_tools: channel.allow_unpriced_server_tools ?? false,
 			models: Object.entries(channel.models).map(([model, entry]) => ({
 				model,
 				redirect: entry.redirect ?? '',

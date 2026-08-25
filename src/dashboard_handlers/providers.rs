@@ -1286,7 +1286,7 @@ mod tests {
     fn test_provider_input(base_url: String) -> CreateMonoizeProviderInput {
         CreateMonoizeProviderInput {
             name: "provider".to_string(),
-	                enabled: true,
+            enabled: true,
             priority: Some(0),
             max_retries: -1,
             channel_max_retries: 0,
@@ -1302,6 +1302,7 @@ mod tests {
                 weight: 1,
                 enabled: true,
                 allow_missing_usage: false,
+                allow_unpriced_server_tools: false,
                 passive_failure_count_threshold_override: None,
                 passive_cooldown_seconds_override: None,
                 passive_window_seconds_override: None,

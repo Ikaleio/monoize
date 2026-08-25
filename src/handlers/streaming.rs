@@ -47,6 +47,62 @@ async fn retain_decoded_terminal_output(
     Ok(())
 }
 
+fn validate_attempt_server_tool_meters(
+    auth: &crate::auth::AuthResult,
+    attempt: &MonoizeAttempt,
+    usage: &urp::Usage,
+    output: Option<&[urp::Node]>,
+    response_service_tier: Option<&str>,
+) -> AppResult<()> {
+    if auth.user_id.is_none() {
+        return Ok(());
+    }
+    let Some(resolution) = attempt.billing_rate_resolution.as_ref() else {
+        return Ok(());
+    };
+    billing::validate_actual_server_tool_meter_requirements(
+        usage,
+        output,
+        response_service_tier,
+        resolution,
+        &attempt.server_tool_usage_classes,
+        attempt.allow_unpriced_server_tools,
+    )
+    .map_err(|message| AppError::new(StatusCode::FORBIDDEN, "model_pricing_required", message))
+}
+
+async fn validate_terminal_server_tool_meters(
+    mut rx: mpsc::Receiver<urp::UrpStreamEvent>,
+    tx: mpsc::Sender<urp::UrpStreamEvent>,
+    auth: crate::auth::AuthResult,
+    attempt: MonoizeAttempt,
+) -> AppResult<()> {
+    while let Some(event) = rx.recv().await {
+        if let urp::UrpStreamEvent::ResponseDone {
+            usage: Some(usage),
+            output,
+            extra_body,
+            ..
+        } = &event
+        {
+            let response_service_tier = extra_body
+                .get("service_tier")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|tier| !tier.is_empty());
+            validate_attempt_server_tool_meters(
+                &auth,
+                &attempt,
+                usage,
+                Some(output),
+                response_service_tier,
+            )?;
+        }
+        let _ = tx.send(event).await;
+    }
+    Ok(())
+}
+
 /// RCD-D10a (`request-capture-dumps.spec.md`): between response transforms
 /// and downstream encoding, retain the terminal `response_done` event as the
 /// URP non-stream reconstruction `{finish_reason?, usage?, output, ...extra}`.
@@ -630,6 +686,39 @@ pub(super) async fn forward_stream_typed(
                         {
                             convert_assistant_images_to_markdown(&mut resp);
                         }
+                        if let Some(usage) = resp.usage.as_ref() {
+                            let response_service_tier = resp
+                                .extra_body
+                                .get("service_tier")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|tier| !tier.is_empty());
+                            if let Err(err) = validate_attempt_server_tool_meters(
+                                &auth,
+                                &attempt,
+                                usage,
+                                Some(resp.output.as_slice()),
+                                response_service_tier,
+                            ) {
+                                if let Some(session) = capture.session.as_ref() {
+                                    session.persist_with_result(Some(usage), false).await;
+                                }
+                                spawn_stream_attempt_error(
+                                    &state,
+                                    &auth,
+                                    &attempt,
+                                    &logical_model,
+                                    started_at,
+                                    request_id.clone(),
+                                    request_ip.clone(),
+                                    None,
+                                    &err,
+                                    req.reasoning.as_ref().and_then(|r| r.effort.clone()),
+                                    tried_providers.clone(),
+                                );
+                                return Err(err);
+                            }
+                        }
                         let (tx, rx) = mpsc::channel::<Event>(64);
                         let logical_model_for_stream = logical_model.clone();
                         let state_for_log = state.clone();
@@ -972,6 +1061,8 @@ pub(super) async fn forward_stream_typed(
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
                             let (metered_tx, metered_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
+                            let (validated_tx, validated_rx) =
+                                mpsc::channel::<crate::urp::UrpStreamEvent>(64);
                             let (transformed_tx, transformed_rx) =
                                 mpsc::channel::<crate::urp::UrpStreamEvent>(64);
 
@@ -1004,6 +1095,20 @@ pub(super) async fn forward_stream_typed(
                                 })
                             };
 
+                            let meter_validation_handle = {
+                                let validation_auth = auth_for_log.clone();
+                                let validation_attempt = attempt_for_log.clone();
+                                crate::request_capture::spawn_with_sse_capture(async move {
+                                    validate_terminal_server_tool_meters(
+                                        metered_rx,
+                                        validated_tx,
+                                        validation_auth,
+                                        validation_attempt,
+                                    )
+                                    .await
+                                })
+                            };
+
                             let transform_handle =
                                 crate::request_capture::spawn_with_sse_capture(async move {
                                     let reasoning_envelope = reasoning_envelope_for_transform
@@ -1013,7 +1118,7 @@ pub(super) async fn forward_stream_typed(
                                         });
                                     transform_urp_stream(
                                         &state_for_transform,
-                                        metered_rx,
+                                        validated_rx,
                                         transformed_tx,
                                         &provider_rules_for_transform,
                                         &global_rules_for_transform,
@@ -1030,17 +1135,16 @@ pub(super) async fn forward_stream_typed(
                                     Some(slot) => {
                                         let (tap_tx, tap_rx) =
                                             mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-                                        let handle =
-                                            crate::request_capture::spawn_with_sse_capture(
-                                                async move {
-                                                    retain_reconstructed_urp_response(
-                                                        transformed_rx,
-                                                        tap_tx,
-                                                        slot,
-                                                    )
-                                                    .await
-                                                },
-                                            );
+                                        let handle = crate::request_capture::spawn_with_sse_capture(
+                                            async move {
+                                                retain_reconstructed_urp_response(
+                                                    transformed_rx,
+                                                    tap_tx,
+                                                    slot,
+                                                )
+                                                .await
+                                            },
+                                        );
                                         (tap_rx, Some(handle))
                                     }
                                     None => (transformed_rx, None),
@@ -1063,11 +1167,13 @@ pub(super) async fn forward_stream_typed(
                             let (
                                 decode_result,
                                 retain_output_result,
+                                meter_validation_result,
                                 transform_result,
                                 encode_result,
                             ) = tokio::join!(
                                 decode_handle,
                                 retain_output_handle,
+                                meter_validation_handle,
                                 transform_handle,
                                 encode_handle
                             );
@@ -1085,6 +1191,13 @@ pub(super) async fn forward_stream_typed(
                                     ))
                                 })
                                 .and(retain_output_result.unwrap_or_else(|e| {
+                                    Err(AppError::new(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        "task_panic",
+                                        e.to_string(),
+                                    ))
+                                }))
+                                .and(meter_validation_result.unwrap_or_else(|e| {
                                     Err(AppError::new(
                                         StatusCode::INTERNAL_SERVER_ERROR,
                                         "task_panic",
@@ -1134,36 +1247,38 @@ pub(super) async fn forward_stream_typed(
                         ) = {
                             let guard = runtime_metrics.lock().await;
                             let actual_upstream_usage = guard.usage.clone();
-                            let (usage, is_estimated, missing_usage_substituted) =
-                                match guard.usage.clone() {
-                                    Some(u) => (Some(u), false, false),
-                                    None if attempt_for_log.allow_missing_usage => {
-                                        (Some(urp::Usage::default()), false, true)
-                                    }
-                                    None => {
-                                        let visible_output_bytes = guard
-                                            .visible_output_bytes
-                                            .max(terminal_visible_output_bytes);
-                                        let estimated_output_tokens =
-                                            estimated_tokens_from_utf8_bytes(visible_output_bytes);
-                                        tracing::warn!(
-                                            estimated_input_tokens,
-                                            estimated_output_tokens,
-                                            "upstream stream ended without usage; billing from estimate"
-                                        );
-                                        (
-                                            Some(urp::Usage {
-                                                input_tokens: estimated_input_tokens,
-                                                output_tokens: estimated_output_tokens,
-                                                input_details: None,
-                                                output_details: None,
-                                                extra_body: std::collections::HashMap::new(),
-                                            }),
-                                            true,
-                                            false,
-                                        )
-                                    }
-                                };
+                            let (usage, is_estimated, missing_usage_substituted) = match guard
+                                .usage
+                                .clone()
+                            {
+                                Some(u) => (Some(u), false, false),
+                                None if attempt_for_log.allow_missing_usage => {
+                                    (Some(urp::Usage::default()), false, true)
+                                }
+                                None => {
+                                    let visible_output_bytes = guard
+                                        .visible_output_bytes
+                                        .max(terminal_visible_output_bytes);
+                                    let estimated_output_tokens =
+                                        estimated_tokens_from_utf8_bytes(visible_output_bytes);
+                                    tracing::warn!(
+                                        estimated_input_tokens,
+                                        estimated_output_tokens,
+                                        "upstream stream ended without usage; billing from estimate"
+                                    );
+                                    (
+                                        Some(urp::Usage {
+                                            input_tokens: estimated_input_tokens,
+                                            output_tokens: estimated_output_tokens,
+                                            input_details: None,
+                                            output_details: None,
+                                            extra_body: std::collections::HashMap::new(),
+                                        }),
+                                        true,
+                                        false,
+                                    )
+                                }
+                            };
                             (
                                 guard.ttfb_ms,
                                 actual_upstream_usage,
