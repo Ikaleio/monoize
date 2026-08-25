@@ -1608,6 +1608,12 @@ impl MonoizeRoutingStore {
 
         let id = generate_short_id();
         let now = Utc::now();
+        // Resolve before begin_write: the registry lookup uses the read pool,
+        // which on single-connection SQLite would deadlock behind our own
+        // write transaction.
+        let group_ids_json = serialize_provider_group_ids_json(
+            &self.resolve_provider_group_ids(&input.group_ids).await?,
+        )?;
         let txn = self.db.begin_write().await.map_err(|e| e.to_string())?;
 
         let priority = match input.priority {
@@ -1648,7 +1654,6 @@ impl MonoizeRoutingStore {
         let transforms_json = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
         let api_type_overrides_json =
             serde_json::to_string(&input.api_type_overrides).map_err(|e| e.to_string())?;
-        let group_ids_json = serialize_provider_group_ids_json(&self.resolve_provider_group_ids(&input.group_ids).await?)?;
         let extra_fields_whitelist_json: Option<String> = input
             .extra_fields_whitelist
             .as_ref()

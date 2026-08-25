@@ -3423,7 +3423,7 @@ mod tests {
                 "[]".to_string().into(),
             ),
             (
-                "allowed_groups",
+                "group_ids",
                 "{".to_string().into(),
                 "[]".to_string().into(),
             ),
@@ -3487,14 +3487,13 @@ mod tests {
                 .expect("restore API-key policy column");
         }
 
-        for (column, invalid, valid) in [
-            (
-                "allowed_groups",
-                SeaValue::Int(Some(7)),
-                "[]".to_string().into(),
-            ),
-            ("enabled", SeaValue::Int(Some(2)), SeaValue::Int(Some(1))),
-        ] {
+        // users.group_id needs no corruption case here: it is NOT NULL at the
+        // schema level and any stored text decodes as an opaque id.
+        for (column, invalid, valid) in [(
+            "enabled",
+            SeaValue::Int(Some(2)),
+            SeaValue::Int(Some(1)),
+        )] {
             db.write()
                 .await
                 .execute(db.stmt(
