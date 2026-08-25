@@ -767,6 +767,17 @@ export interface DashboardAnalytics {
   today_calls: number;
 }
 
+// Rolling 60-second own-usage aggregate (user-live-usage.spec.md LU-6).
+export interface UserLiveUsage {
+  window_seconds: number;
+  rpm: number;
+  tpm: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_hit_rate: number | null;
+}
+
 export interface RequestLogsFilter {
   model?: string;
   status?: string;
@@ -1200,6 +1211,10 @@ class ApiClient {
     params.set("buckets", String(buckets));
     params.set("range_hours", String(rangeHours));
     return this.request(`/analytics?${params.toString()}`);
+  }
+
+  async getMyLiveUsage(): Promise<UserLiveUsage> {
+    return this.request("/me/live-usage");
   }
 
   async getAdminOverview(): Promise<AdminOverview> {

@@ -220,6 +220,45 @@ pub async fn list_my_request_logs(
     })))
 }
 
+/// `GET /api/dashboard/me/live-usage` (`user-live-usage.spec.md` LU-1..LU-7).
+///
+/// Always scoped to the authenticated user's own request-log rows; an admin
+/// caller receives the same own-rows-only aggregate (LU-3). No query
+/// parameters are accepted.
+pub async fn get_my_live_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<impl IntoResponse> {
+    let user = get_current_user(&headers, &state).await?;
+    let usage = state
+        .user_store
+        .get_user_live_usage(&user.id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
+    let tpm = usage
+        .input_tokens
+        .checked_add(usage.output_tokens)
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "live usage token aggregate overflow",
+            )
+        })?;
+    // LU-6: ratio (not percentage), null when the window has no input tokens.
+    let cache_hit_rate = (usage.input_tokens > 0)
+        .then(|| usage.cache_read_tokens as f64 / usage.input_tokens as f64);
+    Ok(Json(json!({
+        "window_seconds": crate::users::LIVE_USAGE_WINDOW_SECONDS,
+        "rpm": usage.rpm,
+        "tpm": tpm,
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "cache_hit_rate": cache_hit_rate,
+    })))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AnalyticsQuery {
     #[serde(default = "default_analytics_buckets")]

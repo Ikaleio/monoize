@@ -29,6 +29,7 @@ import type {
   Group,
   CreateGroupInput,
   UpdateGroupInput,
+  UserLiveUsage,
 } from "./api";
 
 // SWR fetcher functions
@@ -70,6 +71,7 @@ export const SWR_KEYS = {
   REQUEST_LOGS: "/dashboard/request-logs",
   ANALYTICS: "/dashboard/analytics",
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
+  LIVE_USAGE: "/dashboard/me/live-usage",
 } as const;
 
 export function providerDetailSWRKey(providerId: string) {
@@ -255,6 +257,17 @@ export function useDashboardAnalytics(buckets = 8, rangeHours = 24, config?: SWR
     () => api.getDashboardAnalytics(buckets, rangeHours),
     { ...defaultConfig, ...config }
   );
+}
+
+// Own rolling 60-second usage hook (user-live-usage.spec.md LU-9/LU-10).
+// Mounted only while the user-center dropdown is open, so the 10s poll
+// runs only while the menu is visible.
+export function useLiveUsage(config?: SWRConfiguration) {
+  return useSWR<UserLiveUsage>(SWR_KEYS.LIVE_USAGE, () => api.getMyLiveUsage(), {
+    ...defaultConfig,
+    refreshInterval: 10000,
+    ...config,
+  });
 }
 
 // Admin overview hook (admin dashboard; AD-ADF-7: 10s refresh, skeleton, retry)

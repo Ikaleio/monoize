@@ -2214,6 +2214,10 @@ fn build_dashboard_api_router() -> Router<AppState> {
             get(crate::dashboard_handlers::get_dashboard_analytics),
         )
         .route(
+            "/dashboard/me/live-usage",
+            get(crate::dashboard_handlers::get_my_live_usage),
+        )
+        .route(
             "/dashboard/admin/overview",
             get(crate::dashboard_handlers::get_admin_overview),
         )

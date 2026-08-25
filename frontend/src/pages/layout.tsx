@@ -1,4 +1,4 @@
-import { Navigate, Outlet, Link, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Outlet, Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   LayoutDashboard,
@@ -6,12 +6,7 @@ import {
   Key,
   Settings,
   Server,
-  LogOut,
   Menu,
-  Sun,
-  Moon,
-  Monitor,
-  Cog,
   MessageSquareCode,
   ScrollText,
   Database,
@@ -21,17 +16,7 @@ import {
   Boxes,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  DropdownMenuLabel,
-} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import {
@@ -42,9 +27,9 @@ import {
 } from "@/components/ui/tooltip";
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { formatUsdDecimal } from "@/lib/exact-decimal";
-import { cn, getGravatarUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { MonoizeLogo } from "@/components/MonoizeLogo";
+import { UserCenterMenu } from "@/components/user-center-menu";
 import { springs } from "@/components/ui/motion";
 
 const navTransition = springs.snappy;
@@ -128,18 +113,10 @@ function Sidebar({
   disableLayoutAnimation?: boolean;
   collapsed?: boolean;
 }) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const isAdmin = user?.role === "super_admin" || user?.role === "admin";
 
-  const roleLabel = t(`roles.${user?.role || "user"}`);
-  const balanceLabel = user?.balance_unlimited
-    ? t("users.unlimited")
-    : formatUsdDecimal(user?.balance_usd, 2);
-  const accountSummary = user?.billing_plan?.name
-    ? `${user.billing_plan.name} · ${balanceLabel}`
-    : balanceLabel;
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard"), exact: true },
     { to: "/dashboard/tokens", icon: Key, label: t("nav.apiKeys") },
@@ -225,124 +202,13 @@ function Sidebar({
           )}
         </nav>
 
-        {/* Account menu */}
+        {/* Account menu (dashboard-ui-layout.spec.md DL3a-DL3g) */}
         <div className="mt-auto pt-3">
           <Separator className="mb-3" />
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    className={cn(
-                      "group w-full",
-                      collapsed ? "justify-center px-2" : "justify-start gap-3 px-2.5"
-                    )}
-                    size="sm"
-                  >
-                    <Avatar className="h-6 w-6 shrink-0">
-                      {user?.email && (
-                        <AvatarImage src={getGravatarUrl(user.email, 48) ?? undefined} alt={user?.username} />
-                      )}
-                      <AvatarFallback className="text-xs">
-                        {user?.username?.[0]?.toUpperCase() || "U"}
-                      </AvatarFallback>
-                    </Avatar>
-                    {!collapsed && (
-                      <div className="flex min-w-0 flex-1 flex-col items-start leading-tight">
-                        <span className="truncate text-sm font-medium">{user?.username}</span>
-                        <span className="truncate text-xs text-muted-foreground">{accountSummary}</span>
-                      </div>
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              {collapsed && (
-                <TooltipContent side="right" sideOffset={8}>
-                  <div className="space-y-0.5">
-                    <p className="font-medium">{user?.username}</p>
-                    <p className="text-xs text-muted-foreground">{accountSummary}</p>
-                    <p className="text-xs text-muted-foreground">{roleLabel}</p>
-                  </div>
-                </TooltipContent>
-              )}
-            </Tooltip>
-            <DropdownMenuContent align={collapsed ? "center" : "start"} side={collapsed ? "right" : "top"} className="w-56">
-              <DropdownMenuItem
-                onClick={() => {
-                  onNavigate?.();
-                  navigate("/settings");
-                }}
-              >
-                <Cog className="mr-2 h-4 w-4" />
-                {t("userSettings.title")}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="p-0 font-normal">
-                <ThemeToggle />
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => {
-                  onNavigate?.();
-                  logout();
-                }}
-                className="text-destructive"
-              >
-                <LogOut className="mr-2 h-4 w-4" />
-                {t("auth.signOut")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <UserCenterMenu collapsed={collapsed} onNavigate={onNavigate} />
         </div>
       </motion.div>
     </TooltipProvider>
-  );
-}
-
-function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
-  const { t } = useTranslation();
-
-  const themes = [
-    { value: "light", icon: Sun, label: t("theme.light") },
-    { value: "dark", icon: Moon, label: t("theme.dark") },
-    { value: "system", icon: Monitor, label: t("theme.system") },
-  ] as const;
-
-  return (
-    <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-      <span className="text-sm text-muted-foreground">{t("theme.toggle")}</span>
-      <div className="relative flex h-8 items-center rounded-full bg-muted p-1">
-        {themes.map((item) => {
-          const Icon = item.icon;
-          const isActive = theme === item.value;
-          return (
-            <button
-              key={item.value}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setTheme(item.value);
-              }}
-              className={`relative z-10 flex h-6 w-8 items-center justify-center rounded-full transition-colors ${
-                isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-              title={item.label}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="theme-toggle-indicator"
-                  className="absolute inset-0 rounded-full bg-background shadow-sm"
-                  transition={springs.snappy}
-                />
-              )}
-              <Icon className="relative z-10 h-3.5 w-3.5" />
-            </button>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 

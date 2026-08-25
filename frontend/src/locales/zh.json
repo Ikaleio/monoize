@@ -669,6 +669,18 @@
 		"dark": "深色",
 		"system": "跟随系统"
 	},
+	"userMenu": {
+		"balance": "余额",
+		"plan": "套餐",
+		"grant": "额度",
+		"nextReset": "下次重置",
+		"remainingOfGrant": "套餐额度剩余比例",
+		"liveUsage": "最近 60 秒",
+		"rpm": "RPM",
+		"tpm": "TPM",
+		"cacheHit": "缓存命中",
+		"liveUsageError": "实时用量加载失败"
+	},
 	"userSettings": {
 		"title": "设置",
 		"description": "管理您的账户设置和偏好",

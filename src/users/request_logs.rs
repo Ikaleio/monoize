@@ -2010,6 +2010,48 @@ impl UserStore {
             .collect()
     }
 
+    /// Rolling 60-second per-user usage aggregate
+    /// (`user-live-usage.spec.md` LU-3 through LU-8).
+    ///
+    /// One SQL statement over `[now - 60s, now)` on `created_at_unix_ms`,
+    /// scoped to `user_id`. Token SUMs are cast to BIGINT so SQLite (INTEGER)
+    /// and PostgreSQL (NUMERIC from SUM(bigint)) decode identically into i64;
+    /// the cast wraps the aggregate, not the indexed range column (RL-S2b).
+    pub async fn get_user_live_usage(
+        &self,
+        user_id: &str,
+    ) -> Result<super::UserLiveUsage, String> {
+        let now_ms = Utc::now().timestamp_millis();
+        let from_ms = now_ms - super::LIVE_USAGE_WINDOW_SECONDS * 1000;
+        let sql = "SELECT COUNT(*) AS rpm, \
+             CAST(COALESCE(SUM(COALESCE(rl.input_tokens, 0)), 0) AS BIGINT) AS input_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.output_tokens, 0)), 0) AS BIGINT) AS output_tokens, \
+             CAST(COALESCE(SUM(COALESCE(rl.cache_read_tokens, 0)), 0) AS BIGINT) AS cache_read_tokens \
+             FROM request_logs rl \
+             WHERE rl.user_id = $1 \
+               AND rl.created_at_unix_ms IS NOT NULL \
+               AND rl.created_at_unix_ms >= $2 \
+               AND rl.created_at_unix_ms < $3";
+        let row = self
+            .db
+            .read()
+            .query_one(self.db.stmt(
+                sql,
+                vec![user_id.into(), from_ms.into(), now_ms.into()],
+            ))
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "no live usage aggregate row".to_string())?;
+        Ok(super::UserLiveUsage {
+            rpm: row.try_get("", "rpm").map_err(|e| e.to_string())?,
+            input_tokens: row.try_get("", "input_tokens").map_err(|e| e.to_string())?,
+            output_tokens: row.try_get("", "output_tokens").map_err(|e| e.to_string())?,
+            cache_read_tokens: row
+                .try_get("", "cache_read_tokens")
+                .map_err(|e| e.to_string())?,
+        })
+    }
+
     pub async fn get_today_usage_totals(&self, today_start: &str) -> Result<(i64, i128), String> {
         let is_sqlite = self.db.is_sqlite();
         let today_start_unix_ms = chrono::DateTime::parse_from_rfc3339(today_start)
