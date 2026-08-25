@@ -5,6 +5,7 @@ pub(crate) mod bounded_response;
 pub mod captcha;
 pub mod client_ip;
 pub mod config;
+pub mod custom_transforms;
 pub mod dashboard_handlers;
 pub mod db;
 pub mod db_cache;

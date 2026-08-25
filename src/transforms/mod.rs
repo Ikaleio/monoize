@@ -237,6 +237,86 @@ pub enum TransformError {
     Apply(String),
 }
 
+/// Fixed namespace prefix for dynamically registered custom transforms
+/// (CJS-ID-1). Built-in canonical IDs can never collide with it because TF-14
+/// forbids `:` in canonical IDs.
+pub const CUSTOM_TRANSFORM_ID_PREFIX: &str = "js:";
+
+/// A dynamically registered transform executor (custom `js:` transforms).
+/// Unlike [`Transform`], display metadata lives outside this trait; the
+/// pipeline only needs declared phases, state construction, and application.
+/// The raw rule `config` value is passed through unparsed (CJS-JS-1).
+#[async_trait]
+pub trait DynTransform: Send + Sync {
+    fn declared_phases(&self) -> &[Phase];
+    fn init_state(&self) -> Box<dyn TransformState>;
+    async fn apply(
+        &self,
+        data: UrpData<'_>,
+        phase: Phase,
+        context: &TransformRuntimeContext,
+        config: &Value,
+        state: &mut dyn TransformState,
+    ) -> Result<(), TransformError>;
+}
+
+/// Resolves enabled `js:` transforms at execution time. Implemented by the
+/// custom-transform snapshot; kept as a trait so this module stays free of a
+/// dependency on the custom-transform store.
+pub trait CustomTransformSource: Send + Sync {
+    fn resolve_custom(&self, id: &str) -> Option<Arc<dyn DynTransform>>;
+}
+
+/// CJS-RT-2 lookup: built-in registry first, then the custom snapshot for
+/// `js:`-prefixed IDs. Constructed per apply call; both borrows must outlive
+/// the pipeline invocation.
+#[derive(Clone, Copy)]
+pub struct TransformResolver<'a> {
+    builtin: &'a TransformRegistry,
+    custom: Option<&'a dyn CustomTransformSource>,
+}
+
+enum ResolvedTransform {
+    Builtin(Arc<dyn Transform>),
+    Custom(Arc<dyn DynTransform>),
+    /// CJS-RT-3: a `js:` rule whose transform is deleted or disabled is a
+    /// silent no-op instead of a request failure.
+    SkippedCustom,
+}
+
+impl<'a> TransformResolver<'a> {
+    pub fn new(builtin: &'a TransformRegistry, custom: &'a dyn CustomTransformSource) -> Self {
+        Self {
+            builtin,
+            custom: Some(custom),
+        }
+    }
+
+    fn resolve(&self, raw_id: &str) -> Result<ResolvedTransform, TransformError> {
+        let id = canonical_transform_id(raw_id);
+        if let Some(transform) = self.builtin.get(id) {
+            return Ok(ResolvedTransform::Builtin(transform.clone()));
+        }
+        if id.starts_with(CUSTOM_TRANSFORM_ID_PREFIX) {
+            if let Some(custom) = self.custom.and_then(|source| source.resolve_custom(id)) {
+                return Ok(ResolvedTransform::Custom(custom));
+            }
+            tracing::warn!(transform_id = id, "skipping unresolved custom transform rule");
+            return Ok(ResolvedTransform::SkippedCustom);
+        }
+        Err(TransformError::NotFound(id.to_string()))
+    }
+}
+
+impl<'a> From<&'a TransformRegistry> for TransformResolver<'a> {
+    fn from(builtin: &'a TransformRegistry) -> Self {
+        Self {
+            builtin,
+            custom: None,
+        }
+    }
+}
+
 pub struct TransformEntry {
     pub factory: fn() -> Box<dyn Transform>,
 }
@@ -297,30 +377,32 @@ pub fn registry() -> TransformRegistry {
     map
 }
 
-pub fn build_states_for_rules(
+pub fn build_states_for_rules<'a>(
     rules: &[TransformRuleConfig],
-    registry: &TransformRegistry,
+    resolver: impl Into<TransformResolver<'a>>,
 ) -> Result<Vec<Box<dyn TransformState>>, TransformError> {
+    let resolver = resolver.into();
     let mut out = Vec::with_capacity(rules.len());
     for rule in rules {
-        if let Some(transform) = registry.get(canonical_transform_id(rule.transform.as_str())) {
-            out.push(transform.init_state());
-        } else {
-            return Err(TransformError::NotFound(rule.transform.clone()));
+        match resolver.resolve(rule.transform.as_str())? {
+            ResolvedTransform::Builtin(transform) => out.push(transform.init_state()),
+            ResolvedTransform::Custom(transform) => out.push(transform.init_state()),
+            ResolvedTransform::SkippedCustom => out.push(Box::new(NoState)),
         }
     }
     Ok(out)
 }
 
-pub async fn apply_transforms(
+pub async fn apply_transforms<'a>(
     mut data: UrpData<'_>,
     rules: &[TransformRuleConfig],
     states: &mut [Box<dyn TransformState>],
     current_model: &str,
     phase: Phase,
     context: &TransformRuntimeContext,
-    registry: &TransformRegistry,
+    resolver: impl Into<TransformResolver<'a>>,
 ) -> Result<(), TransformError> {
+    let resolver = resolver.into();
     if rules.len() != states.len() {
         return Err(TransformError::Apply(
             "rule/state length mismatch".to_string(),
@@ -338,32 +420,50 @@ pub async fn apply_transforms(
                 continue;
             }
         }
-        let transform = registry
-            .get(canonical_transform_id(rule.transform.as_str()))
-            .ok_or_else(|| TransformError::NotFound(rule.transform.clone()))?;
-        let config = transform.parse_config(rule.config.clone())?;
-        transform
-            .apply(
-                data.reborrow(),
-                phase,
-                context,
-                config.as_ref(),
-                states[i].as_mut(),
-            )
-            .await?;
+        match resolver.resolve(rule.transform.as_str())? {
+            ResolvedTransform::SkippedCustom => continue,
+            ResolvedTransform::Builtin(transform) => {
+                let config = transform.parse_config(rule.config.clone())?;
+                transform
+                    .apply(
+                        data.reborrow(),
+                        phase,
+                        context,
+                        config.as_ref(),
+                        states[i].as_mut(),
+                    )
+                    .await?;
+            }
+            ResolvedTransform::Custom(transform) => {
+                // CJS-RT-5: a rule phase outside the declared phases is a no-op.
+                if !transform.declared_phases().contains(&phase) {
+                    continue;
+                }
+                transform
+                    .apply(
+                        data.reborrow(),
+                        phase,
+                        context,
+                        &rule.config,
+                        states[i].as_mut(),
+                    )
+                    .await?;
+            }
+        }
     }
     Ok(())
 }
 
-pub async fn apply_stream_transforms(
+pub async fn apply_stream_transforms<'a>(
     initial_event: UrpStreamEvent,
     rules: &[TransformRuleConfig],
     states: &mut [Box<dyn TransformState>],
     current_model: &str,
     phase: Phase,
     context: &TransformRuntimeContext,
-    registry: &TransformRegistry,
+    resolver: impl Into<TransformResolver<'a>>,
 ) -> Result<Vec<UrpStreamEvent>, TransformError> {
+    let resolver = resolver.into();
     if rules.len() != states.len() {
         return Err(TransformError::Apply(
             "rule/state length mismatch".to_string(),
@@ -383,21 +483,49 @@ pub async fn apply_stream_transforms(
                 continue;
             }
         }
-        let transform = registry
-            .get(canonical_transform_id(rule.transform.as_str()))
-            .ok_or_else(|| TransformError::NotFound(rule.transform.clone()))?;
-        let config = transform.parse_config(rule.config.clone())?;
+        enum StreamStep {
+            Builtin(Arc<dyn Transform>, Box<dyn TransformConfig>),
+            Custom(Arc<dyn DynTransform>),
+        }
+        let step = match resolver.resolve(rule.transform.as_str())? {
+            ResolvedTransform::SkippedCustom => continue,
+            ResolvedTransform::Builtin(transform) => {
+                let config = transform.parse_config(rule.config.clone())?;
+                StreamStep::Builtin(transform, config)
+            }
+            ResolvedTransform::Custom(transform) => {
+                if !transform.declared_phases().contains(&phase) {
+                    continue;
+                }
+                StreamStep::Custom(transform)
+            }
+        };
         let mut next_events = Vec::new();
         for mut event in events {
-            transform
-                .apply(
-                    UrpData::Stream(&mut event),
-                    phase,
-                    context,
-                    config.as_ref(),
-                    states[i].as_mut(),
-                )
-                .await?;
+            match &step {
+                StreamStep::Builtin(transform, config) => {
+                    transform
+                        .apply(
+                            UrpData::Stream(&mut event),
+                            phase,
+                            context,
+                            config.as_ref(),
+                            states[i].as_mut(),
+                        )
+                        .await?;
+                }
+                StreamStep::Custom(transform) => {
+                    transform
+                        .apply(
+                            UrpData::Stream(&mut event),
+                            phase,
+                            context,
+                            &rule.config,
+                            states[i].as_mut(),
+                        )
+                        .await?;
+                }
+            }
             next_events.extend(states[i].finalize_stream_event(event));
         }
         events = next_events;
