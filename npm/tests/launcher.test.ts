@@ -26,6 +26,9 @@ describe("native target selection", () => {
     expect(() => currentNativeTarget("darwin", "x64")).toThrow(
       "unsupported platform: darwin (x64)",
     );
+    expect(() => currentNativeTarget("darwin", "arm64")).toThrow(
+      "unsupported platform: darwin (arm64)",
+    );
     expect(() => currentNativeTarget("win32", "arm64")).toThrow(
       "unsupported platform: win32 (arm64)",
     );

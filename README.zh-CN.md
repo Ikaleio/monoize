@@ -176,7 +176,7 @@ npx monoize
 # 全局安装：pnpm add --global monoize
 ```
 
-包管理器只会安装与当前操作系统和 CPU 匹配的原生二进制文件。npm 包支持基于 GNU libc 或 musl 的 Linux，以及 macOS 和 Windows 的 x86-64 与 ARM64 环境。Linux 包使用静态 musl 可执行文件，不依赖宿主机的 libc 或 `libstdc++`。
+包管理器只会安装与当前操作系统和 CPU 匹配的原生二进制文件。npm 包支持基于 GNU libc 或 musl 的 Linux x86-64 与 ARM64，以及 Windows x86-64。Linux 包使用静态 musl 可执行文件，不依赖宿主机的 libc 或 `libstdc++`。
 
 如需从源码构建，请安装稳定版 Rust 工具链和 [Bun](https://bun.sh/)。Release 构建会编译前端并把它嵌入可执行文件。
 
@@ -279,13 +279,13 @@ Monoize 支持一个可写主机加若干只读从机的部署形态。所有节
 
 ## Release 构建产物
 
-发布 GitHub Release 时，如果标签等于 `v` 加 Cargo 包版本，[Release 工作流](.github/workflows/release.yml)会自动运行。它构建 Linux x86-64、Linux ARM64、macOS ARM64 和 Windows x86-64 原生二进制文件。
+发布 GitHub Release 时，如果标签等于 `v` 加 Cargo 包版本，[Release 工作流](.github/workflows/release.yml)会自动运行。它构建 Linux x86-64、Linux ARM64 和 Windows x86-64 原生二进制文件。
 
-Linux 和 macOS 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证。每个压缩包都带有独立的 SHA-256 文件。工作流在校验通过后上传成功的子集。
+Linux 使用 `tar.gz`。Windows 使用 `zip`。每个压缩包都包含中英文 README 和许可证。每个压缩包都带有独立的 SHA-256 文件。工作流在校验通过后上传成功的子集。
 
-手动运行工作流可以执行相同的四平台预检。它不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
+手动运行工作流可以执行相同的三平台预检。它不会修改 GitHub Release。准确的构建产物约束见 [Release Artifact 规范](spec/release-artifacts.spec.md)。
 
-该工作流还会构建五个 npm 压缩包：一个由 TypeScript 构建的启动器，以及四个平台包。Bun、npm 或 pnpm 正常安装时，会根据 `os` 和 `cpu` 元数据选择一个平台包。npm 发布任务通过 npm Trusted Publishing 和 GitHub Actions OIDC 完成认证，不使用长期有效的 npm token。准确的 npm 约束见 [npm CLI 分发规范](spec/npm-cli-distribution.spec.md)。
+该工作流还会构建四个 npm 压缩包：一个由 TypeScript 构建的启动器，以及三个平台包。Bun、npm 或 pnpm 正常安装时，会根据 `os` 和 `cpu` 元数据选择一个平台包。npm 发布任务通过 npm Trusted Publishing 和 GitHub Actions OIDC 完成认证，不使用长期有效的 npm token。准确的 npm 约束见 [npm CLI 分发规范](spec/npm-cli-distribution.spec.md)。
 
 ## 开发与验证
 

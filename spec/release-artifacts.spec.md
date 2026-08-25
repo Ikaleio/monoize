@@ -13,7 +13,7 @@ RA-T2. Creating or editing a draft Release MUST NOT run the workflow.
 
 RA-T3. The workflow MUST check out `github.event.release.tag_name` rather than the default branch head.
 
-RA-T3a. The workflow MAY expose a manual preflight trigger with explicit `ref` and `tag` inputs. A manual preflight MUST execute validation, all four builds, packaging, checksum verification, and Actions-artifact staging. It MUST NOT upload files to a GitHub Release.
+RA-T3a. The workflow MAY expose a manual preflight trigger with explicit `ref` and `tag` inputs. A manual preflight MUST execute validation, all three builds, packaging, checksum verification, and Actions-artifact staging. It MUST NOT upload files to a GitHub Release.
 
 RA-T3b. The validation job MUST resolve the checked-out release ref to one commit SHA. Every build, verification, and container job in the same run MUST check out that exact commit SHA. A later movement of a branch or tag ref MUST NOT change the source revision used by any job in the run.
 
@@ -33,10 +33,9 @@ RA-M1. One workflow run MUST contain exactly these native build rows:
 | --- | --- | --- |
 | Linux x86-64 | `ubuntu-24.04` | `x86_64-unknown-linux-musl` |
 | Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` |
-| macOS ARM64 | `macos-15` | `aarch64-apple-darwin` |
 | Windows x86-64 | `windows-2025` | `x86_64-pc-windows-msvc` |
 
-RA-M2. Each row MUST run on a runner whose CPU architecture and operating system match the Rust target. The workflow MUST NOT use CPU emulation or cross-architecture compilation for these four rows. A Linux row MAY compile through a musl toolchain container on its matching native Linux runner.
+RA-M2. Each row MUST run on a runner whose CPU architecture and operating system match the Rust target. The workflow MUST NOT use CPU emulation or cross-architecture compilation for these three rows. A Linux row MAY compile through a musl toolchain container on its matching native Linux runner.
 
 RA-M2a. Each Linux row MUST use the matching `rust-musl-cross` builder image. The x86-64 image reference MUST equal `ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:ce75e9174325d4fbb3de85c309e2d7ca29f7500169bc4b5d2c611ff7e86d549a`. The ARM64 image reference MUST equal `ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:ecae5dd62d1c938c14f8071d36c16fa699860aace03bfb5284fb1216474d2643`.
 
@@ -81,16 +80,16 @@ RA-P1. `scripts/package_release.py package` MUST accept a release tag, one Rust 
 
 RA-P2. The package command MUST derive the product version from `Cargo.toml` and enforce RA-T4.
 
-RA-P3. The package command MUST read the executable from `target/<target>/release/monoize` on Linux and macOS, or `target/<target>/release/monoize.exe` on Windows.
+RA-P3. The package command MUST read the executable from `target/<target>/release/monoize` on Linux, or `target/<target>/release/monoize.exe` on Windows.
 
 RA-P4. One archive MUST contain exactly one top-level directory named `monoize-<tag>-<target>`. That directory MUST contain:
 
-- `monoize` on Linux and macOS, or `monoize.exe` on Windows;
+- `monoize` on Linux, or `monoize.exe` on Windows;
 - `LICENSE`;
 - `README.md`;
 - `README.zh-CN.md`.
 
-RA-P5. Linux and macOS archives MUST use the name `monoize-<tag>-<target>.tar.gz`. Windows archives MUST use the name `monoize-<tag>-<target>.zip`.
+RA-P5. Linux archives MUST use the name `monoize-<tag>-<target>.tar.gz`. Windows archives MUST use the name `monoize-<tag>-<target>.zip`.
 
 RA-P6. A tar archive MUST store the executable with mode `0755`. It MUST store documentation files with mode `0644`.
 
@@ -106,7 +105,7 @@ RA-S2. One verification job MUST wait for every build row. The asset-publishing 
 
 RA-S3. The verification job and asset-publishing job MUST each download and merge every available `release-<target>` Actions artifact into one directory.
 
-RA-S4. `scripts/package_release.py verify` MUST require a non-empty subset of the four targets in RA-M1. For each present target, the merged directory MUST contain exactly its archive and checksum file. The command MUST reject an unknown file, an archive without its checksum, or a checksum without its archive.
+RA-S4. `scripts/package_release.py verify` MUST require a non-empty subset of the three targets in RA-M1. For each present target, the merged directory MUST contain exactly its archive and checksum file. The command MUST reject an unknown file, an archive without its checksum, or a checksum without its archive.
 
 RA-S5. The verify command MUST recompute and compare every present archive checksum. An unknown, orphaned, malformed, or mismatched file MUST fail verification.
 

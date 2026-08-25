@@ -119,7 +119,7 @@ class PackageReleaseTests(unittest.TestCase):
             package_release.package_release(self.root, "v1.0.0", target, self.output)
 
         entries = package_release.verify_release_directory(self.root, "v1.0.0", self.output)
-        self.assertEqual(len(entries), 8)
+        self.assertEqual(len(entries), 6)
 
         archive = self.output / package_release.archive_name(
             "v1.0.0", "x86_64-unknown-linux-musl"

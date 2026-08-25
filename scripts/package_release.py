@@ -20,7 +20,6 @@ DOCUMENTS = ("LICENSE", "README.md", "README.zh-CN.md")
 TARGETS = {
     "x86_64-unknown-linux-musl": ("tar.gz", "monoize"),
     "aarch64-unknown-linux-musl": ("tar.gz", "monoize"),
-    "aarch64-apple-darwin": ("tar.gz", "monoize"),
     "x86_64-pc-windows-msvc": ("zip", "monoize.exe"),
 }
 

@@ -1,4 +1,4 @@
-export type SupportedPlatform = "linux" | "darwin" | "win32";
+export type SupportedPlatform = "linux" | "win32";
 export type SupportedArchitecture = "x64" | "arm64";
 
 export interface NativeTarget {
@@ -24,14 +24,6 @@ export const NATIVE_TARGETS: readonly NativeTarget[] = [
     packageAlias: "monoize-linux-arm64",
     versionSuffix: "linux-arm64",
     platform: "linux",
-    architecture: "arm64",
-    executable: "monoize",
-  },
-  {
-    rustTarget: "aarch64-apple-darwin",
-    packageAlias: "monoize-darwin-arm64",
-    versionSuffix: "darwin-arm64",
-    platform: "darwin",
     architecture: "arm64",
     executable: "monoize",
   },

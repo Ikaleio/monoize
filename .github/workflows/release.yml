@@ -94,9 +94,6 @@ jobs:
             linker: aarch64-unknown-linux-musl-gcc
             static_libgcc: true
             builder_image: ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:ecae5dd62d1c938c14f8071d36c16fa699860aace03bfb5284fb1216474d2643
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            python: python3
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
             python: python

@@ -7,7 +7,7 @@
 
 ## 1. Package set
 
-NCD-P1. One release MUST publish exactly one root package version and one through four successful platform package versions under the npm package name `monoize`. A failed native build MUST omit only its matching platform version.
+NCD-P1. One release MUST publish exactly one root package version and one through three successful platform package versions under the npm package name `monoize`. A failed native build MUST omit only its matching platform version.
 
 NCD-P2. The root package version MUST equal `[package].version` in `Cargo.toml`.
 
@@ -17,12 +17,11 @@ NCD-P3. The platform package versions and metadata MUST use this table:
 | --- | --- | --- | --- | --- | --- |
 | `x86_64-unknown-linux-musl` | `monoize-linux-x64` | `linux-x64` | `linux` | `x64` | `bin/monoize` |
 | `aarch64-unknown-linux-musl` | `monoize-linux-arm64` | `linux-arm64` | `linux` | `arm64` | `bin/monoize` |
-| `aarch64-apple-darwin` | `monoize-darwin-arm64` | `darwin-arm64` | `darwin` | `arm64` | `bin/monoize` |
 | `x86_64-pc-windows-msvc` | `monoize-win32-x64` | `win32-x64` | `win32` | `x64` | `bin/monoize.exe` |
 
 For Cargo version `<version>`, each platform package version MUST equal `<version>-<suffix>`.
 
-NCD-P4. The root package MUST declare the four aliases in NCD-P3 as `optionalDependencies`. Each dependency value MUST use the npm alias form `npm:monoize@<platform-package-version>`.
+NCD-P4. The root package MUST declare the three aliases in NCD-P3 as `optionalDependencies`. Each dependency value MUST use the npm alias form `npm:monoize@<platform-package-version>`.
 
 NCD-P5. Each platform package MUST declare only its NCD-P3 `os` and `cpu` values. Bun, npm, and pnpm MUST therefore reject or omit that package on a non-matching operating system or CPU. A normal root-package installation MUST extract at most one native Monoize executable.
 
@@ -60,7 +59,7 @@ NCD-R1. The npm staging command MUST reject a tag unless it equals `v` followed 
 
 NCD-R2. Each native build row in the release workflow MUST stage and pack the platform package that corresponds to that row. It MUST NOT place another target's binary in the package.
 
-NCD-R3. One packaging job MUST build and pack the root package. It MUST verify that the package set contains the root tarball and a non-empty subset of the four platform tarballs for the release version. Every platform tarball in the set MUST match one row in NCD-P3.
+NCD-R3. One packaging job MUST build and pack the root package. It MUST verify that the package set contains the root tarball and a non-empty subset of the three platform tarballs for the release version. Every platform tarball in the set MUST match one row in NCD-P3.
 
 NCD-R4. A manual release preflight MUST build, pack, and verify the npm package set. It MUST NOT publish an npm version.
 
