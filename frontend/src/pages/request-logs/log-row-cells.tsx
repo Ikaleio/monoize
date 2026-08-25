@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ScanSearch } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
 	Tooltip,
@@ -39,6 +40,7 @@ interface LogRowCellsProps {
 	isAdmin: boolean
 	showIp: boolean
 	t: (key: string, options?: Record<string, unknown>) => string
+	onOpenCapture: (log: RequestLog) => void
 	onTooltipOpenChange: (tooltipId: string, open: boolean) => void
 }
 
@@ -48,6 +50,7 @@ export function LogRowCells({
 	isAdmin,
 	showIp,
 	t,
+	onOpenCapture,
 	onTooltipOpenChange
 }: LogRowCellsProps) {
 	const rowTooltipIdsRef = useRef<Set<string>>(new Set())
@@ -448,56 +451,70 @@ export function LogRowCells({
 	return (
 		<>
 			<td className='whitespace-nowrap py-1 pl-2 pr-2 align-middle font-mono text-muted-foreground'>
-				<span className='inline-flex flex-col leading-4'>
+				<span className='inline-flex w-full flex-col leading-4'>
 					<span className='h-4 whitespace-nowrap'>{formatTime(log.created_at)}</span>
-					{log.request_id ? (
-						<TooltipProvider delayDuration={200}>
-							<Tooltip onOpenChange={requestTooltipOpenChange}>
-								<TooltipTrigger asChild>
-									<span className='inline-flex h-4 cursor-default items-center gap-1 whitespace-nowrap'>
-										<span>{log.request_id.substring(0, 8)}</span>
-										<span
-											className={cn(
-												'h-1.5 w-1.5 rounded-full',
-												statusIndicatorClass
+					<span className='flex h-6 w-full items-center gap-1'>
+						{log.request_id ? (
+							<TooltipProvider delayDuration={200}>
+								<Tooltip onOpenChange={requestTooltipOpenChange}>
+									<TooltipTrigger asChild>
+										<span className='inline-flex h-4 cursor-default items-center gap-1 whitespace-nowrap'>
+											<span>{log.request_id.substring(0, 8)}</span>
+											<span
+												className={cn(
+													'h-1.5 w-1.5 rounded-full',
+													statusIndicatorClass
+												)}
+											/>
+										</span>
+									</TooltipTrigger>
+									<TooltipContent>
+										<div className='max-w-[480px] space-y-0.5 text-xs'>
+											<div className='font-mono'>{log.request_id}</div>
+											{(log.status === 'error' || log.status === 'client_gone') && (
+												<>
+													{log.error.http_status != null && (
+														<div>
+															{t('requestLogs.errorStatus')}: {log.error.http_status}
+														</div>
+													)}
+													{log.error.code && (
+														<div>
+															{t('requestLogs.errorCode')}: {log.error.code}
+														</div>
+													)}
+													{log.error.message && (
+														<div className='whitespace-pre-wrap break-words'>
+															{t('requestLogs.errorMessage')}: {log.error.message}
+														</div>
+													)}
+												</>
 											)}
-										/>
-									</span>
-								</TooltipTrigger>
-								<TooltipContent>
-									<div className='max-w-[480px] space-y-0.5 text-xs'>
-										<div className='font-mono'>{log.request_id}</div>
-										{(log.status === 'error' || log.status === 'client_gone') && (
-											<>
-												{log.error.http_status != null && (
-													<div>
-														{t('requestLogs.errorStatus')}: {log.error.http_status}
-													</div>
-												)}
-												{log.error.code && (
-													<div>
-														{t('requestLogs.errorCode')}: {log.error.code}
-													</div>
-												)}
-												{log.error.message && (
-													<div className='whitespace-pre-wrap break-words'>
-														{t('requestLogs.errorMessage')}: {log.error.message}
-													</div>
-												)}
-											</>
-										)}
-										{attemptRows.length > 0 && (
-											<div className='mt-1 border-t border-border/50 pt-1'>
-												<RetryAttemptList rows={attemptRows} t={t} />
-											</div>
-										)}
-									</div>
-								</TooltipContent>
-							</Tooltip>
-						</TooltipProvider>
-					) : (
-						<span className='h-4 whitespace-nowrap text-muted-foreground/50'>-</span>
-					)}
+											{attemptRows.length > 0 && (
+												<div className='mt-1 border-t border-border/50 pt-1'>
+													<RetryAttemptList rows={attemptRows} t={t} />
+												</div>
+											)}
+										</div>
+									</TooltipContent>
+								</Tooltip>
+							</TooltipProvider>
+						) : (
+							<span className='h-4 whitespace-nowrap text-muted-foreground/50'>-</span>
+						)}
+						{log.has_capture === true && log.request_id ?
+							<button
+								type='button'
+								aria-label={t('requestLogs.capture.open')}
+								aria-haspopup='dialog'
+								title={t('requestLogs.capture.open')}
+								onClick={() => onOpenCapture(log)}
+								className='ml-auto inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+							>
+								<ScanSearch className='h-3.5 w-3.5' />
+							</button>
+						:	null}
+					</span>
 				</span>
 			</td>
 

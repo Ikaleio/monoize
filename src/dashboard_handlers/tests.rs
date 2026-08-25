@@ -1233,6 +1233,7 @@ fn request_log_timing_serializes_compatibility_aliases() {
             message: None,
             http_status: None,
         },
+        has_capture: false,
     };
 
     let value = serde_json::to_value(&row).expect("serializes");

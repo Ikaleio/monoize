@@ -373,6 +373,12 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                 .await);
             }
             strip_monoize_context(&mut req_attempt);
+            let capture_transform_chain = crate::request_capture::build_transform_chain(
+                &attempt.provider_transforms,
+                &global_transforms,
+                &auth.transforms,
+                &transform_match_model,
+            );
 
             let upstream_body =
                 match encode_request_for_provider(&mut req_attempt, &attempt, downstream) {
@@ -588,6 +594,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 upstream_body.clone(),
                                 value.clone(),
                                 None,
+                                capture_transform_chain.clone(),
                                 None,
                             ))
                             .await;
@@ -899,6 +906,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 upstream_body.clone(),
                                 None,
                                 None,
+                                capture_transform_chain.clone(),
                                 Some(json!({
                                     "message": err.message,
                                     "code": err.code,

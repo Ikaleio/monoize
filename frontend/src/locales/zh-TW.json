@@ -840,7 +840,40 @@
 		"toggleFilters": "展開/收起篩選",
 		"sessionAffinity": "工作階段親和",
 		"uncachedInput": "未快取輸入",
-		"cachedInput": "快取輸入"
+		"cachedInput": "快取輸入",
+		"capture": {
+			"open": "檢視擷取內容",
+			"title": "請求擷取",
+			"loadFailed": "擷取內容載入失敗",
+			"retry": "重試",
+			"attempt": "嘗試",
+			"stream": "串流",
+			"nonStream": "非串流",
+			"transformChain": "轉換鏈",
+			"transformChainEmpty": "無",
+			"hiddenTransforms": "{{count}} 個系統轉換已隱藏",
+			"scope": {
+				"provider": "供應商",
+				"global": "全域",
+				"api_key": "API 金鑰"
+			},
+			"phase": {
+				"request": "請求",
+				"response": "回應"
+			},
+			"tabDownstream": "下游請求",
+			"tabUpstream": "上游請求",
+			"tabUrp": "URP",
+			"tabResponse": "回應",
+			"copy": "複製",
+			"copied": "已複製",
+			"empty": "無內容",
+			"expandChars": "展開（{{count}} 字元）",
+			"collapse": "收合",
+			"keysSummary": "{{count}} 個鍵",
+			"itemsSummary": "{{count}} 項",
+			"framesTruncated": "幀列表已截斷：省略 {{frames}} 幀 / {{bytes}} 位元組"
+		}
 	},
 	"billingPlans": {
 		"title": "訂閱方案",

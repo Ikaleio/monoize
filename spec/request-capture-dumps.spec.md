@@ -89,7 +89,7 @@ RCD-D1. A dump file MUST be UTF-8 JSON.
 
 RCD-D2. A dump file MUST contain at least these top-level fields:
 
-- `version: 1`
+- `version: 2`
 - `request_id: string?`
 - `created_at: RFC3339 string`
 - `api_key_id: string`
@@ -98,6 +98,8 @@ RCD-D2. A dump file MUST contain at least these top-level fields:
 - `is_stream: boolean`
 - `attempts: object[]`
 - `capture_truncation: object`
+
+RCD-D2a. Dump schema version 2 replaces version 1. Monoize MUST write only version-2 dumps. Version-1 files that already exist on disk are not migrated, are not registered in the capture metadata table (section 5), and are therefore unreachable through the capture detail API; retention cleanup still deletes them per section 4.
 
 RCD-D3. Each `attempts[]` entry MUST contain:
 
@@ -113,7 +115,20 @@ RCD-D3. Each `attempts[]` entry MUST contain:
 - `upstream_request: object`
 - `downstream_response: object?`
 - `downstream_sse_frames: string[]?`
+- `transform_chain: object[] | null`
 - `error: object?`
+
+RCD-D3a. `transform_chain` MUST list the transform rules that apply to the attempt, in application order: provider-scope rules first, then global-scope rules, then API-key-scope rules; within one scope, configured order. A rule applies iff `enabled == true` and either the rule has no `models` patterns or at least one pattern glob-matches the attempt's transform match model. Each entry MUST be:
+
+```json
+{ "scope": "provider" | "global" | "api_key", "transform": string, "phase": "request" | "response" }
+```
+
+`transform` MUST be the canonical transform id. Rule `config` payloads MUST NOT be recorded.
+
+RCD-D3b. For the `POST /v1/responses/compact` passthrough endpoint, which applies no URP transforms, `transform_chain` MUST be `[]`.
+
+RCD-D3c. An oversized-attempt placeholder (RCD-D13) MUST store `transform_chain: null`.
 
 RCD-D4. `raw_input` MUST be the parsed downstream JSON request body as received by the forwarding handler, before conversion to URP and before request transforms.
 
@@ -152,3 +167,25 @@ RCD-R3. The default periodic cleanup interval MUST be 1 hour.
 RCD-R4. Cleanup failure MUST be logged and MUST NOT stop process startup or request handling.
 
 RCD-R5. Cleanup MUST only delete regular files directly under the dump directory. It MUST NOT recurse into subdirectories.
+
+RCD-R6. Each cleanup pass MUST also delete every `request_capture_records` row (section 5) whose `created_at_unix_ms` is older than the same retention cutoff. Row deletion failure MUST be logged and MUST NOT stop file cleanup or request handling.
+
+## 5. Capture metadata records
+
+RCD-M1. Capture metadata MUST be stored in table `request_capture_records` with columns:
+
+- `file_name: TEXT PRIMARY KEY` (the dump filename from RCD-S6, without directory components)
+- `request_id: TEXT NOT NULL` (the canonical Monoize request id recorded in the dump, after RCD-C15 truncation)
+- `user_id: TEXT NOT NULL`
+- `api_key_id: TEXT NOT NULL`
+- `created_at: TEXT NOT NULL` (RFC3339, equal to the dump `created_at`)
+- `created_at_unix_ms: BIGINT NOT NULL` (same instant as Unix epoch milliseconds)
+- `size_bytes: BIGINT NOT NULL` (the byte length of the persisted dump file)
+
+RCD-M2. The table MUST have an index on `(user_id, request_id)` and an index on `(created_at_unix_ms)`.
+
+RCD-M3. Immediately after a dump file write succeeds (RCD-S11), and only when the capture session has a request id, Monoize MUST insert one `request_capture_records` row describing that file. Insert conflicts on `file_name` MUST upsert. A session without a request id MUST write no metadata row.
+
+RCD-M4. Metadata insert failure MUST be logged and MUST NOT delete the dump file and MUST NOT change the HTTP response returned to the downstream client.
+
+RCD-M5. `request_capture_records` rows have no foreign keys. Deleting a user, an API key, or a request-log row MUST NOT delete capture metadata rows; only retention cleanup (RCD-R6) and stale-record cleanup (`request-capture-viewer.spec.md` RCV-A8) delete them.

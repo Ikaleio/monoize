@@ -150,6 +150,25 @@ fn request_log_row_value<T: sea_orm::TryGetable>(
         .map_err(|error| format!("request_logs.{column}: {error}"))
 }
 
+/// Decode a SQL boolean-ish column: PostgreSQL EXISTS yields BOOL while
+/// SQLite yields INTEGER 0/1, so both decodings must be attempted.
+fn row_bool(row: &sea_orm::QueryResult, column: &str) -> Result<bool, String> {
+    if let Ok(value) = row.try_get::<bool>("", column) {
+        return Ok(value);
+    }
+    match row.try_get::<i64>("", column) {
+        Ok(value) => Ok(value != 0),
+        Err(i64_error) => row
+            .try_get::<i32>("", column)
+            .map(|value| value != 0)
+            .map_err(|i32_error| {
+                format!(
+                    "request_logs.{column}: BOOL/BIGINT decode failed ({i64_error}); INTEGER decode failed ({i32_error})"
+                )
+            }),
+    }
+}
+
 fn row_optional_i64(row: &sea_orm::QueryResult, column: &str) -> Result<Option<i64>, String> {
     match row.try_get::<Option<i64>>("", column) {
         Ok(value) => Ok(value),
@@ -1116,6 +1135,7 @@ fn row_to_request_log(row: &sea_orm::QueryResult) -> Result<RequestLogRow, Strin
             "tried_providers_json",
         )?,
         session_affinity_value: request_log_row_value(row, "session_affinity_value")?,
+        has_capture: row_bool(row, "has_capture")?,
         provider: RequestLogProvider {
             id: request_log_row_value(row, "provider_id")?,
             name: request_log_row_value(row, "provider_name")?,
@@ -1462,6 +1482,7 @@ impl UserStore {
                       rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
                       rl.session_affinity_value,
                       rl.created_at,
+                      EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture,
                       u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON u.id = rl.user_id
@@ -1616,6 +1637,7 @@ impl UserStore {
                       rl.effective_provider_type, rl.affinity_hit, rl.affinity_key_hash, rl.affinity_target,
                       rl.session_affinity_value,
                       rl.created_at,
+                      EXISTS (SELECT 1 FROM request_capture_records rcr WHERE rcr.request_id = rl.request_id AND rcr.user_id = rl.user_id) AS has_capture,
                       u.username AS username, ak.name AS api_key_name, ch.name AS channel_name, p.name AS provider_name
                FROM request_logs rl
                LEFT JOIN users u ON u.id = rl.user_id
@@ -2080,6 +2102,90 @@ mod today_usage_tests {
             .collect();
         assert_eq!(by_user.get(&alice.id), Some(&(2, 3500)));
         assert_eq!(by_user.get(&bob.id), Some(&(1, 7)));
+    }
+
+    #[tokio::test]
+    async fn request_log_lists_report_has_capture_from_metadata_records() {
+        let db = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let (log_tx, _) = tokio::sync::broadcast::channel(1);
+        let store = UserStore::new(db.clone(), log_tx)
+            .await
+            .expect("store creates");
+        let alice = store
+            .create_user("alice_capture", "password12", UserRole::User, &[])
+            .await
+            .expect("alice created");
+
+        let now_ms = Utc::now().timestamp_millis();
+        for (id, request_id, created_ms) in [
+            ("cap-log-1", "req-with-capture", now_ms),
+            ("cap-log-2", "req-without-capture", now_ms + 1),
+        ] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_logs (id, request_id, user_id, model, is_stream, status, created_at, created_at_unix_ms, charge_nano_usd) VALUES ($1, $2, $3, 'm', 0, 'success', $4, $5, '0')",
+                    vec![
+                        id.into(),
+                        request_id.into(),
+                        alice.id.as_str().into(),
+                        Utc::now().to_rfc3339().into(),
+                        created_ms.into(),
+                    ],
+                ))
+                .await
+                .expect("log inserted");
+        }
+        // Matching record marks has_capture; a record owned by another user
+        // for the same request_id must not (RCV-L2 matches on request_id AND
+        // user_id).
+        for (file_name, request_id, user_id) in [
+            ("a.json", "req-with-capture", alice.id.as_str()),
+            ("b.json", "req-without-capture", "someone-else"),
+        ] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_capture_records (file_name, request_id, user_id, api_key_id, created_at, created_at_unix_ms, size_bytes) VALUES ($1, $2, $3, 'key-1', $4, $5, 10)",
+                    vec![
+                        file_name.into(),
+                        request_id.into(),
+                        user_id.into(),
+                        Utc::now().to_rfc3339().into(),
+                        now_ms.into(),
+                    ],
+                ))
+                .await
+                .expect("capture record inserted");
+        }
+
+        let (user_logs, _, _) = store
+            .list_request_logs_by_user(&alice.id, 50, 0, None, None, None, None, None, None)
+            .await
+            .expect("user list succeeds");
+        let by_request: std::collections::BTreeMap<_, _> = user_logs
+            .iter()
+            .map(|log| (log.request_id.clone().unwrap(), log.has_capture))
+            .collect();
+        assert_eq!(by_request.get("req-with-capture"), Some(&true));
+        assert_eq!(by_request.get("req-without-capture"), Some(&false));
+
+        let (all_logs, _, _) = store
+            .list_all_request_logs(50, 0, None, None, None, None, None, None, None)
+            .await
+            .expect("admin list succeeds");
+        let by_request_all: std::collections::BTreeMap<_, _> = all_logs
+            .iter()
+            .map(|log| (log.request_id.clone().unwrap(), log.has_capture))
+            .collect();
+        assert_eq!(by_request_all.get("req-with-capture"), Some(&true));
+        assert_eq!(by_request_all.get("req-without-capture"), Some(&false));
     }
 
     #[tokio::test]

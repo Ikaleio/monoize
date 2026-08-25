@@ -843,7 +843,40 @@
 		"toggleFilters": "Toggle Filters",
 		"sessionAffinity": "Session Affinity",
 		"uncachedInput": "Uncached Input",
-		"cachedInput": "Cached Input"
+		"cachedInput": "Cached Input",
+		"capture": {
+			"open": "View capture",
+			"title": "Request capture",
+			"loadFailed": "Failed to load the capture",
+			"retry": "Retry",
+			"attempt": "Attempt",
+			"stream": "Streaming",
+			"nonStream": "Non-streaming",
+			"transformChain": "Transforms",
+			"transformChainEmpty": "None",
+			"hiddenTransforms": "{{count}} hidden system transforms",
+			"scope": {
+				"provider": "Provider",
+				"global": "Global",
+				"api_key": "API key"
+			},
+			"phase": {
+				"request": "Request",
+				"response": "Response"
+			},
+			"tabDownstream": "Downstream",
+			"tabUpstream": "Upstream",
+			"tabUrp": "URP",
+			"tabResponse": "Response",
+			"copy": "Copy",
+			"copied": "Copied",
+			"empty": "No content",
+			"expandChars": "Expand ({{count}} chars)",
+			"collapse": "Collapse",
+			"keysSummary": "{{count}} keys",
+			"itemsSummary": "{{count}} items",
+			"framesTruncated": "Frame list truncated: {{frames}} frames / {{bytes}} bytes omitted"
+		}
 	},
 	"billingPlans": {
 		"title": "Billing Plans",

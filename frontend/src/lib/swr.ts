@@ -18,6 +18,7 @@ import type {
   TransformRegistryItem,
   RequestLogsResponse,
   RequestLogsFilter,
+  RequestCaptureDetail,
   ModelMetadataRecord,
   UpsertModelMetadataInput,
   BillingRateRecord,
@@ -224,6 +225,24 @@ export function useRequestLogs(limit = 50, offset = 0, filters?: RequestLogsFilt
     `${SWR_KEYS.REQUEST_LOGS}?limit=${limit}&offset=${offset}&f=${filterKey}`,
     () => api.listRequestLogs(limit, offset, filters),
     { ...defaultConfig, ...config }
+  );
+}
+
+// Capture detail hook (request-capture-viewer.spec.md RCV-F5): the key is
+// null until `enabled` is true, so no fetch happens before the dialog opens;
+// the cache entry survives close/reopen per normal SWR semantics.
+export function useRequestCapture(
+  requestId: string | null | undefined,
+  userId: string | null | undefined,
+  enabled: boolean,
+  config?: SWRConfiguration
+) {
+  return useSWR<RequestCaptureDetail>(
+    enabled && requestId
+      ? `${SWR_KEYS.REQUEST_LOGS}/capture?rid=${encodeURIComponent(requestId)}&uid=${encodeURIComponent(userId ?? "")}`
+      : null,
+    () => api.getRequestCapture(requestId as string, userId ?? undefined),
+    { ...defaultConfig, revalidateOnFocus: false, ...config }
   );
 }
 

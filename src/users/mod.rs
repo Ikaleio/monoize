@@ -614,6 +614,9 @@ pub struct RequestLogRow {
     pub billing: RequestLogBilling,
     pub usage: Option<Value>,
     pub error: RequestLogError,
+    /// RCV-L1/RCV-L2 (`request-capture-viewer.spec.md`): true iff a
+    /// `request_capture_records` row matches this row's `(request_id, user_id)`.
+    pub has_capture: bool,
 }
 
 impl RequestLogRow {
@@ -656,6 +659,9 @@ impl InsertRequestLog {
             request_ip: self.request_ip.clone(),
             tried_providers: self.tried_providers_json.clone(),
             session_affinity_value: self.session_affinity_value.clone(),
+            // RCV-L3: SSE snapshots are emitted before capture persistence
+            // completes, so live rows always report no capture.
+            has_capture: false,
             provider: RequestLogProvider {
                 id: self.provider_id.clone(),
                 name: self.names.provider_name.clone(),
@@ -946,11 +952,6 @@ mod tests {
             error_http_status: Some(502),
             duration_ms: None,
             ttfb_ms: None,
-            first_visible_output_ms: None,
-            last_visible_output_ms: None,
-            visible_generation_ms: None,
-            visible_output_tokens: None,
-            tps_mode: None,
             request_ip: None,
             reasoning_effort: None,
             tried_providers_json: Some(serde_json::json!([

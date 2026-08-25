@@ -1,9 +1,12 @@
 use crate::auth::AuthResult;
 use crate::config::ProviderType;
+use crate::db::DbPool;
 use crate::handlers::DownstreamProtocol;
 use crate::monoize_routing::MonoizeRuntimeConfig;
+use crate::transforms::TransformRuleConfig;
 use crate::users::RequestCaptureMode;
 use chrono::{SecondsFormat, Utc};
+use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -158,6 +161,19 @@ where
 pub struct RequestCaptureStore {
     dump_dir: Arc<PathBuf>,
     limits: RequestCaptureLimits,
+    db: Option<DbPool>,
+}
+
+/// One `request_capture_records` row (RCD-M1).
+#[derive(Clone, Debug)]
+pub struct CaptureRecordRow {
+    pub file_name: String,
+    pub request_id: String,
+    pub user_id: String,
+    pub api_key_id: String,
+    pub created_at: String,
+    pub created_at_unix_ms: i64,
+    pub size_bytes: i64,
 }
 
 #[derive(Clone)]
@@ -203,6 +219,44 @@ impl CaptureTruncation {
     }
 }
 
+/// RCD-D3a: list the transform rules that apply to an attempt, in application
+/// order (provider, then global, then API key), using the same applicability
+/// predicate as `transforms::apply_transforms` minus the phase filter: entries
+/// record their phase instead of being filtered by it. Rule `config` payloads
+/// are intentionally not recorded.
+pub(crate) fn build_transform_chain(
+    provider_rules: &[TransformRuleConfig],
+    global_rules: &[TransformRuleConfig],
+    api_key_rules: &[TransformRuleConfig],
+    match_model: &str,
+) -> Value {
+    let mut chain = Vec::new();
+    for (scope, rules) in [
+        ("provider", provider_rules),
+        ("global", global_rules),
+        ("api_key", api_key_rules),
+    ] {
+        for rule in rules {
+            if !rule.enabled {
+                continue;
+            }
+            if let Some(patterns) = &rule.models
+                && !patterns
+                    .iter()
+                    .any(|pattern| crate::transforms::model_glob_match(pattern, match_model))
+            {
+                continue;
+            }
+            chain.push(json!({
+                "scope": scope,
+                "transform": crate::transforms::canonical_transform_id(&rule.transform),
+                "phase": rule.phase,
+            }));
+        }
+    }
+    Value::Array(chain)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_attempt_dump(
     attempt_number: u32,
@@ -217,6 +271,7 @@ pub(crate) fn build_attempt_dump(
     upstream_request: Value,
     downstream_response: Option<Value>,
     downstream_sse_frames: Option<CapturedSseFrames>,
+    transform_chain: Value,
     error: Option<Value>,
 ) -> Value {
     let (downstream_sse_frames, frame_truncation) = downstream_sse_frames
@@ -236,6 +291,7 @@ pub(crate) fn build_attempt_dump(
         "downstream_response": downstream_response,
         "downstream_sse_frames": downstream_sse_frames,
         "downstream_sse_frames_truncation": frame_truncation.to_json(),
+        "transform_chain": transform_chain,
         "error": error,
     })
 }
@@ -245,7 +301,16 @@ impl RequestCaptureStore {
         Self {
             dump_dir: Arc::new(data_dir_from_database_dsn(database_dsn).join("dumps")),
             limits: RequestCaptureLimits::from_env(),
+            db: None,
         }
+    }
+
+    /// Attach the database pool used for `request_capture_records` metadata
+    /// rows (RCD-M3). Without a pool, dumps are written but no metadata row
+    /// is recorded, so the capture stays unreachable through the detail API.
+    pub fn with_db(mut self, db: DbPool) -> Self {
+        self.db = Some(db);
+        self
     }
 
     pub fn dump_dir(&self) -> &Path {
@@ -315,10 +380,132 @@ impl RequestCaptureStore {
         runtime: Arc<RwLock<MonoizeRuntimeConfig>>,
     ) -> Result<(), String> {
         let retention_days = runtime.read().await.request_capture_retention_days.max(1);
+        // RCD-R6: metadata-row deletion failure must not stop file cleanup.
+        if let Some(db) = self.db.as_ref() {
+            let cutoff_unix_ms = (Utc::now()
+                - chrono::Duration::days(i64::try_from(retention_days).unwrap_or(i64::MAX)))
+            .timestamp_millis();
+            if let Err(err) = db
+                .write()
+                .await
+                .execute(db.stmt(
+                    "DELETE FROM request_capture_records WHERE created_at_unix_ms < $1",
+                    vec![cutoff_unix_ms.into()],
+                ))
+                .await
+            {
+                tracing::warn!("failed to cleanup request capture metadata rows: {err}");
+            }
+        }
         let dump_dir = self.dump_dir.clone();
         tokio::task::spawn_blocking(move || cleanup_expired_sync(&dump_dir, retention_days))
             .await
             .map_err(|err| err.to_string())?
+    }
+
+    /// RCV-A1: candidate records for one request id, newest first. When
+    /// `user_id` is supplied only that owner's records are considered.
+    pub async fn list_capture_records(
+        &self,
+        request_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Vec<CaptureRecordRow>, String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mut sql = "SELECT file_name, request_id, user_id, api_key_id, created_at, \
+             created_at_unix_ms, size_bytes FROM request_capture_records WHERE request_id = $1"
+            .to_string();
+        let mut values: Vec<sea_orm::Value> = vec![request_id.into()];
+        if let Some(user_id) = user_id {
+            sql.push_str(" AND user_id = $2");
+            values.push(user_id.into());
+        }
+        sql.push_str(" ORDER BY created_at_unix_ms DESC, file_name DESC");
+        let rows = db
+            .read()
+            .query_all(db.stmt(&sql, values))
+            .await
+            .map_err(|err| err.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(CaptureRecordRow {
+                    file_name: row.try_get("", "file_name").map_err(|e| e.to_string())?,
+                    request_id: row.try_get("", "request_id").map_err(|e| e.to_string())?,
+                    user_id: row.try_get("", "user_id").map_err(|e| e.to_string())?,
+                    api_key_id: row.try_get("", "api_key_id").map_err(|e| e.to_string())?,
+                    created_at: row.try_get("", "created_at").map_err(|e| e.to_string())?,
+                    created_at_unix_ms: row
+                        .try_get("", "created_at_unix_ms")
+                        .map_err(|e| e.to_string())?,
+                    size_bytes: row.try_get("", "size_bytes").map_err(|e| e.to_string())?,
+                })
+            })
+            .collect()
+    }
+
+    /// RCV-A3: on-demand dump read on a blocking-capable executor. Returns
+    /// `Ok(None)` when the file no longer exists (RCV-A8 stale record).
+    pub async fn read_dump_file(&self, file_name: &str) -> Result<Option<Vec<u8>>, String> {
+        // Defense in depth: recorded file names never contain separators, but
+        // reject any that would escape the dump directory.
+        if file_name.contains('/') || file_name.contains('\\') || file_name.contains("..") {
+            return Err("invalid capture dump file name".to_string());
+        }
+        let path = self.dump_dir.join(file_name);
+        tokio::task::spawn_blocking(move || match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.to_string()),
+        })
+        .await
+        .map_err(|err| err.to_string())?
+    }
+
+    /// RCV-A8: drop a stale metadata row whose dump file no longer exists.
+    pub async fn delete_capture_record(&self, file_name: &str) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        db.write()
+            .await
+            .execute(db.stmt(
+                "DELETE FROM request_capture_records WHERE file_name = $1",
+                vec![file_name.into()],
+            ))
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    /// RCD-M3: upsert one metadata row immediately after a dump write.
+    async fn insert_capture_record(&self, record: &CaptureRecordRow) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        db.write()
+            .await
+            .execute(db.stmt(
+                "INSERT INTO request_capture_records \
+                 (file_name, request_id, user_id, api_key_id, created_at, created_at_unix_ms, size_bytes) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 ON CONFLICT (file_name) DO UPDATE SET \
+                 request_id = excluded.request_id, user_id = excluded.user_id, \
+                 api_key_id = excluded.api_key_id, created_at = excluded.created_at, \
+                 created_at_unix_ms = excluded.created_at_unix_ms, size_bytes = excluded.size_bytes",
+                vec![
+                    record.file_name.as_str().into(),
+                    record.request_id.as_str().into(),
+                    record.user_id.as_str().into(),
+                    record.api_key_id.as_str().into(),
+                    record.created_at.as_str().into(),
+                    record.created_at_unix_ms.into(),
+                    record.size_bytes.into(),
+                ],
+            ))
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(())
     }
 }
 
@@ -450,7 +637,7 @@ impl RequestCaptureSession {
         let mut truncation = self.truncation.lock().await.clone();
         let encoded = loop {
             let payload = json!({
-                "version": 1,
+                "version": 2,
                 "request_id": self.request_id,
                 "created_at": self.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
                 "api_key_id": self.api_key_id,
@@ -503,12 +690,33 @@ impl RequestCaptureSession {
             truncation.omitted_bytes = truncation.omitted_bytes.saturating_add(removed_bytes);
             truncation.retained_bytes = truncation.retained_bytes.saturating_sub(removed_bytes);
         };
-        if let Err(err) = self
+        let size_bytes = encoded.len() as i64;
+        let file_name = match self
             .store
             .write_dump(self.request_id.as_deref(), self.created_at, encoded)
             .await
         {
-            tracing::warn!("failed to write request capture dump: {err}");
+            Ok(file_name) => file_name,
+            Err(err) => {
+                tracing::warn!("failed to write request capture dump: {err}");
+                return;
+            }
+        };
+        // RCD-M3: only sessions with a request id get a metadata row; RCD-M4:
+        // an insert failure keeps the dump file and the client response intact.
+        if let Some(request_id) = self.request_id.as_deref() {
+            let record = CaptureRecordRow {
+                file_name,
+                request_id: request_id.to_string(),
+                user_id: self.user_id.clone(),
+                api_key_id: self.api_key_id.clone(),
+                created_at: self.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                created_at_unix_ms: self.created_at.timestamp_millis(),
+                size_bytes,
+            };
+            if let Err(err) = self.store.insert_capture_record(&record).await {
+                tracing::warn!("failed to record request capture metadata: {err}");
+            }
         }
     }
 }
@@ -519,11 +727,12 @@ impl RequestCaptureStore {
         request_id: Option<&str>,
         created_at: chrono::DateTime<Utc>,
         bytes: Vec<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let dump_dir = self.dump_dir.clone();
         let prefix = request_id_prefix(request_id);
         let timestamp = created_at.format("%Y%m%dT%H%M%S%3fZ").to_string();
         let filename = format!("{prefix}_{timestamp}.json");
+        let written_filename = filename.clone();
         tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&*dump_dir).map_err(|err| err.to_string())?;
             let final_path = dump_dir.join(filename);
@@ -536,7 +745,8 @@ impl RequestCaptureStore {
             Ok::<(), String>(())
         })
         .await
-        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())??;
+        Ok(written_filename)
     }
 }
 
@@ -732,6 +942,7 @@ fn truncated_attempt_placeholder(attempt: &Value, original_bytes: usize) -> Valu
         "downstream_response": null,
         "downstream_sse_frames": null,
         "downstream_sse_frames_truncation": frame_truncation,
+        "transform_chain": null,
         "error": bounded_attempt_error(attempt),
         "capture_truncation": {
             "truncated": true,
@@ -923,6 +1134,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn persisting_a_dump_records_capture_metadata_reachable_through_store_queries() {
+        use crate::migration::Migrator;
+        use sea_orm_migration::MigratorTrait;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let db = crate::db::DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let store = RequestCaptureStore {
+            dump_dir: Arc::new(temp.path().join("dumps")),
+            limits: RequestCaptureLimits::from_env(),
+            db: Some(db.clone()),
+        };
+        let runtime = RwLock::new(MonoizeRuntimeConfig {
+            request_capture_enabled: true,
+            ..MonoizeRuntimeConfig::default()
+        });
+        let session = store
+            .maybe_start_session(
+                &runtime,
+                &test_auth(RequestCaptureMode::CaptureAll),
+                Some("req_meta_1".to_string()),
+                DownstreamProtocol::Responses,
+                false,
+            )
+            .await
+            .expect("capture starts");
+
+        let chain = build_transform_chain(
+            &[],
+            &[serde_json::from_value(json!({
+                "transform": "force_stream",
+                "phase": "request",
+                "config": {}
+            }))
+            .expect("rule parses")],
+            &[],
+            "gpt-test",
+        );
+        session
+            .push_attempt(json!({
+                "attempt_number": 1,
+                "provider_id": "prov-1",
+                "channel_id": "ch-1",
+                "provider_type": "responses",
+                "logical_model": "gpt-test",
+                "upstream_model": "gpt-test",
+                "upstream_path": "/v1/responses",
+                "raw_input": {"input": "hi"},
+                "transformed_urp_request": {},
+                "upstream_request": {},
+                "downstream_response": {"ok": true},
+                "downstream_sse_frames": null,
+                "downstream_sse_frames_truncation": CaptureTruncation::default().to_json(),
+                "transform_chain": chain,
+                "error": null
+            }))
+            .await;
+        session.persist_with_result(None, false).await;
+
+        let records = store
+            .list_capture_records("req_meta_1", None)
+            .await
+            .expect("records query succeeds");
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.request_id, "req_meta_1");
+        assert_eq!(record.user_id, "user-1");
+        assert_eq!(record.api_key_id, "key-1");
+        assert!(record.size_bytes > 0);
+
+        let bytes = store
+            .read_dump_file(&record.file_name)
+            .await
+            .expect("dump read succeeds")
+            .expect("dump exists");
+        assert_eq!(bytes.len() as i64, record.size_bytes);
+        let payload: Value = serde_json::from_slice(&bytes).expect("dump is JSON");
+        assert_eq!(payload["version"], 2);
+        assert_eq!(
+            payload["attempts"][0]["transform_chain"],
+            json!([{"scope": "global", "transform": "force_stream", "phase": "request"}])
+        );
+
+        // Owner filter excludes non-matching users.
+        assert!(
+            store
+                .list_capture_records("req_meta_1", Some("someone-else"))
+                .await
+                .expect("filtered query succeeds")
+                .is_empty()
+        );
+
+        // RCV-A8 support: a missing dump reads as None and the stale row can
+        // be deleted.
+        std::fs::remove_file(store.dump_dir().join(&record.file_name)).expect("file removed");
+        assert!(
+            store
+                .read_dump_file(&record.file_name)
+                .await
+                .expect("read succeeds")
+                .is_none()
+        );
+        store
+            .delete_capture_record(&record.file_name)
+            .await
+            .expect("record deleted");
+        assert!(
+            store
+                .list_capture_records("req_meta_1", None)
+                .await
+                .expect("records query succeeds")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_deletes_expired_metadata_rows_with_dump_files() {
+        use crate::migration::Migrator;
+        use sea_orm::ConnectionTrait;
+        use sea_orm_migration::MigratorTrait;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let db = crate::db::DbPool::connect("sqlite::memory:")
+            .await
+            .expect("db connects");
+        {
+            let write = db.write().await;
+            Migrator::up(&*write, None).await.expect("migrates");
+        }
+        let store = RequestCaptureStore {
+            dump_dir: Arc::new(temp.path().join("dumps")),
+            limits: RequestCaptureLimits::from_env(),
+            db: Some(db.clone()),
+        };
+        let old_ms = (Utc::now() - chrono::Duration::days(365)).timestamp_millis();
+        let fresh_ms = Utc::now().timestamp_millis();
+        for (file_name, created_ms) in [("old.json", old_ms), ("fresh.json", fresh_ms)] {
+            db.write()
+                .await
+                .execute(db.stmt(
+                    "INSERT INTO request_capture_records (file_name, request_id, user_id, api_key_id, created_at, created_at_unix_ms, size_bytes) VALUES ($1, 'req-x', 'user-1', 'key-1', '2026-01-01T00:00:00Z', $2, 1)",
+                    vec![file_name.into(), created_ms.into()],
+                ))
+                .await
+                .expect("row inserted");
+        }
+        let runtime = Arc::new(RwLock::new(MonoizeRuntimeConfig {
+            request_capture_enabled: true,
+            request_capture_retention_days: 7,
+            ..MonoizeRuntimeConfig::default()
+        }));
+        store
+            .cleanup_expired(runtime)
+            .await
+            .expect("cleanup succeeds");
+        let remaining = store
+            .list_capture_records("req-x", None)
+            .await
+            .expect("records query succeeds");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].file_name, "fresh.json");
+    }
+
+    #[tokio::test]
     async fn persisted_dump_uses_the_checked_compact_bytes_and_retains_a_placeholder() {
         let temp = TempDir::new().expect("temporary directory");
         let limits = RequestCaptureLimits {
@@ -934,6 +1314,7 @@ mod tests {
         let store = RequestCaptureStore {
             dump_dir: Arc::new(temp.path().join("dumps")),
             limits,
+            db: None,
         };
         let runtime = RwLock::new(MonoizeRuntimeConfig {
             request_capture_enabled: true,
