@@ -41,6 +41,8 @@
     "role_system_to_developer",
     "---串流---",
     "stream_force",
-    "stream_split_sse_frames"
+    "stream_split_sse_frames",
+    "---自訂---",
+    "custom-js"
   ]
 }

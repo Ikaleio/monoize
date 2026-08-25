@@ -55,6 +55,12 @@ Model matching always uses the logical model name that the client requested, not
 | Role | Rewrite or merge message roles | `role_developer_to_system`, `role_merge_consecutive`, `role_system_to_developer` |
 | Stream | Control streaming behavior | `stream_force`, `stream_split_sse_frames` |
 
+## Custom transforms
+
+Administrators can also write JavaScript transforms with the `js:` ID prefix.
+They run in an embedded QuickJS sandbox and attach to the same chains as built-in transforms.
+See [Custom JS Transforms](/en/docs/transforms/custom-js).
+
 ## Verify a transform
 
 1. Enable [request capture](/en/docs/request-logs) for a test API key.

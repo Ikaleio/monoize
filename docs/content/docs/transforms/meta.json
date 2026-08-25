@@ -41,6 +41,8 @@
     "role_system_to_developer",
     "---Stream---",
     "stream_force",
-    "stream_split_sse_frames"
+    "stream_split_sse_frames",
+    "---Custom---",
+    "custom-js"
   ]
 }
