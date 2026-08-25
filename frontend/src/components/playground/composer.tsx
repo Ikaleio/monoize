@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import type { ApiKey, Group, ModelMetadataRecord } from "@/lib/api";
 import type { PlaygroundPrefs } from "./prefs";
 import type { ComposerAttachment } from "./use-image-generation";
+import { ApiKeyDropdown } from "./api-key-dropdown";
 import { GroupSelector } from "./group-selector";
 import { ModelCombobox } from "./model-combobox";
 import { SettingsPopover } from "./settings-popover";
@@ -262,6 +263,13 @@ export function Composer({
               </motion.div>
             )}
           </AnimatePresence>
+          <ApiKeyDropdown
+            value={prefs.apiKeyId}
+            onChange={(apiKeyId) => setPref("apiKeyId", apiKeyId)}
+            apiKeys={apiKeys}
+            isLoading={keysLoading}
+            resolvedKeyId={resolvedKeyId}
+          />
 
           <div className="ml-auto flex items-center gap-1">
             <input
@@ -285,13 +293,7 @@ export function Composer({
               <Paperclip className="h-4 w-4" />
             </Button>
             <ModeToggle mode={mode} onModeChange={onModeChange} disabled={isBusy} />
-            <SettingsPopover
-              prefs={prefs}
-              setPref={setPref}
-              apiKeys={apiKeys}
-              keysLoading={keysLoading}
-              resolvedKeyId={resolvedKeyId}
-            />
+            <SettingsPopover prefs={prefs} setPref={setPref} />
             <Button
               size="icon"
               aria-label={isBusy ? t("playground.stop") : t("playground.send")}

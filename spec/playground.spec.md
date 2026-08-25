@@ -108,11 +108,15 @@ an API key and MUST NOT be accepted as an API-key credential. Requests authentic
 real API key MUST use the normal API-key request-log identity and MUST NOT use
 `request_kind = "playground"`.
 
-PG-AUTH12. The settings popover MUST render a credential picker. Its first option is the
-translated built-in Playground credential and represents `playground_api_key_id = ""`.
-It MUST then list every time-eligible API key in API response order with its name and
-masked `key_prefix`. The built-in option is selected by default. The picker MUST NOT show
-full API-key values and MUST NOT contain an automatic-key-resolution option.
+PG-AUTH12. The composer toolbar MUST render the credential picker as an independent
+shadcn `DropdownMenu`. The picker MUST NOT be nested inside the settings popover. Its
+trigger MUST identify the selected credential. Its first option is the translated
+built-in Playground credential and represents `playground_api_key_id = ""`. It MUST then
+list every time-eligible API key in API response order with its name and masked
+`key_prefix`. The built-in option is selected by default. The picker MUST NOT show full
+API-key values and MUST NOT contain an automatic-key-resolution option. The dropdown
+content MAY scroll vertically, but an option list inside the content MUST NOT create a
+second scrolling surface.
 
 ## 4. Selectors
 
