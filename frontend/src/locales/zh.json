@@ -60,7 +60,8 @@
 		"marketplace": "模型广场",
 		"billingPlans": "订阅套餐",
 		"adminDashboard": "系统仪表盘",
-		"groups": "分组"
+		"groups": "分组",
+		"customTransforms": "自定义变换"
 	},
 	"roles": {
 		"super_admin": "超级管理员",
@@ -605,6 +606,28 @@
 		"jsonCopyFailed": "复制失败",
 		"stringValuePlaceholder": "纯文本，无需引号",
 		"jsonValuePlaceholder": "JSON，例如 {\"a\": 1} 或 [1, 2]"
+	},
+	"customTransforms": {
+		"title": "自定义变换",
+		"description": "编写在 URP 管道中运行的 QuickJS 自定义变换。",
+		"create": "新建变换",
+		"copySkill": "复制编写技能",
+		"copySkillSuccess": "编写技能已复制到剪贴板",
+		"copyFailed": "复制失败",
+		"emptyTitle": "暂无自定义变换",
+		"emptyDescription": "创建第一个自定义 JavaScript 变换来扩展变换管道。",
+		"editorCreateTitle": "新建自定义变换",
+		"editorEditTitle": "编辑自定义变换",
+		"editorDescription": "脚本开头的 frontmatter 注释声明 id、name、description、author、phase、scopes 和 visibility。",
+		"copyCode": "复制",
+		"copyCodeSuccess": "源码已复制到剪贴板",
+		"format": "格式化",
+		"formatError": "格式化失败：{{message}}",
+		"visibilityAdmin": "仅管理员",
+		"visibilityUser": "用户可见",
+		"deleteTitle": "删除自定义变换？",
+		"deleteDescription": "将删除“{{name}}”（{{id}}）。仍引用它的链会将其跳过。",
+		"updatedAt": "更新于 {{date}}"
 	},
 	"playground": {
 		"greeting": "有什么可以帮你？",

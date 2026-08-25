@@ -116,6 +116,26 @@ export interface TransformRegistryItem {
   config_schema: Record<string, unknown>;
   name: Record<string, string>;
   description: Record<string, string>;
+  // Marker fields present only on custom js: items (custom-js-transforms.spec.md CJS-REG-2)
+  custom?: boolean;
+  visibility?: CustomTransformVisibility;
+}
+
+export type CustomTransformVisibility = "admin" | "user";
+
+export interface CustomTransform {
+  id: string;
+  name: string;
+  description: string;
+  author: string;
+  source: string;
+  enabled: boolean;
+  visibility: CustomTransformVisibility;
+  phases: Phase[];
+  scopes: TransformScope[];
+  config_schema: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ModelRedirectRule {
@@ -1105,6 +1125,36 @@ class ApiClient {
 
   async getTransformRegistry(): Promise<TransformRegistryItem[]> {
     return this.request("/transforms/registry");
+  }
+
+  async listCustomTransforms(): Promise<CustomTransform[]> {
+    const response = await this.request<{ transforms: CustomTransform[] }>(
+      "/custom-transforms"
+    );
+    return response.transforms;
+  }
+
+  async createCustomTransform(source: string): Promise<CustomTransform> {
+    return this.request("/custom-transforms", {
+      method: "POST",
+      body: JSON.stringify({ source }),
+    });
+  }
+
+  async updateCustomTransform(
+    id: string,
+    input: { source?: string; enabled?: boolean }
+  ): Promise<CustomTransform> {
+    return this.request(`/custom-transforms/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteCustomTransform(id: string): Promise<void> {
+    await this.request(`/custom-transforms/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
   async listModelMetadata(): Promise<ModelMetadataRecord[]> {

@@ -18,6 +18,7 @@ import { PlaygroundPage } from "@/pages/playground";
 import { RequestLogsPage } from "@/pages/request-logs";
 import { ModelMetadataPage } from "@/pages/model-metadata";
 import { ModelMarketplacePage } from "@/pages/model-marketplace";
+import { CustomTransformsPage } from "@/pages/custom-transforms";
 import "@/i18n";
 
 function App() {
@@ -46,6 +47,7 @@ function App() {
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="plans" element={<BillingPlansPage />} />
+            <Route path="custom-transforms" element={<CustomTransformsPage />} />
             <Route path="admin-settings" element={<SettingsPage />} />
           </Route>
           {/* User settings routes */}

@@ -60,7 +60,8 @@
 		"marketplace": "モデルマーケット",
 		"billingPlans": "プラン",
 		"adminDashboard": "システムダッシュボード",
-		"groups": "グループ"
+		"groups": "グループ",
+		"customTransforms": "カスタム変換"
 	},
 	"roles": {
 		"super_admin": "スーパー管理者",
@@ -602,6 +603,28 @@
 		"jsonCopyFailed": "コピーに失敗しました",
 		"stringValuePlaceholder": "プレーンテキスト（引用符は不要）",
 		"jsonValuePlaceholder": "JSON、例: {\"a\": 1} や [1, 2]"
+	},
+	"customTransforms": {
+		"title": "カスタム変換",
+		"description": "URP パイプラインで実行される QuickJS カスタム変換を作成します。",
+		"create": "新規変換",
+		"copySkill": "作成スキルをコピー",
+		"copySkillSuccess": "作成スキルをクリップボードにコピーしました",
+		"copyFailed": "コピーに失敗しました",
+		"emptyTitle": "カスタム変換はありません",
+		"emptyDescription": "最初のカスタム JavaScript 変換を作成してパイプラインを拡張します。",
+		"editorCreateTitle": "カスタム変換を新規作成",
+		"editorEditTitle": "カスタム変換を編集",
+		"editorDescription": "スクリプト先頭の frontmatter コメントで id、name、description、author、phase、scopes、visibility を宣言します。",
+		"copyCode": "コピー",
+		"copyCodeSuccess": "ソースをクリップボードにコピーしました",
+		"format": "フォーマット",
+		"formatError": "フォーマットに失敗しました：{{message}}",
+		"visibilityAdmin": "管理者のみ",
+		"visibilityUser": "ユーザーに公開",
+		"deleteTitle": "カスタム変換を削除しますか？",
+		"deleteDescription": "「{{name}}」（{{id}}）を削除します。参照しているチェーンではスキップされます。",
+		"updatedAt": "更新：{{date}}"
 	},
 	"playground": {
 		"greeting": "何をお手伝いしましょうか？",

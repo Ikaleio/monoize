@@ -60,7 +60,8 @@
 		"marketplace": "Models",
 		"billingPlans": "Plans",
 		"adminDashboard": "System Dashboard",
-		"groups": "Groups"
+		"groups": "Groups",
+		"customTransforms": "Custom Transforms"
 	},
 	"roles": {
 		"super_admin": "Super Admin",
@@ -605,6 +606,28 @@
 		"jsonCopyFailed": "Copy failed",
 		"stringValuePlaceholder": "Plain text, no quotes needed",
 		"jsonValuePlaceholder": "JSON, e.g. {\"a\": 1} or [1, 2]"
+	},
+	"customTransforms": {
+		"title": "Custom Transforms",
+		"description": "Author QuickJS-powered transforms that run inside the URP pipeline.",
+		"create": "New Transform",
+		"copySkill": "Copy Authoring Skill",
+		"copySkillSuccess": "Authoring skill copied to clipboard",
+		"copyFailed": "Copy failed",
+		"emptyTitle": "No custom transforms",
+		"emptyDescription": "Create your first custom JavaScript transform to extend the transform pipeline.",
+		"editorCreateTitle": "New Custom Transform",
+		"editorEditTitle": "Edit Custom Transform",
+		"editorDescription": "The frontmatter comment declares id, name, description, author, phase, scopes, and visibility.",
+		"copyCode": "Copy",
+		"copyCodeSuccess": "Source copied to clipboard",
+		"format": "Format",
+		"formatError": "Format failed: {{message}}",
+		"visibilityAdmin": "Admin only",
+		"visibilityUser": "User visible",
+		"deleteTitle": "Delete custom transform?",
+		"deleteDescription": "This deletes “{{name}}” ({{id}}). Chains that still reference it skip it as a no-op.",
+		"updatedAt": "Updated {{date}}"
 	},
 	"playground": {
 		"greeting": "What can I help you with?",

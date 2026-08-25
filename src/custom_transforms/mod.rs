@@ -368,8 +368,8 @@ mod pipeline_tests {
         let builtin = registry();
         // Drops response_start events; duplicates response_done events.
         let source = r#"function transform(ctx) {
-          if (ctx.data.type === "response_start") return null;
-          if (ctx.data.type === "response_done") return [ctx.data, ctx.data];
+          if (ctx.data.event === "response_start") return null;
+          if (ctx.data.event === "response_done") return [ctx.data, ctx.data];
         }"#;
         let snapshot = snapshot_with(source, "js:stream-shaper", vec![Phase::Response]);
         let resolver = TransformResolver::new(&builtin, &snapshot);

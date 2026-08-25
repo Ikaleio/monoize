@@ -60,7 +60,8 @@
 		"marketplace": "模型廣場",
 		"billingPlans": "訂閱方案",
 		"adminDashboard": "系統儀表板",
-		"groups": "群組"
+		"groups": "群組",
+		"customTransforms": "自訂變換"
 	},
 	"roles": {
 		"super_admin": "超級管理員",
@@ -602,6 +603,28 @@
 		"jsonCopyFailed": "複製失敗",
 		"stringValuePlaceholder": "純文字，無需引號",
 		"jsonValuePlaceholder": "JSON，例如 {\"a\": 1} 或 [1, 2]"
+	},
+	"customTransforms": {
+		"title": "自訂變換",
+		"description": "撰寫在 URP 管線中執行的 QuickJS 自訂變換。",
+		"create": "新增變換",
+		"copySkill": "複製撰寫技能",
+		"copySkillSuccess": "撰寫技能已複製到剪貼簿",
+		"copyFailed": "複製失敗",
+		"emptyTitle": "尚無自訂變換",
+		"emptyDescription": "建立第一個自訂 JavaScript 變換來擴充變換管線。",
+		"editorCreateTitle": "新增自訂變換",
+		"editorEditTitle": "編輯自訂變換",
+		"editorDescription": "指令碼開頭的 frontmatter 註解宣告 id、name、description、author、phase、scopes 與 visibility。",
+		"copyCode": "複製",
+		"copyCodeSuccess": "原始碼已複製到剪貼簿",
+		"format": "格式化",
+		"formatError": "格式化失敗：{{message}}",
+		"visibilityAdmin": "僅管理員",
+		"visibilityUser": "使用者可見",
+		"deleteTitle": "刪除自訂變換？",
+		"deleteDescription": "將刪除「{{name}}」（{{id}}）。仍引用它的鏈會將其略過。",
+		"updatedAt": "更新於 {{date}}"
 	},
 	"playground": {
 		"greeting": "有什麼可以幫你？",
