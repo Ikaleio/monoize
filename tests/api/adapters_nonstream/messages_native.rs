@@ -719,7 +719,7 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-markdown-images-ch1".to_string()),
                 name: "mono-transform-markdown-images-ch1".to_string(),
@@ -753,14 +753,14 @@ async fn responses_nonstream_markdown_image_transforms_extract_and_append_markdo
             per_model_circuit_break: false,
             transforms: vec![
                 monoize::transforms::TransformRuleConfig {
-                    transform: "assistant_markdown_images_to_output".to_string(),
+                    transform: "image_markdown_to_output".to_string(),
                     enabled: true,
                     models: None,
                     phase: monoize::transforms::Phase::Response,
                     config: json!({}),
                 },
                 monoize::transforms::TransformRuleConfig {
-                    transform: "assistant_output_images_to_markdown".to_string(),
+                    transform: "image_output_to_markdown".to_string(),
                     enabled: true,
                     models: None,
                     phase: monoize::transforms::Phase::Response,

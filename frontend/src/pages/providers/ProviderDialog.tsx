@@ -63,9 +63,11 @@ import type {
 } from '@/lib/api'
 import {
 	createProviderOptimistic,
+	useDashboardGroups,
 	useProviderDetail,
 	updateProviderOptimistic
 } from '@/lib/swr'
+import { GroupMultiSelect } from '@/components/groups/GroupPicker'
 import { cn } from '@/lib/utils'
 import { normalizeMultiplier } from '@/lib/exact-decimal'
 import { ChannelModelEditor } from './ChannelModelEditor'
@@ -91,7 +93,7 @@ const providerTypes = Object.keys(PROVIDER_TYPE_CONFIG) as ProviderType[]
 function cloneForm(form: ProviderForm): ProviderForm {
 	return {
 		...form,
-		groups: [...form.groups],
+		group_ids: [...form.group_ids],
 		channels: form.channels.map(channel => ({
 			...channel,
 			models: channel.models.map(model => ({ ...model }))
@@ -187,7 +189,7 @@ function buildInput(form: ProviderForm, c: (zhText: string, enText: string) => s
 			.map(value => value.trim())
 			.filter(Boolean),
 		strip_cross_protocol_nested_extra: form.strip_cross_protocol_nested_extra,
-		groups: form.groups
+		group_ids: form.group_ids
 	}
 }
 
@@ -198,6 +200,7 @@ export function ProviderDialog({
 	current,
 	providers,
 	transformRegistry,
+	transformRegistryLoading,
 	modelMetadata,
 	reasoningSuffixMap,
 	settings
@@ -208,6 +211,7 @@ export function ProviderDialog({
 	current: Provider | null
 	providers: Provider[]
 	transformRegistry: TransformRegistryItem[]
+	transformRegistryLoading?: boolean
 	modelMetadata: ModelMetadataRecord[]
 	reasoningSuffixMap: Record<string, string>
 	settings?: SystemSettings
@@ -444,7 +448,7 @@ export function ProviderDialog({
 									) : section === 'routing' ? (
 										<RoutingSettings form={form} setForm={setForm} settings={settings} c={c} />
 									) : section === 'transforms' ? (
-										<div className='mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6'><SectionHeading title={c('请求与响应转换', 'Request and response transforms')} description={c('转换仍属于 Provider，按顺序应用到每个 Channel。', 'Transforms remain provider-scoped and run in order for every channel.')} /><TransformChainEditor value={form.transforms} registry={transformRegistry} onChange={transforms => setForm(previous => ({ ...previous, transforms }))} /></div>
+										<div className='mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6'><SectionHeading title={c('请求与响应转换', 'Request and response transforms')} description={c('转换仍属于 Provider，按顺序应用到每个 Channel。', 'Transforms remain provider-scoped and run in order for every channel.')} /><TransformChainEditor value={form.transforms} registry={transformRegistry} loading={transformRegistryLoading} onChange={transforms => setForm(previous => ({ ...previous, transforms }))} /></div>
 									) : (
 										<ProtocolSettings form={form} setForm={setForm} c={c} />
 									)}
@@ -498,22 +502,19 @@ function Field({ label, hint, children, className }: { label: string; hint?: str
 }
 
 function ProviderBasics({ form, setForm, c }: { form: ProviderForm; setForm: React.Dispatch<React.SetStateAction<ProviderForm>>; c: (zh: string, en: string) => string }) {
-	// The groups field keeps raw text while typing and canonicalizes on blur,
-	// because comma-splitting on every keystroke makes commas impossible to
-	// enter and erases in-progress entries. The component remounts on section
-	// switches, so the initializer re-reads the canonical form value.
-	const [groupsText, setGroupsText] = useState(form.groups.join(', '))
-	const commitGroups = () => {
-		const next = groupsText.split(',').map(value => value.trim().toLowerCase()).filter(Boolean)
-		const canonical = [...new Set(next)].sort()
-		setForm(previous => ({ ...previous, groups: canonical }))
-		setGroupsText(canonical.join(', '))
-	}
+	const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups()
 	return <div className='mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-6'>
 		<SectionHeading title={c('Provider 基础信息', 'Provider basics')} description={c('Provider 负责公共路由策略；模型和上游地址在 Channel 中配置。', 'Providers own shared routing policy. Models and upstream endpoints are configured per channel.')} />
 		<div className='grid gap-5 rounded-xl border bg-card p-4 sm:grid-cols-2 sm:p-5'>
 			<Field label={c('名称', 'Name')} className='sm:col-span-2'><Input value={form.name} onChange={event => setForm(previous => ({ ...previous, name: event.target.value }))} placeholder='OpenAI production' /></Field>
-			<Field label={c('访问组', 'Groups')} hint={c('逗号分隔；留空表示公开 Provider。', 'Comma-separated. Empty means public provider.')}><Input value={groupsText} onChange={event => setGroupsText(event.target.value)} onBlur={commitGroups} placeholder='premium, internal' /></Field>
+			<Field label={c('服务分组', 'Serving groups')} hint={c('留空保存时自动绑定系统默认分组。', 'Empty selections are bound to the system default group on save.')} className='sm:col-span-2'>
+				<GroupMultiSelect
+					value={form.group_ids}
+					groups={groups}
+					loading={groupsLoading}
+					onChange={group_ids => setForm(previous => ({ ...previous, group_ids }))}
+				/>
+			</Field>
 			<Field label={c('额外字段白名单', 'Extra fields allowlist')} hint={c('逗号分隔，应用到全部 Channel。', 'Comma-separated and shared by all channels.')}><Input value={form.extra_fields_whitelist} onChange={event => setForm(previous => ({ ...previous, extra_fields_whitelist: event.target.value }))} placeholder='service_tier, metadata' /></Field>
 		</div>
 	</div>

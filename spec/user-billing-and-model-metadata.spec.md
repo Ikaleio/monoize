@@ -32,7 +32,7 @@ U1. User read model exposed by dashboard/auth APIs MUST include:
 - `balance_usd: string`
 - `balance_unlimited: boolean`
 - `email: string | null`
-- `allowed_groups: string[]`
+- `group_id: string` (the user's single group id, see `groups-registry.spec.md`)
 - `billing_plan_id: string | null`
 - `next_grant_at: string | null` (RFC 3339)
 - `billing_plan: object | null` as defined by `spec/billing-plan-subscriptions.spec.md` BP-U2
@@ -46,7 +46,7 @@ U3. New users created by register or dashboard create-user MUST default to:
 - `balance_nano_usd = "0"`
 - `balance_unlimited = false`
 - `email = null`
-- `allowed_groups = []`
+- `group_id = <default group id>` (`groups-registry.spec.md` GR-D2)
 
 U4. Usernames with prefix `_monoize_` (case-insensitive) are reserved for internal system accounts and MUST NOT be allowed in public register/login flows or admin create/update username operations.
 
@@ -84,16 +84,16 @@ A2. `PUT /api/dashboard/users/{user_id}` MUST accept optional fields:
 - `balance_usd: string`
 - `balance_unlimited: boolean`
 - `email: string | null`
-- `allowed_groups: string[]`
+- `group_id: string`
 
-A2a. `POST /api/dashboard/users` MUST accept optional field `allowed_groups: string[]`. If the field is omitted, the stored value MUST be `[]`.
+A2a. `POST /api/dashboard/users` MUST accept optional field `group_id: string`. If the field is omitted, the stored value MUST be the default group id.
 
-A2b. `PUT /api/dashboard/users/{user_id}` MUST treat `allowed_groups` as a partial-update field:
+A2b. `PUT /api/dashboard/users/{user_id}` MUST treat `group_id` as a partial-update field:
 
-- if `allowed_groups` is omitted, the stored value MUST remain unchanged;
-- if `allowed_groups` is present, the stored value MUST be replaced by that array.
+- if `group_id` is omitted, the stored value MUST remain unchanged;
+- if `group_id` is present, the stored value MUST be replaced by that value.
 
-A2c. Any dashboard/admin write path that persists `users.allowed_groups` MUST canonicalize the array before storage by trimming each element, lowercasing, removing empty strings after trimming, deduplicating, and sorting ascending.
+A2c. Any dashboard/admin write path that persists `users.group_id` MUST trim the value and validate that it references an existing `monoize_groups` row; a violation MUST be rejected with HTTP `400` and code `invalid_request`.
 
 A3. If both `balance_nano_usd` and `balance_usd` are provided, server MUST use `balance_nano_usd`.
 

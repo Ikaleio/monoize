@@ -204,7 +204,7 @@ async fn channel_passive_override_threshold_takes_precedence_over_global_default
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "override-threshold-provider".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("override-threshold-ch".to_string()),
                 name: "override-threshold-ch".to_string(),
@@ -299,7 +299,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
     let create_input = monoize::monoize_routing::CreateMonoizeProviderInput {
         name: "mono-transform-original-model-match".to_string(),
         api_type_overrides: Vec::new(),
-        groups: Vec::new(),
+        group_ids: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-transform-original-model-match-ch1".to_string()),
             name: "mono-transform-original-model-match-ch1".to_string(),
@@ -332,7 +332,7 @@ async fn provider_request_transform_matches_normalized_model_before_redirect() {
         circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
-            transform: "set_field".to_string(),
+            transform: "field_set".to_string(),
             enabled: true,
             models: Some(vec!["normalized-transform-model".to_string()]),
             phase: monoize::transforms::Phase::Request,
@@ -410,7 +410,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
             pattern: "gpt-5.4-fast".to_string(),
             api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
         }],
-        groups: Vec::new(),
+        group_ids: Vec::new(),
         channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
             id: Some("mono-provider-redirect-api-type-override-ch1".to_string()),
             name: "mono-provider-redirect-api-type-override-ch1".to_string(),
@@ -443,7 +443,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
         circuit_breaker_enabled: true,
         per_model_circuit_break: false,
         transforms: vec![monoize::transforms::TransformRuleConfig {
-            transform: "set_field".to_string(),
+            transform: "field_set".to_string(),
             enabled: true,
             models: Some(vec!["gpt-5.4-fast".to_string()]),
             phase: monoize::transforms::Phase::Request,
@@ -493,7 +493,7 @@ async fn provider_api_type_override_matches_logical_model_before_provider_redire
     assert_eq!(
         upstream_body["service_tier"].as_str(),
         Some("fast"),
-        "conditional set_field should rewrite the matching service_tier before Responses encoding"
+        "conditional field_set should rewrite the matching service_tier before Responses encoding"
     );
 }
 
@@ -551,7 +551,8 @@ async fn models_list_respects_api_key_model_limits() {
                 model_limits: vec!["gpt-5-mini".to_string(), "grok-4".to_string()],
                 ip_whitelist: Vec::new(),
 
-                allowed_groups: Vec::new(),
+                use_user_group: true,
+                group_ids: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -615,7 +616,8 @@ async fn models_list_model_limits_disabled_shows_all() {
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: Vec::new(),
 
-                allowed_groups: Vec::new(),
+                use_user_group: true,
+                group_ids: Vec::new(),
                 max_multiplier: None,
                 transforms: Vec::new(),
                 model_redirects: Vec::new(),
@@ -675,7 +677,8 @@ async fn forwarding_rejects_models_outside_api_key_model_limits() {
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
 
-                allowed_groups: Vec::new(),
+                use_user_group: true,
+                group_ids: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: Vec::new(),
@@ -732,7 +735,8 @@ async fn forwarding_applies_api_key_model_redirects_before_model_limits_and_rout
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
-                allowed_groups: Vec::new(),
+                use_user_group: true,
+                group_ids: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: vec![monoize::users::ModelRedirectRule {
@@ -827,7 +831,8 @@ async fn image_generation_applies_api_key_model_redirects_before_model_limits() 
                 model_limits_enabled: true,
                 model_limits: vec!["gpt-5-mini".to_string()],
                 ip_whitelist: vec![],
-                allowed_groups: Vec::new(),
+                use_user_group: true,
+                group_ids: Vec::new(),
                 max_multiplier: None,
                 transforms: vec![],
                 model_redirects: vec![monoize::users::ModelRedirectRule {

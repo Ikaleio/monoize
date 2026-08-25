@@ -45,7 +45,7 @@ pub struct UserBillingPlanResponse {
     pub grant_amount_nano_usd: String,
     pub grant_amount_usd: String,
     pub schedule: String,
-    pub allowed_groups: Vec<String>,
+    pub group_ids: Vec<String>,
     pub enabled: bool,
 }
 
@@ -61,7 +61,7 @@ impl From<BillingPlan> for UserBillingPlanResponse {
             grant_amount_usd: format_nano_to_usd(nano),
             grant_amount_nano_usd: plan.grant_amount_nano_usd,
             schedule: plan.schedule,
-            allowed_groups: plan.allowed_groups,
+            group_ids: plan.group_ids,
             enabled: plan.enabled,
         }
     }
@@ -80,7 +80,7 @@ pub struct UserResponse {
     pub balance_unlimited: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    pub allowed_groups: Vec<String>,
+    pub group_id: String,
     pub billing_plan_id: Option<String>,
     pub next_grant_at: Option<String>,
     pub billing_plan: Option<UserBillingPlanResponse>,
@@ -117,7 +117,7 @@ impl UserResponse {
             balance_nano_usd: u.balance_nano_usd,
             balance_unlimited: u.balance_unlimited,
             email: u.email,
-            allowed_groups: u.allowed_groups,
+            group_id: u.group_id,
             billing_plan_id: u.billing_plan_id,
             next_grant_at: u.next_grant_at.map(|d| d.to_rfc3339()),
             billing_plan: plan.map(UserBillingPlanResponse::from),

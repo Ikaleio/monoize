@@ -29,10 +29,9 @@ pub struct Model {
     pub model_limits: String,
     #[sea_orm(column_type = "Text")]
     pub ip_whitelist: String,
+    pub use_user_group: i32,
     #[sea_orm(column_type = "Text")]
-    pub allowed_groups: String,
-    #[sea_orm(column_type = "Text")]
-    pub token_group: String,
+    pub group_ids: String,
     #[sea_orm(column_type = "Text")]
     pub max_multiplier: Option<String>,
     #[sea_orm(column_type = "Text")]

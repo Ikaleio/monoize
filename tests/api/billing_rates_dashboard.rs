@@ -24,7 +24,7 @@ async fn setup() -> TestContext {
     .expect("state loads");
     let admin = state
         .user_store
-        .create_user("admin_billing_rates", "password", UserRole::Admin, &[])
+        .create_user("admin_billing_rates", "password", UserRole::Admin, None)
         .await
         .expect("admin created");
     let session = state

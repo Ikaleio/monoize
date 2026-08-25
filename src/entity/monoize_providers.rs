@@ -27,7 +27,7 @@ pub struct Model {
     pub extra_fields_whitelist: Option<String>,
     pub strip_cross_protocol_nested_extra: Option<i32>,
     #[sea_orm(column_type = "Text")]
-    pub groups: String,
+    pub group_ids: String,
     pub enabled: i32,
     pub priority: i32,
     #[sea_orm(column_type = "Text")]

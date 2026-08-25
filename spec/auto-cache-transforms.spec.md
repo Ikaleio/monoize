@@ -2,9 +2,9 @@
 
 ## 0. Status
 
-- Version: `1.2.0`
-- Scope: Five request-phase transforms that automatically optimize provider prompt caching by injecting Anthropic `cache_control` markers, OpenAI prompt-cache request fields and content breakpoints, and user identity fields.
-- Dependency: URP Transform System (see `urp-transform-system.spec.md`, TF-1 through TF-6).
+- Version: `1.3.0`
+- Scope: Five request-phase `cache_*` domain transforms that automatically optimize provider prompt caching by injecting Anthropic `cache_control` markers, OpenAI prompt-cache request fields and content breakpoints, and user identity fields.
+- Dependency: URP Transform System (see `urp-transform-system.spec.md`, TF-1 through TF-7b; historical IDs map to the canonical `cache_*` IDs through TF-17).
 
 ## 1. Shared Definitions
 
@@ -28,11 +28,11 @@ DEF-9. The **OpenAI explicit cache breakpoint limit** is `4` when `req.extra_bod
 
 DEF-10. An **OpenAI explicit-breakpoint model** is a model whose identifier contains a `/`- or `:`-delimited segment with a `gpt-<major>[.<minor>]` prefix, where `major > 5` or `major = 5` and `minor >= 6`. Missing `minor` is treated as `0`.
 
-## 2. `auto_cache_user_id`
+## 2. `cache_user_id`
 
 ### 2.1 Registration
 
-ACUID-1. Transform type ID: `"auto_cache_user_id"`.
+ACUID-1. Transform type ID: `"cache_user_id"`.
 
 ACUID-2. Phase: `Request` only.
 
@@ -52,11 +52,11 @@ ACUID-7. **OpenAI user field injection**: If `req.user` is `None`, it MUST be se
 
 ACUID-8. The transform MUST NOT modify `req.input`, `req.model`, or any node content.
 
-## 3. `auto_cache_system`
+## 3. `cache_anthropic_system`
 
 ### 3.1 Registration
 
-ACS-1. Transform type ID: `"auto_cache_system"`.
+ACS-1. Transform type ID: `"cache_anthropic_system"`.
 
 ACS-2. Phase: `Request` only.
 
@@ -80,11 +80,11 @@ ACS-9. After insertion, the Anthropic cache breakpoint count increases by exactl
 
 ACS-10. The transform MUST NOT modify any other node, any node content (text, image data, etc.), `req.model`, or `req.user`.
 
-## 4. `auto_cache_tool_use`
+## 4. `cache_anthropic_tool_use`
 
 ### 4.1 Registration
 
-ACTU-1. Transform type ID: `"auto_cache_tool_use"`.
+ACTU-1. Transform type ID: `"cache_anthropic_tool_use"`.
 
 ACTU-2. Phase: `Request` only.
 
@@ -125,11 +125,11 @@ CTX-3. After all request-phase transforms complete (provider, global, and API-ke
 
 CTX-4. `auth.username` is populated from `User.username` during API key authentication. If authentication does not resolve to a user record, `auth.username` is `None`.
 
-## 6. `auto_cache_openai_prompt`
+## 6. `cache_openai_prompt`
 
 ### 6.1 Registration
 
-ACOP-1. Transform type ID: `"auto_cache_openai_prompt"`.
+ACOP-1. Transform type ID: `"cache_openai_prompt"`.
 
 ACOP-2. Phase: `Request` only.
 
@@ -184,11 +184,11 @@ ACOP-18. The transform is idempotent.
 
 ACOP-19. The transform does not guarantee an OpenAI cache hit. OpenAI prompt caching requires upstream eligibility, a minimum prompt size, and exact prefix compatibility as defined by OpenAI.
 
-## 7. `auto_cache_openai_tool_use`
+## 7. `cache_openai_tool_use`
 
 ### 7.1 Registration
 
-ACOTU-1. Transform type ID: `"auto_cache_openai_tool_use"`.
+ACOTU-1. Transform type ID: `"cache_openai_tool_use"`.
 
 ACOTU-2. Phase: `Request` only.
 
@@ -239,19 +239,19 @@ ACOTU-18. The transform is idempotent.
 
 ## 8. Transform Ordering Guidance
 
-ORD-1. `auto_cache_system` SHOULD be ordered before `auto_cache_tool_use` in the transform rule list, so that system prompt caching takes priority when approaching the 4-breakpoint limit.
+ORD-1. `cache_anthropic_system` SHOULD be ordered before `cache_anthropic_tool_use` in the transform rule list, so that system prompt caching takes priority when approaching the 4-breakpoint limit.
 
-ORD-2. `auto_cache_user_id` has no ordering dependency relative to the other transforms; it does not consume cache breakpoints.
+ORD-2. `cache_user_id` has no ordering dependency relative to the other transforms; it does not consume cache breakpoints.
 
-ORD-3. The per-attempt cross-protocol strip of nested `extra_body` (see provider setting `strip_cross_protocol_nested_extra`) MUST run BEFORE any request-phase transform (provider, global, and API-key scopes) within the same attempt. This guarantees that `cache_control` markers produced by `auto_cache_system` / `auto_cache_tool_use` on part-level `extra_body` survive into the encoded upstream request, even when the downstream and upstream protocol families differ (e.g. downstream OpenAI Responses → upstream Anthropic Messages).
+ORD-3. The per-attempt cross-protocol strip of nested `extra_body` (see provider setting `strip_cross_protocol_nested_extra`) MUST run BEFORE any request-phase transform (provider, global, and API-key scopes) within the same attempt. This guarantees that `cache_control` markers produced by `cache_anthropic_system` / `cache_anthropic_tool_use` on part-level `extra_body` survive into the encoded upstream request, even when the downstream and upstream protocol families differ (e.g. downstream OpenAI Responses → upstream Anthropic Messages).
 
-ORD-4. As a consequence of ORD-3, request-phase transforms may be invoked more than once per request across multiple attempts. Each invocation operates on an independent clone of the originally-decoded URP request, so `auto_cache_*` idempotency (INV-4) is sufficient to keep behavior deterministic; non-idempotent transforms MUST likewise produce the same result when applied once to a fresh clone, which is the only pattern exercised here.
+ORD-4. As a consequence of ORD-3, request-phase transforms may be invoked more than once per request across multiple attempts. Each invocation operates on an independent clone of the originally-decoded URP request, so `cache_*` idempotency (INV-4) is sufficient to keep behavior deterministic; non-idempotent transforms MUST likewise produce the same result when applied once to a fresh clone, which is the only pattern exercised here.
 
-ORD-5. `auto_cache_openai_prompt` SHOULD run after transforms that modify the stable prompt prefix, tool definitions, or response format. This ensures the generated `prompt_cache_key` reflects the upstream request shape after those mutations.
+ORD-5. `cache_openai_prompt` SHOULD run after transforms that modify the stable prompt prefix, tool definitions, or response format. This ensures the generated `prompt_cache_key` reflects the upstream request shape after those mutations.
 
-ORD-6. `strip_anthropic_billing_header` SHOULD run before `auto_cache_openai_prompt` when both transforms are enabled. This ensures the generated `prompt_cache_key` and the OpenAI upstream prompt omit Claude Code's per-request billing marker.
+ORD-6. `prompt_strip_anthropic_billing_header` SHOULD run before `cache_openai_prompt` when both transforms are enabled. This ensures the generated `prompt_cache_key` and the OpenAI upstream prompt omit Claude Code's per-request billing marker.
 
-ORD-7. `auto_cache_openai_tool_use` SHOULD run before `auto_cache_openai_prompt` when `auto_cache_openai_prompt.include_full_input_in_key = true`. This ensures the generated key material includes the inserted content breakpoint.
+ORD-7. `cache_openai_tool_use` SHOULD run before `cache_openai_prompt` when `cache_openai_prompt.include_full_input_in_key = true`. This ensures the generated key material includes the inserted content breakpoint.
 
 ## 9. Invariants
 

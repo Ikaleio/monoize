@@ -22,7 +22,7 @@ async fn set_messages_metadata_collision_transform(ctx: &TestContext) {
                 circuit_breaker_enabled: None,
                 per_model_circuit_break: None,
                 transforms: Some(vec![monoize::transforms::TransformRuleConfig {
-                    transform: "set_field".to_string(),
+                    transform: "field_set".to_string(),
                     enabled: true,
                     models: None,
                     phase: monoize::transforms::Phase::Request,
@@ -39,7 +39,7 @@ async fn set_messages_metadata_collision_transform(ctx: &TestContext) {
                 request_timeout_ms_override: None,
                 extra_fields_whitelist: None,
                 strip_cross_protocol_nested_extra: None,
-                groups: None,
+                group_ids: None,
                 enabled: None,
                 priority: None,
             },

@@ -160,7 +160,8 @@ DS34c. Hover/press scale affordance on action buttons MUST be applied through th
 
 - hover scale MUST be `1.02`;
 - tap scale MUST be `0.98`;
-- the wrapper MUST respect reduced motion per DS32-DS34.
+- the wrapper MUST respect reduced motion per DS32-DS34;
+- the wrapper MUST forward all props it does not consume (event handlers, ARIA and data attributes) to its underlying element, so that `asChild` composition (for example Radix `DialogTrigger asChild`) keeps its injected open/close handlers functional.
 
 Pages MUST NOT wrap buttons in ad-hoc `motion.div` elements with `whileHover`/`whileTap` scale handlers.
 

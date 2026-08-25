@@ -4,7 +4,7 @@ use crate::settings::{
     PricingProfilePattern, default_pricing_profile_model_patterns, default_reasoning_suffix_map,
 };
 use crate::transforms::{TransformRuleConfig, canonicalize_transform_rules};
-use crate::users::canonicalize_groups;
+use crate::users::canonicalize_group_ids;
 use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, QueryResult, Value as SeaValue};
 use serde::{Deserialize, Serialize};
@@ -176,7 +176,7 @@ pub struct MonoizeProvider {
     #[serde(default)]
     pub strip_cross_protocol_nested_extra: Option<bool>,
     #[serde(default)]
-    pub groups: Vec<String>,
+    pub group_ids: Vec<String>,
     pub enabled: bool,
     pub priority: i32,
     pub created_at: DateTime<Utc>,
@@ -258,7 +258,7 @@ pub struct CreateMonoizeProviderInput {
     #[serde(default)]
     pub strip_cross_protocol_nested_extra: Option<bool>,
     #[serde(default)]
-    pub groups: Vec<String>,
+    pub group_ids: Vec<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub priority: Option<i32>,
@@ -283,7 +283,7 @@ pub struct UpdateMonoizeProviderInput {
     pub request_timeout_ms_override: Option<Option<u64>>,
     pub extra_fields_whitelist: Option<Option<Vec<String>>>,
     pub strip_cross_protocol_nested_extra: Option<Option<bool>>,
-    pub groups: Option<Vec<String>>,
+    pub group_ids: Option<Vec<String>>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
 }
@@ -394,10 +394,10 @@ pub const DEFAULT_CHANNEL_AFFINITY_MAX_ENTRIES: usize = 4096;
 pub const DEFAULT_CHANNEL_AFFINITY_CLEANUP_INTERVAL_SECONDS: u64 = 60;
 pub const DEFAULT_CHANNEL_HEALTH_MAX_ENTRIES: usize = 10_000;
 pub const DEFAULT_CHANNEL_PASSIVE_FAILURE_SAMPLE_MAX_ENTRIES: usize = 1024;
-pub const DEFAULT_DASHBOARD_GROUP_SCAN_BATCH_ROWS: usize = 400;
 pub const DEFAULT_PROVIDER_REORDER_MAX_IDS: usize = 199;
 const TRANSFORM_MIGRATION_BATCH_SIZE: usize = 199;
-const TRANSFORM_MIGRATION_MARKER: &str = "migration.provider_transform_rule_ids.v1";
+const TRANSFORM_MIGRATION_MARKER: &str = "migration.provider_transform_rule_ids.v2";
+const OBSOLETE_TRANSFORM_MIGRATION_MARKER: &str = "migration.provider_transform_rule_ids.v1";
 
 fn parse_positive_entry_limit(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|value| value.trim().parse::<usize>().ok())
@@ -469,18 +469,6 @@ pub fn channel_health_max_entries() -> usize {
                 .ok()
                 .as_deref(),
             DEFAULT_CHANNEL_HEALTH_MAX_ENTRIES,
-        )
-    })
-}
-
-fn dashboard_group_scan_batch_rows() -> usize {
-    static LIMIT: OnceLock<usize> = OnceLock::new();
-    *LIMIT.get_or_init(|| {
-        parse_positive_entry_limit(
-            std::env::var("MONOIZE_DASHBOARD_GROUP_SCAN_BATCH_ROWS")
-                .ok()
-                .as_deref(),
-            DEFAULT_DASHBOARD_GROUP_SCAN_BATCH_ROWS,
         )
     })
 }
@@ -580,7 +568,7 @@ fn default_channel_weight() -> i32 {
     1
 }
 
-fn decode_provider_groups_json(
+fn decode_provider_group_ids_json(
     provider_id: &str,
     raw: Option<String>,
 ) -> Result<Vec<String>, String> {
@@ -590,13 +578,13 @@ fn decode_provider_groups_json(
     if raw.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let groups = serde_json::from_str::<Vec<String>>(&raw)
-        .map_err(|error| format!("provider {provider_id} invalid groups JSON: {error}"))?;
-    Ok(canonicalize_groups(&groups))
+    let group_ids = serde_json::from_str::<Vec<String>>(&raw)
+        .map_err(|error| format!("provider {provider_id} invalid group_ids JSON: {error}"))?;
+    Ok(canonicalize_group_ids(&group_ids))
 }
 
-fn serialize_provider_groups_json(groups: &[String]) -> Result<String, String> {
-    serde_json::to_string(&canonicalize_groups(groups)).map_err(|e| e.to_string())
+fn serialize_provider_group_ids_json(group_ids: &[String]) -> Result<String, String> {
+    serde_json::to_string(&canonicalize_group_ids(group_ids)).map_err(|e| e.to_string())
 }
 
 fn decode_database_bool(
@@ -611,15 +599,6 @@ fn decode_database_bool(
         _ => Err(format!(
             "{entity} {entity_id} invalid {field} boolean: expected 0 or 1, got {value}"
         )),
-    }
-}
-
-fn extend_dashboard_group_labels(
-    groups: &mut std::collections::BTreeSet<String>,
-    raw: Option<&str>,
-) {
-    if let Some(raw) = raw {
-        groups.extend(crate::users::parse_groups_json(raw));
     }
 }
 
@@ -1009,10 +988,10 @@ fn decode_provider_row(
                 decode_database_bool("provider", &id, "strip_cross_protocol_nested_extra", value)
             })
             .transpose()?,
-        groups: decode_provider_groups_json(
+        group_ids: decode_provider_group_ids_json(
             &id,
-            row.try_get::<Option<String>>("", "groups")
-                .map_err(|e| format!("provider {id} invalid groups column: {e}"))?,
+            row.try_get::<Option<String>>("", "group_ids")
+                .map_err(|e| format!("provider {id} invalid group_ids column: {e}"))?,
         )?,
         enabled: decode_database_bool(
             "provider",
@@ -1153,6 +1132,12 @@ impl MonoizeRoutingStore {
         ))
         .await
         .map_err(|e| e.to_string())?;
+        tx.execute(self.db.stmt(
+            "DELETE FROM system_settings WHERE key = $1",
+            vec![OBSOLETE_TRANSFORM_MIGRATION_MARKER.into()],
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())
     }
 
@@ -1270,7 +1255,7 @@ impl MonoizeRoutingStore {
                           active_probe_enabled_override, active_probe_interval_seconds_override,
                           active_probe_success_threshold_override, active_probe_model_override,
                           request_timeout_ms_override, extra_fields_whitelist,
-                          strip_cross_protocol_nested_extra, groups,
+                          strip_cross_protocol_nested_extra, group_ids,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    ORDER BY priority ASC, created_at ASC"#,
@@ -1367,7 +1352,7 @@ impl MonoizeRoutingStore {
                           p.active_probe_enabled_override, p.active_probe_interval_seconds_override,
                           p.active_probe_success_threshold_override, p.active_probe_model_override,
                           p.request_timeout_ms_override, p.extra_fields_whitelist,
-                          p.strip_cross_protocol_nested_extra, p.groups,
+                          p.strip_cross_protocol_nested_extra, p.group_ids,
                           p.enabled, p.priority, p.created_at, p.updated_at
                    FROM monoize_providers p
                    JOIN monoize_channels c ON c.provider_id = p.id
@@ -1442,7 +1427,7 @@ impl MonoizeRoutingStore {
                           active_probe_enabled_override, active_probe_interval_seconds_override,
                           active_probe_success_threshold_override, active_probe_model_override,
                           request_timeout_ms_override, extra_fields_whitelist,
-                          strip_cross_protocol_nested_extra, groups,
+                          strip_cross_protocol_nested_extra, group_ids,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    WHERE circuit_breaker_enabled = 1
@@ -1517,55 +1502,46 @@ impl MonoizeRoutingStore {
             .collect()
     }
 
-    pub async fn list_dashboard_group_labels(&self) -> Result<Vec<String>, String> {
-        self.list_dashboard_group_labels_with_batch_size(dashboard_group_scan_batch_rows())
-            .await
-    }
-
-    pub(crate) async fn list_dashboard_group_labels_with_batch_size(
+    /// GR-I2/GR-C3 for the provider group set: canonicalize, replace an empty
+    /// selection with the default group id, and require every id to reference
+    /// an existing registry row.
+    async fn resolve_provider_group_ids(
         &self,
-        batch_size: usize,
+        group_ids: &[String],
     ) -> Result<Vec<String>, String> {
-        let batch_size = batch_size.max(1);
-        let mut groups = std::collections::BTreeSet::new();
-        for (table, column) in [
-            ("monoize_providers", "groups"),
-            ("users", "allowed_groups"),
-            ("api_keys", "allowed_groups"),
-        ] {
-            let mut row_id = String::new();
-            loop {
-                let rows = self
-                    .db
-                    .read()
-                    .query_all(self.db.stmt(
-                        &format!(
-                            "SELECT id AS row_id, {column} AS groups_json
-                             FROM {table}
-                             WHERE id > $1
-                             ORDER BY id ASC
-                             LIMIT {batch_size}"
-                        ),
-                        vec![row_id.clone().into()],
-                    ))
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if rows.is_empty() {
-                    break;
-                }
-                let row_count = rows.len();
-                for row in rows {
-                    row_id = row.try_get("", "row_id").map_err(|e| e.to_string())?;
-                    let raw: Option<String> =
-                        row.try_get("", "groups_json").map_err(|e| e.to_string())?;
-                    extend_dashboard_group_labels(&mut groups, raw.as_deref());
-                }
-                if row_count < batch_size {
-                    break;
-                }
+        let group_ids = canonicalize_group_ids(group_ids);
+        if group_ids.len() > 32 {
+            return Err("at most 32 groups can be selected".to_string());
+        }
+        if group_ids.is_empty() {
+            let row = self
+                .db
+                .read()
+                .query_one(self.db.stmt(
+                    "SELECT id FROM monoize_groups WHERE is_default = 1 LIMIT 1",
+                    vec![],
+                ))
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "default group row missing (GR-D2 violated)".to_string())?;
+            let default_id: String = row.try_get("", "id").map_err(|e| e.to_string())?;
+            return Ok(vec![default_id]);
+        }
+        for id in &group_ids {
+            let row = self
+                .db
+                .read()
+                .query_one(self.db.stmt(
+                    "SELECT 1 AS one FROM monoize_groups WHERE id = $1",
+                    vec![id.clone().into()],
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            if row.is_none() {
+                return Err(format!("unknown group id: {id}"));
             }
         }
-        Ok(groups.into_iter().collect())
+        Ok(group_ids)
     }
 
     pub async fn get_provider(&self, id: &str) -> Result<Option<MonoizeProvider>, String> {
@@ -1579,7 +1555,7 @@ impl MonoizeRoutingStore {
                           active_probe_enabled_override, active_probe_interval_seconds_override,
                           active_probe_success_threshold_override, active_probe_model_override,
                           request_timeout_ms_override, extra_fields_whitelist,
-                          strip_cross_protocol_nested_extra, groups,
+                          strip_cross_protocol_nested_extra, group_ids,
                           enabled, priority, created_at, updated_at
                    FROM monoize_providers
                    WHERE id = $1"#,
@@ -1632,6 +1608,12 @@ impl MonoizeRoutingStore {
 
         let id = generate_short_id();
         let now = Utc::now();
+        // Resolve before begin_write: the registry lookup uses the read pool,
+        // which on single-connection SQLite would deadlock behind our own
+        // write transaction.
+        let group_ids_json = serialize_provider_group_ids_json(
+            &self.resolve_provider_group_ids(&input.group_ids).await?,
+        )?;
         let txn = self.db.begin_write().await.map_err(|e| e.to_string())?;
 
         let priority = match input.priority {
@@ -1672,7 +1654,6 @@ impl MonoizeRoutingStore {
         let transforms_json = serde_json::to_string(&transforms).map_err(|e| e.to_string())?;
         let api_type_overrides_json =
             serde_json::to_string(&input.api_type_overrides).map_err(|e| e.to_string())?;
-        let groups_json = serialize_provider_groups_json(&input.groups)?;
         let extra_fields_whitelist_json: Option<String> = input
             .extra_fields_whitelist
             .as_ref()
@@ -1687,7 +1668,7 @@ impl MonoizeRoutingStore {
                         active_probe_enabled_override, active_probe_interval_seconds_override,
                         active_probe_success_threshold_override, active_probe_model_override,
                         request_timeout_ms_override, extra_fields_whitelist,
-                        strip_cross_protocol_nested_extra, groups,
+                        strip_cross_protocol_nested_extra, group_ids,
                         enabled, priority, created_at, updated_at
                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
                 vec![
@@ -1711,7 +1692,7 @@ impl MonoizeRoutingStore {
                         opt_u64_to_value(input.request_timeout_ms_override),
                         extra_fields_whitelist_json.into(),
                         opt_bool_to_value(strip_cross_proto),
-                        groups_json.into(),
+                        group_ids_json.into(),
                         SeaValue::Int(Some(if input.enabled { 1 } else { 0 })),
                         SeaValue::Int(Some(priority)),
                         now.to_rfc3339().into(),
@@ -1854,8 +1835,12 @@ impl MonoizeRoutingStore {
                 opt_bool_to_value(value),
             );
         }
-        if let Some(value) = &input.groups {
-            push_value("groups", serialize_provider_groups_json(value)?.into());
+        if let Some(value) = &input.group_ids {
+            let resolved = self.resolve_provider_group_ids(value).await?;
+            push_value(
+                "group_ids",
+                serialize_provider_group_ids_json(&resolved)?.into(),
+            );
         }
         if let Some(value) = input.enabled {
             push_value("enabled", SeaValue::Int(Some(if value { 1 } else { 0 })));
@@ -2668,16 +2653,6 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_group_scan_treats_null_and_malformed_values_as_empty() {
-        let mut groups = std::collections::BTreeSet::new();
-        extend_dashboard_group_labels(&mut groups, None);
-        extend_dashboard_group_labels(&mut groups, Some("not-json"));
-        assert!(groups.is_empty());
-        extend_dashboard_group_labels(&mut groups, Some(r#"[" Beta ","alpha"]"#));
-        assert_eq!(groups.into_iter().collect::<Vec<_>>(), ["alpha", "beta"]);
-    }
-
-    #[test]
     fn health_capacity_fails_closed_without_scanning_or_eviction() {
         let mut health = HashMap::from([
             (
@@ -2766,7 +2741,7 @@ mod tests {
             let raw: String = row.try_get("", "transforms").expect("transforms decode");
             let rules: Vec<TransformRuleConfig> =
                 serde_json::from_str(&raw).expect("transforms parse");
-            assert_eq!(rules[0].transform, "auto_cache_openai_prompt");
+            assert_eq!(rules[0].transform, "cache_openai_prompt");
         }
         let marker = db
             .read()
@@ -3138,26 +3113,29 @@ mod tests {
     }
 
     #[test]
-    fn decode_provider_groups_json_is_compatible_only_for_absent_and_empty_values() {
+    fn decode_provider_group_ids_json_is_compatible_only_for_absent_and_empty_values() {
         assert!(
-            decode_provider_groups_json("provider-a", None)
+            decode_provider_group_ids_json("provider-a", None)
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            decode_provider_groups_json("provider-a", Some(String::new()))
+            decode_provider_group_ids_json("provider-a", Some(String::new()))
                 .unwrap()
                 .is_empty()
         );
-        assert!(decode_provider_groups_json("provider-a", Some("not-json".to_string())).is_err());
-        assert!(decode_provider_groups_json("provider-a", Some("[1]".to_string())).is_err());
+        assert!(
+            decode_provider_group_ids_json("provider-a", Some("not-json".to_string())).is_err()
+        );
+        assert!(decode_provider_group_ids_json("provider-a", Some("[1]".to_string())).is_err());
+        // Ids are opaque: order and casing must survive, duplicates and empties drop (GR-C1).
         assert_eq!(
-            decode_provider_groups_json(
+            decode_provider_group_ids_json(
                 "provider-a",
-                Some(r#"[" Beta ","alpha","ALPHA",""]"#.to_string())
+                Some(r#"[" g-B ","g-a","g-a",""]"#.to_string())
             )
             .unwrap(),
-            vec!["alpha".to_string(), "beta".to_string()]
+            vec!["g-B".to_string(), "g-a".to_string()]
         );
     }
 

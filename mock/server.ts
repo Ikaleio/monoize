@@ -15,12 +15,15 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function sseResponse(chunks: string[]) {
+function sseResponse(chunks: string[], delayMs = 0) {
   const encoder = new TextEncoder();
   return new Response(
     new ReadableStream({
-      start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      async start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
         controller.close();
       },
     }),
@@ -195,6 +198,32 @@ function echoSuffix(body: any): string {
   return "";
 }
 
+// 256x256 solid-color PNGs so image responses are visible in UI walkthroughs:
+// orange marks /v1/images/generations output, teal marks /v1/images/edits output.
+const GENERATION_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAB/klEQVR42u3TsQkAAAzDsPy/995m7wsV6AKDsxN4SwIMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA2AAFTAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAADCABBgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAEwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAA4Cvt/F62yjg5YAAAAAElFTkSuQmCC";
+const EDIT_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAACAElEQVR42u3TQQ0AAAjEsJOEdFxgizcaaFIFS5bqgbciAQYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABMIAKGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAbAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAGUAEDgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAAGAAMAAYAAwABgADgAHAABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwAFwLC1gYymvLfH8AAAAASUVORK5CYII=";
+
+function imageResponse(prompt: string, b64: string) {
+  return {
+    created: Math.floor(Date.now() / 1000),
+    data: [
+      {
+        b64_json: b64,
+        revised_prompt: `mock render of: ${prompt}`,
+      },
+    ],
+    // Monoize rejects image responses without billable usage.
+    usage: {
+      total_tokens: 30,
+      input_tokens: 10,
+      output_tokens: 20,
+      input_tokens_details: { text_tokens: 10, image_tokens: 0 },
+    },
+  };
+}
+
 function responsesObject(model: string, text: string) {
   return {
     id: `resp_mock_${Date.now()}`,
@@ -243,18 +272,57 @@ Bun.serve({
 
       if (body.stream === true) {
         const text = `${collectChatText(messages)}${echoSuffix(body)}`;
-        const chunk = {
+        const base = {
           id: `chatcmpl_mock_${Date.now()}`,
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
           model,
-          choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
         };
-        const chunks = [`data: ${JSON.stringify(chunk)}\n\n`, `data: [DONE]\n\n`];
-        return sseResponse(chunks);
+        // Word-level deltas plus a terminal finish_reason chunk: Monoize
+        // rejects streams that hit [DONE] without a terminal finish_reason.
+        const words = text.match(/\S+\s*/g) ?? [];
+        const chunks = [
+          `data: ${JSON.stringify({
+            ...base,
+            choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+          })}\n\n`,
+          ...words.map(
+            (word) =>
+              `data: ${JSON.stringify({
+                ...base,
+                choices: [{ index: 0, delta: { content: word }, finish_reason: null }],
+              })}\n\n`,
+          ),
+          `data: ${JSON.stringify({
+            ...base,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 8, completion_tokens: 16, total_tokens: 24 },
+          })}\n\n`,
+          `data: [DONE]\n\n`,
+        ];
+        return sseResponse(chunks, 45);
       }
 
       return jsonResponse(toolAwareChatResponse(model, messages, body));
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+      const body = await req.json();
+      const prompt = String(body.prompt ?? "");
+      return jsonResponse(imageResponse(prompt, GENERATION_PNG_B64));
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/images/edits") {
+      const form = await req.formData();
+      const prompt = String(form.get("prompt") ?? "");
+      const image = form.get("image");
+      if (!image || typeof image === "string") {
+        return jsonResponse(
+          { error: { message: "image file field required" } },
+          400,
+        );
+      }
+      return jsonResponse(imageResponse(prompt, EDIT_PNG_B64));
     }
 
     if (req.method === "POST" && url.pathname === "/v1/messages") {

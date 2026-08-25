@@ -1,5 +1,5 @@
 use super::*;
-use crate::transforms::split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
+use crate::transforms::stream_split_sse_frames::DEFAULT_MAX_FRAME_LENGTH;
 use crate::urp::ImageSource;
 use std::io::Write;
 use xxhash_rust::xxh3::Xxh3;
@@ -646,7 +646,7 @@ fn resolve_sse_max_frame_length_from_rules(
         .find(|rule| {
             rule.enabled
                 && rule.phase == Phase::Response
-                && rule.transform == "split_sse_frames"
+                && rule.transform == "stream_split_sse_frames"
                 && match &rule.models {
                     None => true,
                     Some(patterns) => patterns
@@ -683,7 +683,7 @@ pub(super) fn requires_buffered_response_stream(
                 .any(|pattern| model_glob_match(pattern, model)),
         })
         .any(|rule| {
-            rule.transform == "assistant_markdown_images_to_output"
+            rule.transform == "image_markdown_to_output"
                 && !matches!(downstream, DownstreamProtocol::Responses)
         })
 }
@@ -1285,7 +1285,7 @@ mod tests {
     #[test]
     fn assistant_markdown_images_to_output_stays_passthrough_for_responses() {
         assert!(!requires_buffered_response_stream(
-            &[response_rule("assistant_markdown_images_to_output")],
+            &[response_rule("image_markdown_to_output")],
             &[],
             &[],
             "gpt-5-mini",
@@ -1296,14 +1296,14 @@ mod tests {
     #[test]
     fn assistant_markdown_images_to_output_still_buffers_for_chat_and_messages() {
         assert!(requires_buffered_response_stream(
-            &[response_rule("assistant_markdown_images_to_output")],
+            &[response_rule("image_markdown_to_output")],
             &[],
             &[],
             "gpt-5-mini",
             DownstreamProtocol::ChatCompletions,
         ));
         assert!(requires_buffered_response_stream(
-            &[response_rule("assistant_markdown_images_to_output")],
+            &[response_rule("image_markdown_to_output")],
             &[],
             &[],
             "gpt-5-mini",

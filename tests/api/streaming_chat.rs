@@ -1218,7 +1218,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-summary-chat".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-chat-ch1".to_string()),
                 name: "mono-transform-summary-chat-ch1".to_string(),
@@ -1251,7 +1251,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_events
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
@@ -1323,7 +1323,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-summary-chat-encrypted".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-chat-encrypted-ch1".to_string()),
                 name: "mono-transform-summary-chat-encrypted-ch1".to_string(),
@@ -1356,7 +1356,7 @@ async fn chat_streaming_plaintext_reasoning_to_summary_preserves_encrypted_reaso
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,

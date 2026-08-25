@@ -15,7 +15,7 @@ pub struct CreateBillingPlanRequest {
     pub grant_amount_usd: Option<String>,
     pub schedule: String,
     #[serde(default)]
-    pub allowed_groups: Option<Vec<String>>,
+    pub group_ids: Option<Vec<String>>,
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -27,7 +27,7 @@ pub struct UpdateBillingPlanRequest {
     pub grant_amount_usd: Option<String>,
     pub schedule: String,
     #[serde(default)]
-    pub allowed_groups: Option<Vec<String>>,
+    pub group_ids: Option<Vec<String>>,
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -39,7 +39,7 @@ pub struct BillingPlanResponse {
     pub grant_amount_nano_usd: String,
     pub grant_amount_usd: String,
     pub schedule: String,
-    pub allowed_groups: Vec<String>,
+    pub group_ids: Vec<String>,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -57,7 +57,7 @@ impl From<BillingPlan> for BillingPlanResponse {
             grant_amount_usd: format_nano_to_usd(nano),
             grant_amount_nano_usd: plan.grant_amount_nano_usd,
             schedule: plan.schedule,
-            allowed_groups: plan.allowed_groups,
+            group_ids: plan.group_ids,
             enabled: plan.enabled,
             created_at: plan.created_at.to_rfc3339(),
             updated_at: plan.updated_at.to_rfc3339(),
@@ -70,7 +70,7 @@ fn plan_input(
     grant_amount_nano_usd: Option<String>,
     grant_amount_usd: Option<String>,
     schedule: String,
-    allowed_groups: Option<Vec<String>>,
+    group_ids: Option<Vec<String>>,
     enabled: Option<bool>,
 ) -> BillingPlanInput {
     BillingPlanInput {
@@ -78,7 +78,7 @@ fn plan_input(
         grant_amount_nano_usd,
         grant_amount_usd,
         schedule,
-        allowed_groups,
+        group_ids,
         enabled,
     }
 }
@@ -90,7 +90,7 @@ fn map_plan_inner_error(error: String) -> AppError {
             "plan_name_exists",
             "a billing plan with this name already exists",
         ),
-        "invalid_schedule" | "invalid_grant_amount" | "invalid_plan_name" => {
+        "invalid_schedule" | "invalid_grant_amount" | "invalid_plan_name" | "invalid_request" => {
             AppError::new(StatusCode::BAD_REQUEST, error.clone(), error)
         }
         "plan_in_use" => AppError::new(
@@ -132,7 +132,7 @@ pub async fn create_billing_plan(
             body.grant_amount_nano_usd,
             body.grant_amount_usd,
             body.schedule,
-            body.allowed_groups,
+            body.group_ids,
             body.enabled,
         ))
         .await
@@ -156,7 +156,7 @@ pub async fn update_billing_plan(
         body.grant_amount_nano_usd,
         body.grant_amount_usd,
         body.schedule,
-        body.allowed_groups,
+        body.group_ids,
         body.enabled,
     );
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Braces, Copy } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,15 +14,15 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { TransformRegistryItem, TransformRuleConfig } from "@/lib/api";
+import { resolveLocalizedText } from "./localized-text";
 import { ModelsGlobInput } from "./models-glob-input";
 import { SchemaFormFields } from "./schema-form-fields";
 import {
+  buildDraftConfig,
   getSchemaObject,
-  isJsonValuedProperty,
-  isRequiredSchemaKey,
-  jsonFieldInitialText,
-  parseJsonConfigField,
+  serializeDraftConfig,
   validateTransformRule,
+  type DraftValue,
 } from "./transform-schema";
 
 type TransformItemConfigDialogProps = {
@@ -76,51 +77,43 @@ function TransformItemConfigDialogInner({
   onOpenChange: (open: boolean) => void;
   onSave: (nextRule: TransformRuleConfig) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const initialRule = useMemo(() => buildInitialRule(rule), [rule]);
-  const [draftRule, setDraftRule] = useState<TransformRuleConfig>(initialRule);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [rawJsonInputs, setRawJsonInputs] = useState<Record<string, string>>(
-    buildRawJsonInputs(initialRule, registryItem)
-  );
-  const [rawConfigText, setRawConfigText] = useState(JSON.stringify(initialRule.config, null, 2));
 
   const schema = registryItem ? getSchemaObject(registryItem.config_schema) : null;
   const canUseSchemaForm = Boolean(registryItem && schema?.type === "object");
   const isUnknownTransform = !registryItem;
 
-  const updateConfigField = (key: string, value: unknown) => {
-    setDraftRule((prev) => {
-      const nextConfig = { ...prev.config };
-      if (value === undefined) {
-        delete nextConfig[key];
-      } else {
-        nextConfig[key] = value;
-      }
-      return { ...prev, config: nextConfig };
-    });
+  const [draftRule, setDraftRule] = useState<TransformRuleConfig>(initialRule);
+  const [draftConfig, setDraftConfig] = useState(() =>
+    buildDraftConfig(canUseSchemaForm ? schema : null, initialRule.config)
+  );
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [rawConfigText, setRawConfigText] = useState(
+    JSON.stringify(initialRule.config, null, 2)
+  );
+
+  const displayName = registryItem
+    ? resolveLocalizedText(registryItem.name, i18n.language, registryItem.type_id)
+    : rule.transform;
+  const displayDescription = registryItem
+    ? resolveLocalizedText(registryItem.description, i18n.language, "")
+    : "";
+
+  const updateDraftField = (key: string, draft: DraftValue) => {
+    setDraftConfig((prev) => ({
+      ...prev,
+      drafts: { ...prev.drafts, [key]: draft },
+    }));
     setFieldErrors((prev) => {
-      const next = { ...prev };
-      delete next[key];
+      const next: Record<string, string> = {};
+      for (const [path, message] of Object.entries(prev)) {
+        if (path !== key && !path.startsWith(`${key}.`)) {
+          next[path] = message;
+        }
+      }
       return next;
     });
-  };
-
-  const commitRawJsonInput = (key: string): boolean => {
-    const raw = rawJsonInputs[key];
-    if (raw === undefined) {
-      return true;
-    }
-    const parsed = parseJsonConfigField(raw, isRequiredSchemaKey(schema, key));
-    if (parsed.kind === "error") {
-      setFieldErrors((prev) => ({
-        ...prev,
-        [key]: t("transforms.validationInvalidJson"),
-      }));
-      return false;
-    }
-    updateConfigField(key, parsed.kind === "omit" ? undefined : parsed.value);
-    return true;
   };
 
   const validateAndSave = () => {
@@ -129,23 +122,20 @@ function TransformItemConfigDialogInner({
       config: { ...draftRule.config },
     };
 
-    for (const [key, raw] of Object.entries(rawJsonInputs)) {
-      const parsed = parseJsonConfigField(raw, isRequiredSchemaKey(schema, key));
-      if (parsed.kind === "error") {
-        setFieldErrors((prev) => ({
-          ...prev,
-          [key]: t("transforms.validationInvalidJson"),
-        }));
+    if (canUseSchemaForm) {
+      const serialized = serializeDraftConfig(schema, draftConfig);
+      if (serialized.errors.length > 0) {
+        const nextErrors: Record<string, string> = {};
+        for (const error of serialized.errors) {
+          if (!nextErrors[error.path]) {
+            nextErrors[error.path] = error.message;
+          }
+        }
+        setFieldErrors(nextErrors);
         return;
       }
-      if (parsed.kind === "omit") {
-        delete candidate.config[key];
-      } else {
-        candidate.config[key] = parsed.value;
-      }
-    }
-
-    if (!canUseSchemaForm && !isUnknownTransform) {
+      candidate.config = serialized.config;
+    } else if (!isUnknownTransform) {
       try {
         const parsed = JSON.parse(rawConfigText);
         if (!isRecord(parsed)) {
@@ -175,13 +165,32 @@ function TransformItemConfigDialogInner({
     onOpenChange(false);
   };
 
+  const copyConfigJson = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(t("transforms.jsonCopied"));
+    } catch {
+      toast.error(t("transforms.jsonCopyFailed"));
+    }
+  };
+
+  const formatRawConfig = () => {
+    try {
+      setRawConfigText(JSON.stringify(JSON.parse(rawConfigText.trim()), null, 2));
+    } catch {
+      toast.error(t("transforms.validationInvalidJson"));
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)] sm:max-w-2xl">
         <div className="flex min-h-0 flex-col p-6">
         <DialogHeader className="shrink-0">
-          <DialogTitle className="font-mono">{draftRule.transform}</DialogTitle>
+          <DialogTitle>{displayName}</DialogTitle>
+          <p className="font-mono text-xs text-muted-foreground">{draftRule.transform}</p>
           <DialogDescription>
+            {displayDescription ? `${displayDescription} ` : ""}
             {t("transforms.configureRule", { phase: draftRule.phase })}
           </DialogDescription>
         </DialogHeader>
@@ -209,19 +218,42 @@ function TransformItemConfigDialogInner({
             {canUseSchemaForm ? (
               <SchemaFormFields
                 schema={schema}
-                config={draftRule.config}
+                draftConfig={draftConfig}
                 errors={fieldErrors}
-                rawJsonInputs={rawJsonInputs}
-                jsonFieldPlaceholder={t("transforms.jsonFieldPlaceholder")}
-                jsonFieldOptionalHint={t("transforms.jsonFieldOptionalHint")}
-                onFieldChange={updateConfigField}
-                onRawJsonInputChange={(key, value) =>
-                  setRawJsonInputs((prev) => ({ ...prev, [key]: value }))
-                }
-                onRawJsonInputCommit={commitRawJsonInput}
+                onDraftChange={updateDraftField}
               />
             ) : (
               <div className="space-y-2">
+                <div className="flex items-center gap-1">
+                  {!isUnknownTransform && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-11 touch-manipulation sm:size-8"
+                      aria-label={t("transforms.jsonFormat")}
+                      onClick={formatRawConfig}
+                    >
+                      <Braces className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 touch-manipulation sm:size-8"
+                    aria-label={t("transforms.jsonCopy")}
+                    onClick={() =>
+                      copyConfigJson(
+                        isUnknownTransform
+                          ? JSON.stringify(draftRule.config, null, 2)
+                          : rawConfigText
+                      )
+                    }
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
                 <Textarea
                   rows={8}
                   className="font-mono text-xs"
@@ -256,22 +288,6 @@ function buildInitialRule(rule: TransformRuleConfig): TransformRuleConfig {
     models: normalizeModels(rule.models),
     config: { ...safeConfig },
   };
-}
-
-function buildRawJsonInputs(
-  rule: TransformRuleConfig,
-  registryItem?: TransformRegistryItem
-): Record<string, string> {
-  const schema = registryItem ? getSchemaObject(registryItem.config_schema) : null;
-  const properties = schema?.properties ?? {};
-  const rawByKey: Record<string, string> = {};
-  for (const [key, property] of Object.entries(properties)) {
-    if (!isJsonValuedProperty(property)) {
-      continue;
-    }
-    rawByKey[key] = jsonFieldInitialText(rule.config, key);
-  }
-  return rawByKey;
 }
 
 function normalizeModels(models: string[] | null | undefined): string[] | null {

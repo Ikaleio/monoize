@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Copy, Check, Key, Edit, Globe, Layers, Settings2, ArrowRightLeft, X } from "lucide-react";
 import { BadgeOverflowList } from "@/components/BadgeOverflowList";
 import { GroupsBadge } from "@/components/GroupsBadge";
+import { GroupMultiSelect } from "@/components/groups/GroupPicker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -41,7 +41,7 @@ import {
   useDashboardGroups,
   useTransformRegistry,
 } from "@/lib/swr";
-import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
+import type { ApiKey, ApiKeyCreated, CreateApiKeyInput, Group, ModelRedirectRule, RequestCaptureMode, TransformRuleConfig, UpdateApiKeyInput } from "@/lib/api";
 import { api as apiClient } from "@/lib/api";
 import { AnimatedButton, PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
@@ -53,10 +53,6 @@ import { findFirstInvalidTransformRule } from "@/components/transforms/transform
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { normalizeMultiplier } from "@/lib/exact-decimal";
-
-function groupKey(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function parseOptionalMultiplier(value: string): string | undefined {
   if (!value.trim()) return undefined;
@@ -83,23 +79,6 @@ function parseOptionalNanoBalance(value: string, allowNegative = true): string |
     throw new Error("Initial balance must be non-negative");
   }
   return parsed.toString();
-}
-
-function dedupeAllowedGroups(values: string[]): string[] {
-  const seen = new Set<string>();
-  const next: string[] = [];
-
-  for (const value of values) {
-    const trimmed = value.trim();
-    const key = groupKey(trimmed);
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(trimmed);
-  }
-
-  return next;
 }
 
 function requestCaptureBadgeVariant(mode: RequestCaptureMode): "secondary" | "outline" {
@@ -226,161 +205,74 @@ function ApiKeyRestrictionBadges({
   );
 }
 
-interface AllowedGroupsInputProps {
-  inputId: string;
-  value: string[];
-  suggestions: string[];
-  suggestionsLoading: boolean;
-  currentUserAllowedGroups: string[] | null;
-  onChange: (next: string[]) => void;
+interface KeyGroupsSectionProps {
+  idPrefix: string;
+  useUserGroup: boolean;
+  groupIds: string[];
+  groups: Group[];
+  groupsLoading: boolean;
+  ownerGroupId: string | null;
+  isAdmin: boolean;
+  onUseUserGroupChange: (next: boolean) => void;
+  onGroupIdsChange: (next: string[]) => void;
 }
 
-function AllowedGroupsInput({
-  inputId,
-  value,
-  suggestions,
-  suggestionsLoading,
-  currentUserAllowedGroups,
-  onChange,
-}: AllowedGroupsInputProps) {
+/**
+ * TM-GRP-1..TM-GRP-5: a key either inherits the owner's single group or holds
+ * an ordered explicit selection; non-admins may only pick `user_selectable`
+ * groups plus their own current group.
+ */
+function KeyGroupsSection({
+  idPrefix,
+  useUserGroup,
+  groupIds,
+  groups,
+  groupsLoading,
+  ownerGroupId,
+  isAdmin,
+  onUseUserGroupChange,
+  onGroupIdsChange,
+}: KeyGroupsSectionProps) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState("");
-  const groups = useMemo(() => dedupeAllowedGroups(value), [value]);
-  const groupsRef = useRef(groups);
-  const currentUserGroups = useMemo(
-    () => dedupeAllowedGroups(currentUserAllowedGroups ?? []),
-    [currentUserAllowedGroups]
+  const ownerGroup = useMemo(
+    () => groups.find((group) => group.id === ownerGroupId) ?? null,
+    [groups, ownerGroupId]
   );
-  const draftKey = groupKey(draft);
-
-  useEffect(() => {
-    groupsRef.current = groups;
-  }, [groups]);
-
-  const filteredSuggestions = useMemo(
-    () =>
-      suggestions.filter((suggestion) => {
-        const suggestionKey = groupKey(suggestion);
-        if (!suggestionKey) {
-          return false;
-        }
-        if (groups.some((group) => groupKey(group) === suggestionKey)) {
-          return false;
-        }
-        return !draftKey || suggestionKey.includes(draftKey);
-      }),
-    [draftKey, groups, suggestions]
-  );
-
-  const commitGroups = (nextValues: string[]) => {
-    const nextGroups = dedupeAllowedGroups(nextValues);
-    groupsRef.current = nextGroups;
-    onChange(nextGroups);
-  };
-
-  const flushDraft = () => {
-    const parts = draft
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    if (parts.length > 0) {
-      commitGroups([...groupsRef.current, ...parts]);
-    }
-
-    setDraft("");
-  };
-
-  const removeGroup = (group: string) => {
-    commitGroups(groupsRef.current.filter((entry) => groupKey(entry) !== groupKey(group)));
-  };
-
-  const addSuggestion = (group: string) => {
-    commitGroups([...groupsRef.current, group]);
-    setDraft("");
-  };
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={inputId}>{t("apiKeys.allowedGroups")}</Label>
-        <span className="text-xs text-muted-foreground">{t("providers.optional")}</span>
-      </div>
-      <Input
-        id={inputId}
-        value={draft}
-        placeholder={t("providers.groupsPlaceholder")}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={flushDraft}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            flushDraft();
-          }
-        }}
-      />
-      <p className="text-xs text-muted-foreground">
-        {groups.length === 0
-          ? t("apiKeys.allowedGroupsEmptyHelp")
-          : t("apiKeys.allowedGroupsSelectedHelp")}
-      </p>
-      {groups.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {groups.map((group) => (
-            <Badge
-              key={groupKey(group)}
-              variant="secondary"
-              className="flex max-w-full items-center gap-1 font-mono"
-            >
-              <span className="min-w-0 truncate">{group}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-4 w-4 shrink-0"
-                onClick={() => removeGroup(group)}
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </Badge>
-          ))}
-        </div>
-      )}
-      {suggestionsLoading ? (
-        <div className="flex flex-wrap gap-2">
-          <Skeleton className="h-7 w-20 rounded-md" />
-          <Skeleton className="h-7 w-24 rounded-md" />
-          <Skeleton className="h-7 w-16 rounded-md" />
-        </div>
-      ) : filteredSuggestions.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {filteredSuggestions.slice(0, 8).map((group) => (
-            <Button
-              key={group}
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 rounded-md px-3 font-mono text-xs"
-              onClick={() => addSuggestion(group)}
-            >
-              {group}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-      {currentUserAllowedGroups !== null && (
-        currentUserGroups.length > 0 ? (
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">
-              {t("apiKeys.allowedGroupsCurrentUserHint")}
-            </p>
-            <GroupsBadge groups={currentUserGroups} />
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            {t("apiKeys.allowedGroupsCurrentUserAllHint")}
+    <div className="space-y-3 rounded-lg border p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <Label htmlFor={`${idPrefix}-use-user-group`}>{t("apiKeys.useUserGroup")}</Label>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {ownerGroup
+              ? t("apiKeys.useUserGroupHelpNamed", { name: ownerGroup.name })
+              : t("apiKeys.useUserGroupHelp")}
           </p>
-        )
+        </div>
+        <Switch
+          id={`${idPrefix}-use-user-group`}
+          checked={useUserGroup}
+          onCheckedChange={onUseUserGroupChange}
+        />
+      </div>
+      {!useUserGroup && (
+        <div className="space-y-2">
+          <Label>{t("apiKeys.groups")}</Label>
+          <GroupMultiSelect
+            value={groupIds}
+            groups={groups}
+            loading={groupsLoading}
+            sortable
+            optionFilter={
+              isAdmin
+                ? undefined
+                : (group) => group.user_selectable || group.id === ownerGroupId
+            }
+            onChange={onGroupIdsChange}
+          />
+          <p className="text-xs text-muted-foreground">{t("apiKeys.groupsHelp")}</p>
+        </div>
       )}
     </div>
   );
@@ -458,8 +350,9 @@ export function ApiKeysPage() {
   const { t } = useTranslation();
   const { user: currentUser } = useAuth();
   const { data: keys = [], isLoading } = useApiKeys();
-  const { data: groupSuggestions = [], isLoading: groupsLoading } = useDashboardGroups();
-  const { data: transformRegistry = [] } = useTransformRegistry();
+  const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
+  const { data: transformRegistry = [], isLoading: transformRegistryLoading } =
+    useTransformRegistry();
   const apiKeyTransformRegistry = useMemo(
     () => transformRegistry.filter((item) => item.supported_scopes.includes("api_key")),
     [transformRegistry]
@@ -482,7 +375,8 @@ export function ApiKeysPage() {
   const [newKeyModelLimits, setNewKeyModelLimits] = useState("");
   const [newKeyIpWhitelist, setNewKeyIpWhitelist] = useState("");
 
-  const [newKeyAllowedGroups, setNewKeyAllowedGroups] = useState<string[]>([]);
+  const [newKeyUseUserGroup, setNewKeyUseUserGroup] = useState(true);
+  const [newKeyGroupIds, setNewKeyGroupIds] = useState<string[]>([]);
   const [newKeyMaxMultiplier, setNewKeyMaxMultiplier] = useState("");
   const [newKeyTransforms, setNewKeyTransforms] = useState<TransformRuleConfig[]>([]);
   const [newKeyModelRedirects, setNewKeyModelRedirects] = useState<ModelRedirectRule[]>([]);
@@ -504,7 +398,8 @@ export function ApiKeysPage() {
     setNewKeyModelLimits("");
     setNewKeyIpWhitelist("");
 
-    setNewKeyAllowedGroups([]);
+    setNewKeyUseUserGroup(true);
+    setNewKeyGroupIds([]);
     setNewKeyMaxMultiplier("");
     setNewKeyTransforms([]);
     setNewKeyModelRedirects([]);
@@ -521,6 +416,10 @@ export function ApiKeysPage() {
         index: invalidRule.index + 1,
         reason: `${firstError.field} ${firstError.message}`,
       }));
+      return;
+    }
+    if (!newKeyUseUserGroup && newKeyGroupIds.length === 0) {
+      toast.error(t("apiKeys.groupsRequired"));
       return;
     }
     setCreating(true);
@@ -545,7 +444,8 @@ export function ApiKeysPage() {
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
-        allowed_groups: dedupeAllowedGroups(newKeyAllowedGroups),
+        use_user_group: newKeyUseUserGroup,
+        group_ids: newKeyUseUserGroup ? [] : newKeyGroupIds,
         max_multiplier: parseOptionalMultiplier(newKeyMaxMultiplier),
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
@@ -577,6 +477,10 @@ export function ApiKeysPage() {
       }));
       return;
     }
+    if (!newKeyUseUserGroup && newKeyGroupIds.length === 0) {
+      toast.error(t("apiKeys.groupsRequired"));
+      return;
+    }
     setUpdating(true);
     try {
       const input: UpdateApiKeyInput = {
@@ -588,7 +492,8 @@ export function ApiKeysPage() {
         model_limits_enabled: newKeyModelLimitsEnabled,
         model_limits: newKeyModelLimits ? newKeyModelLimits.split(",").map(s => s.trim()).filter(s => s) : [],
         ip_whitelist: newKeyIpWhitelist ? newKeyIpWhitelist.split(",").map(s => s.trim()).filter(s => s) : [],
-        allowed_groups: dedupeAllowedGroups(newKeyAllowedGroups),
+        use_user_group: newKeyUseUserGroup,
+        group_ids: newKeyUseUserGroup ? [] : newKeyGroupIds,
         max_multiplier: parseOptionalMultiplier(newKeyMaxMultiplier),
         transforms: newKeyTransforms,
         model_redirects: newKeyModelRedirects.filter((r) => r.pattern.trim() && r.replace.trim()),
@@ -673,7 +578,8 @@ export function ApiKeysPage() {
     setNewKeyModelLimitsEnabled(key.model_limits_enabled);
     setNewKeyModelLimits(key.model_limits.join(", "));
     setNewKeyIpWhitelist(key.ip_whitelist.join(", "));
-    setNewKeyAllowedGroups(key.allowed_groups ?? []);
+    setNewKeyUseUserGroup(key.use_user_group);
+    setNewKeyGroupIds(key.group_ids ?? []);
     setNewKeyMaxMultiplier(key.max_multiplier != null ? String(key.max_multiplier) : "");
     setNewKeyTransforms(key.transforms ?? []);
     setNewKeyModelRedirects(key.model_redirects ?? []);
@@ -764,13 +670,16 @@ export function ApiKeysPage() {
                     placeholder="30"
                   />
                 </div>
-                <AllowedGroupsInput
-                  inputId="allowedGroups"
-                  value={newKeyAllowedGroups}
-                  suggestions={groupSuggestions}
-                  suggestionsLoading={groupsLoading}
-                  currentUserAllowedGroups={currentUser?.allowed_groups ?? null}
-                  onChange={(allowedGroups) => setNewKeyAllowedGroups(allowedGroups)}
+                <KeyGroupsSection
+                  idPrefix="create"
+                  useUserGroup={newKeyUseUserGroup}
+                  groupIds={newKeyGroupIds}
+                  groups={groups}
+                  groupsLoading={groupsLoading}
+                  ownerGroupId={currentUser?.group_id ?? null}
+                  isAdmin={canManageSystem}
+                  onUseUserGroupChange={setNewKeyUseUserGroup}
+                  onGroupIdsChange={setNewKeyGroupIds}
                 />
                 <div className="flex items-center space-x-2">
                   <Switch
@@ -871,6 +780,7 @@ export function ApiKeysPage() {
                   <TransformChainEditor
                     value={newKeyTransforms}
                     registry={apiKeyTransformRegistry}
+                    loading={transformRegistryLoading}
                     onChange={setNewKeyTransforms}
                   />
                 </div>
@@ -1036,8 +946,8 @@ export function ApiKeysPage() {
                     <VirtualTableCell className="font-medium">
                       <div className="flex min-w-max items-center gap-2 whitespace-nowrap">
                         <span>{key.name}</span>
-                        {key.allowed_groups && key.allowed_groups.length > 0 && (
-                          <GroupsBadge groups={key.allowed_groups} variant="secondary" />
+                        {!key.use_user_group && key.group_ids.length > 0 && (
+                          <GroupsBadge groupIds={key.group_ids} variant="secondary" />
                         )}
                       </div>
                     </VirtualTableCell>
@@ -1143,13 +1053,16 @@ export function ApiKeysPage() {
                 onChange={(e) => setNewKeyName(e.target.value)}
               />
             </div>
-            <AllowedGroupsInput
-              inputId="editAllowedGroups"
-              value={newKeyAllowedGroups}
-              suggestions={groupSuggestions}
-              suggestionsLoading={groupsLoading}
-              currentUserAllowedGroups={currentUser?.allowed_groups ?? null}
-              onChange={(allowedGroups) => setNewKeyAllowedGroups(allowedGroups)}
+            <KeyGroupsSection
+              idPrefix="edit"
+              useUserGroup={newKeyUseUserGroup}
+              groupIds={newKeyGroupIds}
+              groups={groups}
+              groupsLoading={groupsLoading}
+              ownerGroupId={currentUser?.group_id ?? null}
+              isAdmin={canManageSystem}
+              onUseUserGroupChange={setNewKeyUseUserGroup}
+              onGroupIdsChange={setNewKeyGroupIds}
             />
             <div className="flex items-center space-x-2">
               <Switch
@@ -1246,6 +1159,7 @@ export function ApiKeysPage() {
               <TransformChainEditor
                 value={newKeyTransforms}
                 registry={apiKeyTransformRegistry}
+                loading={transformRegistryLoading}
                 onChange={setNewKeyTransforms}
               />
             </div>

@@ -1219,7 +1219,7 @@ mod tests {
         assert_eq!(payload["version"], 2);
         assert_eq!(
             payload["attempts"][0]["transform_chain"],
-            json!([{"scope": "global", "transform": "force_stream", "phase": "request"}])
+            json!([{"scope": "global", "transform": "stream_force", "phase": "request"}])
         );
 
         // Owner filter excludes non-matching users.

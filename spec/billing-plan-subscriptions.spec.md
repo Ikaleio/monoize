@@ -3,7 +3,7 @@
 ## 0. Purpose
 
 Define recurring balance grants ("subscriptions"): admins define billing plans that periodically
-reset a user's balance to a fixed amount and optionally restrict which channel groups the
+reset a user's balance to a fixed amount and optionally restrict which routing groups the
 subscriber may use. A plan is a named record; users reference at most one plan.
 
 ## 1. Data model
@@ -16,14 +16,15 @@ subscriber may use. A plan is a named record; users reference at most one plan.
 | `name`                   | TEXT    | NOT NULL, unique after `lower(trim(name))`, 1..100 chars after trimming |
 | `grant_amount_nano_usd`  | TEXT    | NOT NULL, canonical signed i128 decimal, >= 0   |
 | `schedule`               | TEXT    | NOT NULL, 5-field Unix cron (see BP-D4)         |
-| `allowed_groups`         | TEXT    | NOT NULL, JSON array of strings, default `[]`   |
+| `group_ids`              | TEXT    | NOT NULL, JSON array of group ids, default `[]` |
 | `enabled`                | INTEGER | NOT NULL, `0` or `1`, default `1`               |
 | `created_at`             | TEXT    | NOT NULL, RFC 3339 UTC                          |
 | `updated_at`             | TEXT    | NOT NULL, RFC 3339 UTC                          |
 
-BP-D1. `allowed_groups` MUST be canonicalized on every write path exactly like
-`users.allowed_groups`: trim each element, lowercase, drop empties, deduplicate, sort ascending.
-The empty array means "no group restriction from this layer".
+BP-D1. `group_ids` references first-class groups (`groups-registry.spec.md`). Every write
+path MUST canonicalize and validate it per GR-C1..GR-C3 (trim, drop empties, dedupe
+preserving first-occurrence order, at most 32 entries, every id must exist). The empty
+array means "no group restriction from this layer".
 
 BP-D4. `schedule` is a 5-field Unix cron expression `minute hour day-of-month month day-of-week`.
 Write paths MUST trim the value, split on ASCII whitespace, require exactly five non-empty
@@ -73,10 +74,10 @@ the user management endpoints.
 
 Create request body fields: `name: string`, one of `grant_amount_nano_usd: string` or
 `grant_amount_usd: string` (if both are provided, the nano value wins), `schedule: string`,
-optional `allowed_groups: string[]` (omitted = `[]`), optional `enabled: boolean` (omitted = `true`).
+optional `group_ids: string[]` (omitted = `[]`), optional `enabled: boolean` (omitted = `true`).
 
 Update (`PUT`) request body fields: `name`, `schedule`, and a grant amount are required
-(same amount rules as create). Omitted `allowed_groups` and omitted `enabled` leave the stored
+(same amount rules as create). Omitted `group_ids` and omitted `enabled` leave the stored
 values unchanged (BP-A8).
 
 BP-A1. If `name` (trimmed) already exists on another plan when compared case-insensitively,
@@ -100,8 +101,8 @@ BP-A7. If `name` (trimmed) is empty or longer than 100 characters, the server MU
 HTTP `400` with code `invalid_plan_name`.
 
 BP-A8. On `PUT`, omitted `enabled` MUST leave the stored enabled flag unchanged, and omitted
-`allowed_groups` MUST leave the stored group list unchanged. On `POST`, omitted
-`allowed_groups` is `[]` and omitted `enabled` is `true`.
+`group_ids` MUST leave the stored group list unchanged. On `POST`, omitted
+`group_ids` is `[]` and omitted `enabled` is `true`.
 
 BP-A9. Reset of a nonexistent plan MUST return HTTP `404` with code `not_found`.
 
@@ -198,18 +199,17 @@ applied the first grant at assignment time.
 
 ## 5. Group composition
 
-BP-R1. When a user references an enabled plan P, request authorization computes effective
-groups as the intersection of three layers:
-`user.allowed_groups ∩ P.allowed_groups ∩ api_key.allowed_groups`.
-Each layer's empty array means "unrestricted at this layer". The result is `None` (fully
-unrestricted) if and only if all three layers are unrestricted; otherwise the result is
-`Some(intersection)`, possibly `Some([])` when the layers share no group.
+BP-R1. When a user references an enabled plan P with non-empty `P.group_ids`, request
+authorization filters the base group list (the API key's ordered group ids, or the user's
+single group; `api-key-authentication.spec.md` AKG5) to the members of `P.group_ids`,
+preserving base order. An empty `P.group_ids` contributes no restriction. The filtered
+result MAY be `[]`, in which case zero providers are group-eligible.
 
 BP-R2. A disabled plan, or a missing plan row, contributes NO restriction (treated exactly as
 "no plan") for group computation. Per BP-G6 it also receives no grants.
 
-BP-R3. Canonicalization rules of every layer are identical to BP-D1. The composition output
-MUST be canonical (sorted, deduplicated).
+BP-R3. The composition output MUST be deduplicated preserving first-occurrence order; it
+MUST NOT be lowercased or sorted (group ids are opaque, order is routing preference).
 
 ## 6. Dashboard response surface
 
@@ -230,7 +230,7 @@ BP-U2. Every dashboard user JSON object from login, register,
   "grant_amount_nano_usd": "10000000000",
   "grant_amount_usd": "10",
   "schedule": "0 0 * * *",
-  "allowed_groups": [],
+  "group_ids": [],
   "enabled": true
 }
 ```

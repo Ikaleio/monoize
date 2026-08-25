@@ -1424,7 +1424,7 @@ use crate::users::{ApiKey, User};
 struct CachedApiKeyEntry {
     api_key: ApiKey,
     user: User,
-    plan_allowed_groups: Option<Vec<String>>,
+    plan_group_ids: Option<Vec<String>>,
     cached_at: Instant,
     generation: u64,
 }
@@ -1491,7 +1491,7 @@ impl ApiKeyCache {
         Some((
             entry.api_key.clone(),
             entry.user.clone(),
-            entry.plan_allowed_groups.clone(),
+            entry.plan_group_ids.clone(),
         ))
     }
 
@@ -1505,7 +1505,7 @@ impl ApiKeyCache {
         generation: u64,
         api_key: ApiKey,
         user: User,
-        plan_allowed_groups: Option<Vec<String>>,
+        plan_group_ids: Option<Vec<String>>,
     ) -> bool {
         if self.current_generation() != generation {
             return false;
@@ -1534,7 +1534,7 @@ impl ApiKeyCache {
             CachedApiKeyEntry {
                 api_key,
                 user,
-                plan_allowed_groups,
+                plan_group_ids,
                 cached_at: Instant::now(),
                 generation,
             },
@@ -2186,7 +2186,7 @@ mod tests {
             balance_nano_usd: "0".to_string(),
             balance_unlimited: false,
             email: None,
-            allowed_groups: Vec::new(),
+            group_id: String::new(),
             billing_plan_id: None,
             next_grant_at: None,
         }
@@ -2208,7 +2208,8 @@ mod tests {
             model_limits_enabled: false,
             model_limits: Vec::new(),
             ip_whitelist: Vec::new(),
-            allowed_groups: Vec::new(),
+            use_user_group: true,
+            group_ids: Vec::new(),
             max_multiplier: None,
             transforms: Vec::new(),
             model_redirects: Vec::new(),

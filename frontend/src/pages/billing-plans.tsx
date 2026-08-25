@@ -24,6 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { GroupsBadge } from "@/components/GroupsBadge";
+import { GroupMultiSelect } from "@/components/groups/GroupPicker";
 import { toast } from "sonner";
 import { PageWrapper, motion, transitions } from "@/components/ui/motion";
 import { PageHeader } from "@/components/ui/page-header";
@@ -33,6 +34,7 @@ import {
   deleteBillingPlanOptimistic,
   updateBillingPlanOptimistic,
   useBillingPlans,
+  useDashboardGroups,
   createBillingPlanOptimistic,
   resetBillingPlanOptimistic,
 } from "@/lib/swr";
@@ -61,7 +63,7 @@ interface PlanFormState {
   name: string;
   amount_usd: string;
   schedule: string;
-  groups_text: string;
+  group_ids: string[];
   enabled: boolean;
 }
 
@@ -69,7 +71,7 @@ const EMPTY_FORM: PlanFormState = {
   name: "",
   amount_usd: "",
   schedule: "0 0 * * *",
-  groups_text: "",
+  group_ids: [],
   enabled: true,
 };
 
@@ -78,7 +80,7 @@ function formFromPlan(plan: BillingPlan): PlanFormState {
     name: plan.name,
     amount_usd: plan.grant_amount_usd,
     schedule: plan.schedule,
-    groups_text: plan.allowed_groups.join(", "),
+    group_ids: plan.group_ids,
     enabled: plan.enabled,
   };
 }
@@ -86,6 +88,7 @@ function formFromPlan(plan: BillingPlan): PlanFormState {
 export function BillingPlansPage() {
   const { t } = useTranslation();
   const { data, isLoading } = useBillingPlans();
+  const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const plans = useMemo(() => data ?? [], [data]);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -121,10 +124,7 @@ export function BillingPlansPage() {
       name,
       grant_amount_nano_usd: amount.toString(),
       schedule,
-      allowed_groups: form.groups_text
-        .split(",")
-        .map((g) => g.trim().toLowerCase())
-        .filter(Boolean),
+      group_ids: form.group_ids,
       enabled: form.enabled,
     };
   };
@@ -201,7 +201,7 @@ export function BillingPlansPage() {
         name: plan.name,
         grant_amount_nano_usd: plan.grant_amount_nano_usd,
         schedule: plan.schedule,
-        allowed_groups: plan.allowed_groups,
+        group_ids: plan.group_ids,
         enabled,
       },
       plans,
@@ -264,12 +264,12 @@ export function BillingPlansPage() {
           <p className="text-xs text-muted-foreground">{t("billingPlans.scheduleHelp")}</p>
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="plan-groups">{t("users.allowedGroups")}</Label>
-          <Input
-            id="plan-groups"
-            value={form.groups_text}
-            onChange={(e) => setForm({ ...form, groups_text: e.target.value })}
-            placeholder="team-a, team-b"
+          <Label>{t("billingPlans.groups")}</Label>
+          <GroupMultiSelect
+            value={form.group_ids}
+            groups={groups}
+            loading={groupsLoading}
+            onChange={(group_ids) => setForm({ ...form, group_ids })}
           />
           <p className="text-xs text-muted-foreground">{t("billingPlans.groupsHelp")}</p>
         </div>
@@ -326,7 +326,7 @@ export function BillingPlansPage() {
                   <th className="px-4 py-2.5 font-medium">{t("billingPlans.name")}</th>
                   <th className="px-4 py-2.5 font-medium">{t("billingPlans.amount")}</th>
                   <th className="px-4 py-2.5 font-medium">{t("billingPlans.schedule")}</th>
-                  <th className="px-4 py-2.5 font-medium">{t("users.allowedGroups")}</th>
+                  <th className="px-4 py-2.5 font-medium">{t("billingPlans.groups")}</th>
                   <th className="px-4 py-2.5 font-medium">{t("billingPlans.enabled")}</th>
                   <th className="px-4 py-2.5" />
                 </tr>
@@ -343,7 +343,13 @@ export function BillingPlansPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <GroupsBadge groups={plan.allowed_groups} />
+                      {plan.group_ids.length > 0 ? (
+                        <GroupsBadge groupIds={plan.group_ids} />
+                      ) : (
+                        <span className="text-sm text-muted-foreground">
+                          {t("billingPlans.groupsUnrestricted")}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <Switch

@@ -2058,11 +2058,11 @@ mod today_usage_tests {
             .await
             .expect("store creates");
         let alice = store
-            .create_user("alice_usage", "password12", UserRole::User, &[])
+            .create_user("alice_usage", "password12", UserRole::User, None)
             .await
             .expect("alice created");
         let bob = store
-            .create_user("bob_usage", "password12", UserRole::User, &[])
+            .create_user("bob_usage", "password12", UserRole::User, None)
             .await
             .expect("bob created");
 
@@ -2118,7 +2118,7 @@ mod today_usage_tests {
             .await
             .expect("store creates");
         let alice = store
-            .create_user("alice_capture", "password12", UserRole::User, &[])
+            .create_user("alice_capture", "password12", UserRole::User, None)
             .await
             .expect("alice created");
 
@@ -2202,11 +2202,11 @@ mod today_usage_tests {
             .await
             .expect("store creates");
         let alice = store
-            .create_user("alice_rank", "password12", UserRole::User, &[])
+            .create_user("alice_rank", "password12", UserRole::User, None)
             .await
             .expect("alice created");
         let bob = store
-            .create_user("bob_rank", "password12", UserRole::User, &[])
+            .create_user("bob_rank", "password12", UserRole::User, None)
             .await
             .expect("bob created");
 

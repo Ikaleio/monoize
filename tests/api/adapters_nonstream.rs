@@ -278,7 +278,7 @@ async fn channel_extra_headers_are_sent_to_upstream() {
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "up-cf-affinity".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: None,
                 name: "cf-affinity-channel".to_string(),
@@ -365,7 +365,7 @@ async fn auto_session_affinity_is_stable_per_conversation_and_distinct_across_se
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "up-cf-auto-affinity".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: None,
                 name: "cf-auto-channel".to_string(),

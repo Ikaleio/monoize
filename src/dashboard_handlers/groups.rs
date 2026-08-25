@@ -1,49 +1,128 @@
 use crate::app::AppState;
-use crate::dashboard_handlers::session_helpers::get_current_user;
+use crate::dashboard_handlers::session_helpers::{get_current_user, require_admin};
 use crate::error::{AppError, AppResult};
-use crate::users::canonicalize_groups;
+use crate::users::{CreateGroupInput, Group, GroupStoreError, UpdateGroupInput};
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Serialize;
+use serde_json::{Value, json};
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Serialize)]
 pub struct DashboardGroupsResponse {
-    pub groups: Vec<String>,
+    pub groups: Vec<Group>,
 }
 
+fn map_group_error(error: GroupStoreError) -> AppError {
+    match error {
+        GroupStoreError::NotFound => {
+            AppError::new(StatusCode::NOT_FOUND, "not_found", "group not found")
+        }
+        GroupStoreError::NameExists => AppError::new(
+            StatusCode::CONFLICT,
+            "group_name_exists",
+            "a group with this name already exists",
+        ),
+        GroupStoreError::InvalidName => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_group_name",
+            "group name must be 1-64 characters after trimming",
+        ),
+        GroupStoreError::InvalidDescription => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_group_description",
+            "group description must be at most 256 characters after trimming",
+        ),
+        GroupStoreError::CannotDeleteDefault => AppError::new(
+            StatusCode::BAD_REQUEST,
+            "cannot_delete_default_group",
+            "the default group cannot be deleted",
+        ),
+        GroupStoreError::Storage(error) => {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+        }
+    }
+}
+
+/// GR-A1: every authenticated session may read the full registry in canonical order.
 pub async fn list_dashboard_groups(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<DashboardGroupsResponse>> {
-    let user = get_current_user(&headers, &state).await?;
+    get_current_user(&headers, &state).await?;
 
-    let groups = if user.role.can_manage_users() {
-        state
-            .monoize_store
-            .list_dashboard_group_labels()
-            .await
-            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
-    } else {
-        canonicalize_groups(&user.allowed_groups)
-    };
+    let groups = state
+        .user_store
+        .list_groups()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
     Ok(Json(DashboardGroupsResponse { groups }))
+}
+
+pub async fn create_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateGroupInput>,
+) -> AppResult<(StatusCode, Json<Group>)> {
+    require_admin(&headers, &state).await?;
+
+    let group = state
+        .user_store
+        .create_group(body)
+        .await
+        .map_err(map_group_error)?;
+    Ok((StatusCode::CREATED, Json(group)))
+}
+
+pub async fn update_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(body): Json<UpdateGroupInput>,
+) -> AppResult<Json<Group>> {
+    require_admin(&headers, &state).await?;
+
+    let group = state
+        .user_store
+        .update_group(&group_id, body)
+        .await
+        .map_err(map_group_error)?;
+    Ok(Json(group))
+}
+
+pub async fn delete_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+) -> AppResult<Json<Value>> {
+    require_admin(&headers, &state).await?;
+
+    state
+        .user_store
+        .delete_group(&group_id)
+        .await
+        .map_err(map_group_error)?;
+
+    // GR-X6: provider group sets may have changed; force re-validation of
+    // in-flight affinity bindings and cached routing decisions.
+    state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
+
+    Ok(Json(json!({ "success": true })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{DashboardGroupsResponse, list_dashboard_groups};
-    use crate::app::{RuntimeConfig, load_state_with_runtime};
-    use crate::users::UserRole;
+    use crate::app::{AppState, RuntimeConfig, load_state_with_runtime};
+    use crate::users::{CreateGroupInput, UpdateGroupInput, UserRole};
     use axum::Json;
-    use axum::extract::State;
+    use axum::extract::{Path, State};
     use axum::http::{HeaderMap, HeaderValue};
-    use sea_orm::ConnectionTrait;
 
-    #[tokio::test]
-    async fn dashboard_groups_endpoint_scopes_labels_by_role() {
-        let state = load_state_with_runtime(RuntimeConfig {
+    async fn make_state() -> AppState {
+        load_state_with_runtime(RuntimeConfig {
             listen: "127.0.0.1:0".to_string(),
             metrics_path: "/metrics".to_string(),
             database_dsn: "sqlite::memory:".to_string(),
@@ -51,26 +130,13 @@ mod tests {
             node: crate::node_config::NodeSettings::primary_default(),
         })
         .await
-        .expect("state loads");
+        .expect("state loads")
+    }
 
-        let admin = state
-            .user_store
-            .create_user("dashboard_admin", "password123", UserRole::Admin, &[])
-            .await
-            .expect("admin created");
-        let admin_session = state
-            .user_store
-            .create_session(&admin.id, 7)
-            .await
-            .expect("admin session created");
+    async fn session_headers(state: &AppState, username: &str, role: UserRole) -> HeaderMap {
         let user = state
             .user_store
-            .create_user(
-                "dashboard_reader",
-                "password123",
-                UserRole::User,
-                &[" Team-A ".to_string(), "".to_string()],
-            )
+            .create_user(username, "password123", role, None)
             .await
             .expect("user created");
         let session = state
@@ -78,175 +144,144 @@ mod tests {
             .create_session(&user.id, 7)
             .await
             .expect("session created");
-        let api_key_owner = state
-            .user_store
-            .create_user("api_owner", "password123", UserRole::User, &[])
-            .await
-            .expect("api owner created");
-        state
-            .user_store
-            .create_api_key_extended(
-                &api_key_owner.id,
-                crate::users::CreateApiKeyInput {
-                    name: "reader key".to_string(),
-                    expires_in_days: None,
-                    sub_account_enabled: false,
-                    sub_account_balance_nano_usd: None,
-                    model_limits_enabled: false,
-                    model_limits: Vec::new(),
-                    ip_whitelist: Vec::new(),
-                    allowed_groups: vec!["gamma".to_string(), "Beta".to_string()],
-                    max_multiplier: None,
-                    transforms: Vec::new(),
-                    model_redirects: Vec::new(),
-                    reasoning_envelope_enabled: true,
-                    request_capture_mode: crate::users::RequestCaptureMode::Off,
-                },
-                false,
-            )
-            .await
-            .expect("api key created");
-
-        state
-            .monoize_store
-            .create_provider(crate::monoize_routing::CreateMonoizeProviderInput {
-                name: "provider".to_string(),
-                enabled: true,
-                priority: Some(0),
-                max_retries: -1,
-                channel_max_retries: 0,
-                channel_retry_interval_ms: 0,
-                circuit_breaker_enabled: true,
-                per_model_circuit_break: false,
-                groups: vec!["beta".to_string(), " delta ".to_string()],
-                channels: vec![crate::monoize_routing::CreateMonoizeChannelInput {
-                    id: None,
-                    name: "ch".to_string(),
-                    provider_type: crate::monoize_routing::MonoizeProviderType::Responses,
-                    base_url: "https://example.com".to_string(),
-                    api_key: Some("secret".to_string()),
-                    weight: 1,
-                    enabled: true,
-                    passive_failure_count_threshold_override: None,
-                    passive_window_seconds_override: None,
-                    passive_cooldown_seconds_override: None,
-                    passive_rate_limit_cooldown_seconds_override: None,
-                    models: std::collections::HashMap::from([(
-                        "gpt-5".to_string(),
-                        crate::monoize_routing::MonoizeModelEntry {
-                            redirect: None,
-                            multiplier: crate::exact_decimal::Multiplier::ONE,
-                        },
-                    )]),
-                    active_probe_enabled_override: None,
-                    active_probe_interval_seconds_override: None,
-                    active_probe_success_threshold_override: None,
-                    active_probe_model_override: None,
-                    affinity_enabled_override: None,
-                    affinity_idle_ttl_seconds_override: None,
-                    affinity_failback_mode_override: None,
-                    affinity_failback_delay_seconds_override: None,
-
-                    proxy_url: None,
-                    extra_headers: None,
-                    session_affinity_auto: None,
-                }],
-                transforms: Vec::new(),
-                api_type_overrides: Vec::new(),
-                active_probe_enabled_override: None,
-                active_probe_interval_seconds_override: None,
-                active_probe_success_threshold_override: None,
-                active_probe_model_override: None,
-                request_timeout_ms_override: None,
-                extra_fields_whitelist: None,
-                strip_cross_protocol_nested_extra: None,
-            })
-            .await
-            .expect("provider created");
-
-        state
-            .user_store
-            .db
-            .write()
-            .await
-            .execute(state.user_store.db.stmt(
-                "UPDATE users SET allowed_groups = $1 WHERE id = $2",
-                vec!["not-json".into(), api_key_owner.id.clone().into()],
-            ))
-            .await
-            .expect("corrupt user groups");
-        state
-            .user_store
-            .db
-            .write()
-            .await
-            .execute(state.user_store.db.stmt(
-                "UPDATE api_keys SET allowed_groups = $1",
-                vec![r#"["Gamma"," epsilon ",""]"#.into()],
-            ))
-            .await
-            .expect("override api key groups");
-        state
-            .user_store
-            .db
-            .write()
-            .await
-            .execute(state.user_store.db.stmt(
-                "UPDATE monoize_providers SET groups = $1",
-                vec![r#"["beta"," delta ","BETA"]"#.into()],
-            ))
-            .await
-            .expect("override provider groups");
-
-        assert_eq!(
-            state
-                .monoize_store
-                .list_dashboard_group_labels_with_batch_size(2)
-                .await
-                .expect("bounded group scan succeeds"),
-            vec![
-                "beta".to_string(),
-                "delta".to_string(),
-                "epsilon".to_string(),
-                "gamma".to_string(),
-                "team-a".to_string(),
-            ]
-        );
-
-        let mut admin_headers = HeaderMap::new();
-        admin_headers.insert(
-            "authorization",
-            HeaderValue::from_str(&format!("Bearer {}", admin_session.token))
-                .expect("header value"),
-        );
-
-        let response = list_dashboard_groups(State(state.clone()), admin_headers)
-            .await
-            .expect("handler succeeds");
-        let Json(body) = response;
-        let body: DashboardGroupsResponse = body;
-
-        assert_eq!(
-            body.groups,
-            vec![
-                "beta".to_string(),
-                "delta".to_string(),
-                "epsilon".to_string(),
-                "gamma".to_string(),
-                "team-a".to_string(),
-            ]
-        );
-
-        let mut user_headers = HeaderMap::new();
-        user_headers.insert(
+        let mut headers = HeaderMap::new();
+        headers.insert(
             "authorization",
             HeaderValue::from_str(&format!("Bearer {}", session.token)).expect("header value"),
         );
-        let response = list_dashboard_groups(State(state), user_headers)
-            .await
-            .expect("handler succeeds");
-        let Json(body) = response;
+        headers
+    }
 
-        assert_eq!(body.groups, vec!["team-a".to_string()]);
+    #[tokio::test]
+    async fn groups_crud_lifecycle_enforces_registry_invariants() {
+        let state = make_state().await;
+        let admin_headers = session_headers(&state, "group_admin", UserRole::Admin).await;
+        let reader_headers = session_headers(&state, "group_reader", UserRole::User).await;
+
+        // Fresh install: exactly one default group (GM-10).
+        let Json(DashboardGroupsResponse { groups }) =
+            list_dashboard_groups(State(state.clone()), reader_headers.clone())
+                .await
+                .expect("list succeeds");
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].is_default);
+        assert_eq!(groups[0].name, "default");
+
+        // Admin creates a group; the reader sees it in canonical order.
+        let created = super::create_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(CreateGroupInput {
+                name: " Team-A ".to_string(),
+                description: " premium routing ".to_string(),
+                user_selectable: true,
+                sort_order: 5,
+            }),
+        )
+        .await
+        .expect("create succeeds");
+        let (status, Json(created)) = created;
+        assert_eq!(status, axum::http::StatusCode::CREATED);
+        assert_eq!(created.name, "Team-A");
+        assert_eq!(created.description, "premium routing");
+        assert!(!created.is_default);
+
+        // Duplicate name (case-insensitive) is rejected with 409.
+        let conflict = super::create_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Json(CreateGroupInput {
+                name: "team-a".to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 0,
+            }),
+        )
+        .await
+        .expect_err("duplicate must fail");
+        assert_eq!(conflict.status, axum::http::StatusCode::CONFLICT);
+
+        // Non-admin cannot create groups.
+        let forbidden = super::create_group(
+            State(state.clone()),
+            reader_headers.clone(),
+            Json(CreateGroupInput {
+                name: "team-b".to_string(),
+                description: String::new(),
+                user_selectable: false,
+                sort_order: 0,
+            }),
+        )
+        .await
+        .expect_err("non-admin must fail");
+        assert_eq!(forbidden.status, axum::http::StatusCode::FORBIDDEN);
+
+        // The default group is renameable but stays default (GR-D3).
+        let default_id = groups[0].id.clone();
+        let Json(renamed) = super::update_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(default_id.clone()),
+            Json(UpdateGroupInput {
+                name: Some("общий".to_string()),
+                description: Some("system default".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("rename succeeds");
+        assert_eq!(renamed.name, "общий");
+        assert!(renamed.is_default);
+
+        // The default group cannot be deleted (GR-A7).
+        let default_delete = super::delete_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(default_id.clone()),
+        )
+        .await
+        .expect_err("default delete must fail");
+        assert_eq!(default_delete.status, axum::http::StatusCode::BAD_REQUEST);
+
+        // Deleting a non-default group cascades and bumps the routing revision.
+        let member = state
+            .user_store
+            .create_user("member", "password123", UserRole::User, Some(&created.id))
+            .await
+            .expect("member created");
+        let revision_before = state
+            .routing_config_revision
+            .load(std::sync::atomic::Ordering::Acquire);
+        let Json(delete_body) = super::delete_group(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(created.id.clone()),
+        )
+        .await
+        .expect("delete succeeds");
+        assert_eq!(delete_body["success"], serde_json::json!(true));
+        assert!(
+            state
+                .routing_config_revision
+                .load(std::sync::atomic::Ordering::Acquire)
+                > revision_before
+        );
+        let member_after = state
+            .user_store
+            .get_user_by_id(&member.id)
+            .await
+            .expect("reads")
+            .expect("exists");
+        assert_eq!(member_after.group_id, default_id);
+
+        // Deleting an unknown id is a 404.
+        let missing = super::delete_group(
+            State(state.clone()),
+            admin_headers,
+            Path("missing".to_string()),
+        )
+        .await
+        .expect_err("missing delete must fail");
+        assert_eq!(missing.status, axum::http::StatusCode::NOT_FOUND);
     }
 }

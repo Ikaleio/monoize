@@ -198,6 +198,12 @@ export function UserSettingsPage() {
                   )}
                 </div>
               </div>
+              {user?.group_id && (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">{t("users.group")}</p>
+                  <GroupsBadge groupIds={[user.group_id]} />
+                </div>
+              )}
               {user?.billing_plan && (
                 <>
                   <Separator />
@@ -220,9 +226,9 @@ export function UserSettingsPage() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <p className="text-sm text-muted-foreground">{t("users.allowedGroups")}</p>
-                    {user.billing_plan.allowed_groups.length > 0 ? (
-                      <GroupsBadge groups={user.billing_plan.allowed_groups} />
+                    <p className="text-sm text-muted-foreground">{t("billingPlans.groups")}</p>
+                    {user.billing_plan.group_ids.length > 0 ? (
+                      <GroupsBadge groupIds={user.billing_plan.group_ids} />
                     ) : (
                       <p className="text-sm">{t("userSettings.unrestrictedGroups")}</p>
                     )}

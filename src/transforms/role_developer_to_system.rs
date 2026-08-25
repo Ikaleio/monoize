@@ -1,0 +1,82 @@
+use crate::transforms::{
+    NoState, Phase, Transform, TransformConfig, TransformEntry, TransformError,
+    TransformRuntimeContext, TransformScope, TransformState, UrpData,
+    move_developer_to_system_nodes,
+};
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::any::Any;
+
+#[derive(Debug, Deserialize)]
+struct Config {}
+
+impl TransformConfig for Config {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub struct RoleDeveloperToSystemTransform;
+
+#[async_trait]
+impl Transform for RoleDeveloperToSystemTransform {
+    fn type_id(&self) -> &'static str {
+        "role_developer_to_system"
+    }
+
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Role: developer to system"), ("zh", "角色：developer 转 system")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Rewrites developer-role ordinary nodes to the system role. Inverse of role_system_to_developer."),
+            ("zh", "将 developer 角色的普通节点改写为 system 角色。与 role_system_to_developer 互逆。"),
+        ]
+    }
+
+    fn supported_phases(&self) -> &'static [Phase] {
+        &[Phase::Request]
+    }
+
+    fn supported_scopes(&self) -> &'static [TransformScope] {
+        &[TransformScope::Provider, TransformScope::ApiKey]
+    }
+
+    fn config_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    fn parse_config(&self, raw: Value) -> Result<Box<dyn TransformConfig>, TransformError> {
+        let cfg: Config = serde_json::from_value(raw)
+            .map_err(|e| TransformError::InvalidConfig(e.to_string()))?;
+        Ok(Box::new(cfg))
+    }
+
+    fn init_state(&self) -> Box<dyn TransformState> {
+        Box::new(NoState)
+    }
+
+    async fn apply(
+        &self,
+        data: UrpData<'_>,
+        _phase: Phase,
+        _context: &TransformRuntimeContext,
+        _config: &dyn TransformConfig,
+        _state: &mut dyn TransformState,
+    ) -> Result<(), TransformError> {
+        if let UrpData::Request(req) = data {
+            move_developer_to_system_nodes(&mut req.input);
+        }
+        Ok(())
+    }
+}
+
+inventory::submit!(TransformEntry {
+    factory: || Box::new(RoleDeveloperToSystemTransform),
+});

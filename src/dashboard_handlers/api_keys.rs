@@ -5,7 +5,7 @@ use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
     CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, RequestCaptureMode,
-    UpdateApiKeyInput, canonicalize_groups, format_nano_to_usd, parse_nano_usd,
+    UpdateApiKeyInput, format_nano_to_usd, parse_nano_usd,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -33,8 +33,10 @@ pub struct CreateApiKeyRequest {
     pub model_limits: Vec<String>,
     #[serde(default)]
     pub ip_whitelist: Vec<String>,
+    #[serde(default = "default_true")]
+    pub use_user_group: bool,
     #[serde(default)]
-    pub allowed_groups: Vec<String>,
+    pub group_ids: Vec<String>,
     #[serde(default)]
     pub max_multiplier: Option<Multiplier>,
     #[serde(default)]
@@ -49,10 +51,6 @@ pub struct CreateApiKeyRequest {
 
 fn default_true() -> bool {
     true
-}
-
-pub(super) fn canonicalize_dashboard_api_key_allowed_groups(groups: &mut Vec<String>) {
-    *groups = canonicalize_groups(groups);
 }
 
 #[derive(Debug, Serialize)]
@@ -71,7 +69,8 @@ pub struct ApiKeyResponse {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub allowed_groups: Vec<String>,
+    pub use_user_group: bool,
+    pub group_ids: Vec<String>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
@@ -93,7 +92,8 @@ pub struct ApiKeyCreatedResponse {
     pub model_limits_enabled: bool,
     pub model_limits: Vec<String>,
     pub ip_whitelist: Vec<String>,
-    pub allowed_groups: Vec<String>,
+    pub use_user_group: bool,
+    pub group_ids: Vec<String>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Vec<TransformRuleConfig>,
     pub model_redirects: Vec<ModelRedirectRule>,
@@ -110,7 +110,8 @@ pub struct UpdateApiKeyRequest {
     pub model_limits_enabled: Option<bool>,
     pub model_limits: Option<Vec<String>>,
     pub ip_whitelist: Option<Vec<String>>,
-    pub allowed_groups: Option<Vec<String>>,
+    pub use_user_group: Option<bool>,
+    pub group_ids: Option<Vec<String>>,
     pub max_multiplier: Option<Multiplier>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
@@ -156,7 +157,8 @@ pub async fn list_my_api_keys(
                 model_limits_enabled: k.model_limits_enabled,
                 model_limits: k.model_limits,
                 ip_whitelist: k.ip_whitelist,
-                allowed_groups: k.allowed_groups,
+                use_user_group: k.use_user_group,
+                group_ids: k.group_ids,
                 max_multiplier: k.max_multiplier,
                 transforms: k.transforms,
                 model_redirects: k.model_redirects,
@@ -173,14 +175,12 @@ pub async fn list_my_api_keys(
 pub async fn create_api_key(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(mut body): Json<CreateApiKeyRequest>,
+    Json(body): Json<CreateApiKeyRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
 
     let user_store = &state.user_store;
     let settings_store = &state.settings_store;
-
-    canonicalize_dashboard_api_key_allowed_groups(&mut body.allowed_groups);
 
     let max_per_user = settings_store
         .get_api_key_max_per_user()
@@ -195,7 +195,8 @@ pub async fn create_api_key(
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
-        allowed_groups: body.allowed_groups,
+        use_user_group: body.use_user_group,
+        group_ids: body.group_ids,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
@@ -236,7 +237,8 @@ pub async fn create_api_key(
             model_limits_enabled: api_key.model_limits_enabled,
             model_limits: api_key.model_limits,
             ip_whitelist: api_key.ip_whitelist,
-            allowed_groups: api_key.allowed_groups,
+            use_user_group: api_key.use_user_group,
+            group_ids: api_key.group_ids,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
@@ -311,7 +313,8 @@ pub async fn get_api_key(
             model_limits_enabled: api_key.model_limits_enabled,
             model_limits: api_key.model_limits,
             ip_whitelist: api_key.ip_whitelist,
-            allowed_groups: api_key.allowed_groups,
+            use_user_group: api_key.use_user_group,
+            group_ids: api_key.group_ids,
             max_multiplier: api_key.max_multiplier,
             transforms: api_key.transforms,
             model_redirects: api_key.model_redirects,
@@ -325,15 +328,11 @@ pub async fn update_api_key(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(key_id): Path<String>,
-    Json(mut body): Json<UpdateApiKeyRequest>,
+    Json(body): Json<UpdateApiKeyRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user = get_current_user(&headers, &state).await?;
 
     let user_store = &state.user_store;
-
-    if let Some(groups) = body.allowed_groups.as_mut() {
-        canonicalize_dashboard_api_key_allowed_groups(groups);
-    }
 
     let api_key = user_store
         .get_api_key_for_user(&key_id, &user.id)
@@ -356,7 +355,8 @@ pub async fn update_api_key(
         model_limits_enabled: body.model_limits_enabled,
         model_limits: body.model_limits,
         ip_whitelist: body.ip_whitelist,
-        allowed_groups: body.allowed_groups,
+        use_user_group: body.use_user_group,
+        group_ids: body.group_ids,
         max_multiplier: body.max_multiplier,
         transforms: body.transforms,
         model_redirects: body.model_redirects,
@@ -389,7 +389,8 @@ pub async fn update_api_key(
         model_limits_enabled: updated_key.model_limits_enabled,
         model_limits: updated_key.model_limits,
         ip_whitelist: updated_key.ip_whitelist,
-        allowed_groups: updated_key.allowed_groups,
+        use_user_group: updated_key.use_user_group,
+        group_ids: updated_key.group_ids,
         max_multiplier: updated_key.max_multiplier,
         transforms: updated_key.transforms,
         model_redirects: updated_key.model_redirects,

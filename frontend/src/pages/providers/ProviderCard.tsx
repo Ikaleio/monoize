@@ -35,7 +35,7 @@ import {
 } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { SWR_KEYS } from '@/lib/swr'
+import { SWR_KEYS, useDashboardGroups } from '@/lib/swr'
 import { Virtuoso } from 'react-virtuoso'
 import type { ChannelTestResult, ModelMetadataRecord, Provider } from '@/lib/api'
 import { ChannelTestDialog } from './ChannelTestDialog'
@@ -116,6 +116,11 @@ export function ProviderCard({
 		() => new Set(provider.unpriced_model_ids ?? []),
 		[provider.unpriced_model_ids]
 	)
+	const { data: registryGroups = [] } = useDashboardGroups(provider.group_ids.length > 0)
+	const groupNameById = useMemo(
+		() => new Map(registryGroups.map(group => [group.id, group.name])),
+		[registryGroups]
+	)
 
 	const channelTypeLabelEntries = useMemo(() => {
 		const types = Array.from(new Set(provider.channels.map(channel => channel.provider_type)))
@@ -171,24 +176,25 @@ export function ProviderCard({
 			})
 		}
 
-		for (const group of provider.groups) {
+		for (const groupId of provider.group_ids) {
+			const label = groupNameById.get(groupId) ?? `${groupId.slice(0, 8)}…`
 			items.push({
-				key: `group-${group}`,
+				key: `group-${groupId}`,
 				collapsed: (
-					<Badge variant='outline' className='max-w-[10rem] font-mono text-xs'>
-						<span className='truncate'>{group}</span>
+					<Badge variant='outline' className='max-w-[10rem] text-xs'>
+						<span className='truncate'>{label}</span>
 					</Badge>
 				),
 				full: (
-					<Badge variant='outline' className='max-w-none font-mono text-xs'>
-						<span className='whitespace-nowrap'>{group}</span>
+					<Badge variant='outline' className='max-w-none text-xs'>
+						<span className='whitespace-nowrap'>{label}</span>
 					</Badge>
 				)
 			})
 		}
 
 		return items
-	}, [channelTypeLabelEntries, provider.enabled, provider.groups, t, unpricedCount])
+	}, [channelTypeLabelEntries, groupNameById, provider.enabled, provider.group_ids, t, unpricedCount])
 
 	const handleQuickTest = async (channelId: string) => {
 		setQuickTestingChannelId(channelId)

@@ -13,7 +13,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub schedule: String,
     #[sea_orm(column_type = "Text")]
-    pub allowed_groups: String,
+    pub group_ids: String,
     pub enabled: i32,
     #[sea_orm(column_type = "Text")]
     pub created_at: String,

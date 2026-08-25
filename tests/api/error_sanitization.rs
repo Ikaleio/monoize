@@ -220,7 +220,7 @@ async fn create_admin_session(ctx: &TestContext, username: &str) -> String {
             username,
             "admin-password-12",
             monoize::users::UserRole::Admin,
-            &[],
+            None,
         )
         .await
         .expect("create admin user");
@@ -300,7 +300,7 @@ async fn request_log_error_detail_is_full_for_admin_and_masked_for_non_admin() {
             "admin-full-detail",
             "admin-password-12",
             monoize::users::UserRole::Admin,
-            &[],
+            None,
         )
         .await
         .expect("create admin user");

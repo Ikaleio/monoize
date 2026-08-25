@@ -32,11 +32,11 @@ A provider object MUST include:
 - `request_timeout_ms_override?: integer | null`
 - `extra_fields_whitelist?: string[] | null`
 - `strip_cross_protocol_nested_extra?: boolean | null`
-
-CM-READ-1. Provider list, Provider detail, model-constrained routing, and active-probe candidate reads MUST return the persisted `strip_cross_protocol_nested_extra` value exactly. `true`, `false`, and `null` MUST remain distinct on every read path.
-- `groups: string[]` (default empty; provider-level group labels for routing eligibility)
+- `group_ids: string[]` (provider-level group ids for routing eligibility; stored non-empty, see `groups-registry.spec.md` GR-I2)
 - `created_at: RFC3339`
 - `updated_at: RFC3339`
+
+CM-READ-1. Provider list, Provider detail, model-constrained routing, and active-probe candidate reads MUST return the persisted `strip_cross_protocol_nested_extra` value exactly. `true`, `false`, and `null` MUST remain distinct on every read path.
 
 A provider object MUST NOT include `provider_type`.
 
@@ -108,7 +108,7 @@ CP-INV-5. Every channel `provider_type` and every `api_type_overrides[].api_type
 
 CP-INV-6. Every `api_type_overrides[].pattern` MUST be a non-empty string.
 
-CP-INV-7. Every returned `provider.groups` value MUST be lowercase, trimmed, non-empty, deduplicated, and sorted ascending.
+CP-INV-7. Every returned `provider.group_ids` value MUST be trimmed, deduplicated preserving first-occurrence order, and reference existing groups at write time (`groups-registry.spec.md` GR-C1..GR-C3).
 
 CP-INV-8. Channel model keys MUST be non-empty after trimming and unique within that Channel.
 
@@ -177,9 +177,8 @@ CM-AFF-4. When effective automatic session affinity is enabled and any of CM-AFF
 
 Provider group routing semantics:
 
-- `provider.groups = []` means the provider is public for unrestricted callers and callers with `effective_groups == []`.
-- If `effective_groups` is non-empty, public providers are not eligible.
-- On create/update, the server MUST canonicalize `groups`.
+- A provider is eligible for a request when `provider.group_ids` overlaps the request's `effective_groups` (`database-provider-routing.spec.md` R-GRP-1).
+- On create/update, the server MUST canonicalize and validate `group_ids` per `groups-registry.spec.md` GR-C1..GR-C3, and MUST store a canonicalized empty array as `[default_group_id]` (GR-I2).
 
 ## 3. Endpoints
 
@@ -209,7 +208,7 @@ All endpoints require an authenticated dashboard admin session.
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
   - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null }>`
-  - `groups?: string[]`
+  - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
 - Response: `201` + created provider

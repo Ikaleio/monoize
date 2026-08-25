@@ -440,7 +440,7 @@ mod tests {
 
         let admin = state
             .user_store
-            .create_user("stats_admin", "password123", UserRole::Admin, &[])
+            .create_user("stats_admin", "password123", UserRole::Admin, None)
             .await
             .expect("admin created");
         let admin_session = state
@@ -450,7 +450,7 @@ mod tests {
             .expect("admin session created");
         let user = state
             .user_store
-            .create_user("stats_reader", "password123", UserRole::User, &[])
+            .create_user("stats_reader", "password123", UserRole::User, None)
             .await
             .expect("user created");
         let user_session = state

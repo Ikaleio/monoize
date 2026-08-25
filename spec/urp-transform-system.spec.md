@@ -119,12 +119,16 @@ STR-10. A stream transform MAY rewrite `NodeStart`, `NodeDelta`, `NodeDone`, and
 
 TF-1. A transform MUST implement these conceptual interface members:
 - `type_id()`
+- `display_name()`
+- `display_description()`
 - `supported_phases()`
 - `supported_scopes()`
 - `config_schema()`
 - `parse_config()`
 - `init_state()`
 - `apply()`
+
+TF-1b. `display_name()` and `display_description()` MUST return localized-text entries as `(language, text)` pairs satisfying TF-8a.
 
 TF-1a. Request-phase and response-phase transform execution MUST support asynchronous work. The runtime MAY await file I/O, local computation, or other asynchronous operations performed by `apply()` before continuing to the next matching rule.
 
@@ -149,41 +153,60 @@ TF-5. Transform registry discovery MUST be automatic through `inventory`.
 
 TF-6. Adding a new transform file with a valid inventory submission MUST be sufficient for registration.
 
-TF-7. Built-ins that MUST exist are:
-- `reasoning_to_think_xml`
-- `think_xml_to_reasoning`
+TF-7. Built-ins that MUST exist are exactly:
+- `cache_anthropic_system`
+- `cache_anthropic_tool_use`
+- `cache_openai_prompt`
+- `cache_openai_tool_use`
+- `cache_user_id`
+- `field_override_max_tokens`
+- `field_remove`
+- `field_set`
+- `image_compress_input`
+- `image_compress_output`
+- `image_enable_openai_generation_tool`
+- `image_markdown_to_output`
+- `image_output_to_markdown`
+- `image_resolve_urls`
+- `prompt_append_empty_user`
+- `prompt_inject_system`
+- `prompt_strip_anthropic_billing_header`
+- `prompt_strip_orphaned_tool_calls`
+- `reasoning_content_to_summary`
 - `reasoning_effort_to_budget`
 - `reasoning_effort_to_model_suffix`
-- `strip_reasoning`
-- `strip_input_reasoning`
-- `system_to_developer_role`
-- `developer_to_system_role`
-- `merge_consecutive_roles`
-- `inject_system_prompt`
-- `override_max_tokens`
-- `set_field`
-- `remove_field`
-- `force_stream`
-- `append_empty_user_message`
-- `enable_openai_image_generation_tool`
-- `split_sse_frames`
-- `auto_cache_user_id`
-- `auto_cache_system`
-- `auto_cache_tool_use`
-- `auto_cache_openai_tool_use`
-- `auto_cache_openai_prompt`
-- `strip_anthropic_billing_header`
-- `compress_user_message_images`
-- `resolve_image_urls`
-- `plaintext_reasoning_to_summary`
+- `reasoning_from_think_xml`
+- `reasoning_inject_content_field`
+- `reasoning_strip_encrypted`
+- `reasoning_strip_input`
+- `reasoning_strip_output`
 - `reasoning_summary_to_raw_cot`
-- `reasoning_content_delta`
-- `assistant_markdown_images_to_output`
-- `assistant_output_images_to_markdown`
-- `strip_orphaned_tool_use`
-- `strip_encrypted_reasoning`
+- `reasoning_to_think_xml`
+- `role_developer_to_system`
+- `role_merge_consecutive`
+- `role_system_to_developer`
+- `stream_force`
+- `stream_split_sse_frames`
 
-TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include `type_id`, `supported_phases`, `supported_scopes`, and `config_schema`.
+TF-7a. Every canonical transform ID MUST take the form `<domain>_<subject>` where `<domain>` is the first `_`-separated segment and MUST be one of exactly these seven values:
+1. `cache` — provider prompt-cache optimization;
+2. `field` — direct mutation of typed request/response fields or `extra_body` paths;
+3. `image` — image payload conversion, compression, generation-tool control, and URL resolution;
+4. `prompt` — request `input` node-sequence hygiene (insertion, padding, line stripping, orphan removal);
+5. `reasoning` — reasoning representation, placement, and effort conversion;
+6. `role` — ordinary-node role rewriting and role-based merging;
+7. `stream` — stream execution mode and downstream SSE framing.
+
+TF-7b. Transforms that form a conversion or inverse pair MUST use mirrored IDs inside one domain, using exactly one of these shapes:
+1. `<domain>_<a>_to_<b>` paired with `<domain>_<b>_to_<a>` (example: `role_system_to_developer` / `role_developer_to_system`);
+2. `<domain>_to_<x>` paired with `<domain>_from_<x>` (example: `reasoning_to_think_xml` / `reasoning_from_think_xml`);
+3. a shared `<domain>_<verb>` prefix with differing final segments (examples: `field_set` / `field_remove`, `reasoning_strip_input` / `reasoning_strip_output`, `image_compress_input` / `image_compress_output`, `image_markdown_to_output` / `image_output_to_markdown`, `cache_anthropic_tool_use` / `cache_openai_tool_use`).
+
+TF-8. Every transform registry item returned by `/api/dashboard/transforms/registry` MUST include `type_id`, `supported_phases`, `supported_scopes`, `config_schema`, `name`, and `description`.
+
+TF-8a. `name` and `description` MUST each be a JSON object mapping a lowercase language code to a non-empty human-readable string. Both objects MUST contain at least the keys `en` and `zh`. The values MUST come from the transform's `display_name()` and `display_description()` interface members; the registry endpoint MUST NOT synthesize display text from `type_id`.
+
+TF-8b. A `config_schema` string property MAY carry `"format": "multiline"` to request a multi-line text editor in the dashboard (see `transform-config-ui.spec.md` TCU-3 rule 4). Exactly these properties MUST carry `"format": "multiline"`: `prompt_inject_system` property `content`, `prompt_append_empty_user` property `content`, and `image_output_to_markdown` property `template`.
 
 TF-9. Scope semantics are exact:
 1. `provider` means the transform MAY be configured in provider transform chains;
@@ -209,11 +232,49 @@ TF-16. On startup, the application MUST canonicalize transform IDs persisted in:
 2. `monoize_providers.transforms`; and
 3. `api_keys.transforms`.
 
-TF-17. The canonicalization map MUST include:
-1. `remove_anthropic_billing_header`, `remove_anthropic_billing_headers`, `strip_anthropic_billing_headers`, and `strip_claude_code_billing_header` to `strip_anthropic_billing_header`; and
-2. `auto_cache_openai`, `auto_cache_openai_prompt_key`, and `openai_prompt_cache` to `auto_cache_openai_prompt`.
+TF-17. The canonicalization map MUST map exactly these historical IDs to canonical IDs:
 
-TF-18. Provider transform-rule id canonicalization MUST use the persistent `system_settings` marker `migration.provider_transform_rule_ids.v1`. When the marker value is `complete`, startup MUST perform only the marker point query and MUST NOT scan `monoize_providers`. When the marker is absent, startup MUST scan Provider transform rows in `id ASC` keyset batches of at most `199`. Each batch read and its set-based CASE update MUST commit in one transaction before the next batch; process memory MUST remain `O(199)`. After every batch commits, startup MUST write the completion marker in a separate final transaction. Invalid transform JSON MUST remain unchanged and MUST NOT prevent the completion marker.
+| historical ID | canonical ID |
+| --- | --- |
+| `auto_cache_openai` | `cache_openai_prompt` |
+| `auto_cache_openai_prompt` | `cache_openai_prompt` |
+| `auto_cache_openai_prompt_key` | `cache_openai_prompt` |
+| `auto_cache_openai_tool_use` | `cache_openai_tool_use` |
+| `auto_cache_system` | `cache_anthropic_system` |
+| `auto_cache_tool_use` | `cache_anthropic_tool_use` |
+| `auto_cache_user_id` | `cache_user_id` |
+| `append_empty_user_message` | `prompt_append_empty_user` |
+| `assistant_markdown_images_to_output` | `image_markdown_to_output` |
+| `assistant_output_images_to_markdown` | `image_output_to_markdown` |
+| `compress_assistant_output_images` | `image_compress_output` |
+| `compress_user_message_images` | `image_compress_input` |
+| `developer_to_system_role` | `role_developer_to_system` |
+| `enable_openai_image_generation_tool` | `image_enable_openai_generation_tool` |
+| `force_stream` | `stream_force` |
+| `inject_system_prompt` | `prompt_inject_system` |
+| `merge_consecutive_roles` | `role_merge_consecutive` |
+| `openai_prompt_cache` | `cache_openai_prompt` |
+| `override_max_tokens` | `field_override_max_tokens` |
+| `plaintext_reasoning_to_summary` | `reasoning_content_to_summary` |
+| `reasoning_content_delta` | `reasoning_inject_content_field` |
+| `remove_anthropic_billing_header` | `prompt_strip_anthropic_billing_header` |
+| `remove_anthropic_billing_headers` | `prompt_strip_anthropic_billing_header` |
+| `remove_field` | `field_remove` |
+| `set_field` | `field_set` |
+| `split_sse_frames` | `stream_split_sse_frames` |
+| `strip_anthropic_billing_header` | `prompt_strip_anthropic_billing_header` |
+| `strip_anthropic_billing_headers` | `prompt_strip_anthropic_billing_header` |
+| `strip_claude_code_billing_header` | `prompt_strip_anthropic_billing_header` |
+| `strip_encrypted_reasoning` | `reasoning_strip_encrypted` |
+| `strip_input_reasoning` | `reasoning_strip_input` |
+| `strip_orphaned_tool_use` | `prompt_strip_orphaned_tool_calls` |
+| `strip_reasoning` | `reasoning_strip_output` |
+| `system_to_developer_role` | `role_system_to_developer` |
+| `think_xml_to_reasoning` | `reasoning_from_think_xml` |
+
+TF-17a. An ID already equal to a canonical ID in TF-7 MUST map to itself. An ID absent from both TF-7 and the TF-17 table MUST remain unchanged.
+
+TF-18. Provider transform-rule id canonicalization MUST use the persistent `system_settings` marker `migration.provider_transform_rule_ids.v2`. When the marker value is `complete`, startup MUST perform only the marker point query and MUST NOT scan `monoize_providers`. When the marker is absent, startup MUST scan Provider transform rows in `id ASC` keyset batches of at most `199`. Each batch read and its set-based CASE update MUST commit in one transaction before the next batch; process memory MUST remain `O(199)`. After every batch commits, startup MUST write the completion marker in a separate final transaction. That final transaction MUST also delete the obsolete `system_settings` row `key = "migration.provider_transform_rule_ids.v1"`. Invalid transform JSON MUST remain unchanged and MUST NOT prevent the completion marker.
 
 ### 4.1 Transform-visible request and response surfaces
 
@@ -239,34 +300,34 @@ SURF-10. Unless a transform section below says otherwise, a transform MUST treat
 
 ### 4.2 Role and sequence transforms on ordinary nodes
 
-ROLE-1. `system_to_developer_role` is request-phase only.
+ROLE-1. `role_system_to_developer` is request-phase only.
 
-ROLE-2. `system_to_developer_role` MUST rewrite `role = system` to `role = developer` on ordinary nodes in `request.input`.
+ROLE-2. `role_system_to_developer` MUST rewrite `role = system` to `role = developer` on ordinary nodes in `request.input`.
 
-ROLE-3. `system_to_developer_role` MUST NOT modify `ToolResult` nodes, `ToolResultContent` entries, or control nodes.
+ROLE-3. `role_system_to_developer` MUST NOT modify `ToolResult` nodes, `ToolResultContent` entries, or control nodes.
 
-ROLE-4. `developer_to_system_role` is request-phase only.
+ROLE-4. `role_developer_to_system` is request-phase only.
 
-ROLE-5. `developer_to_system_role` MUST rewrite `role = developer` to `role = system` on ordinary nodes in `request.input`.
+ROLE-5. `role_developer_to_system` MUST rewrite `role = developer` to `role = system` on ordinary nodes in `request.input`.
 
-ROLE-6. `developer_to_system_role` MUST NOT modify `ToolResult` nodes, `ToolResultContent` entries, or control nodes.
+ROLE-6. `role_developer_to_system` MUST NOT modify `ToolResult` nodes, `ToolResultContent` entries, or control nodes.
 
-ROLE-7. `merge_consecutive_roles` is request-phase only.
+ROLE-7. `role_merge_consecutive` is request-phase only.
 
-ROLE-8. `merge_consecutive_roles` MUST operate on a derived contiguous-run view of adjacent ordinary nodes in `request.input`. It MUST NOT introduce grouped canonical storage.
+ROLE-8. `role_merge_consecutive` MUST operate on a derived contiguous-run view of adjacent ordinary nodes in `request.input`. It MUST NOT introduce grouped canonical storage.
 
-ROLE-9. Within one maximal run of adjacent ordinary nodes, `merge_consecutive_roles` MAY merge neighboring ordinary nodes only when all conditions below hold:
+ROLE-9. Within one maximal run of adjacent ordinary nodes, `role_merge_consecutive` MAY merge neighboring ordinary nodes only when all conditions below hold:
 1. both nodes are ordinary nodes;
 2. both nodes carry the same ordinary `role`;
 3. neither node is `Reasoning` or `ToolCall` if the downstream encoder treats those node kinds as distinct top-level semantic units;
 4. no `ToolResult` node lies between them; and
 5. no control node lies between them.
 
-ROLE-10. If `merge_consecutive_roles` merges neighboring ordinary nodes, it MUST preserve node order and MUST preserve all surviving typed fields. If conflicting nested passthrough keys survive on merged ordinary-node state, the earlier surviving node's typed fields remain authoritative and merge policy for residual passthrough keys MUST be deterministic.
+ROLE-10. If `role_merge_consecutive` merges neighboring ordinary nodes, it MUST preserve node order and MUST preserve all surviving typed fields. If conflicting nested passthrough keys survive on merged ordinary-node state, the earlier surviving node's typed fields remain authoritative and merge policy for residual passthrough keys MUST be deterministic.
 
-ROLE-11. `merge_consecutive_roles` MUST NOT merge `ToolResult` into ordinary nodes and MUST NOT cross a control-node boundary.
+ROLE-11. `role_merge_consecutive` MUST NOT merge `ToolResult` into ordinary nodes and MUST NOT cross a control-node boundary.
 
-### 4.3 `append_empty_user_message`
+### 4.3 `prompt_append_empty_user`
 
 AEUM-1. Phase: request only.
 
@@ -278,41 +339,41 @@ AEUM-4. If the final element is an ordinary node with `role = assistant`, the tr
 
 AEUM-5. If `request.input` is empty, or if the final element is not an ordinary assistant node, the transform MUST be a no-op.
 
-AEUM-6. `append_empty_user_message` MUST NOT append `ToolResult` nodes, MUST NOT append control nodes, and MUST NOT inspect derived grouped-message wrappers.
+AEUM-6. `prompt_append_empty_user` MUST NOT append `ToolResult` nodes, MUST NOT append control nodes, and MUST NOT inspect derived grouped-message wrappers.
 
-### 4.4 `inject_system_prompt`
+### 4.4 `prompt_inject_system`
 
 ISP-1. Phase: request only.
 
 ISP-2. Config MUST contain `content: string` and `position: "prepend" | "append"`.
 
-ISP-3. `inject_system_prompt` targets only ordinary `Text` nodes with `role = system` in `request.input`.
+ISP-3. `prompt_inject_system` targets only ordinary `Text` nodes with `role = system` in `request.input`.
 
 ISP-4. If `position = prepend`, the transform MUST locate the first ordinary `Text` node with `role = system` and append the configured text to that node's `content` as an additional system text segment under the encoder's later grouping rules. If no such node exists, the transform MUST insert one new ordinary `Text` node with `role = system` at the beginning of `request.input`.
 
 ISP-5. If `position = append`, the transform MUST locate the last ordinary `Text` node with `role = system` and append the configured text to that node's `content` as an additional system text segment under the encoder's later grouping rules. If no such node exists, the transform MUST append one new ordinary `Text` node with `role = system` to the end of `request.input`.
 
-ISP-6. `inject_system_prompt` MUST NOT rewrite `ToolResult` nodes, `ToolResultContent`, or control nodes.
+ISP-6. `prompt_inject_system` MUST NOT rewrite `ToolResult` nodes, `ToolResultContent`, or control nodes.
 
 ISP-7. If a control node lies at the target insertion boundary, the inserted system text node MUST be placed as an ordinary sequence element without consuming or modifying the control node.
 
-### 4.5 `strip_orphaned_tool_use`
+### 4.5 `prompt_strip_orphaned_tool_calls`
 
 SOTU-1. Phase: request only.
 
-SOTU-2. `strip_orphaned_tool_use` MUST collect the set of `call_id` values from top-level `ToolResult` nodes in `request.input`.
+SOTU-2. `prompt_strip_orphaned_tool_calls` MUST collect the set of `call_id` values from top-level `ToolResult` nodes in `request.input`.
 
 SOTU-3. The transform MUST remove every ordinary `ToolCall` node in `request.input` whose `call_id` does not appear in the collected `ToolResult` set.
 
-SOTU-4. `strip_orphaned_tool_use` MUST NOT remove `ToolResult` nodes.
+SOTU-4. `prompt_strip_orphaned_tool_calls` MUST NOT remove `ToolResult` nodes.
 
-SOTU-5. `strip_orphaned_tool_use` MUST preserve all non-`ToolCall` ordinary nodes unchanged.
+SOTU-5. `prompt_strip_orphaned_tool_calls` MUST preserve all non-`ToolCall` ordinary nodes unchanged.
 
-SOTU-6. `strip_orphaned_tool_use` MUST preserve control nodes unchanged.
+SOTU-6. `prompt_strip_orphaned_tool_calls` MUST preserve control nodes unchanged.
 
-### 4.5a `force_stream`
+### 4.5a `stream_force`
 
-FS-1. `force_stream` is request-phase only.
+FS-1. `stream_force` is request-phase only.
 
 FS-2. Config MUST contain `enabled` as a boolean.
 
@@ -320,21 +381,21 @@ FS-3. If `enabled = true`, the transform MUST set `request.stream = true` during
 
 FS-4. If `enabled = false`, the transform MUST set `request.stream = false` during request-phase application.
 
-FS-5. When `force_stream` is configured in a provider transform chain for a provider whose effective upstream type is `openai_image`, and the downstream request is non-streaming, Monoize MUST still request the upstream image endpoint in streaming mode, collect the upstream stream into one `UrpResponseV2`, apply response transforms, and return a normal non-streaming downstream response. This follows `openai-image-upstream.spec.md` §6.
+FS-5. When `stream_force` is configured in a provider transform chain for a provider whose effective upstream type is `openai_image`, and the downstream request is non-streaming, Monoize MUST still request the upstream image endpoint in streaming mode, collect the upstream stream into one `UrpResponseV2`, apply response transforms, and return a normal non-streaming downstream response. This follows `openai-image-upstream.spec.md` §6.
 
-FS-6. `force_stream` MUST NOT modify `request.input`, `request.tools`, `request.tool_choice`, or any response-phase payload surface.
+FS-6. `stream_force` MUST NOT modify `request.input`, `request.tools`, `request.tool_choice`, or any response-phase payload surface.
 
-### 4.5b `set_field`
+### 4.5b `field_set`
 
-SF-1. `set_field` MUST support request-phase and response-phase execution.
+SF-1. `field_set` MUST support request-phase and response-phase execution.
 
 SF-2. Config MUST contain `path` as a non-empty string and `value` as any JSON value. Config MAY contain `when_equals` as any JSON value.
 
-SF-3. If `when_equals` is absent, `set_field` MUST write `value` at `path` without inspecting the current value.
+SF-3. If `when_equals` is absent, `field_set` MUST write `value` at `path` without inspecting the current value.
 
-SF-3a. JSON `null` is a present `when_equals` value. It MUST NOT be treated as absent. When `when_equals` is JSON `null`, `set_field` MUST write `value` only when the current value at `path` is JSON `null`.
+SF-3a. JSON `null` is a present `when_equals` value. It MUST NOT be treated as absent. When `when_equals` is JSON `null`, `field_set` MUST write `value` only when the current value at `path` is JSON `null`.
 
-SF-4. If `when_equals` is present, `set_field` MUST write `value` only when the current value at `path` is exactly equal to `when_equals` under JSON structural equality. A missing path or a different value MUST be a no-op and MUST NOT create intermediate objects.
+SF-4. If `when_equals` is present, `field_set` MUST write `value` only when the current value at `path` is exactly equal to `when_equals` under JSON structural equality. A missing path or a different value MUST be a no-op and MUST NOT create intermediate objects.
 
 SF-5. On a request, a path that starts with `reasoning.` MUST target `request.reasoning.extra_body`. Every other path MUST target `request.extra_body`.
 
@@ -344,7 +405,7 @@ SF-7. A Provider request transform with config `{ "path": "service_tier", "when_
 
 ### 4.6 Image transforms on request ordinary nodes
 
-EOIGT-1. `enable_openai_image_generation_tool` is request-phase only.
+EOIGT-1. `image_enable_openai_generation_tool` is request-phase only.
 
 EOIGT-2. Config MAY contain:
 - `output_format` as one of `png`, `webp`, or `jpeg`; default `png`;
@@ -390,7 +451,7 @@ EOIGT-11. If `force_tool_choice = false`, the transform MUST NOT modify `request
 
 EOIGT-12. The transform MUST NOT modify `request.input` or any response-phase payload surface.
 
-CUMI-1. `compress_user_message_images` is request-phase only.
+CUMI-1. `image_compress_input` is request-phase only.
 
 CUMI-2. Config MAY contain:
 - `max_edge_px` (integer, optional)
@@ -429,7 +490,7 @@ CUMI-8. When `output_format = original`, the transform MUST emit the same suppor
 Both JPEG XL modes MUST emit media type `image/jxl`. Both WebP modes MUST emit media type `image/webp`.
 
 CUMI-9. The cache key material MUST be the ordered byte sequence:
-1. UTF-8 bytes of `compress_user_message_images:v5`;
+1. UTF-8 bytes of `compress_user_message_images:v5` (a version-frozen cache-key literal; it intentionally retains the historical transform name so existing cache entries stay valid across the TF-17 ID migration);
 2. one zero byte;
 3. UTF-8 bytes of the source media type;
 4. one zero byte;
@@ -455,7 +516,7 @@ CUMI-14. The content cache root defaults to `${TMPDIR}/monoize/image-transform-c
 
 CUMI-15. Cache construction MUST scan the cache directory once, delete expired or invalid entries, evict oldest entries until startup file/byte quotas hold, and build a bounded in-memory metadata index containing key, byte count, modification time, and LRU sequence. Point reads and writes MUST use that index and MUST NOT rescan the cache directory. A point read MUST verify the indexed file's current size before allocating its contents. Point reads MUST update LRU order. A stale point-read observation MUST NOT delete a concurrently published replacement for the same key; validation and deletion MUST serialize with replacement or perform equivalent identity revalidation. Writes MUST evict through the ordered metadata index and MUST update metadata only after atomic rename succeeds. A deletion failure MUST leave metadata accounting intact and fail that cleanup/write operation. Periodic cleanup MAY traverse the bounded metadata index and MUST NOT rescan the directory.
 
-RIU-1. `resolve_image_urls` is request-phase only.
+RIU-1. `image_resolve_urls` is request-phase only.
 
 RIU-2. Config MAY contain:
 - `timeout_seconds` (integer, default `30`)
@@ -474,7 +535,7 @@ RIU-7. A failed fetch for one image node MUST NOT block other eligible image nod
 
 ### 4.7 Reasoning transforms on flat nodes and stream state
 
-PRTS-1. `plaintext_reasoning_to_summary` is response-phase only.
+PRTS-1. `reasoning_content_to_summary` is response-phase only.
 
 PRTS-2. Config MUST be an empty object.
 
@@ -508,7 +569,7 @@ RSRC-6. On streams, the transform MAY annotate reasoning `NodeDelta` event `extr
 
 RSRC-7. When a downstream Chat Completions encoder sees `openwebui_reasoning_content = true` on a reasoning summary node, it MUST emit that summary through OpenWebUI-compatible raw-CoT fields for non-streaming and streaming encodings.
 
-RCD-1. `reasoning_content_delta` is response-phase only.
+RCD-1. `reasoning_inject_content_field` is response-phase only.
 
 RCD-2. Config MUST be an empty object.
 
@@ -529,7 +590,7 @@ RCD-8. The transform MUST be independent of `reasoning_summary_to_raw_cot`. Both
 
 RCD-9. When a downstream Chat Completions encoder sees non-empty `inject_reasoning_content`, it MUST emit the additional OpenRouter-compatible or DeepSeek-compatible downstream reasoning-content field without removing normal reasoning fields.
 
-SER-1. `strip_encrypted_reasoning` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
+SER-1. `reasoning_strip_encrypted` is response-phase only. Supported scopes are `provider`, `global`, and `api_key`.
 
 SER-2. Config MUST be an empty object.
 
@@ -555,7 +616,7 @@ SER-9. The motivating use case for SER-1 through SER-8 is downstream SSE clients
 
 ### 4.8 Response image transforms on flat ordinary nodes and stream state
 
-AMIO-1. `assistant_markdown_images_to_output` is response-phase only.
+AMIO-1. `image_markdown_to_output` is response-phase only.
 
 AMIO-2. Config MUST be an empty object.
 
@@ -579,7 +640,7 @@ AMIO-11. Under the incremental path in AMIO-10, the transform MUST update termin
 
 AMIO-12. If the selected downstream protocol cannot faithfully represent the incremental rewritten node lifecycle, the runtime MUST use the buffered synthetic stream path.
 
-AOIM-1. `assistant_output_images_to_markdown` is response-phase only.
+AOIM-1. `image_output_to_markdown` is response-phase only.
 
 AOIM-2. Config MAY contain `template: string`.
 
@@ -605,9 +666,9 @@ AOIM-10. On pass-through streams, the transform MUST preserve pass-through timin
 
 AOIM-11. If a request is already on the buffered synthetic path because of another matching response transform, the final transformed `UrpResponseV2` MUST produce downstream text deltas that include the appended Markdown.
 
-AOIM-12. `assistant_output_images_to_markdown` alone MUST NOT force an otherwise pass-through stream onto the buffered synthetic path.
+AOIM-12. `image_output_to_markdown` alone MUST NOT force an otherwise pass-through stream onto the buffered synthetic path.
 
-CAOI-1. `compress_assistant_output_images` is response-phase only.
+CAOI-1. `image_compress_output` is response-phase only.
 
 CAOI-2. Config MAY contain:
 - `max_edge_px` (integer, optional)
@@ -646,9 +707,9 @@ CAOI-10. The cache key material and cache key algorithm MUST be identical to CUM
 
 CAOI-11. The cache persistence, eviction, and failure-isolation rules from the previous transform specification remain normative, but they apply to eligible ordinary assistant `Image` nodes and eligible assistant image deltas.
 
-### 4.9 `strip_anthropic_billing_header`
+### 4.9 `prompt_strip_anthropic_billing_header`
 
-SABH-1. `strip_anthropic_billing_header` is request-phase only.
+SABH-1. `prompt_strip_anthropic_billing_header` is request-phase only.
 
 SABH-2. Config MUST be an empty object.
 
@@ -664,13 +725,13 @@ SABH-7. The transform MUST NOT modify user, assistant, tool-result, tool-call, i
 
 SABH-8. The transform is idempotent.
 
-### 4.10 `split_sse_frames`
+### 4.10 `stream_split_sse_frames`
 
 SSF-1. Phase: response only.
 
 SSF-2. Config MAY contain `max_frame_length` as an integer. Default value is `131072`.
 
-SSF-3. If a streaming request matches at least one enabled `split_sse_frames` response rule, the runtime MUST keep the selected native downstream stream encoder path. The transform MUST NOT require or force the buffered synthetic stream path solely to split SSE frames.
+SSF-3. If a streaming request matches at least one enabled `stream_split_sse_frames` response rule, the runtime MUST keep the selected native downstream stream encoder path. The transform MUST NOT require or force the buffered synthetic stream path solely to split SSE frames.
 
 SSF-4. The transform affects only downstream SSE emitted by Monoize.
 

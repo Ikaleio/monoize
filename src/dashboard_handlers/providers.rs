@@ -944,6 +944,8 @@ pub async fn get_transform_registry(
             }
             json!({
                 "type_id": transform.type_id(),
+                "name": localized_text_object(transform.display_name()),
+                "description": localized_text_object(transform.display_description()),
                 "supported_phases": transform
                     .supported_phases()
                     .iter()
@@ -959,6 +961,14 @@ pub async fn get_transform_registry(
         .collect();
     items.sort_by(|a, b| a["type_id"].as_str().cmp(&b["type_id"].as_str()));
     Ok(Json(items))
+}
+
+fn localized_text_object(entries: crate::transforms::LocalizedText) -> Value {
+    let mut map = serde_json::Map::new();
+    for (language, text) in entries {
+        map.insert((*language).to_string(), Value::String((*text).to_string()));
+    }
+    Value::Object(map)
 }
 
 pub async fn get_provider_presets(
@@ -1119,7 +1129,7 @@ mod tests {
                 extra_headers: None,
                 session_affinity_auto: None,
             }],
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             transforms: Vec::new(),
             api_type_overrides: Vec::new(),
             active_probe_enabled_override: None,
@@ -1283,7 +1293,7 @@ mod tests {
 
         let admin = state
             .user_store
-            .create_user("admin_user", "password123", UserRole::Admin, &[])
+            .create_user("admin_user", "password123", UserRole::Admin, None)
             .await
             .expect("admin created");
         let session = state

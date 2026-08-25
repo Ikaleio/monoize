@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail, X, PlusCircle, ScrollText } from "lucide-react";
+import { Plus, Trash2, Pencil, Shield, ShieldCheck, User as UserIcon, Mail, PlusCircle, ScrollText } from "lucide-react";
 import { GroupsBadge } from "@/components/GroupsBadge";
+import { GroupSingleSelect } from "@/components/groups/GroupPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -109,177 +109,17 @@ const roleVariants = {
   user: "secondary" as const,
 };
 
-type Translator = (key: string) => string;
-
-function groupKey(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function dedupeAllowedGroups(values: string[]): string[] {
-  const seen = new Set<string>();
-  const next: string[] = [];
-
-  for (const value of values) {
-    const trimmed = value.trim();
-    const key = groupKey(trimmed);
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(trimmed);
-  }
-
-  return next;
-}
-
-function allowedGroupsEqual(left: string[], right: string[]): boolean {
-  const nextLeft = dedupeAllowedGroups(left);
-  const nextRight = dedupeAllowedGroups(right);
-
-  return (
-    nextLeft.length === nextRight.length &&
-    nextLeft.every((value, index) => groupKey(value) === groupKey(nextRight[index]))
-  );
-}
-
-interface AllowedGroupsInputProps {
-  inputId: string;
-  value: string[];
-  suggestions: string[];
-  suggestionsLoading: boolean;
-  t: Translator;
-  onChange: (next: string[]) => void;
-}
-
-function AllowedGroupsInput({
-  inputId,
-  value,
-  suggestions,
-  suggestionsLoading,
-  t,
-  onChange,
-}: AllowedGroupsInputProps) {
-  const [draft, setDraft] = useState("");
-  const groups = useMemo(() => dedupeAllowedGroups(value), [value]);
-  const draftKey = groupKey(draft);
-  const filteredSuggestions = useMemo(
-    () =>
-      suggestions.filter((suggestion) => {
-        const suggestionKey = groupKey(suggestion);
-        if (!suggestionKey) {
-          return false;
-        }
-        if (groups.some((group) => groupKey(group) === suggestionKey)) {
-          return false;
-        }
-        return !draftKey || suggestionKey.includes(draftKey);
-      }),
-    [draftKey, groups, suggestions]
-  );
-
-  const commitGroups = (nextValues: string[]) => {
-    onChange(dedupeAllowedGroups(nextValues));
-  };
-
-  const flushDraft = () => {
-    const parts = draft
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-    if (parts.length > 0) {
-      commitGroups([...groups, ...parts]);
-    }
-    setDraft("");
-  };
-
-  const removeGroup = (group: string) => {
-    commitGroups(groups.filter((entry) => groupKey(entry) !== groupKey(group)));
-  };
-
-  const addSuggestion = (group: string) => {
-    commitGroups([...groups, group]);
-    setDraft("");
-  };
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={inputId}>{t("users.allowedGroups")}</Label>
-        <span className="text-xs text-muted-foreground">{t("providers.optional")}</span>
-      </div>
-      <Input
-        id={inputId}
-        value={draft}
-        placeholder={t("providers.groupsPlaceholder")}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={flushDraft}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            flushDraft();
-          }
-        }}
-      />
-      <p className="text-xs text-muted-foreground">
-        {groups.length === 0
-          ? t("users.allowedGroupsEmptyHelp")
-          : t("users.allowedGroupsSelectedHelp")}
-      </p>
-      {groups.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {groups.map((group) => (
-            <Badge
-              key={groupKey(group)}
-              variant="secondary"
-              className="flex max-w-full items-center gap-1 font-mono"
-            >
-              <span className="min-w-0 truncate">{group}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-4 w-4 shrink-0"
-                onClick={() => removeGroup(group)}
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </Badge>
-          ))}
-        </div>
-      )}
-      {suggestionsLoading ? (
-        <div className="flex flex-wrap gap-2">
-          <Skeleton className="h-7 w-20 rounded-md" />
-          <Skeleton className="h-7 w-24 rounded-md" />
-          <Skeleton className="h-7 w-16 rounded-md" />
-        </div>
-      ) : filteredSuggestions.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {filteredSuggestions.slice(0, 8).map((group) => (
-            <Button
-              key={group}
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 rounded-md px-3 font-mono text-xs"
-              onClick={() => addSuggestion(group)}
-            >
-              {group}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export function UsersPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const { data: users = [], isLoading } = useUsers();
-  const { data: groupSuggestions = [], isLoading: groupsLoading } = useDashboardGroups();
+  const { data: groups = [], isLoading: groupsLoading } = useDashboardGroups();
   const { data: billingPlans = [] } = useBillingPlans();
+  const defaultGroupId = useMemo(
+    () => groups.find((group) => group.is_default)?.id ?? "",
+    [groups]
+  );
   const todayTotals = useMemo(() => {
     let calls = 0;
     let cost = 0n;
@@ -301,7 +141,7 @@ export function UsersPage() {
     balanceUsd: "0",
     balanceUnlimited: false,
     email: "",
-    allowedGroups: [] as string[],
+    groupId: "",
     billingPlanId: "" as string,
   });
   const [balanceMode, setBalanceMode] = useState<"set" | "add">("set");
@@ -313,12 +153,11 @@ export function UsersPage() {
     if (!formData.username.trim() || !formData.password) return;
     setSaving(true);
     try {
-      const allowedGroups = dedupeAllowedGroups(formData.allowedGroups);
       await createUserOptimistic(
         formData.username.trim(),
         formData.password,
         formData.role,
-        allowedGroups,
+        formData.groupId || undefined,
         users
       );
       setCreateOpen(false);
@@ -329,7 +168,7 @@ export function UsersPage() {
         balanceUsd: "0",
         balanceUnlimited: false,
         email: "",
-        allowedGroups: [],
+        groupId: "",
         billingPlanId: "",
       });
     } catch (error) {
@@ -351,7 +190,7 @@ export function UsersPage() {
         balance_nano_usd?: string;
         balance_unlimited?: boolean;
         email?: string | null;
-        allowed_groups?: string[];
+        group_id?: string;
         billing_plan_id?: string | null;
       } = {};
       if (formData.username.trim() && formData.username !== editUser.username) {
@@ -380,9 +219,8 @@ export function UsersPage() {
       if (trimmedEmail !== currentEmail) {
         updates.email = trimmedEmail || null;
       }
-      const nextAllowedGroups = dedupeAllowedGroups(formData.allowedGroups);
-      if (!allowedGroupsEqual(nextAllowedGroups, editUser.allowed_groups)) {
-        updates.allowed_groups = nextAllowedGroups;
+      if (formData.groupId && formData.groupId !== editUser.group_id) {
+        updates.group_id = formData.groupId;
       }
       const nextPlanId =
         !formData.billingPlanId || formData.billingPlanId === "none"
@@ -406,7 +244,7 @@ export function UsersPage() {
         balanceUsd: "0",
         balanceUnlimited: false,
         email: "",
-        allowedGroups: [],
+        groupId: "",
         billingPlanId: "",
       });
     } catch (error) {
@@ -457,7 +295,7 @@ export function UsersPage() {
       balanceUsd: user.balance_usd,
       balanceUnlimited: user.balance_unlimited,
       email: user.email ?? "",
-      allowedGroups: user.allowed_groups,
+      groupId: user.group_id,
       billingPlanId: user.billing_plan_id ?? "",
     });
   };
@@ -561,14 +399,17 @@ export function UsersPage() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  <AllowedGroupsInput
-                    inputId="allowed-groups"
-                    value={formData.allowedGroups}
-                    suggestions={groupSuggestions}
-                    suggestionsLoading={groupsLoading}
-                    t={t}
-                    onChange={(allowedGroups) => setFormData({ ...formData, allowedGroups })}
-                  />
+                  <div className="space-y-2">
+                    <Label htmlFor="user-group">{t("users.group")}</Label>
+                    <GroupSingleSelect
+                      id="user-group"
+                      value={formData.groupId || defaultGroupId}
+                      groups={groups}
+                      loading={groupsLoading}
+                      onChange={(groupId) => setFormData({ ...formData, groupId })}
+                    />
+                    <p className="text-xs text-muted-foreground">{t("users.groupHelp")}</p>
+                  </div>
                 </div>
               </div>
               <DialogFooter className="shrink-0 pt-4">
@@ -671,14 +512,17 @@ export function UsersPage() {
                     </DropdownMenu>
                   </div>
                 )}
-                <AllowedGroupsInput
-                  inputId="edit-allowed-groups"
-                  value={formData.allowedGroups}
-                  suggestions={groupSuggestions}
-                  suggestionsLoading={groupsLoading}
-                  t={t}
-                  onChange={(allowedGroups) => setFormData({ ...formData, allowedGroups })}
-                />
+                <div className="space-y-2">
+                  <Label htmlFor="edit-user-group">{t("users.group")}</Label>
+                  <GroupSingleSelect
+                    id="edit-user-group"
+                    value={formData.groupId}
+                    groups={groups}
+                    loading={groupsLoading}
+                    onChange={(groupId) => setFormData({ ...formData, groupId })}
+                  />
+                  <p className="text-xs text-muted-foreground">{t("users.groupHelp")}</p>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-billing-plan">{t("billingPlans.title")}</Label>
                   <Select
@@ -892,8 +736,8 @@ export function UsersPage() {
                         </Avatar>
                         <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
                           <span className="min-w-0 truncate font-medium">{user.username}</span>
-                          {user.allowed_groups.length > 0 && (
-                            <GroupsBadge groups={user.allowed_groups} className="shrink-0 whitespace-nowrap" />
+                          {user.group_id && (
+                            <GroupsBadge groupIds={[user.group_id]} className="shrink-0 whitespace-nowrap" />
                           )}
                         </div>
                       </div>

@@ -2,7 +2,7 @@
 async fn enable_auto_cache_openai_prompt(ctx: &TestContext) {
     ctx.state.monoize_runtime.write().await.global_transforms =
         vec![monoize::transforms::TransformRuleConfig {
-            transform: "auto_cache_openai_prompt".to_string(),
+            transform: "cache_openai_prompt".to_string(),
             enabled: true,
             models: None,
             phase: monoize::transforms::Phase::Request,

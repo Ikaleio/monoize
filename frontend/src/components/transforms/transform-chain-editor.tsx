@@ -4,17 +4,20 @@ import { ArrowDownUp, ArrowUpDown, GripVertical, Plus, Settings2, Trash2 } from 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Phase, TransformRegistryItem, TransformRuleConfig } from "@/lib/api";
+import { resolveLocalizedText } from "./localized-text";
 import { TransformItemConfigDialog } from "./transform-item-config-dialog";
 
 type TransformChainEditorProps = {
   value: TransformRuleConfig[];
   registry: TransformRegistryItem[];
+  loading?: boolean;
   onChange: (next: TransformRuleConfig[]) => void;
 };
 
-export function TransformChainEditor({ value, registry, onChange }: TransformChainEditorProps) {
+export function TransformChainEditor({ value, registry, loading, onChange }: TransformChainEditorProps) {
   const requestRules = useMemo(
     () => value.filter((rule) => rule.phase === "request"),
     [value]
@@ -28,6 +31,10 @@ export function TransformChainEditor({ value, registry, onChange }: TransformCha
     [registry]
   );
   const [editing, setEditing] = useState<{ phase: Phase; index: number } | null>(null);
+
+  if (loading) {
+    return <TransformChainSkeleton />;
+  }
 
   const updatePhaseRules = (phase: Phase, nextPhaseRules: TransformRuleConfig[]) => {
     const nextRequest = phase === "request" ? nextPhaseRules : requestRules;
@@ -81,6 +88,25 @@ export function TransformChainEditor({ value, registry, onChange }: TransformCha
   );
 }
 
+function TransformChainSkeleton() {
+  return (
+    <div className="space-y-4">
+      {[0, 1].map((section) => (
+        <div key={section} className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-4 w-4 rounded" />
+            <Skeleton className="h-4 w-36" />
+          </div>
+          <div className="space-y-2 rounded-lg border p-3">
+            <Skeleton className="h-12 w-full rounded-md" />
+            <Skeleton className="h-12 w-full rounded-md" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type PhaseChainSectionProps = {
   phase: Phase;
   rules: TransformRuleConfig[];
@@ -98,7 +124,7 @@ function PhaseChainSection({
   onChange,
   onConfigure,
 }: PhaseChainSectionProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const available = useMemo(
     () => registry.filter((item) => item.supported_phases.includes(phase)),
@@ -146,15 +172,29 @@ function PhaseChainSection({
         </div>
         <div className="flex min-w-0 items-center gap-2">
           <Select value={selectedAddType} onValueChange={setAddType} disabled={available.length === 0}>
-            <SelectTrigger className="h-8 min-w-0 flex-1 sm:w-[220px] sm:flex-none">
+            <SelectTrigger className="h-8 min-w-0 flex-1 sm:w-[260px] sm:flex-none">
               <SelectValue placeholder={t("transforms.selectTransform")} />
             </SelectTrigger>
             <SelectContent>
-              {available.map((item) => (
-                <SelectItem key={item.type_id} value={item.type_id}>
-                  <span className="font-mono text-xs">{item.type_id}</span>
-                </SelectItem>
-              ))}
+              {available.map((item) => {
+                const name = resolveLocalizedText(item.name, i18n.language, item.type_id);
+                const description = resolveLocalizedText(item.description, i18n.language, "");
+                return (
+                  <SelectItem key={item.type_id} value={item.type_id}>
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="truncate text-sm">{name}</span>
+                      <span className="truncate font-mono text-[10px] text-muted-foreground">
+                        {item.type_id}
+                      </span>
+                      {description && (
+                        <span className="max-w-[280px] truncate text-xs text-muted-foreground">
+                          {description}
+                        </span>
+                      )}
+                    </span>
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
           <Button
@@ -174,7 +214,11 @@ function PhaseChainSection({
           <p className="text-sm text-muted-foreground py-2">{t("transforms.emptyChain")}</p>
         )}
         {rules.map((rule, index) => {
-          const unknown = !registryMap.has(rule.transform);
+          const registryItem = registryMap.get(rule.transform);
+          const unknown = !registryItem;
+          const name = registryItem
+            ? resolveLocalizedText(registryItem.name, i18n.language, registryItem.type_id)
+            : rule.transform;
           const modelsSummary =
             !rule.models || rule.models.length === 0
               ? t("transforms.modelsAllModels")
@@ -198,14 +242,18 @@ function PhaseChainSection({
               <GripVertical className="h-4 w-4 text-muted-foreground cursor-grab" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate font-mono text-sm">{rule.transform}</span>
+                  <span className="truncate text-sm font-medium">{name}</span>
                   {unknown && (
                     <Badge variant="destructive">
                       {t("transforms.unknown")}
                     </Badge>
                   )}
                 </div>
-                <p className="truncate text-xs text-muted-foreground">{modelsSummary}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  <span className="font-mono">{rule.transform}</span>
+                  {" · "}
+                  {modelsSummary}
+                </p>
               </div>
 
               <div className="flex items-center gap-1">

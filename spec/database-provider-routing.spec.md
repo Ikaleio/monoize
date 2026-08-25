@@ -16,7 +16,7 @@ R-IN-2a. `max_multiplier` and Channel model multipliers MUST use exact decimal v
 
 R-IN-3. Router MUST read providers from dashboard database in `priority ASC` order.
 
-R-IN-4. Routing input MUST include request-scoped `effective_groups: string[] | null` as resolved by `api-key-authentication.spec.md` §4.
+R-IN-4. Routing input MUST include request-scoped `effective_groups: string[] | null` (an ordered list of group ids) as resolved by `api-key-authentication.spec.md` §4. `null` occurs only for system-originated internal traffic.
 
 R-IN-5. Request routing MUST select Provider and Channel rows through queries constrained by the resolved logical model, enabled Provider, enabled Channel, and Channel weight greater than zero. It MUST NOT load disabled or zero-weight routing rows and MUST NOT load model entries for unrelated logical models.
 
@@ -37,21 +37,27 @@ R-ORD-2. For each provider, static filtering MUST be applied in this order:
 
 R-ORD-3. If any rule in R-ORD-2 fails, router MUST continue to next provider.
 
-## 3. Provider Group Eligibility
+## 3. Provider Group Eligibility and Group-Order Priority
 
-R-GRP-0. For routing eligibility, `provider.groups` MUST be treated as the provider's canonical string-array label set. `provider.groups = []` means the provider is public. If a stored provider row has `groups` absent, null, empty string, or serialized empty array, routing MUST treat it as `[]` for backward compatibility. Any other malformed JSON, non-string array element, or database type mismatch MUST fail Provider decoding; it MUST NOT make the Provider public.
-
-R-GRP-0a. Public providers are group-eligible only when `effective_groups` is `null` or `[]`.
+R-GRP-0. For routing eligibility, `provider.group_ids` MUST be treated as the provider's group-id set (`groups-registry.spec.md`). Every provider row stores at least one group id (GR-I2). Stored-value decoding follows GR-C4: absent, null, empty string, or serialized empty array decode as `[]`; any other malformed JSON, non-string array element, or database type mismatch MUST fail Provider decoding.
 
 R-GRP-1. A provider is group-eligible if and only if:
 
-- `effective_groups == null` (unrestricted access), OR
-- `effective_groups == []` AND `provider.groups == []` (public-only access to public providers), OR
-- `effective_groups` is non-empty AND `intersection(provider.groups, effective_groups)` is non-empty
+- `effective_groups == null` (internal system traffic), OR
+- `intersection(provider.group_ids, effective_groups)` is non-empty.
 
-R-GRP-1a. If `effective_groups == []`, only public providers (`provider.groups == []`) satisfy the group rule.
+R-GRP-1a. If `effective_groups == []`, no provider is group-eligible.
 
-R-GRP-1b. If `effective_groups` is non-empty, public providers (`provider.groups == []`) are NOT group-eligible. Only providers whose groups explicitly overlap with `effective_groups` are eligible.
+R-GRP-2. Group order defines routing preference. For a non-null `effective_groups`, define
+`group_rank(provider) = min { i : effective_groups[i] ∈ provider.group_ids }`. Before
+attempt collection, group-eligible providers MUST be stably re-ordered by
+`group_rank ASC`; within one rank the R-IN-3 order (`priority ASC`, `created_at ASC`) is
+preserved. When `effective_groups == null`, every provider has rank `0` and R-IN-3 order
+applies unchanged.
+
+R-GRP-3. R-GRP-2 affects only attempt ordering. Channel affinity promotion
+(`monoize-upstream-routing.spec.md` §AFF) applies after group-order sorting and MAY move a
+bound attempt ahead of a lower-rank provider.
 
 ## 4. Channel Availability and Retry
 

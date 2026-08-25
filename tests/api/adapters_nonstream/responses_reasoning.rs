@@ -448,7 +448,8 @@ async fn responses_reasoning_envelope_can_be_disabled_per_api_key() {
                 model_limits_enabled: None,
                 model_limits: None,
                 ip_whitelist: None,
-                allowed_groups: None,
+                use_user_group: None,
+                group_ids: None,
                 max_multiplier: None,
                 transforms: None,
                 model_redirects: None,
@@ -532,7 +533,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
                 pattern: "gpt-image-test".to_string(),
                 api_type: monoize::monoize_routing::MonoizeProviderType::Responses,
             }],
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("fisx-style-image-test-ch".to_string()),
                 name: "fisx-style-image-test-ch".to_string(),
@@ -565,7 +566,7 @@ async fn responses_nonstream_collects_completed_snapshot_image_generation_result
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "enable_openai_image_generation_tool".to_string(),
+                transform: "image_enable_openai_generation_tool".to_string(),
                 enabled: true,
                 models: Some(vec!["gpt-image-test".to_string()]),
                 phase: monoize::transforms::Phase::Request,

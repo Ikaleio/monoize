@@ -28,6 +28,17 @@ impl Transform for ReasoningToThinkXmlTransform {
         "reasoning_to_think_xml"
     }
 
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: to think XML"), ("zh", "推理：转为 think XML")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Converts reasoning node content into assistant text wrapped in the configured think tag. Inverse of reasoning_from_think_xml."),
+            ("zh", "将推理节点内容转换为使用配置标签包裹的 assistant 文本。与 reasoning_from_think_xml 互逆。"),
+        ]
+    }
+
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Response]
     }

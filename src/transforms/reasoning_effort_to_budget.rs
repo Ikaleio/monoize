@@ -32,6 +32,17 @@ impl Transform for ReasoningEffortToBudgetTransform {
         "reasoning_effort_to_budget"
     }
 
+    fn display_name(&self) -> crate::transforms::LocalizedText {
+        &[("en", "Reasoning: effort to thinking budget"), ("zh", "推理：effort 转思考预算")]
+    }
+
+    fn display_description(&self) -> crate::transforms::LocalizedText {
+        &[
+            ("en", "Maps the request reasoning effort level to a provider thinking-token budget."),
+            ("zh", "将请求的推理力度等级映射为上游思考 token 预算。"),
+        ]
+    }
+
     fn supported_phases(&self) -> &'static [Phase] {
         &[Phase::Request]
     }

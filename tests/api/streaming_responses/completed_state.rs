@@ -18,7 +18,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-summary".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-summary-ch1".to_string()),
                 name: "mono-transform-summary-ch1".to_string(),
@@ -51,7 +51,7 @@ async fn responses_streaming_plaintext_reasoning_to_summary_rewrites_reasoning_e
             circuit_breaker_enabled: true,
             per_model_circuit_break: false,
             transforms: vec![monoize::transforms::TransformRuleConfig {
-                transform: "plaintext_reasoning_to_summary".to_string(),
+                transform: "reasoning_content_to_summary".to_string(),
                 enabled: true,
                 models: None,
                 phase: monoize::transforms::Phase::Response,
@@ -284,7 +284,7 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
         .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
             name: "mono-transform-streaming-markdown-images".to_string(),
             api_type_overrides: Vec::new(),
-            groups: Vec::new(),
+            group_ids: Vec::new(),
             channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
                 id: Some("mono-transform-streaming-markdown-images-ch1".to_string()),
                 name: "mono-transform-streaming-markdown-images-ch1".to_string(),
@@ -318,14 +318,14 @@ async fn responses_streaming_markdown_image_transforms_emit_image_part_and_appen
             per_model_circuit_break: false,
             transforms: vec![
                 monoize::transforms::TransformRuleConfig {
-                    transform: "assistant_markdown_images_to_output".to_string(),
+                    transform: "image_markdown_to_output".to_string(),
                     enabled: true,
                     models: None,
                     phase: monoize::transforms::Phase::Response,
                     config: json!({}),
                 },
                 monoize::transforms::TransformRuleConfig {
-                    transform: "assistant_output_images_to_markdown".to_string(),
+                    transform: "image_output_to_markdown".to_string(),
                     enabled: true,
                     models: None,
                     phase: monoize::transforms::Phase::Response,

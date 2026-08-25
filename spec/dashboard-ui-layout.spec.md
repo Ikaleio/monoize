@@ -34,9 +34,12 @@ DL5. Sidebar main navigation (always visible to authenticated users) MUST includ
 
 DL6. Sidebar admin navigation group (visible only when user role is `admin` or `super_admin`) MUST include exactly:
 
+- `/dashboard/admin`
 - `/dashboard/providers`
 - `/dashboard/models`
+- `/dashboard/plans`
 - `/dashboard/users`
+- `/dashboard/groups`
 - `/dashboard/admin-settings`
 
 DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pane vertical scrolling:
@@ -61,7 +64,7 @@ PL3. Provider list MUST support drag-and-drop reordering and persist order throu
 
 PL4. Provider detail/editor MUST display:
 
-- provider-level fields: `name`, `enabled`, `max_retries`
+- provider-level fields: `name`, `enabled`, `max_retries`, and `group_ids` edited through the shared unordered multi-select group selector (GS rules, §11); freeform group text entry MUST NOT be offered
 - channel master list: name, type, base URL, weight, enabled, model count, and runtime health
 - selected Channel detail editor with per-model controls for: logical model, redirect target, multiplier, and delete
 - channel runtime health indicator: healthy/probing/unhealthy
@@ -91,26 +94,19 @@ PL8. Each provider transform chain MUST support:
 
 PL8a. At viewport widths below `640px`, each transform chain header MUST stack its title and add controls vertically. The transform selector MUST shrink to the available width, and the add action MUST remain visible without creating horizontal overflow.
 
+PL8b. The add-transform selector options and every rendered chain item MUST display the transform's localized registry `name` resolved per `transform-config-ui.spec.md` TCU-2, with the canonical `type_id` rendered as secondary monospace text. A chain item whose `type_id` is absent from the registry MUST fall back to displaying the raw `type_id`.
+
 PL9. Provider transform config dialog MUST:
 
 - edit `models` glob filters as string list (`*` and `?` supported)
 - edit transform `config` using schema-driven fields from `/api/dashboard/transforms/registry`
 - block save when schema validation fails
 
-PL9b. A config schema property that has neither `type` nor `enum` is a JSON-valued field. The transform config dialog MUST render that field as a JSON text input.
+PL9b. Config field rendering, typing, and null/omission semantics are defined by `transform-config-ui.spec.md` TCU-3 through TCU-9. A config schema property that has neither `type` nor `enum` is a JSON-valued field and MUST render as the typed value editor defined by TCU-7; it MUST NOT render as a bare JSON text input.
 
-PL9c. When the transform config dialog opens, each JSON-valued field's text input MUST initialize as follows:
-1. If the existing rule config contains that key, the input text is `JSON.stringify(existingValue)` with two-space pretty-print.
-2. If the existing rule config does not contain that key, the input text is the empty string.
-The dialog MUST NOT initialize an absent JSON-valued field as the text `null`.
+PL9c. When the transform config dialog opens, field initialization MUST follow `transform-config-ui.spec.md` TCU-8. The dialog MUST NOT initialize an absent field as the text `null`.
 
-PL9d. Saving a JSON-valued field MUST parse the trimmed input text with this procedure:
-1. If the trimmed input is empty and the property is not listed in schema `required`, the saved config MUST omit that key.
-2. If the trimmed input is empty and the property is listed in schema `required`, save MUST fail with the invalid-JSON error.
-3. If `JSON.parse` succeeds, the saved config MUST store the parsed JSON value at that key, including JSON `null`.
-4. If `JSON.parse` fails and the trimmed input does not start with `{`, `[`, or `"`, the saved config MUST store the trimmed input as a JSON string.
-5. Otherwise save MUST fail with the invalid-JSON error.
-Empty optional JSON-valued input MUST NOT fail save as invalid JSON.
+PL9d. Saving the dialog MUST produce config values per `transform-config-ui.spec.md` TCU-9. Empty optional fields MUST be omitted from the saved config and MUST NOT fail save as invalid JSON.
 
 PL10. If a provider transform item type is not present in transform registry, editor MUST:
 
@@ -139,7 +135,7 @@ PL12a. Provider list card header metadata badges MUST render through a collapsed
 
 - The header badge preview MUST render no more than 3 badges before a `+N` overflow badge.
 - The preview row MUST NOT wrap.
-- The complete popover list MUST include channel type, enabled state, unpriced warning, and each provider group badge represented by the provider.
+- The complete popover list MUST include channel type, enabled state, unpriced warning, and one badge per provider `group_ids` entry showing the group name resolved from `GET /api/dashboard/groups` (raw id fallback for unknown ids).
 
 PL13. The selected Channel model section MUST include an explicit "Fetch upstream" action that opens a model-diff selection dialog before insertion.
 
@@ -269,6 +265,11 @@ PL25. Provider editor MUST use an explicit workbench information architecture.
 
 ## 3. Playground Page
 
+ST0. The page-level layout of `/dashboard/admin-settings` (horizontal category rail,
+category panels, skeleton, and motion) is governed by `spec/system-settings-ui.spec.md`.
+ST1-ST7 below define field-level behavior; where an ST statement calls the container a
+"card", the container is the corresponding category panel/section defined there.
+
 ST1. `/dashboard/admin-settings` MUST include a "Health Monitoring" section for Monoize active probe settings.
 
 ST2. Health Monitoring section MUST expose at least these editable fields bound to `GET/PUT /api/dashboard/settings`:
@@ -289,14 +290,14 @@ ST2. Health Monitoring section MUST expose at least these editable fields bound 
 - `monoize_request_capture_retention_days` (integer >= 1, default 1)
 - `monoize_mask_sensitive_info` (boolean switch, default on; when on, client-facing and non-admin request-log error text apply `MASK` per `upstream-error-sanitization.spec.md`; when off, that masking is disabled)
 
-ST2a. `/dashboard/admin-settings` MUST include a "Routing Affinity" card bound to `GET/PUT /api/dashboard/settings`. The card MUST expose:
+ST2a. `/dashboard/admin-settings` MUST include a "Routing Affinity" section bound to `GET/PUT /api/dashboard/settings`. The section MUST expose:
 
 - `monoize_affinity_enabled` (boolean switch, default `true`)
 - `monoize_affinity_idle_ttl_seconds` (integer >= 1, default `1800`)
 - `monoize_affinity_failback_mode` (exactly `"sticky"` or `"prefer_higher_priority"`, default `"sticky"`)
 - `monoize_affinity_failback_delay_seconds` (integer >= 0, default `300`)
 
-ST2b. The Routing Affinity card MUST state that Channel overrides replace global values and that `"prefer_higher_priority"` returns to normal Provider order only after its delay and only when an earlier Provider is eligible.
+ST2b. The Routing Affinity section MUST state that Channel overrides replace global values and that `"prefer_higher_priority"` returns to normal Provider order only after its delay and only when an earlier Provider is eligible.
 
 ST3. Settings UI MUST perform optimistic update and persist via existing settings save flow; persisted values MUST be reflected after reload.
 
@@ -304,25 +305,28 @@ ST4. `/dashboard/admin-settings` MUST include a global transform editor bound to
 
 ST5. The global transform editor MUST follow the same interaction contract as PL7, PL8, PL9, and PL10, but its option list MUST be filtered to transforms whose registry metadata includes `global` in `supported_scopes`.
 
-ST6. `/dashboard/admin-settings` MUST include a "Codex Model Picker" card bound to `GET/PUT /api/dashboard/settings` field `codex_model_ids`.
+ST6. `/dashboard/admin-settings` MUST include a "Codex Model Picker" section bound to `GET/PUT /api/dashboard/settings` field `codex_model_ids`.
 
-ST6a. The card MUST load Provider data through the existing SWR Provider hook. Its available model set MUST be the sorted union of Channel model keys where the Provider is enabled, the Channel is enabled, and Channel weight is greater than zero.
+ST6a. The section MUST load Provider data through the existing SWR Provider hook. Its available model set MUST be the sorted union of Channel model keys where the Provider is enabled, the Channel is enabled, and Channel weight is greater than zero.
 
-ST6b. The card MUST provide a text search input and one controlled checkbox for each matching model. Changing a checkbox MUST update the local optimistic settings draft. The existing settings save action MUST persist the resulting ordered array. The card MUST NOT provide a bulk "select all" action.
+ST6b. The section MUST provide a text search input and one controlled checkbox for each matching model. Changing a checkbox MUST update the local optimistic settings draft. The existing settings save action MUST persist the resulting ordered array. The section MUST NOT provide a bulk "select all" action.
 
 ST6c. A configured model absent from the available model set MUST remain visible and removable with an unavailable label. Provider loading MUST render skeleton rows. Provider failure MUST render an error state with a retry action. Search with no matches MUST render an explicit empty state.
 
-ST6d. The card MUST state that standard OpenAI `data` continues to include every available model and that `codex_model_ids` controls only the extended Codex `models` catalog.
+ST6d. The section MUST state that standard OpenAI `data` continues to include every available model and that `codex_model_ids` controls only the extended Codex `models` catalog.
 
-ST6e. At viewport widths below `640px`, the settings card grid and each direct card wrapper MUST shrink to the available content width without creating horizontal page overflow.
+ST6e. At viewport widths below `640px`, the settings category rail and the active category panel MUST shrink to the available content width without creating page-level horizontal overflow; the rail scrolls inside its own container per `system-settings-ui.spec.md` SSU-5.
 
-ST7. `/dashboard/admin-settings` MUST include a "Global Model Redirects" card
+ST7. `/dashboard/admin-settings` MUST include a "Global Model Redirects" section
 bound to `GET/PUT /api/dashboard/settings` field `global_model_redirects`.
-The card MUST follow `spec/api-key-model-redirects.spec.md` FR-8 through FR-13.
+The section MUST follow `spec/api-key-model-redirects.spec.md` FR-8 through FR-13.
 
 PG-L1. `/playground` page MUST be accessible from the main navigation sidebar (below Token Management).
 
-PG-L2. The page MUST follow standard dashboard layout patterns: `PageWrapper`, `text-3xl` heading, motion animations.
+PG-L2. The playground page layout follows `playground.spec.md` §9: a full-height chat
+shell inside the dashboard content pane with its own internal scroll container and
+`framer-motion` animations. It intentionally has no `PageHeader`/`text-3xl` heading
+block.
 
 ## 4. Token Management Page
 
@@ -338,7 +342,7 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 - The editor MUST continue filtering by `supported_phases` within the API-key-scoped subset.
 - Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
 
-AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_content_delta` for response-phase rules.
+AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_inject_content_field` for response-phase rules.
 
 AK4. API key create and edit dialogs MUST include a `request_capture_mode` tri-state control.
 
@@ -363,9 +367,11 @@ AK10. API key restriction indicators in `/dashboard/tokens` MUST render as a non
 - The restriction preview MUST NOT render long help text inside the table cell.
 - The complete popover list MUST include model-limit, IP whitelist, max-multiplier, and request-capture badges when those restrictions are active.
 
-AK11. In the `/dashboard/tokens` list table, the API key name and allowed-group badge collection MUST render in a single non-wrapping inline row inside the name cell.
+AK11. In the `/dashboard/tokens` list table, the API key name and its group badge collection MUST render in a single non-wrapping inline row inside the name cell.
 
-- The allowed-group badge collection MUST remain adjacent to the API key name and MUST NOT move below the name.
+- A key with `use_user_group = true` MUST NOT render group badges (it follows the owner's group).
+- A key with `use_user_group = false` MUST render its `group_ids` in stored order as name badges resolved from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to the raw id.
+- The group badge collection MUST remain adjacent to the API key name and MUST NOT move below the name.
 - If the inline row exceeds the available viewport width, the table container MUST handle overflow through horizontal scrolling.
 
 ## 5. Dashboard Home Page
@@ -449,10 +455,15 @@ UP4. The users table body in `/dashboard/users` MUST use virtualized rendering v
 - Table body rows MUST be rendered via `itemContent` callback.
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 
-UP5. In the `/dashboard/users` list table, the username text and allowed-group badge collection MUST render in a single non-wrapping inline row inside the user cell.
+UP5. In the `/dashboard/users` list table, the username text and the user's group badge MUST render in a single non-wrapping inline row inside the user cell.
 
 - If horizontal space is insufficient, the username text MAY truncate.
-- The allowed-group badge collection MUST remain single-line and MUST NOT move below the username.
+- The group badge MUST display the group **name** resolved from `GET /api/dashboard/groups`; an id without a matching registry row MUST fall back to the raw id.
+- The group badge MUST remain single-line and MUST NOT move below the username.
+
+UP12. The user create and edit dialogs MUST select the user's group through the shared
+single-select group selector (GS rules, §11). They MUST NOT offer freeform group text
+entry.
 
 UP6. The users table MUST include columns for assigned billing plan, UTC-calendar-day spend,
 and UTC-calendar-day call count, in addition to the existing user/role/balance/status columns.
@@ -486,8 +497,8 @@ US2. The billing card MUST show:
 - assigned plan name, or an explicit none label when `billing_plan` is null.
 
 US3. When `billing_plan` is non-null, the billing card MUST also show grant amount,
-period, `next_grant_at` when present, and `billing_plan.allowed_groups` (empty array
-renders as unrestricted).
+period, `next_grant_at` when present, and `billing_plan.group_ids` rendered as group
+names (empty array renders as unrestricted).
 
 US4. The billing card MUST use the same skeleton/loading contract as the rest of `/settings`
 when the user object has not yet resolved. It MUST NOT require a page close/reopen to
@@ -502,21 +513,32 @@ AK4. The API keys table body in `/dashboard/tokens` MUST use virtualized renderi
 - Virtualized table container height MUST be `calc(100vh - 280px)` with a minimum height of `400px`.
 - Select-all checkbox MUST remain in the fixed header; per-row checkboxes MUST remain in `itemContent`.
 
-AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include both the existing legacy `group` text input and a distinct `allowed_groups` chip input.
+AK5. API key create and edit dialogs in `/dashboard/tokens` MUST include a group section
+containing exactly:
 
-AK6. The `allowed_groups` chip input MUST follow the same interaction contract as the provider/user group editors:
+- a "use the owner's user group" switch bound to `use_user_group` (default on for create);
+- when the switch is off, the shared ordered multi-select group selector (GS rules, §11)
+  bound to `group_ids`.
 
-- freeform text entry;
-- `Enter`, comma, and blur commit pending draft labels;
-- selected labels render as removable chips;
-- suggestion buttons are sourced from `GET /api/dashboard/groups`;
-- suggestion buttons for labels already selected in the current draft MUST be hidden.
+The dialogs MUST NOT offer freeform group text entry and MUST NOT render a legacy `group`
+text input.
 
-AK6a. Typed commits, chip removals, and suggestion clicks in the API-key `allowed_groups` editor MUST apply against the latest in-session chip draft. A typed commit MUST NOT resurrect labels the user has already removed from the current draft.
+AK6. When `use_user_group` is on, the `group_ids` selector MUST be hidden or disabled and
+the mutation payload MUST send `use_user_group: true`. When it is off, the mutation payload
+MUST send `use_user_group: false` and the ordered `group_ids` array exactly as displayed.
 
-AK7. The API key `allowed_groups` helper text MUST explain that an empty array means the key inherits the owning user's `allowed_groups`. If the authenticated dashboard user payload exposes `allowed_groups`, the dialog MUST render that value as a non-authoritative hint only. The frontend MUST NOT block save with client-side subset validation.
+AK6a. Selection, removal, and reordering in the API-key group selector MUST apply against
+the latest in-session draft. A reorder MUST NOT resurrect groups the user removed from the
+current draft.
 
-AK8. If `POST /api/dashboard/tokens` or `PUT /api/dashboard/tokens/{key_id}` returns a validation error for `allowed_groups` subset rules, the frontend MUST surface the server-provided message in a toast and MUST keep the dialog open with the current draft state intact.
+AK7. The group section helper text MUST explain that group order is the routing preference
+order (earlier groups are tried first) and that the owner-group switch inherits the user's
+single group. Non-admin callers MUST only be offered options with `user_selectable = true`
+plus their own current group; admin callers MUST be offered every group.
+
+AK8. If `POST /api/dashboard/tokens` or `PUT /api/dashboard/tokens/{key_id}` returns a
+group validation error, the frontend MUST surface the server-provided message in a toast
+and MUST keep the dialog open with the current draft state intact.
 
 ## 9. Billing Plans Page
 
@@ -530,3 +552,61 @@ BP-UI3. After a successful reset, the users-list SWR cache and the session user 
 MUST be revalidated so `/dashboard/users` and the sidebar balance reflect the new
 balances without a page close/reopen. On failure, the dialog MUST remain available and
 the UI MUST surface the server error.
+
+BP-UI4. Plan create and edit dialogs MUST select `group_ids` through the shared
+unordered multi-select group selector (GS rules, §11) instead of freeform text. The plan
+list MUST render `group_ids` as group-name badges; an empty array renders the localized
+unrestricted label.
+
+## 11. Groups Management Page and Shared Group Selector
+
+### 11.1 Groups page
+
+GP1. `/dashboard/groups` is an admin page (nav per DL6). It MUST list every registry row
+from `GET /api/dashboard/groups` in the returned order and MUST render a skeleton
+placeholder while the list is loading.
+
+GP2. Each row MUST display: name, description (muted, truncated with title attribute),
+a default-group badge when `is_default` is true, a user-selectable indicator, and
+`sort_order`.
+
+GP3. The page MUST offer create, edit, and delete actions bound to
+`POST /api/dashboard/groups`, `PUT /api/dashboard/groups/{id}`, and
+`DELETE /api/dashboard/groups/{id}`. Create/edit dialogs MUST expose exactly: name,
+description, user-selectable switch, and sort-order number input.
+
+GP4. The delete action for the default group MUST be disabled. Deleting any other group
+MUST open a confirmation dialog that names the group and states the cascade consequences
+(members move to the default group; keys/providers/plans drop the group).
+
+GP5. Every mutation MUST apply an SWR optimistic update to the groups cache and roll back
+on error with a toast showing the server message. After a successful create or update the
+groups cache MUST be revalidated (badges resolve names from the groups cache, so no other
+cache is stale). After a successful delete the groups cache MUST be revalidated together
+with the users, tokens, providers, billing-plans, and current-user caches, because the
+server-side deletion cascade rewrites group references in those entities.
+
+### 11.2 Shared group selector (GS)
+
+GS1. One shared selector component MUST serve users (single mode), API keys (ordered
+multi mode), providers (unordered multi mode), and billing plans (unordered multi mode).
+
+GS2. Options MUST come from the SWR cache of `GET /api/dashboard/groups`. While the list
+is loading, the selector MUST render a skeleton control, not an empty option list.
+
+GS3. Every option row MUST display the group name and, when non-empty, its description.
+The default group option MUST carry a default badge.
+
+GS4. Single mode MUST behave as an exclusive select and produce exactly one group id.
+
+GS5. Multi mode MUST render selected groups as removable rows and unselected options as
+add buttons. In ordered multi mode each selected row MUST show its 1-based position and
+support pointer drag-and-drop reordering (framer-motion `Reorder`), and the emitted array
+order MUST equal the visual row order. In unordered multi mode the emitted order is the
+selection order and no position or drag affordance is shown.
+
+GS6. When a selected id has no matching registry row (deleted concurrently), the chip MUST
+render the raw id and remain removable.
+
+GS7. The selector MUST NOT perform freeform text creation of groups. Group creation happens
+only on `/dashboard/groups`.

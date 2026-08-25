@@ -55,7 +55,7 @@ async fn ingest_applies_balance_delta_idempotently() {
     let (_temp, state) = boot().await;
     let user = state
         .user_store
-        .create_user("delta_user", "pw", monoize::users::UserRole::User, &[])
+        .create_user("delta_user", "pw", monoize::users::UserRole::User, None)
         .await
         .expect("user");
     state
@@ -114,12 +114,12 @@ async fn ingest_allows_negative_result_and_counts_unlimited_as_applied_without_u
     let (_temp, state) = boot().await;
     let limited = state
         .user_store
-        .create_user("limited", "pw", monoize::users::UserRole::User, &[])
+        .create_user("limited", "pw", monoize::users::UserRole::User, None)
         .await
         .expect("limited");
     let unlimited = state
         .user_store
-        .create_user("unl", "pw", monoize::users::UserRole::User, &[])
+        .create_user("unl", "pw", monoize::users::UserRole::User, None)
         .await
         .expect("unlimited");
     state
@@ -292,7 +292,7 @@ async fn promotion_drain_applies_leftover_deltas_locally() {
         .expect("state");
     let user = state
         .user_store
-        .create_user("drain_user", "pw", monoize::users::UserRole::User, &[])
+        .create_user("drain_user", "pw", monoize::users::UserRole::User, None)
         .await
         .expect("user");
 
@@ -701,7 +701,7 @@ async fn t8_postgres_ingest_parity_when_configured() {
             &format!("pg_{}", uuid::Uuid::new_v4().simple()),
             "pw",
             monoize::users::UserRole::User,
-            &[],
+            None,
         )
         .await
         .expect("user");
