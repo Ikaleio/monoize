@@ -146,39 +146,39 @@ TM-TF-2. The server MUST reject API key create/update requests whose `transforms
 
 TM-TF-3. Allowed API-key request-phase transforms are exactly:
 
-- `inject_system_prompt`
-- `system_to_developer_role`
-- `merge_consecutive_roles`
-- `append_empty_user_message`
-- `compress_user_message_images`
-- `enable_openai_image_generation_tool`
-- `strip_anthropic_billing_header`
-- `auto_cache_system`
-- `auto_cache_tool_use`
-- `auto_cache_openai_tool_use`
-- `auto_cache_user_id`
-- `auto_cache_openai_prompt`
+- `prompt_inject_system`
+- `role_system_to_developer`
+- `role_merge_consecutive`
+- `prompt_append_empty_user`
+- `image_compress_input`
+- `image_enable_openai_generation_tool`
+- `prompt_strip_anthropic_billing_header`
+- `cache_anthropic_system`
+- `cache_anthropic_tool_use`
+- `cache_openai_tool_use`
+- `cache_user_id`
+- `cache_openai_prompt`
 
 TM-TF-4. Allowed API-key response-phase transforms are exactly:
 
-- `strip_reasoning`
-- `strip_encrypted_reasoning`
+- `reasoning_strip_output`
+- `reasoning_strip_encrypted`
 - `reasoning_to_think_xml`
-- `think_xml_to_reasoning`
-- `split_sse_frames`
-- `plaintext_reasoning_to_summary`
-- `reasoning_content_delta`
+- `reasoning_from_think_xml`
+- `stream_split_sse_frames`
+- `reasoning_content_to_summary`
+- `reasoning_inject_content_field`
 - `reasoning_summary_to_raw_cot`
-- `assistant_markdown_images_to_output`
-- `assistant_output_images_to_markdown`
-- `compress_assistant_output_images`
+- `image_markdown_to_output`
+- `image_output_to_markdown`
+- `image_compress_output`
 
 TM-TF-5. API key `transforms` MUST NOT include transforms that can modify routing, upstream model selection, upstream pricing tier, request execution mode, output token ceiling, or arbitrary provider passthrough fields. This forbidden set includes at minimum:
 
-- `set_field`
-- `remove_field`
-- `force_stream`
-- `override_max_tokens`
+- `field_set`
+- `field_remove`
+- `stream_force`
+- `field_override_max_tokens`
 - `reasoning_effort_to_budget`
 - `reasoning_effort_to_model_suffix`
 
@@ -220,9 +220,9 @@ TM-BATCH-4. The HTTP endpoint MUST reject a request containing more than TM-BATC
 
 ## Startup Transform-ID Migration
 
-TM-MIG-1. API-key transform-rule id canonicalization MUST use the persistent `system_settings` marker `migration.api_key_transform_rule_ids.v1`. When the marker value is `complete`, startup MUST perform only the marker point query and MUST NOT scan `api_keys`.
+TM-MIG-1. API-key transform-rule id canonicalization MUST use the persistent `system_settings` marker `migration.api_key_transform_rule_ids.v2`. When the marker value is `complete`, startup MUST perform only the marker point query and MUST NOT scan `api_keys`. Canonicalization MUST use the map defined by `urp-transform-system.spec.md` TF-17.
 
-TM-MIG-2. When the marker is absent, one process MUST process API-key transform rows in ascending-ID keyset batches of at most 300 rows. Each batch MUST select, canonicalize, update changed rows through at most one CASE statement, and commit before the next batch begins. Memory use and one transaction's row count MUST remain bounded by 300. Invalid transform JSON MUST remain unchanged and MUST NOT prevent progress. The completion marker MUST be written in a separate final transaction only after every batch commits. A restart before the marker is written MAY re-read canonicalized rows and MUST converge without changing their values.
+TM-MIG-2. When the marker is absent, one process MUST process API-key transform rows in ascending-ID keyset batches of at most 300 rows. Each batch MUST select, canonicalize, update changed rows through at most one CASE statement, and commit before the next batch begins. Memory use and one transaction's row count MUST remain bounded by 300. Invalid transform JSON MUST remain unchanged and MUST NOT prevent progress. The completion marker MUST be written in a separate final transaction only after every batch commits; that final transaction MUST also delete the obsolete `system_settings` row `key = "migration.api_key_transform_rule_ids.v1"`. A restart before the marker is written MAY re-read canonicalized rows and MUST converge without changing their values.
 
 TM-QUERY-1. The create limit check MUST use `COUNT(*) WHERE user_id = current_user_id`; it MUST NOT decode every API-key row. The count and insert MUST satisfy TM-CREATE-5.
 

@@ -91,26 +91,19 @@ PL8. Each provider transform chain MUST support:
 
 PL8a. At viewport widths below `640px`, each transform chain header MUST stack its title and add controls vertically. The transform selector MUST shrink to the available width, and the add action MUST remain visible without creating horizontal overflow.
 
+PL8b. The add-transform selector options and every rendered chain item MUST display the transform's localized registry `name` resolved per `transform-config-ui.spec.md` TCU-2, with the canonical `type_id` rendered as secondary monospace text. A chain item whose `type_id` is absent from the registry MUST fall back to displaying the raw `type_id`.
+
 PL9. Provider transform config dialog MUST:
 
 - edit `models` glob filters as string list (`*` and `?` supported)
 - edit transform `config` using schema-driven fields from `/api/dashboard/transforms/registry`
 - block save when schema validation fails
 
-PL9b. A config schema property that has neither `type` nor `enum` is a JSON-valued field. The transform config dialog MUST render that field as a JSON text input.
+PL9b. Config field rendering, typing, and null/omission semantics are defined by `transform-config-ui.spec.md` TCU-3 through TCU-9. A config schema property that has neither `type` nor `enum` is a JSON-valued field and MUST render as the typed value editor defined by TCU-7; it MUST NOT render as a bare JSON text input.
 
-PL9c. When the transform config dialog opens, each JSON-valued field's text input MUST initialize as follows:
-1. If the existing rule config contains that key, the input text is `JSON.stringify(existingValue)` with two-space pretty-print.
-2. If the existing rule config does not contain that key, the input text is the empty string.
-The dialog MUST NOT initialize an absent JSON-valued field as the text `null`.
+PL9c. When the transform config dialog opens, field initialization MUST follow `transform-config-ui.spec.md` TCU-8. The dialog MUST NOT initialize an absent field as the text `null`.
 
-PL9d. Saving a JSON-valued field MUST parse the trimmed input text with this procedure:
-1. If the trimmed input is empty and the property is not listed in schema `required`, the saved config MUST omit that key.
-2. If the trimmed input is empty and the property is listed in schema `required`, save MUST fail with the invalid-JSON error.
-3. If `JSON.parse` succeeds, the saved config MUST store the parsed JSON value at that key, including JSON `null`.
-4. If `JSON.parse` fails and the trimmed input does not start with `{`, `[`, or `"`, the saved config MUST store the trimmed input as a JSON string.
-5. Otherwise save MUST fail with the invalid-JSON error.
-Empty optional JSON-valued input MUST NOT fail save as invalid JSON.
+PL9d. Saving the dialog MUST produce config values per `transform-config-ui.spec.md` TCU-9. Empty optional fields MUST be omitted from the saved config and MUST NOT fail save as invalid JSON.
 
 PL10. If a provider transform item type is not present in transform registry, editor MUST:
 
@@ -343,7 +336,7 @@ AK3a. API key transform editor option list MUST be filtered by transform scope m
 - The editor MUST continue filtering by `supported_phases` within the API-key-scoped subset.
 - Transforms not available to API keys MUST be hidden from the add-transform selector instead of being shown and rejected after selection.
 
-AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_content_delta` for response-phase rules.
+AK3b. Backend API key persistence and validation MUST accept every transform whose registry metadata advertises `supported_scopes` including `api_key`, including `reasoning_inject_content_field` for response-phase rules.
 
 AK4. API key create and edit dialogs MUST include a `request_capture_mode` tri-state control.
 

@@ -231,7 +231,7 @@ TR1. Image API sub-requests MUST go through the full URP transform pipeline:
 - Provider response-phase transforms apply after upstream response decode.
 - API-key response-phase transforms apply after provider response transforms.
 
-TR2. The `assistant_markdown_images_to_output` response transform is the expected mechanism for extracting images from providers that return images embedded in assistant markdown text (e.g. Gemini image models). Users MUST configure this transform on the relevant provider or API key for such providers.
+TR2. The `image_markdown_to_output` response transform is the expected mechanism for extracting images from providers that return images embedded in assistant markdown text (e.g. Gemini image models). Users MUST configure this transform on the relevant provider or API key for such providers.
 
 TR3. Monoize MUST NOT automatically enable any transform for Image API requests. All transforms are user-configured.
 
