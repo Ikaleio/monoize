@@ -1,0 +1,50 @@
+---
+title: "Image: resolve URLs to base64"
+description: Download image URLs in the request and inline them as base64 sources.
+---
+
+## What it does
+
+This transform downloads request image URLs concurrently and replaces them with inline base64 sources. A failed or oversized download leaves that node unchanged.
+
+Without this transform, Monoize never fetches remote image URLs.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `image_resolve_urls` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- The upstream rejects URL image sources and accepts only inline base64 data.
+- Image URLs point to hosts that the upstream cannot reach, for example an internal network.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `timeout_seconds` | integer | No | `30` | Per-download timeout in seconds. |
+| `max_bytes` | integer | No | `20971520` | Maximum bytes per downloaded image. Default 20 MiB. |
+| `roles` | string[] | No | — | Roles whose image URLs are resolved: `user`, `assistant`, `system`. Empty resolves all. |
+
+### Example rule
+
+```json
+{
+  "transform": "image_resolve_urls",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "timeout_seconds": 30,
+    "roles": [
+      "user"
+    ]
+  }
+}
+```

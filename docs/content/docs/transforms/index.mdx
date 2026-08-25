@@ -1,0 +1,63 @@
+---
+title: Transforms Overview
+description: Ordered rules that adjust requests and responses per Provider, per API key, or globally.
+---
+
+## What a transform is
+
+A transform is a rule that modifies a request before Monoize encodes it for the upstream, or modifies a response before Monoize returns it to the client. Transforms operate on the typed internal representation, not on raw JSON text. A transform therefore works the same way for every protocol pair.
+
+Monoize ships 33 built-in transforms. Each transform has its own page in this section.
+
+## Where transforms attach
+
+| Scope | Configured in | Runs for |
+| --- | --- | --- |
+| Provider | The Provider edit dialog | Every request that Provider serves |
+| Global | **Settings**, global transform chain | Every request |
+| API key | The key edit dialog in **Token Management** | Every request with that key |
+
+Execution order per phase: Provider chain first, then the global chain, then the API-key chain. Inside one chain, rules run in list order. The output of one rule is the input of the next.
+
+Not every transform supports every scope. API-key scope excludes transforms that could change routing, pricing, or token ceilings. Each transform page lists its supported scopes.
+
+## Rule fields
+
+Each rule has five fields:
+
+```json
+{
+  "transform": "prompt_inject_system",
+  "enabled": true,
+  "phase": "request",
+  "models": ["gpt-4*"],
+  "config": { "content": "Answer in French.", "position": "append" }
+}
+```
+
+- `transform`: the transform type ID.
+- `enabled`: a disabled rule is skipped.
+- `phase`: `request` or `response`. The rule runs only in its phase.
+- `models`: optional glob list. The rule runs only when at least one glob matches the logical model. `*` matches any sequence; `?` matches one character. Matching is case-sensitive and anchored.
+- `config`: transform-specific options. The dashboard renders a form from each transform's schema.
+
+Model matching always uses the logical model name that the client requested, not the redirected upstream name.
+
+## Transform families
+
+| Family | Purpose | Transforms |
+| --- | --- | --- |
+| Auto-cache | Improve provider-side prompt caching | `cache_anthropic_system`, `cache_anthropic_tool_use`, `cache_openai_prompt`, `cache_openai_tool_use`, `cache_user_id` |
+| Field | Set, remove, or cap raw request/response fields | `field_override_max_tokens`, `field_remove`, `field_set` |
+| Image | Compress, convert, or resolve images | `image_compress_input`, `image_compress_output`, `image_enable_openai_generation_tool`, `image_markdown_to_output`, `image_output_to_markdown`, `image_resolve_urls` |
+| Prompt | Reshape the message list | `prompt_append_empty_user`, `prompt_inject_system`, `prompt_strip_anthropic_billing_header`, `prompt_strip_orphaned_tool_calls` |
+| Reasoning | Move, strip, or re-encode reasoning content | `reasoning_content_to_summary`, `reasoning_effort_to_budget`, `reasoning_effort_to_model_suffix`, `reasoning_from_think_xml`, `reasoning_inject_content_field`, `reasoning_strip_encrypted`, `reasoning_strip_input`, `reasoning_strip_output`, `reasoning_summary_to_raw_cot`, `reasoning_to_think_xml` |
+| Role | Rewrite or merge message roles | `role_developer_to_system`, `role_merge_consecutive`, `role_system_to_developer` |
+| Stream | Control streaming behavior | `stream_force`, `stream_split_sse_frames` |
+
+## Verify a transform
+
+1. Enable [request capture](/en/docs/request-logs) for a test API key.
+2. Send a request that matches the rule's model globs.
+3. Open the capture viewer. Compare the request before transforms with the encoded upstream request.
+4. The viewer also lists the transform chain that ran, in order, with each rule's scope.

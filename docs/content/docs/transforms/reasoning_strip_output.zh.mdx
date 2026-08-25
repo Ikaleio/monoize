@@ -1,0 +1,39 @@
+---
+title: "推理：移除响应输出中的推理"
+description: 从响应输出和流事件中移除推理节点。
+---
+
+## 行为
+
+此变换从响应输出和流事件中移除推理节点。客户端只收到最终答案，看不到推理过程。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `reasoning_strip_output` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 你不希望终端用户看到模型推理。
+- 某个客户端收到推理条目时会出错。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "reasoning_strip_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

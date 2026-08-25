@@ -1,0 +1,38 @@
+---
+title: "推論: reasoning_content フィールドの注入"
+description: Chat レスポンスに OpenRouter/DeepSeek 互換の reasoning_content フィールドを出力します。
+---
+
+## 動作
+
+この変換は推論ノードとデルタをマークし、Chat Completions エンコーダーが OpenRouter や DeepSeek クライアントと互換の `reasoning_content` フィールドを出力するようにします。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `reasoning_inject_content_field` |
+| フェーズ | `response` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- Chat クライアントが `reasoning_content` を読み取り、それがないと推論を失う。
+
+## 設定
+
+この変換にはオプションがありません。`config` には空オブジェクトを指定します。
+
+### ルール例
+
+```json
+{
+  "transform": "reasoning_inject_content_field",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

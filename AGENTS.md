@@ -153,3 +153,44 @@ Manual edits must remain an exception, not the default.
   1. **Optimistic updates** for user-triggered mutations, and
   2. **Skeleton fallback** while data is loading or hydrating.
 - Do not ship fetch-driven UI flows that require close/reopen or manual refresh to display fresh data.
+
+---
+
+## 5. Documentation
+
+The user-facing documentation site lives under `docs/` and is governed by `spec/docs-site.spec.md`.
+These rules apply whenever you modify the documentation site, the README, or user-visible behavior
+that the documentation describes.
+
+### 5.1 Language and style
+
+- Write all documentation prose in **Simplified Technical English (STE)**:
+  imperative mood, active voice, short sentences (target at most 25 words), one instruction
+  per sentence, one term per concept.
+- Marketing vocabulary is forbidden in docs and README ("seamless", "powerful",
+  "revolutionary", "blazing", "effortless", "world-class").
+- Keep product nouns in canonical English in every locale: Provider, Channel, transform
+  `type_id` values, environment variable names, endpoint paths.
+- Translations must read as native technical prose. Word-for-word translationese is a defect.
+
+### 5.2 Locale completeness
+
+- The docs site supports exactly `en`, `zh`, `zh-TW`, and `ja`.
+- When you change observable user-facing behavior that the docs describe, update the
+  affected pages in **all four locales** in the same change.
+- When you add or remove a built-in transform, add or remove the matching transform pages
+  in all four locales and update the transforms overview page.
+
+### 5.3 Screenshots
+
+- Dashboard screenshots are WebP files under `docs/public/images/en/` (English UI) and
+  `docs/public/images/zh/` (Simplified Chinese UI).
+- `zh` pages reference the `zh` set; `en`, `zh-TW`, and `ja` pages reference the `en` set.
+- When a UI change alters a documented flow, recapture the affected screenshots in **both**
+  sets in the same change.
+
+### 5.4 Build and links
+
+- `cd docs && bun install && bun run build` must pass before a docs change merges.
+- Update README links when documentation URLs change.
+- Follow the visual identity in `DESIGN_SYSTEM.md` for any docs-site UI work.

@@ -1,0 +1,77 @@
+---
+title: Configuration
+description: Environment variables for the Monoize process.
+---
+
+## Overview
+
+Environment variables control process bootstrap only. Providers, Channels, models, routing policy, transforms, users, and API keys live in the database. Manage them through the dashboard.
+
+## Core variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP listen address |
+| `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite or PostgreSQL DSN |
+| `DATABASE_URL` | unset | Fallback DSN when `MONOIZE_DATABASE_DSN` is unset |
+| `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus metrics path |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | Forwarding request-body limit in bytes |
+| `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | Trusted reverse-proxy networks; an explicitly empty value disables trust |
+| `MONOIZE_UPSTREAM_PROXY_URL` | unset | Outbound HTTP(S) proxy for upstream calls; a Channel can override it with `proxy_url` |
+
+## Database
+
+Monoize supports SQLite and PostgreSQL. One Monoize process is the supported writer for its business tables.
+
+Example DSN values:
+
+```bash
+MONOIZE_DATABASE_DSN=sqlite://./data/monoize.db
+MONOIZE_DATABASE_DSN=postgres://user:password@host:5432/monoize
+```
+
+## Image transform limits
+
+The `image_compress_input`, `image_compress_output`, and `image_resolve_urls` transforms share bounded resources:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_ENCODED_BYTES` | `20971520` | Maximum encoded source size per image |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_PIXELS` | `40000000` | Maximum decoded pixel count per image |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_CONCURRENCY` | `2` | Concurrent encode operations |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_DIR` | `${TMPDIR}/monoize/image-transform-cache` | Cache directory |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_TTL_SECONDS` | `3600` | Cache entry lifetime |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_FILES` | `2048` | Maximum cache entries |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_BYTES` | `536870912` | Maximum total cache size |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_ENTRY_BYTES` | `33554432` | Maximum size per cache entry |
+
+A source image above a limit passes through unchanged.
+
+## Request capture limits
+
+Request capture obeys these process-level bounds:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONOIZE_REQUEST_CAPTURE_MAX_ATTEMPTS` | `16` | Captured upstream attempts per request |
+| `MONOIZE_REQUEST_CAPTURE_MAX_FRAMES` | `4096` | Captured stream frames per request |
+| `MONOIZE_REQUEST_CAPTURE_MAX_FRAME_BYTES` | `262144` | Bytes per captured frame |
+| `MONOIZE_REQUEST_CAPTURE_MAX_SESSION_BYTES` | `16777216` | Bytes per captured request |
+
+Enable capture in the dashboard. See [Request Logs](/en/docs/request-logs).
+
+## Primary/replica deployment
+
+Monoize can run as one writable primary plus read-only replicas that share one PostgreSQL database. Replicas serve `/v1/**` traffic only. They ship request logs and billing deltas to the primary over an authenticated internal API.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONOIZE_NODE_ROLE` | `primary` | `primary` or `replica` |
+| `MONOIZE_PRIMARY_INTERNAL_URL` | required on replicas | Base URL of the primary for metering shipment |
+| `MONOIZE_REPLICA_TOKEN` | unset | Shared secret; required on replicas, enables the ingest endpoint on the primary |
+| `MONOIZE_CONFIG_POLL_INTERVAL_SECONDS` | `5` | Replica config poll interval |
+| `MONOIZE_METERING_SHIP_INTERVAL_SECONDS` | `10` | Replica metering shipment interval |
+| `MONOIZE_METERING_SHIP_BATCH_MAX_ENTRIES` | `500` | Per-batch entry cap (hard cap 2000) |
+| `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | Durable delta spool directory |
+
+Failover is manual: promote a replica by switching its role and restarting the process.

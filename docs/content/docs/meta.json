@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "index",
+    "quick-start",
+    "configuration",
+    "dashboard",
+    "request-logs",
+    "routing",
+    "endpoints",
+    "transforms",
+    "troubleshooting"
+  ]
+}

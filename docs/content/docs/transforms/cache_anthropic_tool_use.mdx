@@ -1,0 +1,41 @@
+---
+title: "Auto-cache: Anthropic tool results"
+description: Insert a cache_control breakpoint before each tool-call run in agent loops.
+---
+
+## What it does
+
+When the request submits tool results, this transform inserts an Anthropic ephemeral `cache_control` breakpoint on the latest user node before the tool-call run. In an agent loop, the growing conversation prefix then stays cached between iterations.
+
+Requests without tool results pass through unchanged.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `cache_anthropic_tool_use` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Agent clients run long tool loops against an Anthropic-compatible upstream.
+- You want each loop iteration to re-read the conversation prefix from cache instead of paying full input price.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "cache_anthropic_tool_use",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {}
+}
+```

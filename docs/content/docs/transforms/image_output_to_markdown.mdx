@@ -1,0 +1,41 @@
+---
+title: "Image: image nodes to Markdown"
+description: Render assistant image nodes as Markdown links inside assistant text.
+---
+
+## What it does
+
+This transform renders assistant image nodes as Markdown image links appended to the assistant text output. It is the inverse of `image_markdown_to_output`.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `image_output_to_markdown` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Clients render plain text and cannot display structured image outputs.
+- A chat frontend shows Markdown and you want inline image previews.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `template` | string | No | — | Template appended per image. Placeholders: `{{src}}`, `{{url}}`, `{{media_type}}`, `{{data}}`, and `_urlencoded` variants. |
+
+### Example rule
+
+```json
+{
+  "transform": "image_output_to_markdown",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

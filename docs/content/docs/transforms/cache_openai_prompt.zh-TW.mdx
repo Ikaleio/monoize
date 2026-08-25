@@ -1,0 +1,50 @@
+---
+title: "自動快取：OpenAI prompt 快取鍵"
+description: 生成確定性的 prompt_cache_key，讓重複提示詞命中 OpenAI 提示詞快取。
+---
+
+## 行為
+
+此變換根據請求內容計算確定性的 `prompt_cache_key`，連同保留提示一起附加到發往 OpenAI Responses 和 Chat Completions 上游的請求上。前綴相同的重複提示詞因此命中提供商的提示詞快取。
+
+用戶端已經設定 `prompt_cache_key` 時，此變換絕不覆蓋。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `cache_openai_prompt` |
+| 階段 | `request` |
+| 範圍 | Provider, 全域, API 金鑰 |
+
+## 適用場景
+
+- 上游相容 OpenAI 協議，且快取命中的輸入 token 價格更低。
+- 用戶端自己不設定 `prompt_cache_key`。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `retention` | string | 否 | `"24h"` | `24h` 或 `in_memory`。發送給上游的快取保留提示。 |
+| `key_prefix` | string | 否 | `"mzpc"` | 生成的 `prompt_cache_key` 的前綴。 |
+| `key_mode` | string | 否 | `"prefix"` | `prefix` 從會話前綴衍生鍵；`identity` 每個身分使用一個鍵。 |
+| `include_user_in_key` | boolean | 否 | `false` | 把 Monoize 使用者混入鍵中，避免使用者之間共享快取條目。 |
+| `include_full_input_in_key` | boolean | 否 | `false` | 對完整輸入取雜湊，而不是僅對穩定前綴。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "cache_openai_prompt",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {
+    "retention": "24h",
+    "key_mode": "prefix"
+  }
+}
+```

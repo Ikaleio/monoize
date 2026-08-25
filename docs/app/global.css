@@ -1,0 +1,173 @@
+/* Font stack mirrors frontend/src/index.css (Monoize visual identity). */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap');
+@import url('https://fontsapi.zeoseven.com/159/main/result.css');
+
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Monoize design tokens, mapped from frontend/src/index.css onto the
+ * Fumadocs theme variables. Keep both files aligned (spec/docs-site.spec.md DOC-50).
+ */
+@theme {
+  --color-fd-background: hsl(0 0% 98%);
+  --color-fd-foreground: hsl(0 0% 9%);
+  --color-fd-muted: hsl(0 0% 96%);
+  --color-fd-muted-foreground: hsl(0 0% 45%);
+  --color-fd-popover: hsl(0 0% 100%);
+  --color-fd-popover-foreground: hsl(0 0% 9%);
+  --color-fd-card: hsl(0 0% 100%);
+  --color-fd-card-foreground: hsl(0 0% 9%);
+  --color-fd-border: hsl(0 0% 90%);
+  --color-fd-primary: hsl(217 91% 53%);
+  --color-fd-primary-foreground: hsl(0 0% 100%);
+  --color-fd-secondary: hsl(0 0% 96%);
+  --color-fd-secondary-foreground: hsl(0 0% 9%);
+  --color-fd-accent: hsl(0 0% 96%);
+  --color-fd-accent-foreground: hsl(0 0% 9%);
+  --color-fd-ring: hsl(217 91% 53%);
+
+  --font-sans:
+    'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-display: 'Noto Serif SC', 'Source Han Serif SC', serif;
+  --font-heading: 'Noto Serif SC', 'Source Han Serif SC', serif;
+  --font-mono:
+    'Sarasa Mono SC', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+}
+
+.dark {
+  --color-fd-background: hsl(0 0% 4%);
+  --color-fd-foreground: hsl(0 0% 93%);
+  --color-fd-muted: hsl(0 0% 10%);
+  --color-fd-muted-foreground: hsl(0 0% 64%);
+  --color-fd-popover: hsl(0 0% 5%);
+  --color-fd-popover-foreground: hsl(0 0% 93%);
+  --color-fd-card: hsl(0 0% 7%);
+  --color-fd-card-foreground: hsl(0 0% 93%);
+  --color-fd-border: hsl(0 0% 15%);
+  --color-fd-primary: hsl(217 91% 60%);
+  --color-fd-primary-foreground: hsl(0 0% 100%);
+  --color-fd-secondary: hsl(0 0% 10%);
+  --color-fd-secondary-foreground: hsl(0 0% 93%);
+  --color-fd-accent: hsl(0 0% 10%);
+  --color-fd-accent-foreground: hsl(0 0% 93%);
+  --color-fd-ring: hsl(217 91% 60%);
+
+  --destructive: hsl(0 63% 31%);
+}
+
+.dark #nd-sidebar {
+  --color-fd-muted: hsl(0 0% 10%);
+  --color-fd-secondary: hsl(0 0% 12%);
+  --color-fd-muted-foreground: hsl(0 0% 70%);
+}
+
+/*
+ * shadcn/ui tokens alias the Fumadocs tokens above, so both component
+ * systems resolve to the same Monoize palette in light and dark mode.
+ */
+:root {
+  --background: var(--color-fd-background);
+  --foreground: var(--color-fd-foreground);
+  --card: var(--color-fd-card);
+  --card-foreground: var(--color-fd-card-foreground);
+  --popover: var(--color-fd-popover);
+  --popover-foreground: var(--color-fd-popover-foreground);
+  --primary: var(--color-fd-primary);
+  --primary-foreground: var(--color-fd-primary-foreground);
+  --secondary: var(--color-fd-secondary);
+  --secondary-foreground: var(--color-fd-secondary-foreground);
+  --muted: var(--color-fd-muted);
+  --muted-foreground: var(--color-fd-muted-foreground);
+  --accent: var(--color-fd-accent);
+  --accent-foreground: var(--color-fd-accent-foreground);
+  --destructive: hsl(0 84% 60%);
+  --border: var(--color-fd-border);
+  --input: var(--color-fd-border);
+  --ring: var(--color-fd-ring);
+  --radius: 0.5rem;
+  --sidebar: var(--color-fd-background);
+  --sidebar-foreground: var(--color-fd-foreground);
+  --sidebar-primary: var(--color-fd-primary);
+  --sidebar-primary-foreground: var(--color-fd-primary-foreground);
+  --sidebar-accent: var(--color-fd-accent);
+  --sidebar-accent-foreground: var(--color-fd-accent-foreground);
+  --sidebar-border: var(--color-fd-border);
+  --sidebar-ring: var(--color-fd-ring);
+  --chart-1: hsl(217 91% 53%);
+  --chart-2: hsl(38 92% 50%);
+  --chart-3: hsl(142 71% 35%);
+  --chart-4: hsl(199 89% 48%);
+  --chart-5: hsl(0 84% 60%);
+}
+
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Product grid texture (frontend DS5b), used on the docs landing hero. */
+.monoize-grid {
+  background-image:
+    linear-gradient(to right, var(--color-fd-border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-fd-border) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
+}

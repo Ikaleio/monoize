@@ -1,0 +1,38 @@
+---
+title: "Role: merge consecutive"
+description: Merge adjacent messages that share the same role.
+---
+
+## What it does
+
+This transform merges adjacent ordinary nodes that share the same role into one node. It never merges across tool results or control nodes.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `role_merge_consecutive` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- An upstream rejects two consecutive messages with the same role, for example two user messages in a row.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "role_merge_consecutive",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

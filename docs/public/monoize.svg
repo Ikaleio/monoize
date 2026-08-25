@@ -1,0 +1,82 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 400 400"
+  width="100%"
+  height="100%"
+  shape-rendering="geometricPrecision"
+>
+  <rect width="400" height="400" fill="#111216" />
+
+  <!-- Upper / right continuous M body -->
+  <path
+    d="
+      M 88 120
+      L 118 88
+      L 198 165
+      L 282 88
+      L 310 120
+      L 310 310
+      L 256 310
+      L 256 178
+      L 199 226
+      L 177 212
+      Z
+    "
+    fill="#F0EDE6"
+  />
+
+  <!-- Lower-left M block -->
+  <path
+    d="
+      M 88 289
+      L 177 212
+      L 177 270
+      L 126 310
+      L 88 310
+      Z
+    "
+    fill="#F0EDE6"
+  />
+
+  <!-- Input beams -->
+  <path
+    d="
+      M 88 120
+      L 88 168
+      L 177 212
+      Z
+    "
+    fill="#EE2E32"
+  />
+
+  <path
+    d="
+      M 88 182
+      L 88 224
+      L 177 212
+      Z
+    "
+    fill="#F6A51A"
+  />
+
+  <path
+    d="
+      M 88 238
+      L 88 289
+      L 177 212
+      Z
+    "
+    fill="#24B3CD"
+  />
+
+  <!-- Output celeste wedge -->
+  <path
+    d="
+      M 224 226
+      L 256 202
+      L 256 250
+      Z
+    "
+    fill="#7FA8C4"
+  />
+</svg>

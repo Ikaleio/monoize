@@ -1,0 +1,43 @@
+---
+title: "自动缓存：Anthropic 系统提示词"
+description: 在系统提示词之后插入 Anthropic cache_control 缓存断点。
+---
+
+## 行为
+
+此变换在请求的最后一个 system 或 developer 节点上插入 Anthropic ephemeral `cache_control` 缓存断点。上游随后缓存稳定的系统前缀，并在后续请求中直接读取缓存。
+
+请求中没有 system 或 developer 节点时，此变换不做任何修改。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `cache_anthropic_system` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游兼容 Anthropic 协议，且缓存写入和读取按折扣价计费。
+- 客户端在每个请求中都发送冗长且稳定的系统提示词。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "cache_anthropic_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {}
+}
+```
+
+与 `cache_anthropic_tool_use` 组合使用，可以在工具循环中同时缓存会话前缀。

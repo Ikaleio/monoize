@@ -1,0 +1,39 @@
+---
+title: "提示詞：移除孤立工具呼叫"
+description: 移除輸入中沒有對應工具結果的工具呼叫。
+---
+
+## 行為
+
+此變換移除請求輸入中 `call_id` 沒有匹配工具結果的工具呼叫節點。完整的呼叫-結果對保持不變。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `prompt_strip_orphaned_tool_calls` |
+| 階段 | `request` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 用戶端截斷歷史後留下懸空的工具呼叫，嚴格的上游會拒絕。
+- 你看到上游報缺少工具結果的錯誤。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "prompt_strip_orphaned_tool_calls",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

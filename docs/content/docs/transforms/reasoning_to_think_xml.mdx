@@ -1,0 +1,43 @@
+---
+title: "Reasoning: to think XML"
+description: Wrap reasoning content in a think tag inside assistant text.
+---
+
+## What it does
+
+This transform converts reasoning node content into assistant text wrapped in the configured tag, for example `<think>...</think>`. It is the inverse of `reasoning_from_think_xml`.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_to_think_xml` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Clients render only assistant text and you still want reasoning visible.
+- A downstream tool parses think tags from text.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `tag` | string | Yes | — | The XML tag that wraps reasoning text, for example `think`. |
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_to_think_xml",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "tag": "think"
+  }
+}
+```

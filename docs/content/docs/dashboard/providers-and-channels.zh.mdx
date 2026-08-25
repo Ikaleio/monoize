@@ -1,0 +1,50 @@
+---
+title: Provider 与 Channel
+description: 用有序的 Provider 和带权重的 Channel 定义上游路由。
+---
+
+## 概念
+
+- **Provider（服务提供者）** 是一个路由分组。它定义路由顺序、重试预算、健康策略和有序的变换链。
+- **Channel（通道）** 是 Provider 内的一个上游端点。它保存上游类型、Base URL、凭据、模型映射、权重和超时。
+
+请求先选择 Provider，再在其中选择 Channel。选择规则参见[路由与可靠性](/zh/docs/routing)。
+
+![Provider 列表](/images/zh/providers.webp)
+
+## 创建 Provider
+
+1. 在侧边栏打开**服务提供者**。
+2. 点击创建按钮并输入名称。
+3. 默认值不合适时调整重试选项：
+   - `max_retries`：整个 Provider 的重试总预算。`-1` 表示该路由内不限制。
+   - `channel_max_retries`：切换前在单个 Channel 内的重试次数。默认 `0`。
+   - `channel_retry_interval_ms`：Channel 内重试的间隔时间。默认 `0`。
+4. 除非有明确理由，保持 `circuit_breaker_enabled` 开启。
+
+## 添加 Channel
+
+1. 打开 Provider 并点击**添加通道**。
+2. 选择上游类型：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image` 或 `replicate`。
+3. 填写上游 Base URL 和 API 密钥。
+4. 设置权重。流量按权重比例在符合条件的 Channel 之间分配。默认 `1`。
+5. 可选：为单个 Channel 设置 `proxy_url`，覆盖进程级上游代理。
+
+之后编辑 Channel 时，API 密钥留空则保持原有密钥不变。
+
+## 映射模型
+
+每个 Channel 列出它服务的逻辑模型。模型条目包含：
+
+- `redirect`：真实的上游模型名。留空则按逻辑名原样发送。
+- `multiplier`：用于计费的正数价格乘数。
+
+只有当 Provider 内至少有一个已启用的 Channel 映射了某个逻辑模型时，该模型才会路由到这个 Provider。
+
+## Provider 变换
+
+Provider 可以持有一组有序的变换规则。它们在 Provider 选定之后、上游编码之前，作用于该 Provider 服务的每个请求。参见[变换](/zh/docs/transforms)。
+
+## 分组
+
+每个 Provider 至少属于一个分组。API 密钥只会路由到分组有交集的 Provider。用分组来区分用户等级或环境。

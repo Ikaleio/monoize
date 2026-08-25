@@ -1,0 +1,51 @@
+---
+title: "推理：effort 轉模型後綴"
+description: 把推理力度以後綴形式追加到上游模型名。
+---
+
+## 行為
+
+當請求攜帶受支援的推理力度（`none`、`minimum`、`low`、`medium`、`high`、`xhigh`、`max`）時，此變換把第一條匹配規則的後綴追加到上游模型名。後綴中的 `{effort}` 替換為力度值。
+
+沒有受支援力度的請求原樣通過。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `reasoning_effort_to_model_suffix` |
+| 階段 | `request` |
+| 範圍 | Provider |
+
+## 適用場景
+
+- 上游把推理強度編碼在模型名中，例如 `model-high`。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `rules` | array | 是 | — | `{ pattern, suffix }` 的有序規則。第一條匹配模型的規則生效。後綴中的 `{effort}` 會替換為解析出的力度。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "reasoning_effort_to_model_suffix",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "rules": [
+      {
+        "pattern": "grok-*",
+        "suffix": "-{effort}"
+      }
+    ]
+  }
+}
+```
+
+此變換僅支援 Provider 範圍，因為它改變上游模型選擇。

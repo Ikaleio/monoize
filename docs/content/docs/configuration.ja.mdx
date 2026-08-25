@@ -1,0 +1,77 @@
+---
+title: 設定
+description: Monoize プロセスの環境変数。
+---
+
+## 概要
+
+環境変数はプロセスの起動設定のみを制御します。Provider、Channel、モデル、ルーティングポリシー、変換、ユーザー、API キーはデータベースに保存され、ダッシュボードで管理します。
+
+## 基本変数
+
+| 変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP 待ち受けアドレス |
+| `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite または PostgreSQL の DSN |
+| `DATABASE_URL` | 未設定 | `MONOIZE_DATABASE_DSN` が未設定の場合の代替 DSN |
+| `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus メトリクスのパス |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | 転送リクエストボディの上限（バイト） |
+| `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 信頼するリバースプロキシのネットワーク。明示的に空にすると信頼を無効化 |
+| `MONOIZE_UPSTREAM_PROXY_URL` | 未設定 | 上流呼び出し用の送信 HTTP(S) プロキシ。Channel の `proxy_url` で個別に上書き可能 |
+
+## データベース
+
+Monoize は SQLite と PostgreSQL に対応します。業務テーブルへの書き込みは 1 つの Monoize プロセスのみがサポートされます。
+
+DSN の例：
+
+```bash
+MONOIZE_DATABASE_DSN=sqlite://./data/monoize.db
+MONOIZE_DATABASE_DSN=postgres://user:password@host:5432/monoize
+```
+
+## 画像変換の制限
+
+`image_compress_input`、`image_compress_output`、`image_resolve_urls` の各変換は、次のリソース上限を共有します。
+
+| 変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_ENCODED_BYTES` | `20971520` | 画像 1 枚のエンコード済みサイズ上限 |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_PIXELS` | `40000000` | 画像 1 枚のデコード後ピクセル数上限 |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_CONCURRENCY` | `2` | 同時エンコード数 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_DIR` | `${TMPDIR}/monoize/image-transform-cache` | キャッシュディレクトリ |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_TTL_SECONDS` | `3600` | キャッシュエントリの有効期間 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_FILES` | `2048` | キャッシュエントリ数の上限 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_BYTES` | `536870912` | キャッシュ合計サイズの上限 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_ENTRY_BYTES` | `33554432` | エントリごとのサイズ上限 |
+
+上限を超えた元画像は変更されずに通過します。
+
+## リクエストキャプチャの制限
+
+リクエストキャプチャは次のプロセスレベルの上限に従います。
+
+| 変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_REQUEST_CAPTURE_MAX_ATTEMPTS` | `16` | リクエストごとにキャプチャする上流試行数 |
+| `MONOIZE_REQUEST_CAPTURE_MAX_FRAMES` | `4096` | リクエストごとにキャプチャするストリームフレーム数 |
+| `MONOIZE_REQUEST_CAPTURE_MAX_FRAME_BYTES` | `262144` | フレームごとのバイト数 |
+| `MONOIZE_REQUEST_CAPTURE_MAX_SESSION_BYTES` | `16777216` | リクエストごとの合計バイト数 |
+
+キャプチャはダッシュボードで有効化します。[リクエストログ](/ja/docs/request-logs) を参照してください。
+
+## プライマリ / レプリカ構成
+
+Monoize は、1 つの書き込み可能なプライマリと複数の読み取り専用レプリカで、同一の PostgreSQL データベースを共有して動作できます。レプリカは `/v1/**` トラフィックのみを処理します。リクエストログと課金差分は、認証付き内部 API でプライマリへ送られます。
+
+| 変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_NODE_ROLE` | `primary` | `primary` または `replica` |
+| `MONOIZE_PRIMARY_INTERNAL_URL` | レプリカでは必須 | プライマリの内部 API ベース URL |
+| `MONOIZE_REPLICA_TOKEN` | 未設定 | 共有シークレット。レプリカでは必須。プライマリに設定すると受信エンドポイントが有効化 |
+| `MONOIZE_CONFIG_POLL_INTERVAL_SECONDS` | `5` | レプリカの設定ポーリング間隔 |
+| `MONOIZE_METERING_SHIP_INTERVAL_SECONDS` | `10` | レプリカの課金送信間隔 |
+| `MONOIZE_METERING_SHIP_BATCH_MAX_ENTRIES` | `500` | バッチごとのエントリ上限（ハード上限 2000） |
+| `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | 永続化差分スプールディレクトリ |
+
+フェイルオーバーは手動です。レプリカのロールを切り替えてプロセスを再起動します。

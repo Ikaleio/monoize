@@ -1,0 +1,41 @@
+---
+title: "自動快取：OpenAI 工具結果"
+description: 為 GPT 模型在工具結果區塊上插入顯式提示詞快取斷點。
+---
+
+## 行為
+
+此變換在符合條件的工具結果內容區塊上插入顯式的 OpenAI 提示詞快取斷點。它針對支援顯式快取斷點的 GPT 模型系列。
+
+沒有符合條件的工具結果區塊的請求原樣通過。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `cache_openai_tool_use` |
+| 階段 | `request` |
+| 範圍 | Provider, 全域, API 金鑰 |
+
+## 適用場景
+
+- 智慧代理用戶端在支援顯式斷點的 OpenAI 相容上游上執行工具迴圈。
+- 你希望工具迴圈的前綴在迭代之間保持快取。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "cache_openai_tool_use",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {}
+}
+```

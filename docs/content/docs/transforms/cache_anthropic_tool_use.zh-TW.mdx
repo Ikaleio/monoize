@@ -1,0 +1,41 @@
+---
+title: "自動快取：Anthropic 工具結果"
+description: 在智慧代理迴圈中，於每輪工具呼叫前插入 cache_control 快取斷點。
+---
+
+## 行為
+
+當請求提交工具結果時，此變換在工具呼叫串之前最近的 user 節點上插入 Anthropic ephemeral `cache_control` 快取斷點。在智慧代理迴圈中，不斷增長的會話前綴在迭代之間保持快取。
+
+沒有工具結果的請求原樣通過。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `cache_anthropic_tool_use` |
+| 階段 | `request` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 智慧代理用戶端在 Anthropic 相容上游上執行長工具迴圈。
+- 你希望每輪迭代從快取中重讀會話前綴，而不是按全價支付輸入費用。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "cache_anthropic_tool_use",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {}
+}
+```

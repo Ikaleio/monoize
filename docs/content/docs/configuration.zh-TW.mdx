@@ -1,0 +1,77 @@
+---
+title: 設定
+description: Monoize 程序的環境變數。
+---
+
+## 概述
+
+環境變數只控制程序啟動參數。Provider、Channel、模型、路由策略、變換、使用者和 API 金鑰都儲存在資料庫中，透過儀表板管理。
+
+## 核心變數
+
+| 變數 | 預設值 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP 監聽位址 |
+| `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite 或 PostgreSQL DSN |
+| `DATABASE_URL` | 未設定 | `MONOIZE_DATABASE_DSN` 未設定時的備用 DSN |
+| `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus 指標路徑 |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | 轉發請求體大小上限（位元組） |
+| `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 受信任的反向代理網段；明確設為空值即停用信任 |
+| `MONOIZE_UPSTREAM_PROXY_URL` | 未設定 | 上游呼叫的對外 HTTP(S) 代理；Channel 可用 `proxy_url` 個別覆寫 |
+
+## 資料庫
+
+Monoize 支援 SQLite 和 PostgreSQL。業務資料表只支援一個 Monoize 程序作為寫入者。
+
+DSN 範例：
+
+```bash
+MONOIZE_DATABASE_DSN=sqlite://./data/monoize.db
+MONOIZE_DATABASE_DSN=postgres://user:password@host:5432/monoize
+```
+
+## 圖像變換限制
+
+`image_compress_input`、`image_compress_output` 和 `image_resolve_urls` 變換共享以下資源上限：
+
+| 變數 | 預設值 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_ENCODED_BYTES` | `20971520` | 單張圖片編碼後大小上限 |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_PIXELS` | `40000000` | 單張圖片解碼像素數上限 |
+| `MONOIZE_IMAGE_TRANSFORM_MAX_CONCURRENCY` | `2` | 並行編碼數 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_DIR` | `${TMPDIR}/monoize/image-transform-cache` | 快取目錄 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_TTL_SECONDS` | `3600` | 快取條目存活時間 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_FILES` | `2048` | 快取條目數上限 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_BYTES` | `536870912` | 快取總大小上限 |
+| `MONOIZE_IMAGE_TRANSFORM_CACHE_MAX_ENTRY_BYTES` | `33554432` | 單條快取大小上限 |
+
+超出任一上限的來源圖片保持原樣通過。
+
+## 請求擷取限制
+
+請求擷取遵守以下程序層級上限：
+
+| 變數 | 預設值 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_REQUEST_CAPTURE_MAX_ATTEMPTS` | `16` | 每個請求擷取的上游嘗試數 |
+| `MONOIZE_REQUEST_CAPTURE_MAX_FRAMES` | `4096` | 每個請求擷取的串流幀數 |
+| `MONOIZE_REQUEST_CAPTURE_MAX_FRAME_BYTES` | `262144` | 單幀位元組數 |
+| `MONOIZE_REQUEST_CAPTURE_MAX_SESSION_BYTES` | `16777216` | 單個請求擷取總位元組數 |
+
+在儀表板中開啟擷取。參見[請求日誌](/zh-TW/docs/request-logs)。
+
+## 主從部署
+
+Monoize 支援一個可寫主節點加多個唯讀副本，共享同一個 PostgreSQL 資料庫。副本只處理 `/v1/**` 流量，並透過帶認證的內部 API 將請求日誌和計費增量上報給主節點。
+
+| 變數 | 預設值 | 用途 |
+| --- | --- | --- |
+| `MONOIZE_NODE_ROLE` | `primary` | `primary` 或 `replica` |
+| `MONOIZE_PRIMARY_INTERNAL_URL` | 副本必填 | 主節點內部 API 基底 URL |
+| `MONOIZE_REPLICA_TOKEN` | 未設定 | 共享密鑰；副本必填，主節點設定後開啟上報端點 |
+| `MONOIZE_CONFIG_POLL_INTERVAL_SECONDS` | `5` | 副本設定輪詢間隔 |
+| `MONOIZE_METERING_SHIP_INTERVAL_SECONDS` | `10` | 副本計費上報間隔 |
+| `MONOIZE_METERING_SHIP_BATCH_MAX_ENTRIES` | `500` | 單批條目上限（硬上限 2000） |
+| `MONOIZE_REPLICA_METERING_SPOOL_DIR` | `./data/replica-metering-spool` | 持久化增量暫存目錄 |
+
+容錯移轉是手動操作：將副本的角色改為主節點並重啟程序。

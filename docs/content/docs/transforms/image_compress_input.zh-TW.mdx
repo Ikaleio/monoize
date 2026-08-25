@@ -1,0 +1,55 @@
+---
+title: "圖像：壓縮請求圖片"
+description: 在上游編碼之前，對 user 訊息中的 base64 圖片重新編碼並可選縮放。
+---
+
+## 行為
+
+此變換對 user 訊息中的 base64 圖片重新編碼，並可選縮放到 `max_edge_px`。更小的封包上傳更快，還可以降低圖像 token 成本。
+
+`skip_if_smaller` 開啟時（預設），壓縮沒有減小體積的圖片保留原始位元組。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `image_compress_input` |
+| 階段 | `request` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 用戶端發送大照片或截圖，上游請求觸達大小限制。
+- 你希望限制圖像解析度以控制成本。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | 否 | `"original"` | `original`、`jpg`、`jpegxl_lossless`、`jpegxl`、`webp_lossless`、`webp` 或 `png`。 |
+| `max_edge_px` | integer | 否 | — | 最大寬度或高度（像素）。省略則保留原始尺寸。 |
+| `jpeg_quality` | integer | 否 | `80` | JPEG 輸出的品質，1-100。 |
+| `jpegxl_quality` | integer | 否 | `90` | 有損 JPEG XL 輸出的品質，1-99。 |
+| `jpegxl_effort` | integer | 否 | `7` | JPEG XL 編碼力度，1-10。數值越高壓縮越慢。 |
+| `webp_quality` | integer | 否 | `80` | 有損 WebP 輸出的品質，1-100。 |
+| `skip_if_smaller` | boolean | 否 | `true` | 壓縮沒有減小體積時保留原圖。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "image_compress_input",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "max_edge_px": 1568,
+    "webp_quality": 80
+  }
+}
+```
+
+設定環境變數 `MONOIZE_IMAGE_TRANSFORM_MAX_*` 可以限制解碼開銷。參見[設定](/zh-TW/docs/configuration)。

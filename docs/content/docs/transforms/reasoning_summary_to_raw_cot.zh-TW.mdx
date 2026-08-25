@@ -1,0 +1,38 @@
+---
+title: "推理：摘要轉原始思維鏈"
+description: 把推理摘要以 OpenWebUI 相容的原始思維鏈欄位輸出。
+---
+
+## 行為
+
+此變換標記推理摘要，使下游 Chat 編碼器以 OpenWebUI 相容的原始思維鏈欄位輸出它們。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `reasoning_summary_to_raw_cot` |
+| 階段 | `response` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- OpenWebUI 或類似前端只為原始思維鏈欄位顯示思考面板。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "reasoning_summary_to_raw_cot",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

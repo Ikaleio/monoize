@@ -1,0 +1,146 @@
+---
+title: API Endpoints
+description: Call Monoize with OpenAI, Anthropic, embeddings, and image clients.
+---
+
+## Base URL and authentication
+
+Send requests to the Monoize listen address. The default is `http://localhost:8080`. Authenticate with an API key in one of these headers:
+
+```bash
+Authorization: Bearer sk-...
+# or
+x-api-key: sk-...
+```
+
+Every endpoint below also exists under the `/api` prefix, for example `/api/v1/chat/completions`. Use the alias when a client hardcodes `/api` paths.
+
+Any endpoint can reach any upstream type. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions.
+
+## List models
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer sk-..."
+```
+
+The response lists the logical models available to the calling key, in the OpenAI list format.
+
+## Chat Completions
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "messages": [{ "role": "user", "content": "Hello" }],
+    "stream": true
+  }'
+```
+
+Set `"stream": true` for server-sent events. Omit it or set `false` for one JSON response.
+
+## Responses
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "input": "Hello",
+    "stream": true
+  }'
+```
+
+Notes:
+
+- Monoize supports `previous_response_id` chains when the upstream provides server-side state. Enable session affinity so follow-up requests reach the same Channel. See [Routing and Reliability](/en/docs/routing).
+- `GET /v1/responses` upgrades to a WebSocket transport for clients that use it.
+- `POST /v1/responses/compact` compacts a conversation.
+
+## Anthropic Messages
+
+```bash
+curl http://localhost:8080/v1/messages \
+  -H "x-api-key: sk-..." \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "max_tokens": 1024,
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'
+```
+
+## Embeddings
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-embedding-model",
+    "input": "The quick brown fox"
+  }'
+```
+
+## Images
+
+Generation:
+
+```bash
+curl http://localhost:8080/v1/images/generations \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-image-model",
+    "prompt": "A lighthouse at dawn",
+    "size": "1024x1024"
+  }'
+```
+
+Edits use `multipart/form-data`:
+
+```bash
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer sk-..." \
+  -F model="my-image-model" \
+  -F prompt="Add a red boat" \
+  -F image[]=@input.png
+```
+
+## Use official SDKs
+
+Point an official SDK at Monoize by setting its base URL:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="sk-...",
+)
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost:8080",
+    api_key="sk-...",
+)
+```
+
+## Error responses
+
+| HTTP status | Code | Meaning |
+| --- | --- | --- |
+| `401` | `unauthorized` | The API key is missing, invalid, disabled, or expired |
+| `402` | `insufficient_balance` | The user or sub-account balance is empty |
+| `403` | `model_not_allowed` | The key's model limits reject the requested model |
+| `403` | `ip_not_allowed` | The client IP is not in the key's IP whitelist |
+| `502` | `upstream_error` | No route serves the model, or all eligible routes failed |
+
+Upstream error text is sanitized before it reaches the client. Read the full detail in [Request Logs](/en/docs/request-logs).

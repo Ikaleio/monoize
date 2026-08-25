@@ -1,0 +1,39 @@
+---
+title: "Prompt: strip orphaned tool calls"
+description: Remove tool calls that have no matching tool result in the input.
+---
+
+## What it does
+
+This transform removes tool-call nodes whose `call_id` has no matching tool result in the request input. Complete call-result pairs stay untouched.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `prompt_strip_orphaned_tool_calls` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Clients truncate history and leave dangling tool calls that strict upstreams reject.
+- You see upstream errors about missing tool results.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "prompt_strip_orphaned_tool_calls",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

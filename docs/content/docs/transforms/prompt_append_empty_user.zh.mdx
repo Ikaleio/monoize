@@ -1,0 +1,41 @@
+---
+title: "提示词：追加空 user 消息"
+description: 当输入以 assistant 消息结尾时追加一个占位 user 消息。
+---
+
+## 行为
+
+当请求输入以 assistant 节点结尾时，此变换追加一个占位 user 文本节点。已经以 user 节点结尾的输入原样通过。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `prompt_append_empty_user` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游拒绝最后一条消息来自 assistant 的会话。
+- 客户端向严格的上游发送 assistant 预填式消息。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `content` | string | 否 | `" "` | 占位 user 消息的文本内容。默认为一个空格。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "prompt_append_empty_user",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,48 @@
+---
+title: "欄位：設定"
+description: 在設定路徑寫入 JSON 值，可選擇僅在滿足條件時寫入。
+---
+
+## 行為
+
+此變換在設定的 extra_body 路徑寫入 JSON 值。設定了 `when_equals` 時，僅當當前值等於給定 JSON 值才寫入；未設定時總是寫入。
+
+用它新增或取代協議轉換不攜帶的廠商私有欄位。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `field_set` |
+| 階段 | `request`, `response` |
+| 範圍 | Provider |
+
+## 適用場景
+
+- 上游需要某個廠商私有欄位，例如服務檔位或思考開關。
+- 你希望對某個 Provider 服務的每個請求歸一化某個欄位值。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `path` | string | 是 | — | 要寫入的 extra_body 路徑，點號分隔，例如 `service_tier`。 |
+| `value` | JSON | 是 | — | 寫入該路徑的 JSON 值。 |
+| `when_equals` | JSON | 否 | — | 設定後，僅當當前值等於該 JSON 值時才寫入。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "field_set",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {
+    "path": "service_tier",
+    "value": "flex"
+  }
+}
+```

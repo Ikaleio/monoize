@@ -1,0 +1,50 @@
+---
+title: "自动缓存：OpenAI prompt 缓存键"
+description: 生成确定性的 prompt_cache_key，让重复提示词命中 OpenAI 提示词缓存。
+---
+
+## 行为
+
+此变换根据请求内容计算确定性的 `prompt_cache_key`，连同保留提示一起附加到发往 OpenAI Responses 和 Chat Completions 上游的请求上。前缀相同的重复提示词因此命中提供商的提示词缓存。
+
+客户端已经设置 `prompt_cache_key` 时，此变换绝不覆盖。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `cache_openai_prompt` |
+| 阶段 | `request` |
+| 范围 | Provider, 全局, API 密钥 |
+
+## 适用场景
+
+- 上游兼容 OpenAI 协议，且缓存命中的输入 token 价格更低。
+- 客户端自己不设置 `prompt_cache_key`。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `retention` | string | 否 | `"24h"` | `24h` 或 `in_memory`。发送给上游的缓存保留提示。 |
+| `key_prefix` | string | 否 | `"mzpc"` | 生成的 `prompt_cache_key` 的前缀。 |
+| `key_mode` | string | 否 | `"prefix"` | `prefix` 从会话前缀派生键；`identity` 每个身份使用一个键。 |
+| `include_user_in_key` | boolean | 否 | `false` | 把 Monoize 用户混入键中，避免用户之间共享缓存条目。 |
+| `include_full_input_in_key` | boolean | 否 | `false` | 对完整输入取哈希，而不是仅对稳定前缀。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "cache_openai_prompt",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {
+    "retention": "24h",
+    "key_mode": "prefix"
+  }
+}
+```

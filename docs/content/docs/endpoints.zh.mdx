@@ -1,0 +1,146 @@
+---
+title: API 端点
+description: 使用 OpenAI、Anthropic、Embeddings 和图像客户端调用 Monoize。
+---
+
+## 基础 URL 与认证
+
+将请求发送到 Monoize 的监听地址。默认为 `http://localhost:8080`。使用以下任一请求头携带 API 密钥：
+
+```bash
+Authorization: Bearer sk-...
+# 或
+x-api-key: sk-...
+```
+
+下列每个端点都有 `/api` 前缀别名，例如 `/api/v1/chat/completions`。当客户端硬编码了 `/api` 路径时使用别名。
+
+任何端点都可以到达任何上游类型。例如，客户端调用 `/v1/messages`，而路由通过 `chat_completion` 类型的 Channel 服务该模型。Monoize 在两个方向上转换协议。
+
+## 列出模型
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer sk-..."
+```
+
+响应以 OpenAI 列表格式返回调用密钥可用的逻辑模型。
+
+## Chat Completions
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "messages": [{ "role": "user", "content": "Hello" }],
+    "stream": true
+  }'
+```
+
+设置 `"stream": true` 使用服务器推送事件。省略或设为 `false` 则返回单个 JSON 响应。
+
+## Responses
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "input": "Hello",
+    "stream": true
+  }'
+```
+
+说明：
+
+- 当上游提供服务端状态时，Monoize 支持 `previous_response_id` 链。开启会话亲和可以让后续请求到达同一个 Channel。参见[路由与可靠性](/zh/docs/routing)。
+- `GET /v1/responses` 会升级为 WebSocket 传输，供使用该传输的客户端调用。
+- `POST /v1/responses/compact` 压缩一段会话。
+
+## Anthropic Messages
+
+```bash
+curl http://localhost:8080/v1/messages \
+  -H "x-api-key: sk-..." \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-model",
+    "max_tokens": 1024,
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'
+```
+
+## Embeddings
+
+```bash
+curl http://localhost:8080/v1/embeddings \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-embedding-model",
+    "input": "The quick brown fox"
+  }'
+```
+
+## 图像
+
+生成：
+
+```bash
+curl http://localhost:8080/v1/images/generations \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-image-model",
+    "prompt": "A lighthouse at dawn",
+    "size": "1024x1024"
+  }'
+```
+
+编辑使用 `multipart/form-data`：
+
+```bash
+curl http://localhost:8080/v1/images/edits \
+  -H "Authorization: Bearer sk-..." \
+  -F model="my-image-model" \
+  -F prompt="Add a red boat" \
+  -F image[]=@input.png
+```
+
+## 使用官方 SDK
+
+将官方 SDK 的基础 URL 指向 Monoize：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="sk-...",
+)
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost:8080",
+    api_key="sk-...",
+)
+```
+
+## 错误响应
+
+| HTTP 状态码 | 错误码 | 含义 |
+| --- | --- | --- |
+| `401` | `unauthorized` | API 密钥缺失、无效、被禁用或已过期 |
+| `402` | `insufficient_balance` | 用户或子账户余额不足 |
+| `403` | `model_not_allowed` | 密钥的模型限制拒绝了请求的模型 |
+| `403` | `ip_not_allowed` | 客户端 IP 不在密钥的 IP 白名单中 |
+| `502` | `upstream_error` | 没有路由服务该模型，或所有符合条件的路由都失败 |
+
+上游错误文本在到达客户端之前会被脱敏。完整详情请在[请求日志](/zh/docs/request-logs)中查看。

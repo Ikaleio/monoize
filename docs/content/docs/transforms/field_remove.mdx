@@ -1,0 +1,45 @@
+---
+title: "Field: remove"
+description: Remove a JSON value at a configured path from the request or response.
+---
+
+## What it does
+
+This transform removes the JSON value at the configured extra-body path. In the request phase it edits the outgoing upstream payload. In the response phase it edits the payload returned to the client.
+
+When the path does not exist, the transform changes nothing.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `field_remove` |
+| Phase | `request`, `response` |
+| Scopes | Provider |
+
+## When to use
+
+- An upstream rejects a vendor-specific field that clients send.
+- You want to hide a response field from clients behind one Provider.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `path` | string | Yes | — | Dot-separated extra-body path of the value to remove, for example `metadata.tags`. |
+
+### Example rule
+
+```json
+{
+  "transform": "field_remove",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "path": "metadata"
+  }
+}
+```

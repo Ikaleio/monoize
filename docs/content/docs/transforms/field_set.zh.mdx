@@ -1,0 +1,48 @@
+---
+title: "字段：设置"
+description: 在配置路径写入 JSON 值，可选择仅在满足条件时写入。
+---
+
+## 行为
+
+此变换在配置的 extra_body 路径写入 JSON 值。设置了 `when_equals` 时，仅当当前值等于给定 JSON 值才写入；未设置时总是写入。
+
+用它添加或替换协议转换不携带的厂商私有字段。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `field_set` |
+| 阶段 | `request`, `response` |
+| 范围 | Provider |
+
+## 适用场景
+
+- 上游需要某个厂商私有字段，例如服务档位或思考开关。
+- 你希望对某个 Provider 服务的每个请求归一化某个字段值。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `path` | string | 是 | — | 要写入的 extra_body 路径，点号分隔，例如 `service_tier`。 |
+| `value` | JSON | 是 | — | 写入该路径的 JSON 值。 |
+| `when_equals` | JSON | 否 | — | 设置后，仅当当前值等于该 JSON 值时才写入。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "field_set",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {
+    "path": "service_tier",
+    "value": "flex"
+  }
+}
+```

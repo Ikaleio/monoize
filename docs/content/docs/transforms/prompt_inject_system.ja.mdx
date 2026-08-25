@@ -1,0 +1,45 @@
+---
+title: "プロンプト: システムプロンプトの注入"
+description: 固定テキストをリクエストのシステムプロンプトの前または後に追加します。
+---
+
+## 動作
+
+この変換は設定テキストを設定位置でシステムプロンプトに追加します。リクエストに system ノードがない場合は作成します。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `prompt_inject_system` |
+| フェーズ | `request` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 組織全体の指示（言語ルールや安全ルールなど）を強制したい。
+- 特定の Provider にクライアント管理外の追加指示が必要。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `content` | string | はい | — | システムプロンプトに注入するテキスト。 |
+| `position` | string | はい | — | `prepend` は既存プロンプトの前に、`append` は後に配置します。 |
+
+### ルール例
+
+```json
+{
+  "transform": "prompt_inject_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "content": "Answer concisely.",
+    "position": "append"
+  }
+}
+```

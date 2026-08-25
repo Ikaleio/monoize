@@ -1,0 +1,50 @@
+---
+title: "推論: effort から思考予算へ"
+description: リクエストの推論 effort レベルを思考トークン予算にマッピングします。
+---
+
+## 動作
+
+この変換は、リクエストの推論 effort レベル（`low`、`medium`、`high`、任意で `xhigh` や `max`）を、effort ラベルではなく予算を受け取る上流向けの数値の思考トークン予算にマッピングします。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `reasoning_effort_to_budget` |
+| フェーズ | `request` |
+| スコープ | Provider |
+
+## 使いどころ
+
+- クライアントは OpenAI 形式の `reasoning.effort` を送るが、上流は Anthropic 形式の思考予算を受け取る。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `low` | integer | はい | — | `low` に対応する思考トークン予算。 |
+| `med` | integer | はい | — | `medium` に対応する予算。 |
+| `high` | integer | はい | — | `high` に対応する予算。 |
+| `xhigh` | integer | いいえ | — | 任意。`xhigh` に対応する予算。 |
+| `max` | integer | いいえ | — | 任意。`max` に対応する予算。 |
+
+### ルール例
+
+```json
+{
+  "transform": "reasoning_effort_to_budget",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {
+    "low": 1024,
+    "med": 8192,
+    "high": 24576
+  }
+}
+```
+
+この変換は上流の支出を変えるため、Provider スコープ専用です。

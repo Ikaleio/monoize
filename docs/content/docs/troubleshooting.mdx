@@ -1,0 +1,84 @@
+---
+title: Troubleshooting
+description: Resolve common errors for authentication, routing, billing, and streaming.
+---
+
+## Diagnose with logs first
+
+Open **Logs** in the dashboard before you change configuration. Each failed request row shows the error code, the HTTP status, and every failed upstream attempt. Enable [request capture](/en/docs/request-logs) to inspect the exact upstream payloads.
+
+## Authentication errors
+
+### `401 unauthorized`
+
+1. Confirm the key starts with `sk-` and is complete.
+2. Confirm the key is enabled and not expired in **Token Management**.
+3. Confirm the owning user account is enabled.
+4. Confirm the header format: `Authorization: Bearer sk-...` or `x-api-key: sk-...`.
+
+### `403 model_not_allowed`
+
+The key has model limits enabled and the requested model equals no entry. Add the exact logical model name to the key's model list, or disable model limits.
+
+### `403 ip_not_allowed`
+
+The client IP is not in the key's IP whitelist. Add the address or CIDR range, or clear the whitelist. When Monoize runs behind a reverse proxy, confirm the proxy forwards the real client IP.
+
+## Routing errors
+
+### `502 upstream_error`
+
+All eligible routes failed, or no route serves the model. Check in this order:
+
+1. **No route exists.** Confirm at least one enabled Provider has an enabled Channel with weight above zero that maps the model.
+2. **Groups do not intersect.** The key's groups must share at least one group with the Provider. See [API Keys](/en/docs/dashboard/api-keys).
+3. **All Channels unhealthy.** The circuit breaker skips unhealthy Channels during cooldown. Read the failed attempts on the log row to find the root upstream error.
+4. **Multiplier cap.** A key with `max_multiplier` skips model entries priced above the cap.
+
+### Requests always hit one Channel
+
+Weighted selection is random per request. Small samples can look unbalanced. Check also whether session affinity binds the conversation to one Channel on purpose.
+
+## Billing errors
+
+### `402 insufficient_balance`
+
+The user balance, or the key's sub-account balance, is zero or negative. Top up the balance in **Users**, or disable the sub-account option on the key.
+
+### Charges look wrong
+
+Charge = base model price × Channel model `multiplier`. Confirm the model has metadata prices on the **Models** page, and check the multiplier on the Channel model entry.
+
+## Streaming problems
+
+### The stream stops mid-response
+
+Monoize never switches upstreams after the first response byte. A stream that dies mid-response reflects an upstream failure. Read the log row and enable capture to see the raw upstream frames.
+
+### A client rejects long SSE frames
+
+Some clients limit SSE frame length. Add the `stream_split_sse_frames` transform to the serving Provider. See [Stream: split oversized SSE frames](/en/docs/transforms/stream_split_sse_frames).
+
+### The upstream requires streaming
+
+Add the `stream_force` transform to force `stream: true` toward the upstream. Monoize still returns a non-streaming response to the client when the client asked for one.
+
+## Protocol conversion questions
+
+### Reasoning disappears after conversion
+
+Some upstreams return reasoning in nonstandard fields. Use the reasoning transforms to restore or reshape it. Start with [Transforms](/en/docs/transforms).
+
+### Provider-specific fields are missing upstream
+
+Cross-family conversion removes provider-specific nested fields with no safe target representation. Use the `field_set` transform to reinstate a field for one Provider.
+
+## Dashboard access
+
+### Lost admin password
+
+Another `super_admin` can reset it in **Users**. When no `super_admin` remains, reset it directly in the database.
+
+### First account is not admin
+
+The first registered account becomes `super_admin`. This rule applies once. Later accounts default to `user`.

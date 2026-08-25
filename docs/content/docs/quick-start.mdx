@@ -1,0 +1,83 @@
+---
+title: Quick Start
+description: Install Monoize, create the first account, and send the first request.
+---
+
+## Requirements
+
+Choose one installation method:
+
+- **Docker.** The published image supports Linux x86-64 and ARM64.
+- **Release binary.** Download an archive for Linux, macOS, or Windows from the GitHub Releases page.
+- **Build from source.** Install a stable Rust toolchain and [Bun](https://bun.sh/). A release build compiles the React dashboard and embeds it in the executable.
+
+## Run with Docker
+
+Run the image with a persistent SQLite volume:
+
+```bash
+docker run -d \
+  --name monoize \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v monoize-data:/app/data \
+  ghcr.io/ikaleio/monoize:latest
+```
+
+Set `MONOIZE_DATABASE_DSN` with `-e` to use PostgreSQL or a non-default SQLite location.
+
+## Build from source
+
+```bash
+cargo build --release
+./target/release/monoize
+```
+
+The server listens on `0.0.0.0:8080` by default. Set `MONOIZE_LISTEN` to change the address.
+
+## Create the first account
+
+1. Open `http://localhost:8080` in a browser.
+2. Register an account. The first registered account becomes `super_admin`. This happens even when public registration is disabled.
+
+## Configure a route
+
+Complete these steps in the dashboard:
+
+1. Create a Provider. See [Providers and Channels](/en/docs/dashboard/providers-and-channels).
+2. Add at least one Channel with its upstream base URL and credential.
+3. Map a logical model name to the Channel.
+4. Create an API key. See [API Keys](/en/docs/dashboard/api-keys).
+
+## Send the first request
+
+Call the logical model through any supported protocol. Example with OpenAI Responses:
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H 'Authorization: Bearer sk-your-monoize-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "your-logical-model",
+    "input": "Hello",
+    "stream": true
+  }'
+```
+
+Example with Chat Completions:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H 'Authorization: Bearer sk-your-monoize-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "your-logical-model",
+    "messages": [{ "role": "user", "content": "Hello" }]
+  }'
+```
+
+The downstream protocol does not need to match the upstream Channel type. Monoize converts between them.
+
+## Verify the request
+
+Open the **Logs** page in the dashboard. The request appears with its status, latency, token usage, and cost. See [Request Logs](/en/docs/request-logs).

@@ -1,0 +1,39 @@
+---
+title: "推理：移除加密載荷"
+description: 移除加密推理載荷，保留明文推理。
+---
+
+## 行為
+
+此變換從回應節點、串流事件和透傳狀態中移除加密推理載荷。明文推理保持不變。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `reasoning_strip_encrypted` |
+| 階段 | `response` |
+| 範圍 | Provider, 全域, API 金鑰 |
+
+## 適用場景
+
+- 用戶端儲存會話歷史並回放給無法解密這些載荷的其他 Provider。
+- 你希望回應更小，且不需要加密推理的連續性。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "reasoning_strip_encrypted",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

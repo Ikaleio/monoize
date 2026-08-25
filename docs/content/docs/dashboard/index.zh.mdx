@@ -1,0 +1,41 @@
+---
+title: 仪表盘概览
+description: 登录内嵌仪表盘并了解各个管理区域。
+---
+
+## 访问仪表盘
+
+在浏览器打开 Monoize 的监听地址，默认是 `http://localhost:8080`。release 构建在同一进程中提供仪表盘、API 和指标。
+
+![仪表盘概览](/images/zh/dashboard.webp)
+
+## 账号与角色
+
+- 安装后注册第一个账号。第一个注册的账号自动成为 `super_admin`。即使公开注册已关闭，此规则仍然生效。
+- `super_admin` 可以管理用户、系统设置、Provider 和计费。
+- `admin` 账号管理运营资源。
+- `user` 账号管理自己的 API 密钥、日志和余额。
+
+## 管理区域
+
+| 区域 | 用途 |
+| --- | --- |
+| 仪表盘 | 流量、费用和健康状态总览 |
+| 服务提供者 | Provider、Channel、模型映射、健康状态、变换 |
+| 令牌管理 | API 密钥、配额、模型限制、变换 |
+| 日志 | 请求日志与捕获查看器 |
+| 模型数据库 | 从 Models.dev 导入的模型元数据与定价 |
+| 用户管理 | 账号、余额与计费流水 |
+| 系统设置 | 系统设置、全局变换、请求捕获开关 |
+
+## 语言
+
+仪表盘支持 English、简体中文、繁體中文和日本語。在用户菜单中切换语言。
+
+## 下一步
+
+<Cards>
+  <Card title="Provider 与 Channel" href="/zh/docs/dashboard/providers-and-channels" description="定义请求的转发目标。" />
+  <Card title="模型" href="/zh/docs/dashboard/models" description="映射逻辑模型并设置定价。" />
+  <Card title="API 密钥" href="/zh/docs/dashboard/api-keys" description="创建密钥并设置限制。" />
+</Cards>

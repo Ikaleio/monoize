@@ -1,0 +1,60 @@
+---
+title: Routing and Reliability
+description: How Monoize selects a route, retries failures, falls forward, and breaks circuits.
+---
+
+## Route selection
+
+For each request, Monoize resolves the route in this order:
+
+1. **Model redirects.** API-key rules run first, then global rules. The first match rewrites the model name.
+2. **Provider selection.** Monoize collects enabled Providers that serve the model through at least one enabled Channel with weight greater than zero, and whose groups intersect the key's groups. Group order sets the preference order; inside one group, Provider priority applies.
+3. **Channel selection.** Inside the chosen Provider, Monoize orders eligible Channels by weighted randomization. The probability that Channel $i$ is tried first is:
+
+```math
+P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}
+```
+
+A Channel with weight `2` therefore receives twice the traffic of a Channel with weight `1`.
+
+## Retry and fallback
+
+Monoize tries routes in nested order: Channels inside a Provider first, then the next Provider.
+
+- Each Channel gets `channel_max_retries + 1` attempts. The default is 1 attempt, no in-Channel retry.
+- `channel_retry_interval_ms` inserts a wait between in-Channel retries. The default is `0`.
+- `max_retries` bounds the total attempt count across the Provider.
+- When a Provider is exhausted, Monoize continues with the next eligible Provider.
+- When all Providers are exhausted, the client receives HTTP `502` with code `upstream_error`.
+
+### Which errors retry the same Channel
+
+| Error | Same-Channel retry | Advance to next route |
+| --- | --- | --- |
+| HTTP `408`, `429`, `5xx` | Yes | Yes, after Channel budget |
+| Timeout, connection refused or reset | Yes | Yes, after Channel budget |
+| Other upstream errors (for example `400`, `401`, `404`) | No | Yes, at once |
+| Monoize-side errors (auth, balance, validation, billing) | No | No; routing stops |
+
+## Streaming guarantee
+
+Fallback ends when the first response byte reaches the client. Before that byte, Monoize can switch Channels and Providers freely. After that byte, Monoize never switches. A visible stream therefore always comes from one generation.
+
+## Circuit breaker
+
+Each Provider has `circuit_breaker_enabled`. When enabled:
+
+- A Channel becomes unhealthy after `failure_count_threshold` retryable failures (default `3`) within `window_seconds` (default `30`).
+- An unhealthy Channel is skipped for `cooldown_seconds` (default `60`). Failures caused by HTTP `429` use `rate_limit_cooldown_seconds` (default `15`).
+- With `per_model_circuit_break` on, health is tracked per `(Channel, model)` pair instead of per Channel.
+- With active probing on, Monoize probes cooled-down Channels in the background and restores them after the success threshold.
+
+Set `circuit_breaker_enabled` to `false` on a Provider to ignore health state for it. Passive breaking and active probing then stop for that Provider.
+
+## Session affinity
+
+Monoize can bind a conversation to the Channel that served it, so follow-up requests with server-side state (for example Responses `previous_response_id`) reach the same upstream. Affinity is configured globally and per Channel. An affinity-preferred Channel still obeys eligibility and health rules.
+
+## Timing metrics
+
+Every request row in [Request Logs](/en/docs/request-logs) records total duration, time to first byte, and visible-output tokens per second. Use these values to compare Channels before you change weights.

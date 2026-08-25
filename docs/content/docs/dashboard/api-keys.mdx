@@ -1,0 +1,60 @@
+---
+title: API Keys
+description: Create forwarding API keys and set limits, groups, and capture options.
+---
+
+## What an API key does
+
+Clients authenticate forwarding requests with an API key. Every key starts with `sk-`. Send the key in one of these headers:
+
+```bash
+Authorization: Bearer sk-...
+# or
+x-api-key: sk-...
+```
+
+Requests without a valid key receive HTTP `401`.
+
+![API key management](/images/en/api-keys.webp)
+
+## Create a key
+
+1. Open **Token Management** in the sidebar.
+2. Click the create button and enter a name.
+3. Set the options you need. All options have safe defaults.
+4. Copy the full key. The list shows the full key again later; keys are not write-only in Monoize.
+
+## Key options
+
+| Option | Effect | Default |
+| --- | --- | --- |
+| Expiry | The key stops working after the expiry date. | No expiry |
+| Enabled | A disabled key fails authentication at once. | Enabled |
+| Model limits | When on, the key can call only the listed model patterns. | Off |
+| IP whitelist | When set, requests must come from a listed IPv4/IPv6 address or CIDR range. | Empty |
+| Groups | The key routes only to Providers whose groups intersect the key's groups. | Inherit the user's group |
+| Max multiplier | The key skips Channel model entries whose price multiplier exceeds this value. | No cap |
+| Sub-account balance | When on, the key spends its own balance instead of the user balance. | Off |
+| Request capture | `off`, `capture-all`, or `capture-only-abnormal`. See [Request Logs](/en/docs/request-logs). | `off` |
+
+## Model limits
+
+Model limit entries are exact logical model names. A request whose model equals no entry receives HTTP `403` with code `model_not_allowed`.
+
+## Model redirects
+
+A key can hold an ordered list of model redirect rules. Each rule has:
+
+- `pattern`: a regular expression. Monoize anchors it as `^(pattern)$` against the full model name.
+- `replace`: the literal target model name.
+
+The first matching rule rewrites the model before routing, billing, and model-limit checks. Key rules run before global rules. Use redirects to move traffic to a new model without client changes.
+
+## Groups
+
+- **Inherit user group** (default): the key follows the owning user's group.
+- **Explicit groups**: select one or more groups. Order matters; Monoize prefers Providers from earlier groups. See [Routing and Reliability](/en/docs/routing).
+
+## Per-key transforms
+
+A key can hold an ordered transform chain. Key transforms run inside a safety boundary: only transform types allowed at API-key scope are accepted. See [Transforms](/en/docs/transforms).

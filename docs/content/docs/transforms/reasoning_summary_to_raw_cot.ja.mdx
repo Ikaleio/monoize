@@ -1,0 +1,38 @@
+---
+title: "推論: サマリーから生 CoT へ"
+description: 推論サマリーを OpenWebUI 互換の生チェーン・オブ・ソートとして出力します。
+---
+
+## 動作
+
+この変換は推論サマリーをマークし、下流の Chat エンコーダーが OpenWebUI 互換の生チェーン・オブ・ソートフィールドとして出力するようにします。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `reasoning_summary_to_raw_cot` |
+| フェーズ | `response` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- OpenWebUI などのフロントエンドが、生チェーン・オブ・ソートフィールドに対してのみ思考パネルを表示する。
+
+## 設定
+
+この変換にはオプションがありません。`config` には空オブジェクトを指定します。
+
+### ルール例
+
+```json
+{
+  "transform": "reasoning_summary_to_raw_cot",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

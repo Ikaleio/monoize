@@ -1,0 +1,43 @@
+---
+title: "流式：拆分超长 SSE 帧"
+description: 把过大的 SSE 增量载荷拆分为多个协议合法的事件。
+---
+
+## 行为
+
+此变换把超过配置长度的下游 SSE 增量载荷拆分为多个协议合法的事件。可见文本不变；只有分帧方式不同。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `stream_split_sse_frames` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 某个客户端或代理丢弃或截断超长 SSE 帧。
+- 上游批量输出大增量，客户端需要更平滑的增量渲染。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `max_frame_length` | integer | 否 | — | SSE 帧载荷的最大长度。超过限制的帧会被拆分。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "stream_split_sse_frames",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "max_frame_length": 4096
+  }
+}
+```

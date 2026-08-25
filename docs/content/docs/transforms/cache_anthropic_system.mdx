@@ -1,0 +1,43 @@
+---
+title: "Auto-cache: Anthropic system prompt"
+description: Insert an Anthropic cache_control breakpoint after the system prompt.
+---
+
+## What it does
+
+This transform inserts an Anthropic ephemeral `cache_control` breakpoint on the last system or developer node of the request. The upstream then caches the stable system prefix and reads it from cache on later requests.
+
+The transform changes nothing when the request has no system or developer node.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `cache_anthropic_system` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- The upstream is Anthropic-compatible and bills cache writes and reads at reduced rates.
+- Your clients send a long, stable system prompt on every request.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "cache_anthropic_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {}
+}
+```
+
+Combine with `cache_anthropic_tool_use` to also cache the conversation prefix during tool loops.

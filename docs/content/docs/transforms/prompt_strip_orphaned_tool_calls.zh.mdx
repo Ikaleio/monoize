@@ -1,0 +1,39 @@
+---
+title: "提示词：移除孤立工具调用"
+description: 移除输入中没有对应工具结果的工具调用。
+---
+
+## 行为
+
+此变换移除请求输入中 `call_id` 没有匹配工具结果的工具调用节点。完整的调用-结果对保持不变。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `prompt_strip_orphaned_tool_calls` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 客户端截断历史后留下悬空的工具调用，严格的上游会拒绝。
+- 你看到上游报缺少工具结果的错误。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "prompt_strip_orphaned_tool_calls",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

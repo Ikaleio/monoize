@@ -1,0 +1,38 @@
+---
+title: "Role: developer to system"
+description: Rewrite developer-role messages to the system role.
+---
+
+## What it does
+
+This transform rewrites developer-role ordinary nodes to the system role. It is the inverse of `role_system_to_developer`.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `role_developer_to_system` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- An upstream does not accept the `developer` role that newer OpenAI clients send.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "role_developer_to_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,39 @@
+---
+title: "Image: Markdown to image nodes"
+description: Convert Markdown image syntax in assistant text into real image nodes.
+---
+
+## What it does
+
+This transform extracts Markdown image blocks, for example `![alt](url)`, from assistant text and converts them into ordinary assistant image nodes. It is the inverse of `image_output_to_markdown`.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `image_markdown_to_output` |
+| Phase | `response` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- An upstream returns generated images as Markdown links inside text.
+- Your clients expect structured image outputs instead of text links.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "image_markdown_to_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

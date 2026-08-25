@@ -1,0 +1,43 @@
+---
+title: "推論: think XML へ変換"
+description: 推論内容を think タグで包んで assistant テキストに含めます。
+---
+
+## 動作
+
+この変換は推論ノードの内容を、設定タグ（例: `<think>...</think>`）で包んだ assistant テキストに変換します。`reasoning_from_think_xml` の逆変換です。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `reasoning_to_think_xml` |
+| フェーズ | `response` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- クライアントが assistant テキストのみ描画するが、推論も見せたい。
+- 下流ツールがテキストから think タグを解析する。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `tag` | string | はい | — | 推論テキストを包む XML タグ名。例: `think`。 |
+
+### ルール例
+
+```json
+{
+  "transform": "reasoning_to_think_xml",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "tag": "think"
+  }
+}
+```

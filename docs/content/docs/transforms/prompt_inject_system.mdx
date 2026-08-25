@@ -1,0 +1,45 @@
+---
+title: "Prompt: inject system prompt"
+description: Prepend or append fixed text to the request system prompt.
+---
+
+## What it does
+
+This transform adds the configured text to the request system prompt at the configured position. When the request has no system node, the transform creates one.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `prompt_inject_system` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- You enforce an organization-wide instruction, for example a language or safety rule.
+- One Provider needs extra instructions that clients should not manage.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `content` | string | Yes | — | The text injected into the system prompt. |
+| `position` | string | Yes | — | `prepend` puts the text before the existing prompt. `append` puts it after. |
+
+### Example rule
+
+```json
+{
+  "transform": "prompt_inject_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "content": "Answer concisely.",
+    "position": "append"
+  }
+}
+```

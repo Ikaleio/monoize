@@ -1,0 +1,38 @@
+---
+title: "ロール: developer から system へ"
+description: developer ロールのメッセージを system ロールに書き換えます。
+---
+
+## 動作
+
+この変換は developer ロールの通常ノードを system ロールに書き換えます。`role_system_to_developer` の逆変換です。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `role_developer_to_system` |
+| フェーズ | `request` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 新しい OpenAI クライアントが送る `developer` ロールを上流が受け付けない。
+
+## 設定
+
+この変換にはオプションがありません。`config` には空オブジェクトを指定します。
+
+### ルール例
+
+```json
+{
+  "transform": "role_developer_to_system",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

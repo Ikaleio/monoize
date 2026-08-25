@@ -1,0 +1,50 @@
+---
+title: "图像：URL 解析为 base64"
+description: 下载请求中的图片 URL，并内联为 base64 数据。
+---
+
+## 行为
+
+此变换并发下载请求中的图片 URL，替换为内联 base64 数据。下载失败或超过大小限制的节点保持不变。
+
+没有此变换时，Monoize 绝不抓取远程图片 URL。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `image_resolve_urls` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游拒绝 URL 图片源，只接受内联 base64 数据。
+- 图片 URL 指向上游无法访问的主机，例如内网。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `timeout_seconds` | integer | 否 | `30` | 每次下载的超时秒数。 |
+| `max_bytes` | integer | 否 | `20971520` | 每张图片的最大下载字节数。默认 20 MiB。 |
+| `roles` | string[] | 否 | — | 解析哪些角色的图片 URL：`user`、`assistant`、`system`。留空解析全部。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "image_resolve_urls",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "timeout_seconds": 30,
+    "roles": [
+      "user"
+    ]
+  }
+}
+```

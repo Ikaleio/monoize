@@ -1,0 +1,50 @@
+---
+title: "自動キャッシュ: OpenAI プロンプトキー"
+description: 決定的な prompt_cache_key を導出し、繰り返しプロンプトを OpenAI プロンプトキャッシュに命中させます。
+---
+
+## 動作
+
+この変換はリクエスト内容から決定的な `prompt_cache_key` を計算し、保持ヒントとともに OpenAI Responses / Chat Completions 上流へのリクエストに付加します。同じプレフィックスを持つ繰り返しプロンプトはプロバイダーのプロンプトキャッシュに命中します。
+
+クライアントがすでに `prompt_cache_key` を設定している場合、この変換は上書きしません。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `cache_openai_prompt` |
+| フェーズ | `request` |
+| スコープ | Provider, グローバル, API キー |
+
+## 使いどころ
+
+- 上流が OpenAI 互換で、キャッシュ済み入力トークンの価格が低い。
+- クライアント自身が `prompt_cache_key` を設定しない。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `retention` | string | いいえ | `"24h"` | `24h` または `in_memory`。上流に送るキャッシュ保持ヒント。 |
+| `key_prefix` | string | いいえ | `"mzpc"` | 生成される `prompt_cache_key` のプレフィックス。 |
+| `key_mode` | string | いいえ | `"prefix"` | `prefix` は会話プレフィックスからキーを導出します。`identity` はアイデンティティごとに 1 つのキーを使います。 |
+| `include_user_in_key` | boolean | いいえ | `false` | Monoize ユーザーをキーに混ぜ、ユーザー間でキャッシュエントリを共有しないようにします。 |
+| `include_full_input_in_key` | boolean | いいえ | `false` | 安定プレフィックスではなく入力全体をハッシュします。 |
+
+### ルール例
+
+```json
+{
+  "transform": "cache_openai_prompt",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "gpt-*"
+  ],
+  "config": {
+    "retention": "24h",
+    "key_mode": "prefix"
+  }
+}
+```

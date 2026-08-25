@@ -1,0 +1,42 @@
+---
+title: "推理：解析 think XML"
+description: 从 assistant 文本解析 think 标签并还原为推理内容。
+---
+
+## 行为
+
+此变换从 assistant 文本中解析配置的 XML 标签（例如 `<think>...</think>`），把内容还原为推理节点。它与 `reasoning_to_think_xml` 互逆。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `reasoning_from_think_xml` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游把推理内联为 think 标签文本输出，而客户端期望结构化推理。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `tag` | string | 是 | — | 要解析的 XML 标签名，例如 `think`。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "reasoning_from_think_xml",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "tag": "think"
+  }
+}
+```

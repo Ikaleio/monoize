@@ -1,0 +1,50 @@
+---
+title: "Reasoning: effort to thinking budget"
+description: Map the request reasoning effort level to a thinking-token budget.
+---
+
+## What it does
+
+This transform maps the request reasoning effort level (`low`, `medium`, `high`, and optionally `xhigh` or `max`) to a numeric thinking-token budget for upstreams that take budgets instead of effort labels.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_effort_to_budget` |
+| Phase | `request` |
+| Scopes | Provider |
+
+## When to use
+
+- Clients send OpenAI-style `reasoning.effort` but the upstream takes an Anthropic-style thinking budget.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `low` | integer | Yes | — | Thinking-token budget for effort `low`. |
+| `med` | integer | Yes | — | Budget for effort `medium`. |
+| `high` | integer | Yes | — | Budget for effort `high`. |
+| `xhigh` | integer | No | — | Optional budget for effort `xhigh`. |
+| `max` | integer | No | — | Optional budget for effort `max`. |
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_effort_to_budget",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {
+    "low": 1024,
+    "med": 8192,
+    "high": 24576
+  }
+}
+```
+
+This transform is Provider-scope only, because it changes upstream spend.

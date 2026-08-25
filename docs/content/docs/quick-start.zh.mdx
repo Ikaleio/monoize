@@ -1,0 +1,83 @@
+---
+title: 快速开始
+description: 安装 Monoize、创建首个账号并发送第一个请求。
+---
+
+## 前置条件
+
+选择一种安装方式：
+
+- **Docker。** 官方镜像支持 Linux x86-64 和 ARM64。
+- **发行版二进制。** 从 GitHub Releases 页面下载 Linux、macOS 或 Windows 的压缩包。
+- **从源码构建。** 安装稳定版 Rust 工具链和 [Bun](https://bun.sh/)。release 构建会编译 React 仪表盘并嵌入可执行文件。
+
+## 使用 Docker 运行
+
+使用持久化 SQLite 卷运行镜像：
+
+```bash
+docker run -d \
+  --name monoize \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v monoize-data:/app/data \
+  ghcr.io/ikaleio/monoize:latest
+```
+
+如需使用 PostgreSQL 或非默认 SQLite 路径，用 `-e` 设置 `MONOIZE_DATABASE_DSN`。
+
+## 从源码构建
+
+```bash
+cargo build --release
+./target/release/monoize
+```
+
+服务器默认监听 `0.0.0.0:8080`。用 `MONOIZE_LISTEN` 修改监听地址。
+
+## 创建首个账号
+
+1. 在浏览器打开 `http://localhost:8080`。
+2. 注册一个账号。第一个注册的账号自动成为 `super_admin`。即使公开注册已关闭，此规则仍然生效。
+
+## 配置一条路由
+
+在仪表盘中完成以下步骤：
+
+1. 创建一个 Provider。参见 [Provider 与 Channel](/zh/docs/dashboard/providers-and-channels)。
+2. 添加至少一个 Channel，填写上游 Base URL 和凭据。
+3. 将一个逻辑模型名映射到该 Channel。
+4. 创建一个 API 密钥。参见 [API 密钥](/zh/docs/dashboard/api-keys)。
+
+## 发送第一个请求
+
+通过任意受支持的协议调用逻辑模型。OpenAI Responses 示例：
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H 'Authorization: Bearer sk-your-monoize-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "your-logical-model",
+    "input": "你好",
+    "stream": true
+  }'
+```
+
+Chat Completions 示例：
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H 'Authorization: Bearer sk-your-monoize-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "your-logical-model",
+    "messages": [{ "role": "user", "content": "你好" }]
+  }'
+```
+
+下游协议不需要与上游 Channel 类型一致。Monoize 会在两者之间转换。
+
+## 验证请求
+
+打开仪表盘的**日志**页面。请求会显示状态、延迟、Token 用量和费用。参见[请求日志](/zh/docs/request-logs)。

@@ -1,0 +1,50 @@
+---
+title: "画像: URL を base64 に解決"
+description: リクエスト内の画像 URL をダウンロードし、base64 ソースとしてインライン化します。
+---
+
+## 動作
+
+この変換はリクエスト内の画像 URL を並行してダウンロードし、インライン base64 ソースに置き換えます。ダウンロードの失敗やサイズ超過があったノードは変更されません。
+
+この変換がない場合、Monoize はリモート画像 URL を取得しません。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `image_resolve_urls` |
+| フェーズ | `request` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 上流が URL 画像ソースを拒否し、インライン base64 データのみ受け付ける。
+- 画像 URL が内部ネットワークなど、上流から到達できないホストを指している。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `timeout_seconds` | integer | いいえ | `30` | ダウンロードごとのタイムアウト秒数。 |
+| `max_bytes` | integer | いいえ | `20971520` | 画像ごとの最大ダウンロードバイト数。デフォルトは 20 MiB。 |
+| `roles` | string[] | いいえ | — | 画像 URL を解決するロール: `user`、`assistant`、`system`。空の場合はすべて解決。 |
+
+### ルール例
+
+```json
+{
+  "transform": "image_resolve_urls",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "timeout_seconds": 30,
+    "roles": [
+      "user"
+    ]
+  }
+}
+```

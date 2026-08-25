@@ -1,0 +1,41 @@
+---
+title: "Prompt: append empty user message"
+description: Append a padding user message when the input ends with an assistant message.
+---
+
+## What it does
+
+When the request input ends with an assistant node, this transform appends a padding user text node. Inputs that already end with a user node pass through unchanged.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `prompt_append_empty_user` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- An upstream rejects conversations whose last message is from the assistant.
+- Clients send prefill-style assistant messages to a strict upstream.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `content` | string | No | `" "` | Text content of the padding user message. Defaults to a single space. |
+
+### Example rule
+
+```json
+{
+  "transform": "prompt_append_empty_user",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

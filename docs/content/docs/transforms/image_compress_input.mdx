@@ -1,0 +1,55 @@
+---
+title: "Image: compress request images"
+description: Re-encode and optionally resize base64 user images before upstream encoding.
+---
+
+## What it does
+
+This transform re-encodes base64 images in user messages and optionally resizes them to `max_edge_px`. Smaller payloads upload faster and can reduce image token cost.
+
+With `skip_if_smaller` on (the default), an image keeps its original bytes when compression does not shrink it.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `image_compress_input` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- Clients send large photos or screenshots and upstream requests hit size limits.
+- You want to cap image resolution for cost control.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | No | `"original"` | `original`, `jpg`, `jpegxl_lossless`, `jpegxl`, `webp_lossless`, `webp`, or `png`. |
+| `max_edge_px` | integer | No | — | Maximum width or height in pixels. Omit to keep the original dimensions. |
+| `jpeg_quality` | integer | No | `80` | Quality 1-100 for JPEG output. |
+| `jpegxl_quality` | integer | No | `90` | Quality 1-99 for lossy JPEG XL output. |
+| `jpegxl_effort` | integer | No | `7` | JPEG XL encoding effort 1-10. Higher values compress more slowly. |
+| `webp_quality` | integer | No | `80` | Quality 1-100 for lossy WebP output. |
+| `skip_if_smaller` | boolean | No | `true` | Keep the original image when compression does not reduce the payload size. |
+
+### Example rule
+
+```json
+{
+  "transform": "image_compress_input",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "max_edge_px": 1568,
+    "webp_quality": 80
+  }
+}
+```
+
+Set the environment variables `MONOIZE_IMAGE_TRANSFORM_MAX_*` to bound decode work. See [Configuration](/en/docs/configuration).

@@ -1,0 +1,54 @@
+---
+title: Request Logs
+description: Read the logs list, enable request capture, and inspect payloads in the capture viewer.
+---
+
+## Logs list
+
+Open **Logs** in the sidebar. Monoize records one row for every API-key-authenticated forwarding request. Each row shows:
+
+- the logical model, the serving Provider and Channel, and the API key name;
+- token counts: input, output, cache read, cache creation, and reasoning tokens;
+- the charge in USD;
+- the status: `pending`, `success`, `error`, or `client_gone`;
+- timing: total duration, time to first byte, and tokens per second for streams.
+
+The list updates live over a server-sent event stream. New rows appear without a manual refresh.
+
+![Request logs list](/images/en/request-logs.webp)
+
+## Failed attempts
+
+When a request needed more than one upstream attempt, the row lists each failed hop in order. Each hop shows the Provider, the Channel, the upstream status code, and the error text. Use this list to see which Channel failed and why the request moved forward.
+
+## Request capture
+
+Capture stores the exact payload of each upstream attempt on disk. Capture is off by default. Two switches control it:
+
+1. **System switch.** A `super_admin` enables request capture in **Settings**. When this switch is off, no capture is written for any key.
+2. **Per-key mode.** Each API key sets `request_capture_mode`:
+   - `off`: never capture.
+   - `capture-all`: capture every request that reaches an upstream.
+   - `capture-only-abnormal`: capture only failed or anomalous requests.
+
+Captured files follow a retention window. The default is 1 day. Set `monoize_request_capture_retention_days` in **Settings** to change it.
+
+## Capture viewer
+
+Rows with a stored capture show a capture indicator. Click it to open the viewer. The viewer shows, for each attempt:
+
+- the original downstream request body;
+- the request after all transforms;
+- the exact encoded upstream request;
+- the raw upstream response or stream frames;
+- the transform chain that ran, with scope and order.
+
+Users with the `user` role see their own captures only, and see only API-key-scope transform entries. Admins can view captures owned by `user`-role accounts.
+
+## Troubleshooting
+
+| Symptom | Cause | Action |
+| --- | --- | --- |
+| No capture indicator on new rows | Capture persistence finishes after the live row arrives | Wait for the automatic list refresh, or reload once |
+| `capture_not_found` | The capture expired, or your role cannot view it | Raise retention days, or ask the owner |
+| Rows missing for a key | The key belongs to another user | Sign in as the key owner or as an admin |

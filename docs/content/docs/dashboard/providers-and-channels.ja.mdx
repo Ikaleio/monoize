@@ -1,0 +1,50 @@
+---
+title: Provider と Channel
+description: 順序付きの Provider と重み付きの Channel で上流ルートを定義します。
+---
+
+## 概念
+
+- **Provider（プロバイダー）** はルーティンググループです。ルーティング順序、リトライ予算、ヘルスポリシー、順序付き変換チェーンを定義します。
+- **Channel（チャネル）** は Provider 内の 1 つの上流エンドポイントです。上流タイプ、ベース URL、認証情報、モデル対応付け、重み、タイムアウトを保持します。
+
+リクエストはまず Provider を選択し、その中の Channel を選択します。選択規則は[ルーティングと信頼性](/ja/docs/routing)を参照してください。
+
+![Provider 一覧](/images/en/providers.webp)
+
+## Provider を作成
+
+1. サイドバーの**プロバイダー**を開きます。
+2. 作成ボタンをクリックして名前を入力します。
+3. 既定値が合わない場合はリトライオプションを調整します。
+   - `max_retries`：Provider 全体のリトライ総予算。`-1` はそのルート内で無制限。
+   - `channel_max_retries`：次へ進む前の Channel 内リトライ回数。既定 `0`。
+   - `channel_retry_interval_ms`：Channel 内リトライの間隔。既定 `0`。
+4. 明確な理由がない限り、`circuit_breaker_enabled` は有効のままにします。
+
+## Channel を追加
+
+1. Provider を開き、**Channel を追加**をクリックします。
+2. 上流タイプを選択します：`responses`、`chat_completion`、`messages`、`gemini`、`openai_image`、`replicate`。
+3. 上流のベース URL と API キーを入力します。
+4. 重みを設定します。トラフィックは対象 Channel 間で重みに比例して分配されます。既定 `1`。
+5. 任意：Channel ごとの `proxy_url` を設定して、プロセスレベルの上流プロキシを上書きします。
+
+後で Channel を編集するとき、API キー欄を空にすると保存済みのキーが維持されます。
+
+## モデルを対応付け
+
+各 Channel は、提供する論理モデルを列挙します。モデルエントリの内容：
+
+- `redirect`：実際の上流モデル名。空にすると論理名をそのまま送信します。
+- `multiplier`：課金に使う正の小数の価格乗数。
+
+Provider 内の有効な Channel が論理モデルを対応付けている場合のみ、そのモデルはその Provider にルーティングされます。
+
+## Provider の変換
+
+Provider は順序付き変換ルールのリストを保持できます。Provider の選択後、上流エンコードの前に、その Provider が処理するすべてのリクエストに適用されます。[変換](/ja/docs/transforms)を参照してください。
+
+## グループ
+
+すべての Provider は少なくとも 1 つのグループに属します。API キーは、グループが交差する Provider のみにルーティングされます。ユーザー層や環境の分離にグループを使います。

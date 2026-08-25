@@ -1,0 +1,50 @@
+---
+title: "推理：effort 轉思考預算"
+description: 把請求的推理力度等級映射為思考 token 預算。
+---
+
+## 行為
+
+此變換把請求的推理力度等級（`low`、`medium`、`high`，可選 `xhigh` 或 `max`）映射為數值型思考 token 預算，用於接受預算而非力度標籤的上游。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `reasoning_effort_to_budget` |
+| 階段 | `request` |
+| 範圍 | Provider |
+
+## 適用場景
+
+- 用戶端發送 OpenAI 風格的 `reasoning.effort`，但上游接受 Anthropic 風格的思考預算。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `low` | integer | 是 | — | `low` 力度對應的思考 token 預算。 |
+| `med` | integer | 是 | — | `medium` 力度對應的預算。 |
+| `high` | integer | 是 | — | `high` 力度對應的預算。 |
+| `xhigh` | integer | 否 | — | 可選，`xhigh` 力度對應的預算。 |
+| `max` | integer | 否 | — | 可選，`max` 力度對應的預算。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "reasoning_effort_to_budget",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "claude-*"
+  ],
+  "config": {
+    "low": 1024,
+    "med": 8192,
+    "high": 24576
+  }
+}
+```
+
+此變換僅支援 Provider 範圍，因為它改變上游開銷。

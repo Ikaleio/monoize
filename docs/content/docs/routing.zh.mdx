@@ -1,0 +1,60 @@
+---
+title: 路由与可靠性
+description: Monoize 如何选择路由、重试失败、前进回退和熔断。
+---
+
+## 路由选择
+
+对每个请求，Monoize 按以下顺序解析路由：
+
+1. **模型重定向。** 先执行 API 密钥规则，再执行全局规则。第一条匹配的规则重写模型名。
+2. **Provider 选择。** Monoize 收集满足以下条件的已启用 Provider：至少有一个已启用、权重大于零的 Channel 服务该模型，且分组与密钥分组有交集。分组顺序决定优先顺序；同一分组内按 Provider 优先级排序。
+3. **Channel 选择。** 在选中的 Provider 内，Monoize 按权重随机排序候选 Channel。Channel $i$ 被首先尝试的概率为：
+
+```math
+P(i) = \frac{w_i}{\sum_{j=1}^{n} w_j}
+```
+
+因此权重为 `2` 的 Channel 获得的流量是权重为 `1` 的 Channel 的两倍。
+
+## 重试与回退
+
+Monoize 按嵌套顺序尝试路由：先在一个 Provider 内遍历 Channel，再前进到下一个 Provider。
+
+- 每个 Channel 获得 `channel_max_retries + 1` 次尝试。默认为 1 次尝试，不做 Channel 内重试。
+- `channel_retry_interval_ms` 在 Channel 内重试之间插入等待。默认为 `0`。
+- `max_retries` 限制整个 Provider 的总尝试次数。
+- 一个 Provider 耗尽后，Monoize 继续尝试下一个符合条件的 Provider。
+- 所有 Provider 都耗尽后，客户端收到 HTTP `502`，错误码为 `upstream_error`。
+
+### 哪些错误会重试同一 Channel
+
+| 错误 | 同 Channel 重试 | 前进到下一路由 |
+| --- | --- | --- |
+| HTTP `408`、`429`、`5xx` | 是 | 是，Channel 预算耗尽后 |
+| 超时、连接被拒绝或重置 | 是 | 是，Channel 预算耗尽后 |
+| 其他上游错误（如 `400`、`401`、`404`） | 否 | 是，立即前进 |
+| Monoize 自身错误（认证、余额、校验、计费） | 否 | 否；路由终止 |
+
+## 流式保证
+
+第一个响应字节到达客户端时，回退即结束。在此之前，Monoize 可以自由切换 Channel 和 Provider。在此之后，Monoize 绝不切换。因此可见的流始终来自同一次生成。
+
+## 熔断器
+
+每个 Provider 有 `circuit_breaker_enabled` 开关。启用时：
+
+- 一个 Channel 在 `window_seconds`（默认 `30`）内出现 `failure_count_threshold`（默认 `3`）次可重试失败后变为不健康。
+- 不健康的 Channel 在 `cooldown_seconds`（默认 `60`）内被跳过。由 HTTP `429` 引起的失败使用 `rate_limit_cooldown_seconds`（默认 `15`）。
+- 开启 `per_model_circuit_break` 后，健康状态按 `(Channel, 模型)` 组合跟踪，而不是按 Channel。
+- 开启主动探测后，Monoize 在后台探测冷却结束的 Channel，达到成功阈值后恢复。
+
+将 Provider 的 `circuit_breaker_enabled` 设为 `false` 可忽略其健康状态。该 Provider 的被动熔断和主动探测随之停止。
+
+## 会话亲和
+
+Monoize 可以把一个会话绑定到服务它的 Channel，让携带服务端状态的后续请求（例如 Responses 的 `previous_response_id`）到达同一个上游。亲和可以全局配置，也可以按 Channel 配置。被亲和优先的 Channel 仍然遵守资格和健康规则。
+
+## 时间指标
+
+[请求日志](/zh/docs/request-logs)中的每一行记录总耗时、首字节时间和可见输出的每秒 Token 数。修改权重之前，用这些数值比较各个 Channel。

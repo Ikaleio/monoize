@@ -1,0 +1,50 @@
+---
+title: "图像：压缩响应图片"
+description: 对响应和流中 assistant 输出的图片重新编码并可选缩放。
+---
+
+## 行为
+
+此变换对响应或流中 assistant 输出的图片重新编码并可选缩放。选项与 `image_compress_input` 相同。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `image_compress_output` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 图像生成响应体积大，客户端为传输付出成本。
+- 你希望输出格式统一（例如 WebP），与上游格式无关。
+
+## 配置
+
+| 选项 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | 否 | `"original"` | `original`、`jpg`、`jpegxl_lossless`、`jpegxl`、`webp_lossless`、`webp` 或 `png`。 |
+| `max_edge_px` | integer | 否 | — | 最大宽度或高度（像素）。省略则保留原始尺寸。 |
+| `jpeg_quality` | integer | 否 | `80` | JPEG 输出的质量，1-100。 |
+| `jpegxl_quality` | integer | 否 | `90` | 有损 JPEG XL 输出的质量，1-99。 |
+| `jpegxl_effort` | integer | 否 | `7` | JPEG XL 编码力度，1-10。数值越高压缩越慢。 |
+| `webp_quality` | integer | 否 | `80` | 有损 WebP 输出的质量，1-100。 |
+| `skip_if_smaller` | boolean | 否 | `true` | 压缩没有减小体积时保留原图。 |
+
+### 示例规则
+
+```json
+{
+  "transform": "image_compress_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*image*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "webp_quality": 80
+  }
+}
+```

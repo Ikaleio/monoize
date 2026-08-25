@@ -1,0 +1,38 @@
+---
+title: "推理：正文转摘要"
+description: 把明文推理正文移动到推理摘要字段。
+---
+
+## 行为
+
+此变换在响应和流中把明文推理正文移动到推理摘要字段。只读取摘要字段的客户端因此能看到推理内容。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `reasoning_content_to_summary` |
+| 阶段 | `response` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游返回原始推理正文，但客户端期望 Responses 风格的摘要。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "reasoning_content_to_summary",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

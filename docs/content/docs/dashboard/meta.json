@@ -1,0 +1,4 @@
+{
+  "title": "Dashboard",
+  "pages": ["index", "providers-and-channels", "models", "api-keys"]
+}

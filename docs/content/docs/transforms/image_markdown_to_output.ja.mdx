@@ -1,0 +1,39 @@
+---
+title: "画像: Markdown から画像ノードへ"
+description: assistant テキスト内の Markdown 画像記法を実際の画像ノードに変換します。
+---
+
+## 動作
+
+この変換は assistant テキストから Markdown 画像ブロック（例: `![alt](url)`）を抽出し、通常の assistant 画像ノードに変換します。`image_output_to_markdown` の逆変換です。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `image_markdown_to_output` |
+| フェーズ | `response` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 上流が生成画像をテキスト内の Markdown リンクとして返す。
+- クライアントがテキストリンクではなく構造化された画像出力を期待している。
+
+## 設定
+
+この変換にはオプションがありません。`config` には空オブジェクトを指定します。
+
+### ルール例
+
+```json
+{
+  "transform": "image_markdown_to_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

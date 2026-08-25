@@ -1,0 +1,50 @@
+---
+title: "画像: レスポンス画像の圧縮"
+description: レスポンスとストリーム内の assistant 出力画像を再エンコードし、必要に応じてリサイズします。
+---
+
+## 動作
+
+この変換はレスポンスまたはストリーム内の assistant 出力画像を再エンコードし、必要に応じてリサイズします。オプションは `image_compress_input` と同じです。
+
+## リファレンス
+
+| 項目 | 値 |
+| --- | --- |
+| タイプ ID | `image_compress_output` |
+| フェーズ | `response` |
+| スコープ | Provider, API キー |
+
+## 使いどころ
+
+- 画像生成レスポンスが大きく、クライアントが転送コストを負担している。
+- 上流のフォーマットに関係なく、出力フォーマットを WebP などに統一したい。
+
+## 設定
+
+| オプション | 型 | 必須 | デフォルト | 説明 |
+| --- | --- | --- | --- | --- |
+| `output_format` | string | いいえ | `"original"` | `original`、`jpg`、`jpegxl_lossless`、`jpegxl`、`webp_lossless`、`webp`、`png` のいずれか。 |
+| `max_edge_px` | integer | いいえ | — | 最大の幅または高さ（ピクセル）。省略すると元の寸法を維持します。 |
+| `jpeg_quality` | integer | いいえ | `80` | JPEG 出力の品質（1〜100）。 |
+| `jpegxl_quality` | integer | いいえ | `90` | 非可逆 JPEG XL 出力の品質（1〜99）。 |
+| `jpegxl_effort` | integer | いいえ | `7` | JPEG XL のエンコード労力（1〜10）。値が大きいほど圧縮が遅くなります。 |
+| `webp_quality` | integer | いいえ | `80` | 非可逆 WebP 出力の品質（1〜100）。 |
+| `skip_if_smaller` | boolean | いいえ | `true` | 圧縮でペイロードが小さくならない場合は元画像を維持します。 |
+
+### ルール例
+
+```json
+{
+  "transform": "image_compress_output",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*image*"
+  ],
+  "config": {
+    "output_format": "webp",
+    "webp_quality": 80
+  }
+}
+```

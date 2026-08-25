@@ -1,0 +1,62 @@
+---
+title: Monoize 是什么
+description: 用 Rust 编写的 AI API 网关：转换协议语义，将一个逻辑模型路由到多个上游渠道。
+---
+
+## 概述
+
+Monoize 是一个用 Rust 编写的 AI API 网关。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Embeddings 和图像格式的请求，将请求转发到你配置的某个上游 Channel（通道），并按客户端使用的协议返回响应。
+
+Monoize 转换的是协议语义，而不是字段名。它先把每个请求解码为统一的类型化内部表示，再编码为选定的上游协议。响应沿同一路径反向转换。文本、推理、加密推理、工具调用、工具结果、图像、用量和流事件边界在转换中各自保持原有语义。
+
+## 核心能力
+
+- **协议转换。** 任何受支持的下游端点都可以调用任何已配置的上游类型。Monoize 在流式与非流式模式下转换 Responses、Chat Completions、Messages、Gemini 和图像协议。
+- **路由与可靠性。** 一个逻辑模型可以匹配多个有序的 Provider（服务提供者）。每个 Provider 包含带权重的 Channel。Monoize 重试可重试的失败，前进到下一条路由，并在发出第一个响应字节后停止回退。参见[路由与可靠性](/zh/docs/routing)。
+- **变换（Transform）。** 33 个内置变换可按 Provider、API 密钥或全局范围修改请求和响应。参见[变换](/zh/docs/transforms)。
+- **请求捕获。** 捕获功能默认关闭，开启后会保存每次上游尝试的完整报文。结构化查看器展示每一跳。参见[请求日志](/zh/docs/request-logs)。
+- **仪表盘。** 内嵌的 Web 仪表盘管理 Provider、Channel、模型、API 密钥、用户、计费和日志。参见[仪表盘](/zh/docs/dashboard)。
+
+## 支持的端点
+
+| 方法 | 端点 | 协议 |
+| --- | --- | --- |
+| `GET` | `/v1/models` | OpenAI 兼容模型列表 |
+| `POST` | `/v1/responses` | OpenAI Responses，支持流式与非流式 |
+| `GET` | `/v1/responses` | OpenAI Responses WebSocket 传输 |
+| `POST` | `/v1/responses/compact` | Responses 压缩 |
+| `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
+| `POST` | `/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/embeddings` | Embeddings |
+| `POST` | `/v1/images/generations` | 图像生成 |
+| `POST` | `/v1/images/edits` | Multipart 图像编辑 |
+
+每个转发端点都另有 `/api/v1/...` 别名。
+
+## 上游 Channel 类型
+
+| 类型 | 原生上游协议 |
+| --- | --- |
+| `responses` | OpenAI Responses 兼容 |
+| `chat_completion` | OpenAI Chat Completions 兼容 |
+| `messages` | Anthropic Messages 兼容 |
+| `gemini` | Google Gemini 原生 |
+| `openai_image` | OpenAI 兼容图像 API |
+| `replicate` | Replicate predictions |
+
+## 限制
+
+- Monoize 只转发工具定义和工具调用，不在本地执行工具。
+- Monoize 不提供 OpenAI Files、向量存储或本地检索。
+- 发出第一个下游字节后回退即结束。Monoize 不会在可见流中途切换 Provider。
+- 跨协议族转换保留可表示的语义。没有安全目标表示的提供商私有嵌套字段会被移除。
+- 图像压缩默认关闭。除非配置 `image_resolve_urls` 变换，Monoize 不会抓取远程图像 URL。
+
+## 下一步
+
+<Cards>
+  <Card title="快速开始" href="/zh/docs/quick-start" description="安装 Monoize 并发送第一个请求。" />
+  <Card title="配置" href="/zh/docs/configuration" description="环境变量与数据库选项。" />
+  <Card title="仪表盘" href="/zh/docs/dashboard" description="创建 Provider、Channel、模型和 API 密钥。" />
+  <Card title="变换" href="/zh/docs/transforms" description="按 Provider、密钥或模型修改请求和响应。" />
+</Cards>

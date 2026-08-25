@@ -1,0 +1,39 @@
+---
+title: "推理：移除请求输入中的推理"
+description: 在上游编码前移除请求输入中的推理节点。
+---
+
+## 行为
+
+此变换在 Monoize 为上游编码之前，移除请求输入中的推理节点。它是 `reasoning_strip_output` 的请求侧对应变换。
+
+## 参考信息
+
+| 属性 | 值 |
+| --- | --- |
+| 类型 ID | `reasoning_strip_input` |
+| 阶段 | `request` |
+| 范围 | Provider, API 密钥 |
+
+## 适用场景
+
+- 上游拒绝输入中回放的推理条目。
+- 客户端回放包含推理的完整历史时，你希望削减输入 token 成本。
+
+## 配置
+
+此变换没有配置项。`config` 使用空对象。
+
+### 示例规则
+
+```json
+{
+  "transform": "reasoning_strip_input",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

@@ -1,0 +1,51 @@
+---
+title: "Reasoning: effort to model suffix"
+description: Append the reasoning effort to the upstream model name as a suffix.
+---
+
+## What it does
+
+When the request carries a supported reasoning effort (`none`, `minimum`, `low`, `medium`, `high`, `xhigh`, `max`), this transform appends the first matching rule's suffix to the upstream model name. `{effort}` in the suffix is replaced by the effort value.
+
+Requests without a supported effort pass through unchanged.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `reasoning_effort_to_model_suffix` |
+| Phase | `request` |
+| Scopes | Provider |
+
+## When to use
+
+- An upstream encodes reasoning strength in the model name, for example `model-high`.
+
+## Configuration
+
+| Option | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `rules` | array | Yes | — | Ordered rules of `{ pattern, suffix }`. The first pattern that matches the model applies. `{effort}` in the suffix is replaced by the resolved effort. |
+
+### Example rule
+
+```json
+{
+  "transform": "reasoning_effort_to_model_suffix",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "rules": [
+      {
+        "pattern": "grok-*",
+        "suffix": "-{effort}"
+      }
+    ]
+  }
+}
+```
+
+This transform is Provider-scope only, because it changes upstream model selection.

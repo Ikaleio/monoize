@@ -1,0 +1,45 @@
+---
+title: "串流：強制串流模式"
+description: 無視用戶端請求，強制設定上游的 stream 旗標。
+---
+
+## 行為
+
+此變換把上游請求的 `stream` 旗標設定為設定值。用戶端保持自己的模式：用戶端請求非串流而上游串流時，Monoize 收集串流並返回單一回應。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `stream_force` |
+| 階段 | `request` |
+| 範圍 | Provider |
+
+## 適用場景
+
+- 上游在長的非串流請求上逾時，但串流正常。
+- 上游只支援一種模式。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `enabled` | boolean | 是 | — | 強制寫入上游請求的 stream 旗標值。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "stream_force",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "enabled": true
+  }
+}
+```
+
+此變換僅支援 Provider 範圍，因為它改變請求執行模式。

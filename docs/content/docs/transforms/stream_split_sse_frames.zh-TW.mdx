@@ -1,0 +1,43 @@
+---
+title: "串流：拆分超長 SSE 幀"
+description: 把過大的 SSE 增量載荷拆分為多個協議合法的事件。
+---
+
+## 行為
+
+此變換把超過設定長度的下游 SSE 增量載荷拆分為多個協議合法的事件。可見文字不變；只有分幀方式不同。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `stream_split_sse_frames` |
+| 階段 | `response` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 某個用戶端或代理丟棄或截斷超長 SSE 幀。
+- 上游批次輸出大增量，用戶端需要更平滑的增量渲染。
+
+## 設定
+
+| 選項 | 類型 | 必填 | 預設值 | 說明 |
+| --- | --- | --- | --- | --- |
+| `max_frame_length` | integer | 否 | — | SSE 幀載荷的最大長度。超過限制的幀會被拆分。 |
+
+### 範例規則
+
+```json
+{
+  "transform": "stream_split_sse_frames",
+  "enabled": true,
+  "phase": "response",
+  "models": [
+    "*"
+  ],
+  "config": {
+    "max_frame_length": 4096
+  }
+}
+```

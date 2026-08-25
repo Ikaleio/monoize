@@ -1,0 +1,41 @@
+---
+title: "Auto-cache: user identity"
+description: Inject the Monoize username into provider user fields to improve cache affinity.
+---
+
+## What it does
+
+This transform writes the Monoize username into the Anthropic `metadata.user_id` field and the OpenAI `user` field. Providers use these fields to route requests from one user to the same cache shard.
+
+The transform never overwrites a value the client already set.
+
+## Reference
+
+| Property | Value |
+| --- | --- |
+| Type ID | `cache_user_id` |
+| Phase | `request` |
+| Scopes | Provider, API key |
+
+## When to use
+
+- The upstream shards its prompt cache by user identity.
+- Multiple end users share one Monoize deployment and cache hit rates are low.
+
+## Configuration
+
+This transform has no options. Use an empty `config` object.
+
+### Example rule
+
+```json
+{
+  "transform": "cache_user_id",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```

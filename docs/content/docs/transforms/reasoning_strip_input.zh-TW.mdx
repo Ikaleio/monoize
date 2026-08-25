@@ -1,0 +1,39 @@
+---
+title: "推理：移除請求輸入中的推理"
+description: 在上游編碼前移除請求輸入中的推理節點。
+---
+
+## 行為
+
+此變換在 Monoize 為上游編碼之前，移除請求輸入中的推理節點。它是 `reasoning_strip_output` 的請求側對應變換。
+
+## 參考資訊
+
+| 屬性 | 值 |
+| --- | --- |
+| 類型 ID | `reasoning_strip_input` |
+| 階段 | `request` |
+| 範圍 | Provider, API 金鑰 |
+
+## 適用場景
+
+- 上游拒絕輸入中回放的推理條目。
+- 用戶端回放包含推理的完整歷史時，你希望削減輸入 token 成本。
+
+## 設定
+
+此變換沒有設定項。`config` 使用空物件。
+
+### 範例規則
+
+```json
+{
+  "transform": "reasoning_strip_input",
+  "enabled": true,
+  "phase": "request",
+  "models": [
+    "*"
+  ],
+  "config": {}
+}
+```
