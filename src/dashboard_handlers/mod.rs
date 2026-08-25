@@ -5,6 +5,7 @@ mod auth;
 mod billing_plans;
 mod billing_rates;
 mod captcha;
+mod custom_transforms;
 mod groups;
 mod model_registry;
 mod providers;
@@ -42,6 +43,10 @@ pub use billing_rates::{
     update_pricing_profile_patterns, upsert_billing_rate,
 };
 pub use captcha::{create_captcha_challenge, redeem_captcha_challenge};
+pub use custom_transforms::{
+    CreateCustomTransformRequest, UpdateCustomTransformRequest, create_custom_transform,
+    delete_custom_transform, list_custom_transforms, update_custom_transform,
+};
 pub use groups::{
     DashboardGroupsResponse, create_group, delete_group, list_dashboard_groups, reorder_groups,
     update_group,

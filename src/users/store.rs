@@ -127,8 +127,23 @@ struct LockedApiKeyBalance {
     sub_account_enabled: bool,
 }
 
-pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
+pub(crate) fn is_allowed_api_key_transform(
+    rule: &TransformRuleConfig,
+    custom: &crate::custom_transforms::CustomTransformSnapshot,
+) -> bool {
     let transform = canonical_transform_id(rule.transform.as_str());
+    // CJS-AKV-2: a `js:` rule is allowed only when it resolves in the enabled
+    // snapshot to a user-visible transform whose scopes include api_key and
+    // whose declared phases include the rule phase.
+    if transform.starts_with(crate::transforms::CUSTOM_TRANSFORM_ID_PREFIX) {
+        return custom.get(transform).is_some_and(|entry| {
+            entry.visibility == crate::custom_transforms::CustomTransformVisibility::User
+                && entry
+                    .scopes
+                    .contains(&crate::transforms::TransformScope::ApiKey)
+                && entry.phases.contains(&rule.phase)
+        });
+    }
     match rule.phase {
         crate::transforms::Phase::Request => {
             ALLOWED_API_KEY_REQUEST_TRANSFORMS.contains(&transform)
@@ -142,6 +157,7 @@ pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
 pub(crate) fn sanitize_api_key_transforms(
     transforms: Vec<TransformRuleConfig>,
     is_admin: bool,
+    custom: &crate::custom_transforms::CustomTransformSnapshot,
 ) -> Vec<TransformRuleConfig> {
     let transforms: Vec<TransformRuleConfig> = transforms
         .into_iter()
@@ -155,13 +171,14 @@ pub(crate) fn sanitize_api_key_transforms(
     }
     transforms
         .into_iter()
-        .filter(is_allowed_api_key_transform)
+        .filter(|rule| is_allowed_api_key_transform(rule, custom))
         .collect()
 }
 
 pub(crate) fn validate_api_key_transforms(
     transforms: &[TransformRuleConfig],
     is_admin: bool,
+    custom: &crate::custom_transforms::CustomTransformSnapshot,
 ) -> Result<(), String> {
     if is_admin {
         return Ok(());
@@ -169,7 +186,7 @@ pub(crate) fn validate_api_key_transforms(
     for rule in transforms {
         let mut canonical_rule = rule.clone();
         canonicalize_transform_rule(&mut canonical_rule);
-        if !is_allowed_api_key_transform(&canonical_rule) {
+        if !is_allowed_api_key_transform(&canonical_rule, custom) {
             return Err(format!(
                 "transform '{}' is not allowed for API keys",
                 rule.transform
@@ -355,12 +372,22 @@ impl UserStore {
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
             registration_lock: Arc::new(tokio::sync::Mutex::new(())),
             api_key_creation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            custom_transforms: crate::custom_transforms::CustomTransformSnapshotHandle::default(),
         };
         if !is_replica {
             store.migrate_transform_rule_ids().await?;
             store.cleanup_expired_sessions().await?;
         }
         Ok(store)
+    }
+
+    /// Attaches the shared enabled custom-transform snapshot (CJS-AKV-2).
+    pub fn with_custom_transforms(
+        mut self,
+        handle: crate::custom_transforms::CustomTransformSnapshotHandle,
+    ) -> Self {
+        self.custom_transforms = handle;
+        self
     }
 
     async fn migrate_transform_rule_ids(&self) -> Result<(), String> {
@@ -1342,7 +1369,7 @@ impl UserStore {
         is_admin: bool,
     ) -> Result<(ApiKey, String), String> {
         canonicalize_transform_rules(&mut input.transforms);
-        validate_api_key_transforms(&input.transforms, is_admin)?;
+        validate_api_key_transforms(&input.transforms, is_admin, &self.custom_transforms.get())?;
         let compiled_model_redirects = compile_model_redirects(&input.model_redirects)?;
         input.ip_whitelist = canonicalize_ip_whitelist(&input.ip_whitelist)?;
         if input.sub_account_balance_nano_usd.is_some() && !is_admin {
@@ -2315,7 +2342,7 @@ impl UserStore {
             .can_manage_system();
         let transforms = parse_persisted_json_array(&transforms_str, "transforms")?;
         let transforms: Vec<TransformRuleConfig> =
-            sanitize_api_key_transforms(transforms, is_admin);
+            sanitize_api_key_transforms(transforms, is_admin, &self.custom_transforms.get());
         let model_redirects: Vec<ModelRedirectRule> =
             parse_persisted_json_array(&model_redirects_str, "model_redirects")?;
         let compiled_model_redirects = compile_model_redirects(&model_redirects)
@@ -2368,7 +2395,7 @@ impl UserStore {
                 .map_err(|_| "expires_at must be a valid RFC3339 timestamp".to_string())?;
         }
         if let Some(transforms) = &input.transforms {
-            validate_api_key_transforms(transforms, is_admin)?;
+            validate_api_key_transforms(transforms, is_admin, &self.custom_transforms.get())?;
         }
         if let Some(model_redirects) = &input.model_redirects {
             validate_model_redirects(model_redirects)?;
@@ -4168,7 +4195,7 @@ mod tests {
             }),
         }];
 
-        let sanitized = sanitize_api_key_transforms(transforms, false);
+        let sanitized = sanitize_api_key_transforms(transforms, false, &Default::default());
         assert!(sanitized.is_empty());
     }
 
@@ -4186,7 +4213,7 @@ mod tests {
             }),
         }];
 
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+        assert!(validate_api_key_transforms(&transforms, false, &Default::default()).is_ok());
     }
 
     #[test]
@@ -4199,7 +4226,7 @@ mod tests {
             config: json!({}),
         }];
 
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+        assert!(validate_api_key_transforms(&transforms, false, &Default::default()).is_ok());
     }
 
     #[test]
@@ -4212,7 +4239,7 @@ mod tests {
             config: json!({}),
         }];
 
-        let sanitized = sanitize_api_key_transforms(transforms, false);
+        let sanitized = sanitize_api_key_transforms(transforms, false, &Default::default());
 
         assert_eq!(sanitized.len(), 1);
         assert_eq!(sanitized[0].transform, "prompt_strip_anthropic_billing_header");
@@ -4276,7 +4303,106 @@ mod tests {
             },
         ];
 
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+        assert!(validate_api_key_transforms(&transforms, false, &Default::default()).is_ok());
+    }
+
+    /// CJS-AKV-2/CJS-AKV-3: `js:` rules pass for non-admins exactly when the
+    /// enabled snapshot entry is user-visible, api_key-scoped, and declares
+    /// the rule phase.
+    #[test]
+    fn api_key_transforms_gate_custom_js_rules_by_snapshot() {
+        use crate::custom_transforms::{
+            CustomTransformEntry, CustomTransformSnapshot, CustomTransformVisibility,
+        };
+        use crate::transforms::TransformScope;
+        use std::sync::Arc;
+
+        let entry = |id: &str,
+                     visibility: CustomTransformVisibility,
+                     scopes: Vec<TransformScope>,
+                     phases: Vec<Phase>| {
+            (
+                id.to_string(),
+                Arc::new(CustomTransformEntry {
+                    id: id.to_string(),
+                    name: "n".to_string(),
+                    description: "d".to_string(),
+                    author: "a".to_string(),
+                    source: "function transform(ctx) {}".to_string(),
+                    visibility,
+                    phases,
+                    scopes,
+                    config_schema: None,
+                }),
+            )
+        };
+        let snapshot = CustomTransformSnapshot::from_entries(
+            [
+                entry(
+                    "js:allowed",
+                    CustomTransformVisibility::User,
+                    vec![TransformScope::ApiKey],
+                    vec![Phase::Request],
+                ),
+                entry(
+                    "js:admin-only",
+                    CustomTransformVisibility::Admin,
+                    vec![TransformScope::ApiKey],
+                    vec![Phase::Request],
+                ),
+                entry(
+                    "js:wrong-scope",
+                    CustomTransformVisibility::User,
+                    vec![TransformScope::Provider],
+                    vec![Phase::Request],
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let rule = |id: &str, phase: Phase| TransformRuleConfig {
+            transform: id.to_string(),
+            enabled: true,
+            models: None,
+            phase,
+            config: json!({}),
+        };
+
+        assert!(
+            validate_api_key_transforms(&[rule("js:allowed", Phase::Request)], false, &snapshot)
+                .is_ok()
+        );
+        for (id, phase) in [
+            ("js:admin-only", Phase::Request),
+            ("js:wrong-scope", Phase::Request),
+            ("js:allowed", Phase::Response),
+            ("js:missing", Phase::Request),
+        ] {
+            assert!(
+                validate_api_key_transforms(&[rule(id, phase)], false, &snapshot).is_err(),
+                "rule {id} in phase {phase:?} must be rejected"
+            );
+        }
+        // Admin bypass keeps every rule.
+        assert!(
+            validate_api_key_transforms(
+                &[rule("js:admin-only", Phase::Request)],
+                true,
+                &snapshot
+            )
+            .is_ok()
+        );
+
+        let sanitized = sanitize_api_key_transforms(
+            vec![
+                rule("js:allowed", Phase::Request),
+                rule("js:admin-only", Phase::Request),
+            ],
+            false,
+            &snapshot,
+        );
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].transform, "js:allowed");
     }
 
     #[test]
@@ -4292,7 +4418,7 @@ mod tests {
             }),
         }];
 
-        let sanitized = sanitize_api_key_transforms(transforms.clone(), true);
+        let sanitized = sanitize_api_key_transforms(transforms.clone(), true, &Default::default());
         assert_eq!(sanitized.len(), 1);
         assert_eq!(sanitized[0].transform, transforms[0].transform);
         assert_eq!(sanitized[0].enabled, transforms[0].enabled);

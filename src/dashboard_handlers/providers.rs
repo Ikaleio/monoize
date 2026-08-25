@@ -1134,6 +1134,39 @@ pub async fn get_transform_registry(
             })
         })
         .collect();
+
+    // CJS-REG-1: admins see every enabled custom transform; everyone else
+    // (non-admin session or no valid session) sees user-visible ones only.
+    let caller_is_admin =
+        match crate::dashboard_handlers::session_helpers::get_current_user(&headers, &state).await
+        {
+            Ok(user) => user.role.can_manage_system(),
+            Err(_) => false,
+        };
+    let snapshot = state.custom_transform_store.snapshot();
+    for entry in snapshot.values() {
+        if !caller_is_admin
+            && entry.visibility != crate::custom_transforms::CustomTransformVisibility::User
+        {
+            continue;
+        }
+        // CJS-REG-2: plain name/description strings mirrored into both
+        // required locale keys; scopes are exactly the declared scopes.
+        items.push(json!({
+            "type_id": entry.id,
+            "name": { "en": entry.name, "zh": entry.name },
+            "description": { "en": entry.description, "zh": entry.description },
+            "supported_phases": entry.phases,
+            "supported_scopes": entry.scopes,
+            "config_schema": entry
+                .config_schema
+                .clone()
+                .unwrap_or_else(crate::custom_transforms::default_config_schema),
+            "custom": true,
+            "visibility": entry.visibility,
+        }));
+    }
+
     items.sort_by(|a, b| a["type_id"].as_str().cmp(&b["type_id"].as_str()));
     Ok(Json(items))
 }

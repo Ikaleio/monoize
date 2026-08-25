@@ -141,8 +141,10 @@ pub(super) async fn apply_transform_rules_request(
     if rules.is_empty() {
         return Ok(());
     }
-    let mut states = transforms::build_states_for_rules(rules, state.transform_registry.as_ref())
-        .map_err(|e| {
+    let custom_snapshot = state.custom_transform_store.snapshot();
+    let resolver =
+        transforms::TransformResolver::new(state.transform_registry.as_ref(), custom_snapshot.as_ref());
+    let mut states = transforms::build_states_for_rules(rules, resolver).map_err(|e| {
         AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "transform_init_failed",
@@ -161,7 +163,7 @@ pub(super) async fn apply_transform_rules_request(
         match_model,
         Phase::Request,
         &context,
-        state.transform_registry.as_ref(),
+        resolver,
     )
     .await
     .map_err(|e| {
@@ -183,8 +185,10 @@ pub(super) async fn apply_transform_rules_response(
     if rules.is_empty() {
         return Ok(());
     }
-    let mut states = transforms::build_states_for_rules(rules, state.transform_registry.as_ref())
-        .map_err(|e| {
+    let custom_snapshot = state.custom_transform_store.snapshot();
+    let resolver =
+        transforms::TransformResolver::new(state.transform_registry.as_ref(), custom_snapshot.as_ref());
+    let mut states = transforms::build_states_for_rules(rules, resolver).map_err(|e| {
         AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "transform_init_failed",
@@ -203,7 +207,7 @@ pub(super) async fn apply_transform_rules_response(
         model,
         Phase::Response,
         &context,
-        state.transform_registry.as_ref(),
+        resolver,
     )
     .await
     .map_err(|e| {
@@ -226,34 +230,34 @@ pub(super) async fn transform_urp_stream(
     upstream_provider_type: Option<ProviderType>,
     reasoning_envelope: Option<(&str, &str)>,
 ) -> AppResult<()> {
+    // The snapshot Arc is held for the whole stream so every event of one
+    // request resolves against the same custom-transform set.
+    let custom_snapshot = state.custom_transform_store.snapshot();
+    let resolver =
+        transforms::TransformResolver::new(state.transform_registry.as_ref(), custom_snapshot.as_ref());
     let mut provider_states =
-        transforms::build_states_for_rules(provider_rules, state.transform_registry.as_ref())
-            .map_err(|e| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "transform_init_failed",
-                    e.to_string(),
-                )
-            })?;
+        transforms::build_states_for_rules(provider_rules, resolver).map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transform_init_failed",
+                e.to_string(),
+            )
+        })?;
     let mut global_states =
-        transforms::build_states_for_rules(global_rules, state.transform_registry.as_ref())
-            .map_err(|e| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "transform_init_failed",
-                    e.to_string(),
-                )
-            })?;
-    let mut auth_states =
-        transforms::build_states_for_rules(auth_rules, state.transform_registry.as_ref()).map_err(
-            |e| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "transform_init_failed",
-                    e.to_string(),
-                )
-            },
-        )?;
+        transforms::build_states_for_rules(global_rules, resolver).map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transform_init_failed",
+                e.to_string(),
+            )
+        })?;
+    let mut auth_states = transforms::build_states_for_rules(auth_rules, resolver).map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "transform_init_failed",
+            e.to_string(),
+        )
+    })?;
     let context = transforms::TransformRuntimeContext {
         image_transform_cache: state.image_transform_cache.clone(),
         http_client: state.http.clone(),
@@ -280,7 +284,7 @@ pub(super) async fn transform_urp_stream(
                 model,
                 Phase::Response,
                 &context,
-                state.transform_registry.as_ref(),
+                resolver,
             )
             .await
             .map_err(|e| {
@@ -299,7 +303,7 @@ pub(super) async fn transform_urp_stream(
                     model,
                     Phase::Response,
                     &context,
-                    state.transform_registry.as_ref(),
+                    resolver,
                 )
                 .await
                 .map_err(|e| {
@@ -318,7 +322,7 @@ pub(super) async fn transform_urp_stream(
                         model,
                         Phase::Response,
                         &context,
-                        state.transform_registry.as_ref(),
+                        resolver,
                     )
                     .await
                     .map_err(|e| {

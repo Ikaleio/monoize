@@ -48,6 +48,10 @@ pub struct CustomTransformSnapshot {
 }
 
 impl CustomTransformSnapshot {
+    pub fn from_entries(entries: HashMap<String, Arc<CustomTransformEntry>>) -> Self {
+        Self { entries }
+    }
+
     pub fn get(&self, id: &str) -> Option<&Arc<CustomTransformEntry>> {
         self.entries.get(id)
     }

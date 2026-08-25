@@ -488,6 +488,10 @@ pub struct UserStore {
     pub(crate) balance_cache: crate::db_cache::BalanceCache,
     pub(crate) registration_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub(crate) api_key_creation_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// Enabled custom-transform snapshot used for CJS-AKV-2 rule checks.
+    /// The default handle resolves nothing, which rejects every `js:` rule
+    /// for non-admin callers.
+    pub(crate) custom_transforms: crate::custom_transforms::CustomTransformSnapshotHandle,
 }
 
 pub(crate) const RESERVED_INTERNAL_USER_PREFIX: &str = "_monoize_";
