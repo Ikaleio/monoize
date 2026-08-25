@@ -88,10 +88,14 @@ DL6. Sidebar admin navigation group (visible only when user role is `admin` or `
 - `/dashboard/admin`
 - `/dashboard/providers`
 - `/dashboard/models`
+- `/dashboard/custom-transforms`
 - `/dashboard/plans`
 - `/dashboard/users`
 - `/dashboard/groups`
 - `/dashboard/admin-settings`
+
+The `/dashboard/custom-transforms` page content is governed by
+`spec/custom-js-transforms.spec.md` §11 (CJS-UI-1 through CJS-UI-7).
 
 DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pane vertical scrolling:
 

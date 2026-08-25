@@ -10,6 +10,8 @@
 
 TCU-1. The frontend transform registry item type MUST carry `type_id: string`, `supported_phases: Phase[]`, `supported_scopes: TransformScope[]`, `config_schema: object`, `name: Record<string, string>`, and `description: Record<string, string>`. `name` and `description` are localized-text objects per `urp-transform-system.spec.md` TF-8a.
 
+TCU-1a. The registry item type additionally carries two optional fields present only on custom `js:` transforms (`custom-js-transforms.spec.md` CJS-REG-2): `custom?: boolean` and `visibility?: "admin" | "user"`. Chain editors treat custom items identically to built-ins: phase and scope filtering, localized-text resolution (custom items resolve to the same plain string for every UI language because both locale keys mirror it), and the config dialog schema mapping are unchanged.
+
 TCU-2. Localized-text resolution for a localized-text object `M` and active UI language `L` is exact and MUST apply this order:
 1. if `M[L]` exists, use `M[L]`;
 2. otherwise, if `L` contains `-`, take the substring of `L` before the first `-`; if `M` has that key, use that value (e.g. `zh-TW` resolves to `M["zh"]`);
