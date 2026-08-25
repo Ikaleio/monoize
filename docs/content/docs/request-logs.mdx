@@ -31,6 +31,16 @@ Capture stores the exact payload of each upstream attempt on disk. Capture is of
    - `capture-all`: capture every request that reaches an upstream.
    - `capture-only-abnormal`: capture only failed or anomalous requests.
 
+Capture applies to these endpoints: `POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/images/generations`, and `POST /v1/images/edits`.
+
+### Image API and multimodal payloads
+
+Each Image API sub-request writes one capture. When `n` is greater than 1, the capture request id gets the suffix `:img:{i}`. Here `i` is the 0-based sub-request index.
+
+Monoize stores a `multipart/form-data` body as a structured JSON object. The object lists each part in wire order. A text part records the field name and the text. A file part records the field name, the file name, the content type, the byte length, and the base64 data. This rule applies to the received `POST /v1/images/edits` body and to the multipart form sent to an `openai_image` upstream.
+
+Capture keeps image and other multimodal payloads exactly as they appear in the source body. Monoize does not redact or re-encode them.
+
 ### Retention and rotation
 
 Each API key sets `request_capture_retention`: `5m`, `1h`, `24h`, or `7d`. The default is `24h`. A capture expires after this period. A cleanup task removes expired captures at startup and then every hour.
@@ -49,6 +59,8 @@ Rows with a stored capture show a capture indicator. Click it to open the viewer
 - **Response**: the non-streaming result. For a streaming attempt, Monoize shows the reconstructed final response;
 - **Output Stream**: the raw SSE frames of a streaming attempt, with syntax highlighting. This tab appears only when the attempt recorded stream frames;
 - the transform chain that ran, with scope and order.
+
+The viewer shows an inline preview under a string that holds an image data URL or base64 image data. Image data that fails to decode collapses the preview and keeps the text.
 
 Users with the `user` role see their own captures only, and see only API-key-scope transform entries. Admins can view captures owned by `user`-role accounts.
 
