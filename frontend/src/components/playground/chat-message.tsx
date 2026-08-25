@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { UIMessage } from "ai";
+import type { ReasoningUIPart, UIMessage } from "ai";
 import {
   Brush,
   Check,
@@ -17,6 +17,10 @@ import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { motion, transitions } from "@/components/ui/motion";
+import {
+  reasoningPartKind,
+  type ReasoningPartKind,
+} from "@/components/playground/responses-sse";
 import { cn } from "@/lib/utils";
 
 function messageText(message: UIMessage): string {
@@ -97,16 +101,54 @@ function MessageImage({
   );
 }
 
-function ReasoningBlock({ text }: { text: string }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+interface ReasoningSection {
+  kind: ReasoningPartKind;
+  parts: ReasoningUIPart[];
+}
+
+/**
+ * Groups a message's non-empty reasoning parts into at most two labeled
+ * sections (raw `content` vs `summary`, PG-RD2), ordered by the first part of
+ * each kind in `parts` order.
+ */
+function collectReasoningSections(message: UIMessage): ReasoningSection[] {
+  const sections: ReasoningSection[] = [];
+  for (const part of message.parts) {
+    if (part.type !== "reasoning" || part.text.trim().length === 0) continue;
+    const kind = reasoningPartKind(part.id);
+    let section = sections.find((candidate) => candidate.kind === kind);
+    if (!section) {
+      section = { kind, parts: [] };
+      sections.push(section);
+    }
+    section.parts.push(part);
+  }
+  return sections;
+}
+
+function ReasoningBlock({
+  label,
+  text,
+  streaming,
+}: {
+  label: string;
+  text: string;
+  streaming: boolean;
+}) {
+  // null = automatic control (open while streaming); a manual toggle takes
+  // over for the remaining lifetime of this rendered message (PG-RD2b).
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const shouldReduceMotion = useReducedMotion();
+  const panelId = useId();
+  const open = userOpen ?? streaming;
 
   return (
     <div className="rounded-lg border border-dashed bg-muted/30">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setUserOpen(!open)}
+        aria-expanded={open}
+        aria-controls={panelId}
         className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
         <motion.span
@@ -116,11 +158,20 @@ function ReasoningBlock({ text }: { text: string }) {
         >
           <ChevronRight className="h-3.5 w-3.5" />
         </motion.span>
-        {t("playground.reasoning")}
+        {label}
+        {streaming && (
+          <motion.span
+            animate={{ opacity: [0.3, 1, 0.3] }}
+            transition={{ duration: 1.2, repeat: Infinity }}
+            className="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground"
+            aria-hidden
+          />
+        )}
       </button>
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
+            id={panelId}
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
@@ -175,9 +226,9 @@ export function ChatMessage({
     (part): part is Extract<typeof part, { type: "file" }> =>
       part.type === "file" && !part.mediaType.startsWith("image"),
   );
-  const reasoningParts = message.parts.filter(
-    (part): part is Extract<typeof part, { type: "reasoning" }> =>
-      part.type === "reasoning" && part.text.trim().length > 0,
+  const reasoningSections = useMemo(
+    () => collectReasoningSections(message),
+    [message],
   );
 
   const copy = async () => {
@@ -321,11 +372,21 @@ export function ChatMessage({
 
   return (
     <div className="group flex w-full flex-col gap-2">
-      {reasoningParts.length > 0 && (
+      {reasoningSections.map((section) => (
         <ReasoningBlock
-          text={reasoningParts.map((part) => part.text).join("\n\n")}
+          key={section.kind}
+          label={t(
+            section.kind === "content"
+              ? "playground.reasoning"
+              : "playground.reasoningSummary",
+          )}
+          text={section.parts.map((part) => part.text).join("\n\n")}
+          streaming={
+            isStreaming &&
+            section.parts.some((part) => part.state === "streaming")
+          }
         />
-      )}
+      ))}
       {text && (
         <div className="min-w-0 text-sm leading-relaxed">
           <Streamdown

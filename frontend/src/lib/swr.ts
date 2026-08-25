@@ -30,6 +30,7 @@ import type {
   CreateGroupInput,
   UpdateGroupInput,
   UserLiveUsage,
+  CustomTransform,
 } from "./api";
 
 // SWR fetcher functions
@@ -49,6 +50,7 @@ const fetchers = {
   billingPlans: () => api.listBillingPlans(),
   pricingProfilePatterns: async () => (await api.getPricingProfilePatterns()).patterns,
   marketplaceModels: () => api.listMarketplaceModels(),
+  customTransforms: () => api.listCustomTransforms(),
 };
 
 // SWR cache keys
@@ -72,6 +74,7 @@ export const SWR_KEYS = {
   ANALYTICS: "/dashboard/analytics",
   ADMIN_OVERVIEW: "/dashboard/admin/overview",
   LIVE_USAGE: "/dashboard/me/live-usage",
+  CUSTOM_TRANSFORMS: "/dashboard/custom-transforms",
 } as const;
 
 export function providerDetailSWRKey(providerId: string) {
@@ -189,6 +192,15 @@ export function useTransformRegistry(config?: SWRConfiguration) {
       ...defaultConfig,
       ...config,
     }
+  );
+}
+
+// Custom transforms hook (admin only; custom-js-transforms.spec.md CJS-UI-2)
+export function useCustomTransforms(config?: SWRConfiguration) {
+  return useSWR<CustomTransform[]>(
+    SWR_KEYS.CUSTOM_TRANSFORMS,
+    fetchers.customTransforms,
+    { ...defaultConfig, ...config }
   );
 }
 
@@ -1100,6 +1112,78 @@ export async function updatePricingProfilePatternsOptimistic(
     return result.patterns;
   } catch (error) {
     mutate(SWR_KEYS.PRICING_PROFILE_PATTERNS, currentPatterns, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+// Custom transform mutation helpers (custom-js-transforms.spec.md CJS-UI-2):
+// every successful mutation also revalidates the transform registry so chain
+// editors observe custom items without close/reopen.
+
+export async function createCustomTransformOptimistic(
+  source: string,
+  onError?: (error: Error) => void
+) {
+  try {
+    const created = await api.createCustomTransform(source);
+    mutate(SWR_KEYS.CUSTOM_TRANSFORMS);
+    mutate(SWR_KEYS.TRANSFORM_REGISTRY);
+    return created;
+  } catch (error) {
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function updateCustomTransformOptimistic(
+  id: string,
+  input: { source?: string; enabled?: boolean },
+  currentTransforms: CustomTransform[],
+  onError?: (error: Error) => void
+) {
+  if (input.enabled !== undefined) {
+    const optimistic = currentTransforms.map((item) =>
+      item.id === id ? { ...item, enabled: input.enabled! } : item
+    );
+    mutate(SWR_KEYS.CUSTOM_TRANSFORMS, optimistic, false);
+  }
+
+  try {
+    const updated = await api.updateCustomTransform(id, input);
+    mutate(SWR_KEYS.CUSTOM_TRANSFORMS);
+    mutate(SWR_KEYS.TRANSFORM_REGISTRY);
+    return updated;
+  } catch (error) {
+    mutate(SWR_KEYS.CUSTOM_TRANSFORMS, currentTransforms, false);
+    if (onError && error instanceof Error) {
+      onError(error);
+    }
+    throw error;
+  }
+}
+
+export async function deleteCustomTransformOptimistic(
+  id: string,
+  currentTransforms: CustomTransform[],
+  onError?: (error: Error) => void
+) {
+  mutate(
+    SWR_KEYS.CUSTOM_TRANSFORMS,
+    currentTransforms.filter((item) => item.id !== id),
+    false
+  );
+
+  try {
+    await api.deleteCustomTransform(id);
+    mutate(SWR_KEYS.CUSTOM_TRANSFORMS);
+    mutate(SWR_KEYS.TRANSFORM_REGISTRY);
+  } catch (error) {
+    mutate(SWR_KEYS.CUSTOM_TRANSFORMS, currentTransforms, false);
     if (onError && error instanceof Error) {
       onError(error);
     }

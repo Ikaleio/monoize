@@ -100,14 +100,26 @@ RCV-F8. The dialog header MUST show, when available: the full `request_id` (mono
 
 RCV-F9. The dialog MUST show a compact transform-chain strip for the selected attempt: one chip per `transform_chain` entry, in stored order, showing the transform id, with scope and phase distinguishable (label or badge styling). When `hidden_transforms > 0`, the strip MUST append one localized chip stating the number of hidden system transforms. When `transform_chain` is `[]` or `null` and `hidden_transforms` is absent or `0`, the strip MUST render a localized empty label.
 
-RCV-F10. The content area MUST be a tab bar with exactly these tabs for the selected attempt:
+RCV-F10. The content area MUST be a tab bar with these tabs for the selected attempt, in this order:
 
 1. **Downstream request** (`raw_input`) — the request body received from the client,
 2. **Upstream request** (`upstream_request`) — the body actually sent upstream,
 3. **URP** (`transformed_urp_request`) — the transformed intermediate request,
-4. **Response** — `downstream_response` when non-null, otherwise the `downstream_sse_frames` list, otherwise the attempt `error` object, otherwise a localized empty state.
+4. **Response** — the non-streaming result of the attempt (RCV-F10a),
+5. **Output Stream** — the captured downstream SSE frames (RCV-F10b).
 
-RCV-F11. Each tab MUST provide a copy button that copies the tab's full underlying content to the clipboard: pretty-printed JSON (2-space indent) for object tabs, newline-joined frame data for the SSE tab. Copy success MUST show transient localized feedback.
+RCV-F10a. The Response tab renders one JSON object chosen by this precedence:
+
+1. `downstream_response` when non-null (non-streaming and buffered synthetic-stream attempts),
+2. otherwise `reconstructed_urp_response` when non-null (the URP parser's non-stream reconstruction of a pass-through stream, `request-capture-dumps.spec.md` RCD-D10a),
+3. otherwise the attempt `error` object when non-null,
+4. otherwise a localized empty state: `requestLogs.capture.responseEmptyStream` when `downstream_sse_frames` is a non-null array (directing the user to the Output Stream tab), else `requestLogs.capture.empty`.
+
+The Response tab MUST NOT render raw SSE frames.
+
+RCV-F10b. The Output Stream tab trigger MUST be rendered iff the selected attempt's `downstream_sse_frames` is a non-null array. Its content is the frame list defined by RCV-F16 with the virtualization and highlighting rules of RCV-F16a and RCV-F16b. Dumps written before `reconstructed_urp_response` existed keep a working Output Stream tab and show the RCV-F10a empty state on the Response tab.
+
+RCV-F11. Each tab MUST provide a copy button that copies the tab's full underlying content to the clipboard: pretty-printed JSON (2-space indent) for object tabs (for the Response tab, the object selected by RCV-F10a), newline-joined frame data for the Output Stream tab. Copy success MUST show transient localized feedback.
 
 ### 4.3 Content rendering
 
@@ -119,7 +131,17 @@ RCV-F14. A string leaf longer than 400 characters MUST render truncated with a l
 
 RCV-F15. Expand/collapse transitions MUST use non-linear easing from the project motion tokens (`easeOutExpo` enter, `easeInOutQuart` exit) via `framer-motion`; durations MUST be within `0.16s`-`0.30s`. Linear easing MUST NOT be used.
 
-RCV-F16. The SSE frames view MUST render one row per captured frame, monospace, each row independently expandable when its content exceeds one line, with the frame index visible. When the attempt records frame truncation (`downstream_sse_frames_truncation.truncated == true`), the list MUST show a localized truncation notice with the omitted counts.
+RCV-F16. The Output Stream view MUST render one row per captured frame, monospace, each row independently expandable when its content exceeds one line, with the frame index visible. When the attempt records frame truncation (`downstream_sse_frames_truncation.truncated == true`), the list MUST show a localized truncation notice with the omitted counts.
+
+RCV-F16a. Virtualization: the frame list MUST be rendered through `react-virtuoso` inside a fixed-height scroll container, so only visible rows (plus overscan) are mounted regardless of frame count. Expanding a row changes only that row's measured height; it MUST NOT force rendering of off-screen rows.
+
+RCV-F16b. Syntax highlighting: expanded frame content MUST be highlighted by a single-pass tokenizer with `O(n)` cost in the frame length and no backtracking. The tokenizer distinguishes: SSE field names at line starts (`event`, `data`, `id`, `retry`, terminated by `:`), JSON object keys, JSON string values, numbers, and `true`/`false`/`null` literals inside `data:` payloads. Token colors MUST reuse the RCV-F12 theme families (keys/fields info, strings success, numbers warning, booleans and null muted/destructive). Highlighting rules:
+
+1. a frame longer than 4096 characters MUST render as plain unhighlighted text,
+2. collapsed one-line previews MUST render as plain text (no tokenization cost for collapsed rows),
+3. tokenization for a row MUST run only while that row is mounted (RCV-F16a) and MUST be memoized per frame string.
+
+RCV-F16c. The highlighted output MUST preserve the frame text exactly: concatenating the rendered tokens reproduces the input string.
 
 ### 4.4 Responsiveness and accessibility
 

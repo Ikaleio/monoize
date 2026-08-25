@@ -1,0 +1,101 @@
+---
+title: Custom JS Transforms
+description: Administrator-authored JavaScript transforms that run in an embedded QuickJS sandbox.
+---
+
+## What a custom transform is
+
+A custom transform is a JavaScript script that an administrator writes in the dashboard.
+Monoize runs the script in an embedded QuickJS sandbox inside the normal transform pipeline.
+A custom transform attaches to Provider, global, and API-key chains like a built-in transform.
+
+Every custom transform ID starts with the fixed prefix `js:`.
+The full ID must match `js:` plus lowercase letters, digits, and single hyphens, for example `js:strip-markers`.
+
+## Manage custom transforms
+
+Open **Custom Transforms** in the admin sidebar.
+The page shows one card per transform with its name, ID, description, author, phases, scopes, and visibility.
+
+- **New Transform** opens a code editor with syntax highlighting, copy, and format actions.
+- The enabled switch on a card enables or disables the transform.
+- **Copy Authoring Skill** copies a complete authoring guide to the clipboard. Paste it into an AI assistant to generate scripts.
+
+`visibility: user` lets a non-admin attach the transform to an API-key chain.
+`visibility: admin` (the default) lets only an administrator attach the transform.
+`GET /api/dashboard/transforms/registry` requires an admin session and lists every enabled custom transform.
+A disabled or deleted transform never runs. Chains that still reference it skip it without error.
+
+## Frontmatter
+
+Each script starts with one block comment that declares the metadata:
+
+```js
+/**
+ * @monoize-transform
+ * id: js:example-rewrite
+ * name: Example Rewrite
+ * description: Rewrites request fields for demo.
+ * author: alice
+ * phase: request
+ * scopes: provider, global
+ * visibility: user
+ */
+```
+
+| Key | Required | Allowed values | Default |
+| --- | --- | --- | --- |
+| `id` | Yes | `js:` plus lowercase letters, digits, hyphens | — |
+| `name` | Yes | Plain string, at most 100 characters | — |
+| `description` | Yes | Plain string, at most 500 characters | — |
+| `author` | Yes | Plain string, at most 100 characters | — |
+| `phase` | No | `request`, `response`, `both` | `both` |
+| `scopes` | No | Comma-separated: `provider`, `global`, `api_key` | All three |
+| `visibility` | No | `admin`, `user` | `admin` |
+
+Monoize validates the frontmatter and evaluates the script once on save.
+A save with invalid frontmatter, a syntax error, or a missing `transform` function is rejected.
+
+## The transform function
+
+The script defines one global function `transform(ctx)`:
+
+```js
+function transform(ctx) {
+  if (ctx.config.target) {
+    ctx.data.model = ctx.config.target;
+  }
+}
+```
+
+- `ctx.phase` is `"request"` or `"response"`.
+- `ctx.kind` is `"request"`, `"response"`, or `"stream"`.
+- `ctx.data` is the JSON form of the payload. Mutate it or return a replacement object.
+- `ctx.config` is the rule config. Declare a global `configSchema` object to render a config form in the chain editor.
+- `ctx.state` is a per-request object that survives across stream events.
+- For stream events, return `null` to drop the event or an array to emit several events.
+
+`Monoize.fetch(url, options)` performs an HTTP request and returns `{ status, headers, body }`.
+`console.log`, `console.info`, `console.warn`, and `console.error` write to the server log.
+
+## Sandbox limits
+
+The sandbox has no filesystem, process, timer, or module APIs.
+Network access works only through `Monoize.fetch`.
+A script error fails the current request with a transform apply error; the proxy process continues.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `MONOIZE_CUSTOM_JS_MEMORY_LIMIT_BYTES` | `33554432` | Memory limit per invocation |
+| `MONOIZE_CUSTOM_JS_STACK_LIMIT_BYTES` | `1048576` | Stack limit per invocation |
+| `MONOIZE_CUSTOM_JS_TIMEOUT_MS` | `10000` | Wall-clock budget per invocation |
+| `MONOIZE_CUSTOM_JS_MAX_CONCURRENCY` | `8` | Concurrent sandbox invocations |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_BYTES` | `8388608` | Maximum fetch response size |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_CALLS` | `16` | Maximum fetch calls per invocation |
+| `MONOIZE_CUSTOM_JS_SOURCE_MAX_BYTES` | `262144` | Maximum script size |
+
+## Attach a custom transform
+
+A saved and enabled custom transform appears in the same chain editors as built-in transforms, filtered by its declared phases and scopes.
+Add it to a chain, set optional model globs, and configure it like any other rule.
+Verify the result with [request capture](/en/docs/request-logs).

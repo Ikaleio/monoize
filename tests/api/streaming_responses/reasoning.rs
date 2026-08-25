@@ -565,3 +565,142 @@ async fn responses_streaming_maps_messages_thinking_to_reasoning_summary() {
     );
     assert_eq!(reasoning["content"], json!([]));
 }
+
+#[tokio::test]
+async fn responses_streaming_chat_reasoning_content_emits_single_reasoning_lifecycle() {
+    let ctx = setup().await;
+    let (upstream_addr, _, _) = start_upstream().await;
+    let base_url = format!("http://{upstream_addr}");
+    let model = "deepseek-raw-cot";
+
+    seed_test_model_pricing(&ctx.state, &[model]).await;
+
+    ctx.state
+        .monoize_store
+        .create_provider(monoize::monoize_routing::CreateMonoizeProviderInput {
+            name: "mono-raw-cot-dedup".to_string(),
+            api_type_overrides: Vec::new(),
+            group_ids: Vec::new(),
+            channels: vec![monoize::monoize_routing::CreateMonoizeChannelInput {
+                id: Some("mono-raw-cot-dedup-ch1".to_string()),
+                name: "mono-raw-cot-dedup-ch1".to_string(),
+                provider_type: monoize::monoize_routing::MonoizeProviderType::ChatCompletion,
+                base_url,
+                api_key: Some("upstream-key".to_string()),
+                weight: 1,
+                enabled: true,
+                allow_missing_usage: false,
+                passive_failure_count_threshold_override: None,
+                passive_cooldown_seconds_override: None,
+                passive_window_seconds_override: None,
+                passive_rate_limit_cooldown_seconds_override: None,
+                models: HashMap::from([(
+                    model.to_string(),
+                    monoize::monoize_routing::MonoizeModelEntry {
+                        redirect: None,
+                        multiplier: monoize::exact_decimal::Multiplier::ONE,
+                    },
+                )]),
+                active_probe_enabled_override: None,
+                active_probe_interval_seconds_override: None,
+                active_probe_success_threshold_override: None,
+                active_probe_model_override: None,
+                affinity_enabled_override: None,
+                affinity_idle_ttl_seconds_override: None,
+                affinity_failback_mode_override: None,
+                affinity_failback_delay_seconds_override: None,
+
+                proxy_url: None,
+                extra_headers: None,
+                session_affinity_auto: None,
+                }],
+            max_retries: -1,
+            channel_max_retries: 0,
+            channel_retry_interval_ms: 0,
+            circuit_breaker_enabled: true,
+            per_model_circuit_break: false,
+            transforms: Vec::new(),
+            active_probe_enabled_override: None,
+            active_probe_interval_seconds_override: None,
+            active_probe_success_threshold_override: None,
+            active_probe_model_override: None,
+            request_timeout_ms_override: None,
+            extra_fields_whitelist: Some(vec!["stream_mode".to_string()]),
+            strip_cross_protocol_nested_extra: None,
+            enabled: true,
+            priority: Some(-1),
+        })
+        .await
+        .unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .header(CONTENT_TYPE, "application/json")
+        .header(AUTHORIZATION, ctx.auth_header.clone())
+        .body(Body::from(
+            json!({
+                "model": model,
+                "input": "hi",
+                "stream": true,
+                "stream_mode": "chat_reasoning_content_then_text"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let frames = parse_responses_sse_json(&text);
+
+    let reasoning_added = frames
+        .iter()
+        .filter(|(event, payload)| {
+            event == "response.output_item.added"
+                && payload["item"]["type"].as_str() == Some("reasoning")
+        })
+        .count();
+    let reasoning_done = frames
+        .iter()
+        .filter(|(event, payload)| {
+            event == "response.output_item.done"
+                && payload["item"]["type"].as_str() == Some("reasoning")
+        })
+        .count();
+    assert_eq!(
+        reasoning_added, 1,
+        "STR3k.2: raw chain of thought must stream exactly one reasoning lifecycle: {text}"
+    );
+    assert_eq!(
+        reasoning_done, 1,
+        "STR3k.2: the terminal reasoning node with a synthetic id must not replay the \
+         already-completed streamed reasoning lifecycle: {text}"
+    );
+
+    let reasoning_text_deltas = frames
+        .iter()
+        .filter(|(event, _)| event == "response.reasoning_text.delta")
+        .filter_map(|(_, payload)| payload["delta"].as_str())
+        .collect::<String>();
+    assert_eq!(reasoning_text_deltas, "think hard", "{text}");
+
+    let completed = frames
+        .iter()
+        .find(|(event, _)| event == "response.completed")
+        .map(|(_, payload)| payload)
+        .unwrap_or_else(|| panic!("missing response.completed: {text}"));
+    let output = completed["response"]["output"]
+        .as_array()
+        .expect("completed output array");
+    let reasoning_items = output
+        .iter()
+        .filter(|item| item["type"].as_str() == Some("reasoning"))
+        .count();
+    let message_items = output
+        .iter()
+        .filter(|item| item["type"].as_str() == Some("message"))
+        .count();
+    assert_eq!(reasoning_items, 1, "{text}");
+    assert_eq!(message_items, 1, "{text}");
+}

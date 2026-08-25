@@ -548,6 +548,7 @@ async fn t5_epoch_bump_poll_swap_and_failed_poll_keeps_snapshot() {
         &state.db_pool,
         &state.settings_store,
         &snapshot,
+        &state.custom_transform_store,
         &mut last,
     )
     .await;
@@ -571,6 +572,7 @@ async fn t5_epoch_bump_poll_swap_and_failed_poll_keeps_snapshot() {
         &state.db_pool,
         &state.settings_store,
         &snapshot,
+        &state.custom_transform_store,
         &mut last,
     )
     .await;
@@ -596,6 +598,7 @@ async fn t5_epoch_bump_poll_swap_and_failed_poll_keeps_snapshot() {
         &state.db_pool,
         &state.settings_store,
         &snapshot,
+        &state.custom_transform_store,
         &mut last,
     )
     .await;

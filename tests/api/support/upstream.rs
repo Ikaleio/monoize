@@ -3055,6 +3055,38 @@ async fn start_upstream() -> (SocketAddr, CapturedHeaders, CapturedBodies) {
                 return Sse::new(futures_util::stream::iter(chunks)).into_response();
             }
 
+            // DeepSeek-style raw chain of thought: `reasoning_content` deltas with no
+            // reasoning id, followed by ordinary content deltas (STR3k.2 repro shape).
+            if stream_mode == Some("chat_reasoning_content_then_text") {
+                let delta_chunk = |delta: Value, finish_reason: Value| {
+                    json!({
+                        "id": "chatcmpl_raw_cot",
+                        "object": "chat.completion.chunk",
+                        "created": 123,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": delta,
+                            "finish_reason": finish_reason
+                        }]
+                    })
+                    .to_string()
+                };
+                let chunks: Vec<Result<Event, Infallible>> = vec![
+                    Ok(Event::default()
+                        .data(delta_chunk(json!({ "role": "assistant" }), Value::Null))),
+                    Ok(Event::default()
+                        .data(delta_chunk(json!({ "reasoning_content": "think " }), Value::Null))),
+                    Ok(Event::default()
+                        .data(delta_chunk(json!({ "reasoning_content": "hard" }), Value::Null))),
+                    Ok(Event::default()
+                        .data(delta_chunk(json!({ "content": "answer" }), Value::Null))),
+                    Ok(Event::default().data(delta_chunk(json!({}), json!("stop")))),
+                    Ok(Event::default().data("[DONE]")),
+                ];
+                return Sse::new(futures_util::stream::iter(chunks)).into_response();
+            }
+
             if tools_present && tool_outputs.is_empty() {
                 if body.get("stream_mode").and_then(|v| v.as_str()) == Some("header_only_tool") {
                     let chunks: Vec<Result<Event, Infallible>> = vec![

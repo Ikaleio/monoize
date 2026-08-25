@@ -55,6 +55,12 @@ Monoize 内置 33 个变换。本节为每个变换提供独立页面。
 | 角色 | 改写或合并消息角色 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
 | 流式 | 控制流式行为 | `stream_force`、`stream_split_sse_frames` |
 
+## 自定义变换
+
+管理员还可以编写以 `js:` 为 ID 前缀的 JavaScript 变换。
+它们在内嵌的 QuickJS 沙箱中运行，与内置变换挂载到相同的链。
+详见[自定义 JS 变换](/zh/docs/transforms/custom-js)。
+
 ## 验证变换效果
 
 1. 为测试用 API 密钥开启[请求捕获](/zh/docs/request-logs)。

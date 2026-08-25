@@ -41,3 +41,6 @@ mod error_sanitization;
 
 #[path = "api/live_usage.rs"]
 mod live_usage;
+
+#[path = "api/custom_transforms_dashboard.rs"]
+mod custom_transforms_dashboard;

@@ -1134,6 +1134,27 @@ pub async fn get_transform_registry(
             })
         })
         .collect();
+
+    // CJS-REG-1 + SAC-1: admin session already required; list every enabled
+    // custom transform. Visibility is returned (CJS-REG-2) and enforced at
+    // API-key validate/sanitize (CJS-AKV-2), not here.
+    let snapshot = state.custom_transform_store.snapshot();
+    for entry in snapshot.values() {
+        items.push(json!({
+            "type_id": entry.id,
+            "name": { "en": entry.name, "zh": entry.name },
+            "description": { "en": entry.description, "zh": entry.description },
+            "supported_phases": entry.phases,
+            "supported_scopes": entry.scopes,
+            "config_schema": entry
+                .config_schema
+                .clone()
+                .unwrap_or_else(crate::custom_transforms::default_config_schema),
+            "custom": true,
+            "visibility": entry.visibility,
+        }));
+    }
+
     items.sort_by(|a, b| a["type_id"].as_str().cmp(&b["type_id"].as_str()));
     Ok(Json(items))
 }

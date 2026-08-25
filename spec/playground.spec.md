@@ -9,10 +9,11 @@
 ## 1. Purpose
 
 The Playground is a session-only chatbot for the local Monoize instance. It supports
-streamed chat completions, multimodal user attachments, image generation, and image
-editing through the Monoize forwarding endpoints. Conversation state is a frontend-only
-feature and is never persisted to any backend store. Forwarding authentication is supplied
-by either the authenticated dashboard session or a user-selected API key.
+streamed chat through the OpenAI Responses API, reasoning display, multimodal user
+attachments, image generation, and image editing through the Monoize forwarding
+endpoints. Conversation state is a frontend-only feature and is never persisted to any
+backend store. Forwarding authentication is supplied by either the authenticated
+dashboard session or a user-selected API key.
 
 ## 2. Session and Persistence Model
 
@@ -174,29 +175,90 @@ PG-CHAT2. `MonoizeChatTransport.sendMessages` MUST:
    temperature, and max-tokens values at call time (latest selector state applies to every
    request, including regenerations).
 2. Reject with an error carrying a translatable reason when the model is empty.
-3. Build an OpenAI-compatible provider via `createOpenAICompatible` from
-   `@ai-sdk/openai-compatible` with `baseURL = <origin>/api/v1`. Built-in mode MUST use
-   the PG-AUTH3 headers, no `apiKey`, and a fetch implementation with `credentials =
+3. Build an OpenAI provider via `createOpenAI` from `@ai-sdk/openai` with
+   `name = "monoize"` and `baseURL = <origin>/api/v1`. Built-in mode MUST use the
+   PG-AUTH3 headers, no `apiKey`, and a fetch implementation with `credentials =
    "include"`. Explicit API-key mode MUST use `apiKey = <full-key-value>` and omit the
-   internal headers. In both modes the upstream call is
-   `POST /api/v1/chat/completions` with `stream: true` against the local Monoize
-   instance.
+   internal headers. In both modes the transport MUST select the Responses model
+   `provider.responses(<model id>)`, so the upstream call is
+   `POST /api/v1/responses` with `stream: true` against the local Monoize instance.
 4. Convert UI messages with `convertToModelMessages` after applying PG-CHAT3
    sanitation.
 5. Call `streamText` with: the converted messages; `system` set iff the stored system
    prompt is non-empty; `temperature` set iff `playground_temperature` parses as a
    finite number; `maxOutputTokens` set iff `playground_max_tokens` parses as a positive
-   integer; and the abort signal from the chat.
+   integer; the abort signal from the chat; and
+   `providerOptions.openai = { reasoningSummary: "auto", store: false }`.
 6. Return `toUIMessageStream(...)` of the resulting stream with an `onError` mapper
    that maps the failure to human-readable text (upstream error text must reach the
    UI): an `Error` maps to its `message`; a non-Error object maps to its string
    `message` field, else its nested `error.message` string field, else its JSON
    serialization; any other value maps to `String(value)`.
 
-PG-CHAT3. Outgoing-message sanitation: `file` parts of **assistant** messages MUST be
-excluded from the converted model messages. If exclusion leaves an assistant message
-with no parts, one text part with literal content `[image]` MUST be substituted.
-User-message `file` parts MUST be preserved (they encode user image attachments).
+PG-CHAT2a. Request-field mapping (performed by the AI SDK Responses model; listed here
+as the observable request contract):
+
+- The model id maps to the `model` field.
+- The system prompt maps to one `input[]` message item with role `system`, or role
+  `developer` when the AI SDK classifies the model id as a reasoning model (model id
+  matching `^o<digits>` followed by `-` or end, or `^gpt-<major>` with `major >= 5` and
+  no `chat` variant suffix).
+- `temperature` maps to the top-level `temperature` field. For a model id classified as
+  a reasoning model, the AI SDK omits `temperature` and records a warning instead of
+  sending it.
+- Max tokens maps to the top-level `max_output_tokens` field.
+- `providerOptions.openai.reasoningSummary = "auto"` maps to
+  `reasoning: { "summary": "auto" }` iff the model id is classified as a reasoning
+  model; otherwise no `reasoning` object is sent.
+- `providerOptions.openai.store = false` maps to `store: false` on every request. For a
+  model id classified as a reasoning model, the AI SDK additionally sends
+  `include: ["reasoning.encrypted_content"]`.
+- User-message image attachments map to `input_image` content parts (data URLs).
+
+PG-CHAT3. Outgoing-message sanitation: `file` parts and `reasoning` parts of
+**assistant** messages MUST be excluded from the converted model messages (generated
+images cannot be replayed as assistant content, and reasoning is not replayed because
+Monoize may route each request to a different upstream). If exclusion leaves an
+assistant message with no parts: when at least one `file` part was removed, one text
+part with literal content `[image]` MUST be substituted; otherwise the assistant
+message MUST be removed from the outgoing conversation. User-message `file` parts MUST
+be preserved (they encode user image attachments).
+
+PG-CHAT7. Raw-reasoning SSE adapter. `@ai-sdk/openai@4` parses the reasoning-summary
+event family (`response.reasoning_summary_part.added`,
+`response.reasoning_summary_text.delta`, `response.reasoning_summary_part.done`) but
+drops the raw-reasoning events `response.reasoning_text.delta` and
+`response.reasoning_text.done` that Monoize emits for `Reasoning.content`
+(`unified_responses_proxy.spec.md` STR3d). The transport MUST wrap the provider `fetch`
+with an adapter obeying exactly these rules:
+
+1. Responses whose `Content-Type` does not contain `text/event-stream` pass through
+   unchanged.
+2. The event-stream body is split into SSE frames at blank-line boundaries. A frame
+   whose `data:` payload is not a JSON object with a string `type` field passes through
+   byte-identical.
+3. A frame with `type = "response.reasoning_text.delta"` is rewritten to
+   `type = "response.reasoning_summary_text.delta"` with
+   `summary_index = 1000 + <content_index>` (`content_index` defaults to `0` when
+   absent) and unchanged `item_id`, `output_index`, and `delta`.
+4. A frame with `type = "response.reasoning_text.done"` is rewritten to
+   `type = "response.reasoning_summary_part.done"` with
+   `summary_index = 1000 + <content_index>` and unchanged `item_id` and
+   `output_index`.
+4a. Before the first rewritten frame (rule 3 or rule 4) for a given
+   (`item_id`, `content_index`) pair, the adapter MUST inject one synthetic
+   `response.reasoning_summary_part.added` frame with the same `item_id`,
+   `output_index`, and `summary_index`.
+5. All other frames pass through byte-identical. The adapter MUST NOT reorder frames.
+6. Rewritten frames use the new event type in both the `event:` line and the `data:`
+   JSON `type` field.
+
+PG-CHAT8. Reasoning-part classification: every reasoning UI part produced by the AI SDK
+Responses model has id `<item_id>:<summary_index>`. The transport module MUST export a
+classifier that maps a reasoning part to kind `content` iff its id parses to
+`summary_index >= 1000` (the PG-CHAT7 base), and to kind `summary` otherwise (including
+parts with no id). The UI MUST use only this classifier to distinguish raw reasoning
+from reasoning summaries.
 
 PG-CHAT4. Send/stop contract: while `status` is `submitted` or `streaming`, the primary
 composer action MUST be a stop control invoking `stop()`. Stopping keeps all partial
@@ -346,8 +408,24 @@ PG-RD1. Assistant text parts MUST render through the `streamdown` package's
 `Streamdown` component (streaming-safe markdown with incomplete-block handling). User
 text parts render as plain text preserving whitespace.
 
-PG-RD2. Assistant reasoning parts MUST render as a collapsed, expandable muted section
-labeled through i18n, separate from the answer text.
+PG-RD2. Assistant reasoning parts with non-empty trimmed text MUST render as up to two
+collapsible muted sections above the answer text, one per PG-CHAT8 kind present in the
+message: kind `content` uses label `playground.reasoning`; kind `summary` uses label
+`playground.reasoningSummary`. Sections render in the order in which the first part of
+each kind appears in `message.parts`. Within a section, part texts are joined with one
+blank line and rendered as plain text preserving whitespace.
+
+PG-RD2a. Reasoning parts whose trimmed text is empty MUST be excluded; a kind with no
+remaining parts MUST NOT render a section (no empty panel).
+
+PG-RD2b. Section expansion state: a section is *auto-expanded* while the message is the
+actively streaming assistant response and at least one of the section's parts has
+`state == "streaming"`; it auto-collapses when that condition stops holding. A manual
+toggle by the user overrides automatic control for the remaining lifetime of the
+rendered message component.
+
+PG-RD2c. While a section is streaming (PG-RD2b condition holds), its header MUST show an
+animated activity indicator whose animation is opacity-only under reduced motion.
 
 PG-RD3. `file` parts with an `image` media type render as rounded images constrained to
 the message column (max height `24rem`), with the PG-MSG1 image actions.
@@ -387,8 +465,10 @@ in `en.json`, `zh.json`, `zh-TW.json`, and `ja.json`.
 
 PG-C1. The Playground performs no dashboard configuration mutation.
 
-PG-C2. The Playground MUST NOT implement its own SSE parser for chat; streaming is
-handled by the AI SDK provider/`streamText` pipeline (PG-CHAT2).
+PG-C2. The Playground MUST NOT implement its own SSE-to-UI-message decoding for chat;
+stream decoding into UI message parts is handled by the AI SDK Responses
+provider/`streamText` pipeline (PG-CHAT2). The only permitted SSE processing is the
+frame-level event rewrite defined in PG-CHAT7.
 
 PG-C3. The page MUST be split into multiple components under
 `frontend/src/components/playground/`; the route file composes them.

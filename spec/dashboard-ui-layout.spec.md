@@ -88,10 +88,14 @@ DL6. Sidebar admin navigation group (visible only when user role is `admin` or `
 - `/dashboard/admin`
 - `/dashboard/providers`
 - `/dashboard/models`
+- `/dashboard/custom-transforms`
 - `/dashboard/plans`
 - `/dashboard/users`
 - `/dashboard/groups`
 - `/dashboard/admin-settings`
+
+The `/dashboard/custom-transforms` page content is governed by
+`spec/custom-js-transforms.spec.md` §11 (CJS-UI-1 through CJS-UI-7).
 
 DL7. In desktop layout (`lg` and above), `/dashboard/*` pages MUST use single-pane vertical scrolling:
 
@@ -343,7 +347,7 @@ ST2. Health Monitoring section MUST expose at least these editable fields bound 
 - `monoize_enable_estimated_billing` (boolean)
 - `monoize_strip_cross_protocol_nested_extra` (boolean)
 - `monoize_request_capture_enabled` (boolean switch, default off)
-- `monoize_request_capture_retention_days` (integer >= 1, default 1)
+- `monoize_request_capture_max_total_bytes` (integer >= 0, default 1073741824; MiB-denominated input per `system-settings-ui.spec.md` SSU-2a)
 - `monoize_mask_sensitive_info` (boolean switch, default on; when on, client-facing and non-admin request-log error text apply `MASK` per `upstream-error-sanitization.spec.md`; when off, that masking is disabled)
 
 ST2a. `/dashboard/admin-settings` MUST include a "Routing Affinity" section bound to `GET/PUT /api/dashboard/settings`. The section MUST expose:

@@ -55,6 +55,8 @@ ipnet = "2"
 sha2 = "0.10.9"
 cron = "0.17.0"
 chrono-tz = "0.10.4"
+zstd = "0.13.3"
+rquickjs = "0.12.2"
 
 [dev-dependencies]
 http-body-util = "0.1.3"

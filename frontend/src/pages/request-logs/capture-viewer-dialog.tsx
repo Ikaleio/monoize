@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Virtuoso } from 'react-virtuoso'
 import { AnimatePresence } from 'framer-motion'
 import { Check, ChevronRight, Copy, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -241,15 +242,28 @@ function TransformChainStrip({
 }
 
 function AttemptTabs({ attempt, t }: { attempt: CaptureAttempt; t: Translate }) {
-	const responseSource =
-		attempt.downstream_response != null ? ('response' as const)
-		: Array.isArray(attempt.downstream_sse_frames) ? ('frames' as const)
-		: attempt.error != null ? ('error' as const)
-		: ('empty' as const)
+	// RCV-F10b: the Output Stream tab exists iff frames were captured.
+	const hasOutputStream = Array.isArray(attempt.downstream_sse_frames)
+	// RCV-F10a: Response tab content precedence.
+	const responseValue =
+		attempt.downstream_response != null ? attempt.downstream_response
+		: attempt.reconstructed_urp_response != null ?
+			attempt.reconstructed_urp_response
+		: attempt.error != null ? attempt.error
+		: null
+	const [tab, setTab] = useState('downstream')
+	// Switching to an attempt without frames while Output Stream is active
+	// falls back to the Response tab instead of a blank content area.
+	const activeTab = tab === 'outputStream' && !hasOutputStream ? 'response' : tab
 
 	return (
-		<Tabs defaultValue='downstream' className='flex min-h-0 flex-col'>
-			<TabsList className='grid h-auto w-full grid-cols-4 p-1'>
+		<Tabs value={activeTab} onValueChange={setTab} className='flex min-h-0 flex-col'>
+			<TabsList
+				className={cn(
+					'grid h-auto w-full p-1',
+					hasOutputStream ? 'grid-cols-5' : 'grid-cols-4'
+				)}
+			>
 				<TabsTrigger value='downstream' className='px-1.5 py-1.5 text-xs'>
 					{t('requestLogs.capture.tabDownstream')}
 				</TabsTrigger>
@@ -262,6 +276,11 @@ function AttemptTabs({ attempt, t }: { attempt: CaptureAttempt; t: Translate }) 
 				<TabsTrigger value='response' className='px-1.5 py-1.5 text-xs'>
 					{t('requestLogs.capture.tabResponse')}
 				</TabsTrigger>
+				{hasOutputStream && (
+					<TabsTrigger value='outputStream' className='px-1.5 py-1.5 text-xs'>
+						{t('requestLogs.capture.tabOutputStream')}
+					</TabsTrigger>
+				)}
 			</TabsList>
 			<TabsContent value='downstream' className='mt-2'>
 				<JsonPane value={attempt.raw_input} t={t} />
@@ -273,23 +292,25 @@ function AttemptTabs({ attempt, t }: { attempt: CaptureAttempt; t: Translate }) 
 				<JsonPane value={attempt.transformed_urp_request} t={t} />
 			</TabsContent>
 			<TabsContent value='response' className='mt-2'>
-				{responseSource === 'frames' ?
+				<JsonPane
+					value={responseValue}
+					emptyLabel={
+						hasOutputStream ?
+							t('requestLogs.capture.responseEmptyStream')
+						:	t('requestLogs.capture.empty')
+					}
+					t={t}
+				/>
+			</TabsContent>
+			{hasOutputStream && (
+				<TabsContent value='outputStream' className='mt-2'>
 					<SseFramesPane
 						frames={attempt.downstream_sse_frames ?? []}
 						truncation={attempt.downstream_sse_frames_truncation}
 						t={t}
 					/>
-				:	<JsonPane
-						value={
-							responseSource === 'response' ? attempt.downstream_response
-							: responseSource === 'error' ?
-								attempt.error
-							:	null
-						}
-						t={t}
-					/>
-				}
-			</TabsContent>
+				</TabsContent>
+			)}
 		</Tabs>
 	)
 }
@@ -353,7 +374,15 @@ function CopyButton({
 	)
 }
 
-function JsonPane({ value, t }: { value: unknown; t: Translate }) {
+function JsonPane({
+	value,
+	emptyLabel,
+	t
+}: {
+	value: unknown
+	emptyLabel?: string
+	t: Translate
+}) {
 	const isEmpty = value == null
 	return (
 		<div className='relative'>
@@ -367,7 +396,7 @@ function JsonPane({ value, t }: { value: unknown; t: Translate }) {
 			<div className='max-h-[45vh] min-h-[8rem] overflow-auto rounded-md border bg-muted/30 p-3 pr-24 font-mono text-xs leading-relaxed sm:max-h-[50vh]'>
 				{isEmpty ?
 					<span className='text-muted-foreground'>
-						{t('requestLogs.capture.empty')}
+						{emptyLabel ?? t('requestLogs.capture.empty')}
 					</span>
 				:	<JsonNode value={value} depth={0} t={t} />}
 			</div>
@@ -563,6 +592,7 @@ function JsonCompositeNode({
 	)
 }
 
+// RCV-F16a: virtualized frame list inside a fixed-height scroll container.
 function SseFramesPane({
 	frames,
 	truncation,
@@ -581,9 +611,9 @@ function SseFramesPane({
 					t={t}
 				/>
 			</div>
-			<div className='max-h-[45vh] min-h-[8rem] overflow-auto rounded-md border bg-muted/30 p-3 pr-24 font-mono text-xs leading-relaxed sm:max-h-[50vh]'>
+			<div className='rounded-md border bg-muted/30 font-mono text-xs leading-relaxed'>
 				{truncation?.truncated === true && (
-					<p className='mb-2 rounded-sm border border-warning-border bg-warning-soft px-2 py-1 font-sans text-warning-foreground'>
+					<p className='mx-3 mt-3 rounded-sm border border-warning-border bg-warning-soft px-2 py-1 font-sans text-warning-foreground'>
 						{t('requestLogs.capture.framesTruncated', {
 							frames: truncation.omitted_frames ?? 0,
 							bytes: truncation.omitted_bytes ?? 0
@@ -591,12 +621,17 @@ function SseFramesPane({
 					</p>
 				)}
 				{frames.length === 0 ?
-					<span className='text-muted-foreground'>
+					<p className='p-3 text-muted-foreground'>
 						{t('requestLogs.capture.empty')}
-					</span>
-				:	frames.map((frame, index) => (
-						<FrameRow key={index} index={index} frame={frame} t={t} />
-					))
+					</p>
+				:	<Virtuoso
+						style={{ height: '45vh' }}
+						totalCount={frames.length}
+						overscan={200}
+						itemContent={index => (
+							<FrameRow index={index} frame={frames[index]} t={t} />
+						)}
+					/>
 				}
 			</div>
 		</div>
@@ -604,6 +639,159 @@ function SseFramesPane({
 }
 
 const FRAME_PREVIEW_LENGTH = 160
+// RCV-F16b rule 1: frames longer than this render as plain text.
+const HIGHLIGHT_MAX_FRAME_CHARS = 4096
+
+interface FrameToken {
+	text: string
+	className?: string
+}
+
+const SSE_FIELD_NAMES = new Set(['event', 'data', 'id', 'retry'])
+const TOKEN_FIELD = 'text-info'
+const TOKEN_KEY = 'text-info'
+const TOKEN_STRING = 'text-success'
+const TOKEN_NUMBER = 'text-warning'
+const TOKEN_BOOLEAN = 'text-destructive'
+const TOKEN_NULL = 'italic text-muted-foreground'
+
+function isJsonNumberChar(ch: string): boolean {
+	return (
+		(ch >= '0' && ch <= '9') ||
+		ch === '.' ||
+		ch === 'e' ||
+		ch === 'E' ||
+		ch === '+' ||
+		ch === '-'
+	)
+}
+
+function isWordChar(ch: string): boolean {
+	return /[A-Za-z0-9_]/.test(ch)
+}
+
+// RCV-F16b: single-pass, non-backtracking tokenizer for `data:` payloads.
+// RCV-F16c invariant: concatenating token texts reproduces the input exactly,
+// so unrecognized spans are emitted verbatim as unclassified tokens.
+function tokenizeJsonPayload(payload: string, tokens: FrameToken[]) {
+	const n = payload.length
+	let i = 0
+	let plainStart = 0
+	const flushPlain = (end: number) => {
+		if (end > plainStart) tokens.push({ text: payload.slice(plainStart, end) })
+	}
+	while (i < n) {
+		const ch = payload[i]
+		if (ch === '"') {
+			let j = i + 1
+			while (j < n) {
+				if (payload[j] === '\\') {
+					j += 2
+					continue
+				}
+				if (payload[j] === '"') break
+				j++
+			}
+			const closed = j < n
+			const end = closed ? j + 1 : n
+			let k = end
+			while (k < n && payload[k] === ' ') k++
+			const isKey = closed && payload[k] === ':'
+			flushPlain(i)
+			tokens.push({
+				text: payload.slice(i, end),
+				className: isKey ? TOKEN_KEY : TOKEN_STRING
+			})
+			plainStart = end
+			i = end
+			continue
+		}
+		const prev = i > 0 ? payload[i - 1] : ''
+		const boundary = i === 0 || !isWordChar(prev)
+		if (
+			boundary &&
+			((ch >= '0' && ch <= '9') ||
+				(ch === '-' && i + 1 < n && payload[i + 1] >= '0' && payload[i + 1] <= '9'))
+		) {
+			let j = i + 1
+			while (j < n && isJsonNumberChar(payload[j])) j++
+			flushPlain(i)
+			tokens.push({ text: payload.slice(i, j), className: TOKEN_NUMBER })
+			plainStart = j
+			i = j
+			continue
+		}
+		if (boundary) {
+			let matchedLiteral = false
+			for (const [literal, className] of [
+				['true', TOKEN_BOOLEAN],
+				['false', TOKEN_BOOLEAN],
+				['null', TOKEN_NULL]
+			] as const) {
+				if (
+					payload.startsWith(literal, i) &&
+					(i + literal.length === n || !isWordChar(payload[i + literal.length]))
+				) {
+					flushPlain(i)
+					tokens.push({ text: literal, className })
+					plainStart = i + literal.length
+					i = plainStart
+					matchedLiteral = true
+					break
+				}
+			}
+			if (matchedLiteral) {
+				continue
+			}
+		}
+		i++
+	}
+	flushPlain(n)
+}
+
+function tokenizeSseFrame(frame: string): FrameToken[] {
+	const tokens: FrameToken[] = []
+	const lines = frame.split('\n')
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+		const line = lines[lineIndex]
+		const colon = line.indexOf(':')
+		if (colon > 0 && SSE_FIELD_NAMES.has(line.slice(0, colon))) {
+			tokens.push({ text: line.slice(0, colon), className: TOKEN_FIELD })
+			tokens.push({ text: ':' })
+			tokenizeJsonPayload(line.slice(colon + 1), tokens)
+		} else if (line.length > 0) {
+			tokens.push({ text: line })
+		}
+		if (lineIndex < lines.length - 1) {
+			tokens.push({ text: '\n' })
+		}
+	}
+	return tokens
+}
+
+// RCV-F16b rule 3: tokenization runs only while the row is mounted and is
+// memoized per frame string.
+function HighlightedFrame({ frame }: { frame: string }) {
+	const tokens = useMemo(() => tokenizeSseFrame(frame), [frame])
+	return (
+		<span className='whitespace-pre-wrap break-all'>
+			{tokens.map((token, index) =>
+				token.className ?
+					<span key={index} className={token.className}>
+						{token.text}
+					</span>
+				:	<span key={index}>{token.text}</span>
+			)}
+		</span>
+	)
+}
+
+function FrameContent({ frame }: { frame: string }) {
+	if (frame.length > HIGHLIGHT_MAX_FRAME_CHARS) {
+		return <span className='whitespace-pre-wrap break-all'>{frame}</span>
+	}
+	return <HighlightedFrame frame={frame} />
+}
 
 // RCV-F16: one row per frame with a visible index; rows expand independently.
 function FrameRow({
@@ -619,13 +807,13 @@ function FrameRow({
 	const isLong = frame.length > FRAME_PREVIEW_LENGTH || frame.includes('\n')
 
 	return (
-		<div className='flex items-start gap-2 border-b border-border/30 py-0.5 last:border-b-0'>
+		<div className='flex items-start gap-2 border-b border-border/30 px-3 py-0.5'>
 			<span className='select-none pt-px text-[10px] tabular-nums text-muted-foreground/60'>
 				{index}
 			</span>
 			<div className='min-w-0 flex-1'>
 				{!isLong ?
-					<span className='break-all'>{frame}</span>
+					<FrameContent frame={frame} />
 				:	<>
 						<button
 							type='button'
@@ -638,6 +826,7 @@ function FrameRow({
 									{t('requestLogs.capture.collapse')}
 								</span>
 							:	<span className='block truncate'>
+									{/* RCV-F16b rule 2: collapsed previews stay plain text. */}
 									{frame.slice(0, FRAME_PREVIEW_LENGTH)}
 									<span className='ml-1 font-sans text-[10px] text-info'>
 										{t('requestLogs.capture.expandChars', {
@@ -663,7 +852,7 @@ function FrameRow({
 									}}
 									className='overflow-hidden'
 								>
-									<span className='whitespace-pre-wrap break-all'>{frame}</span>
+									<FrameContent frame={frame} />
 								</motion.div>
 							)}
 						</AnimatePresence>

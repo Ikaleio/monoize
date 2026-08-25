@@ -155,6 +155,7 @@ pub async fn compact_response(
                                 upstream_body,
                                 Some(value.clone()),
                                 None,
+                                None,
                                 // RCD-D3b: the compact passthrough applies no URP transforms.
                                 json!([]),
                                 None,
@@ -288,6 +289,7 @@ pub async fn compact_response(
                                 capture.raw_input.as_ref().clone(),
                                 &routing_request,
                                 upstream_body,
+                                None,
                                 None,
                                 None,
                                 // RCD-D3b: the compact passthrough applies no URP transforms.

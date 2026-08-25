@@ -2,8 +2,9 @@ use super::utils::parse_nano_usd;
 use super::{
     AdminUpdateUserInput, ApiKey, BillingError, BillingErrorKind, CreateApiKeyInput,
     CreateApiKeyWithLimitError, ModelRedirectRule, RESERVED_INTERNAL_USER_PREFIX,
-    RegisterUserError, RequestCaptureMode, Session, UpdateApiKeyInput, User, UserBalance, UserRole,
-    UserStore, canonicalize_group_ids, compile_model_redirects, validate_model_redirects,
+    RegisterUserError, RequestCaptureMode, RequestCaptureRetention, Session, UpdateApiKeyInput,
+    User, UserBalance, UserRole, UserStore, canonicalize_group_ids, compile_model_redirects,
+    validate_model_redirects,
 };
 use crate::transforms::{
     TransformRuleConfig, canonical_transform_id, canonicalize_transform_rule,
@@ -126,8 +127,23 @@ struct LockedApiKeyBalance {
     sub_account_enabled: bool,
 }
 
-pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
+pub(crate) fn is_allowed_api_key_transform(
+    rule: &TransformRuleConfig,
+    custom: &crate::custom_transforms::CustomTransformSnapshot,
+) -> bool {
     let transform = canonical_transform_id(rule.transform.as_str());
+    // CJS-AKV-2: a `js:` rule is allowed only when it resolves in the enabled
+    // snapshot to a user-visible transform whose scopes include api_key and
+    // whose declared phases include the rule phase.
+    if transform.starts_with(crate::transforms::CUSTOM_TRANSFORM_ID_PREFIX) {
+        return custom.get(transform).is_some_and(|entry| {
+            entry.visibility == crate::custom_transforms::CustomTransformVisibility::User
+                && entry
+                    .scopes
+                    .contains(&crate::transforms::TransformScope::ApiKey)
+                && entry.phases.contains(&rule.phase)
+        });
+    }
     match rule.phase {
         crate::transforms::Phase::Request => {
             ALLOWED_API_KEY_REQUEST_TRANSFORMS.contains(&transform)
@@ -141,6 +157,7 @@ pub(crate) fn is_allowed_api_key_transform(rule: &TransformRuleConfig) -> bool {
 pub(crate) fn sanitize_api_key_transforms(
     transforms: Vec<TransformRuleConfig>,
     is_admin: bool,
+    custom: &crate::custom_transforms::CustomTransformSnapshot,
 ) -> Vec<TransformRuleConfig> {
     let transforms: Vec<TransformRuleConfig> = transforms
         .into_iter()
@@ -154,13 +171,14 @@ pub(crate) fn sanitize_api_key_transforms(
     }
     transforms
         .into_iter()
-        .filter(is_allowed_api_key_transform)
+        .filter(|rule| is_allowed_api_key_transform(rule, custom))
         .collect()
 }
 
 pub(crate) fn validate_api_key_transforms(
     transforms: &[TransformRuleConfig],
     is_admin: bool,
+    custom: &crate::custom_transforms::CustomTransformSnapshot,
 ) -> Result<(), String> {
     if is_admin {
         return Ok(());
@@ -168,7 +186,7 @@ pub(crate) fn validate_api_key_transforms(
     for rule in transforms {
         let mut canonical_rule = rule.clone();
         canonicalize_transform_rule(&mut canonical_rule);
-        if !is_allowed_api_key_transform(&canonical_rule) {
+        if !is_allowed_api_key_transform(&canonical_rule, custom) {
             return Err(format!(
                 "transform '{}' is not allowed for API keys",
                 rule.transform
@@ -225,6 +243,24 @@ fn decode_request_capture_mode(row: &QueryResult) -> Result<RequestCaptureMode, 
         Some("capture-only-abnormal") => Ok(RequestCaptureMode::CaptureOnlyAbnormal),
         Some(value) => Err(format!(
             "invalid persisted request_capture_mode: unsupported value {value:?}"
+        )),
+    }
+}
+
+/// TM-STORAGE-7: strict retention decode; absent/null reads as the `24h`
+/// default (RCD-C5b), any other value fails the read.
+fn decode_request_capture_retention(row: &QueryResult) -> Result<RequestCaptureRetention, String> {
+    let raw = row
+        .try_get::<Option<String>>("", "request_capture_retention")
+        .map_err(|error| format!("invalid persisted request_capture_retention: {error}"))?;
+    match raw.as_deref().map(str::trim) {
+        None => Ok(RequestCaptureRetention::OneDay),
+        Some("5m") => Ok(RequestCaptureRetention::FiveMinutes),
+        Some("1h") => Ok(RequestCaptureRetention::OneHour),
+        Some("24h") => Ok(RequestCaptureRetention::OneDay),
+        Some("7d") => Ok(RequestCaptureRetention::SevenDays),
+        Some(value) => Err(format!(
+            "invalid persisted request_capture_retention: unsupported value {value:?}"
         )),
     }
 }
@@ -336,12 +372,22 @@ impl UserStore {
             balance_cache: crate::db_cache::BalanceCache::new(Duration::from_secs(30)),
             registration_lock: Arc::new(tokio::sync::Mutex::new(())),
             api_key_creation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            custom_transforms: crate::custom_transforms::CustomTransformSnapshotHandle::default(),
         };
         if !is_replica {
             store.migrate_transform_rule_ids().await?;
             store.cleanup_expired_sessions().await?;
         }
         Ok(store)
+    }
+
+    /// Attaches the shared enabled custom-transform snapshot (CJS-AKV-2).
+    pub fn with_custom_transforms(
+        mut self,
+        handle: crate::custom_transforms::CustomTransformSnapshotHandle,
+    ) -> Self {
+        self.custom_transforms = handle;
+        self
     }
 
     async fn migrate_transform_rule_ids(&self) -> Result<(), String> {
@@ -1309,6 +1355,7 @@ impl UserStore {
                 model_redirects: Vec::new(),
                 reasoning_envelope_enabled: true,
                 request_capture_mode: RequestCaptureMode::Off,
+                request_capture_retention: RequestCaptureRetention::default(),
             },
             false,
         )
@@ -1322,7 +1369,7 @@ impl UserStore {
         is_admin: bool,
     ) -> Result<(ApiKey, String), String> {
         canonicalize_transform_rules(&mut input.transforms);
-        validate_api_key_transforms(&input.transforms, is_admin)?;
+        validate_api_key_transforms(&input.transforms, is_admin, &self.custom_transforms.get())?;
         let compiled_model_redirects = compile_model_redirects(&input.model_redirects)?;
         input.ip_whitelist = canonicalize_ip_whitelist(&input.ip_whitelist)?;
         if input.sub_account_balance_nano_usd.is_some() && !is_admin {
@@ -1388,8 +1435,8 @@ impl UserStore {
             .await
             .map_err(|e| e.message)?;
         tx.execute(self.db.stmt(
-                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, use_user_group, group_ids, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)"#,
+                r#"INSERT INTO api_keys (id, user_id, name, key_prefix, key, created_at, expires_at, enabled, sub_account_enabled, sub_account_balance_nano, model_limits_enabled, model_limits, ip_whitelist, use_user_group, group_ids, max_multiplier, transforms, model_redirects, reasoning_envelope_enabled, request_capture_enabled, request_capture_mode, request_capture_retention)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)"#,
                 vec![
                     id.clone().into(),
                     user_id.into(),
@@ -1415,6 +1462,7 @@ impl UserStore {
                         0
                     })),
                     input.request_capture_mode.as_str().into(),
+                    input.request_capture_retention.as_str().into(),
                 ],
             ))
             .await
@@ -1457,6 +1505,7 @@ impl UserStore {
             compiled_model_redirects,
             reasoning_envelope_enabled: input.reasoning_envelope_enabled,
             request_capture_mode: input.request_capture_mode,
+            request_capture_retention: input.request_capture_retention,
         };
 
         Ok((api_key, key))
@@ -1492,7 +1541,7 @@ impl UserStore {
     pub async fn get_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.request_capture_retention, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key_prefix = $1",
                 vec![prefix.into()],
             ))
             .await
@@ -1510,7 +1559,7 @@ impl UserStore {
             .db
             .read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.request_capture_retention, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.key = $1",
                 vec![key.into()],
             ))
             .await
@@ -1537,6 +1586,7 @@ impl UserStore {
                         a.use_user_group, a.group_ids, a.max_multiplier, a.transforms,
                         a.model_redirects, a.reasoning_envelope_enabled,
                         a.request_capture_enabled, a.request_capture_mode,
+                        a.request_capture_retention,
                         u.role AS owner_role,
                         u.id AS owner_id, u.username AS owner_username,
                         u.password_hash AS owner_password_hash,
@@ -1637,7 +1687,7 @@ impl UserStore {
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
                         a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
-                        a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role
+                        a.request_capture_enabled, a.request_capture_mode, a.request_capture_retention, u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
                  WHERE a.user_id = $1 ORDER BY a.created_at DESC",
                 vec![user_id.into()],
@@ -1680,7 +1730,7 @@ impl UserStore {
                         a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits,
                         a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier,
                         a.transforms, a.model_redirects, a.reasoning_envelope_enabled,
-                        a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role
+                        a.request_capture_enabled, a.request_capture_mode, a.request_capture_retention, u.role AS owner_role
                  FROM api_keys a JOIN users u ON u.id = a.user_id
                  WHERE a.id = $1 AND a.user_id = $2",
                 vec![id.into(), user_id.into()],
@@ -2292,13 +2342,14 @@ impl UserStore {
             .can_manage_system();
         let transforms = parse_persisted_json_array(&transforms_str, "transforms")?;
         let transforms: Vec<TransformRuleConfig> =
-            sanitize_api_key_transforms(transforms, is_admin);
+            sanitize_api_key_transforms(transforms, is_admin, &self.custom_transforms.get());
         let model_redirects: Vec<ModelRedirectRule> =
             parse_persisted_json_array(&model_redirects_str, "model_redirects")?;
         let compiled_model_redirects = compile_model_redirects(&model_redirects)
             .map_err(|error| format!("invalid persisted model_redirects: {error}"))?;
         let reasoning_envelope_enabled = decode_required_bool(row, "reasoning_envelope_enabled")?;
         let request_capture_mode = decode_request_capture_mode(row)?;
+        let request_capture_retention = decode_request_capture_retention(row)?;
 
         Ok(ApiKey {
             id: row.try_get("", "id").map_err(|e| e.to_string())?,
@@ -2328,6 +2379,7 @@ impl UserStore {
             compiled_model_redirects,
             reasoning_envelope_enabled,
             request_capture_mode,
+            request_capture_retention,
         })
     }
 
@@ -2343,7 +2395,7 @@ impl UserStore {
                 .map_err(|_| "expires_at must be a valid RFC3339 timestamp".to_string())?;
         }
         if let Some(transforms) = &input.transforms {
-            validate_api_key_transforms(transforms, is_admin)?;
+            validate_api_key_transforms(transforms, is_admin, &self.custom_transforms.get())?;
         }
         if let Some(model_redirects) = &input.model_redirects {
             validate_model_redirects(model_redirects)?;
@@ -2513,6 +2565,11 @@ impl UserStore {
             idx += 1;
             set_clauses.push(format!("request_capture_mode = ${idx}"));
             values.push(request_capture_mode.as_str().into());
+            idx += 1;
+        }
+        if let Some(request_capture_retention) = input.request_capture_retention {
+            set_clauses.push(format!("request_capture_retention = ${idx}"));
+            values.push(request_capture_retention.as_str().into());
             idx += 1;
         }
         if let Some(expires_at) = &input.expires_at {
@@ -2693,7 +2750,7 @@ impl UserStore {
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<Option<ApiKey>, String> {
         let row = self.db.read()
             .query_one(self.db.stmt(
-                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
+                "SELECT a.id, a.user_id, a.name, a.key_prefix, a.key, a.created_at, a.expires_at, a.last_used_at, a.enabled, a.sub_account_enabled, a.sub_account_balance_nano, a.model_limits_enabled, a.model_limits, a.ip_whitelist, a.use_user_group, a.group_ids, a.max_multiplier, a.transforms, a.model_redirects, a.reasoning_envelope_enabled, a.request_capture_enabled, a.request_capture_mode, a.request_capture_retention, u.role AS owner_role FROM api_keys a JOIN users u ON u.id = a.user_id WHERE a.id = $1",
                 vec![id.into()],
             ))
             .await
@@ -3205,7 +3262,7 @@ mod tests {
     use crate::transforms::{Phase, TransformRuleConfig};
     use crate::users::{
         AdminUpdateUserInput, CreateApiKeyInput, CreateApiKeyWithLimitError, CreateGroupInput,
-        RegisterUserError, RequestCaptureMode, UserRole, UserStore,
+        RegisterUserError, RequestCaptureMode, RequestCaptureRetention, UserRole, UserStore,
     };
     use chrono::Utc;
     use sea_orm::{ConnectionTrait, Value as SeaValue};
@@ -3457,6 +3514,11 @@ mod tests {
                 "request_capture_mode",
                 "unsupported".to_string().into(),
                 "off".to_string().into(),
+            ),
+            (
+                "request_capture_retention",
+                "3 days".to_string().into(),
+                "24h".to_string().into(),
             ),
         ];
 
@@ -3730,6 +3792,7 @@ mod tests {
             model_redirects: Vec::new(),
             reasoning_envelope_enabled: true,
             request_capture_mode: RequestCaptureMode::Off,
+            request_capture_retention: RequestCaptureRetention::default(),
         }
     }
 
@@ -4132,7 +4195,7 @@ mod tests {
             }),
         }];
 
-        let sanitized = sanitize_api_key_transforms(transforms, false);
+        let sanitized = sanitize_api_key_transforms(transforms, false, &Default::default());
         assert!(sanitized.is_empty());
     }
 
@@ -4150,7 +4213,7 @@ mod tests {
             }),
         }];
 
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+        assert!(validate_api_key_transforms(&transforms, false, &Default::default()).is_ok());
     }
 
     #[test]
@@ -4163,7 +4226,7 @@ mod tests {
             config: json!({}),
         }];
 
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+        assert!(validate_api_key_transforms(&transforms, false, &Default::default()).is_ok());
     }
 
     #[test]
@@ -4176,7 +4239,7 @@ mod tests {
             config: json!({}),
         }];
 
-        let sanitized = sanitize_api_key_transforms(transforms, false);
+        let sanitized = sanitize_api_key_transforms(transforms, false, &Default::default());
 
         assert_eq!(sanitized.len(), 1);
         assert_eq!(sanitized[0].transform, "prompt_strip_anthropic_billing_header");
@@ -4240,7 +4303,106 @@ mod tests {
             },
         ];
 
-        assert!(validate_api_key_transforms(&transforms, false).is_ok());
+        assert!(validate_api_key_transforms(&transforms, false, &Default::default()).is_ok());
+    }
+
+    /// CJS-AKV-2/CJS-AKV-3: `js:` rules pass for non-admins exactly when the
+    /// enabled snapshot entry is user-visible, api_key-scoped, and declares
+    /// the rule phase.
+    #[test]
+    fn api_key_transforms_gate_custom_js_rules_by_snapshot() {
+        use crate::custom_transforms::{
+            CustomTransformEntry, CustomTransformSnapshot, CustomTransformVisibility,
+        };
+        use crate::transforms::TransformScope;
+        use std::sync::Arc;
+
+        let entry = |id: &str,
+                     visibility: CustomTransformVisibility,
+                     scopes: Vec<TransformScope>,
+                     phases: Vec<Phase>| {
+            (
+                id.to_string(),
+                Arc::new(CustomTransformEntry {
+                    id: id.to_string(),
+                    name: "n".to_string(),
+                    description: "d".to_string(),
+                    author: "a".to_string(),
+                    source: "function transform(ctx) {}".to_string(),
+                    visibility,
+                    phases,
+                    scopes,
+                    config_schema: None,
+                }),
+            )
+        };
+        let snapshot = CustomTransformSnapshot::from_entries(
+            [
+                entry(
+                    "js:allowed",
+                    CustomTransformVisibility::User,
+                    vec![TransformScope::ApiKey],
+                    vec![Phase::Request],
+                ),
+                entry(
+                    "js:admin-only",
+                    CustomTransformVisibility::Admin,
+                    vec![TransformScope::ApiKey],
+                    vec![Phase::Request],
+                ),
+                entry(
+                    "js:wrong-scope",
+                    CustomTransformVisibility::User,
+                    vec![TransformScope::Provider],
+                    vec![Phase::Request],
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let rule = |id: &str, phase: Phase| TransformRuleConfig {
+            transform: id.to_string(),
+            enabled: true,
+            models: None,
+            phase,
+            config: json!({}),
+        };
+
+        assert!(
+            validate_api_key_transforms(&[rule("js:allowed", Phase::Request)], false, &snapshot)
+                .is_ok()
+        );
+        for (id, phase) in [
+            ("js:admin-only", Phase::Request),
+            ("js:wrong-scope", Phase::Request),
+            ("js:allowed", Phase::Response),
+            ("js:missing", Phase::Request),
+        ] {
+            assert!(
+                validate_api_key_transforms(&[rule(id, phase)], false, &snapshot).is_err(),
+                "rule {id} in phase {phase:?} must be rejected"
+            );
+        }
+        // Admin bypass keeps every rule.
+        assert!(
+            validate_api_key_transforms(
+                &[rule("js:admin-only", Phase::Request)],
+                true,
+                &snapshot
+            )
+            .is_ok()
+        );
+
+        let sanitized = sanitize_api_key_transforms(
+            vec![
+                rule("js:allowed", Phase::Request),
+                rule("js:admin-only", Phase::Request),
+            ],
+            false,
+            &snapshot,
+        );
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].transform, "js:allowed");
     }
 
     #[test]
@@ -4256,7 +4418,7 @@ mod tests {
             }),
         }];
 
-        let sanitized = sanitize_api_key_transforms(transforms.clone(), true);
+        let sanitized = sanitize_api_key_transforms(transforms.clone(), true, &Default::default());
         assert_eq!(sanitized.len(), 1);
         assert_eq!(sanitized[0].transform, transforms[0].transform);
         assert_eq!(sanitized[0].enabled, transforms[0].enabled);

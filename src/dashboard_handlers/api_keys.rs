@@ -5,7 +5,7 @@ use crate::exact_decimal::Multiplier;
 use crate::transforms::TransformRuleConfig;
 use crate::users::{
     CreateApiKeyInput, CreateApiKeyWithLimitError, ModelRedirectRule, RequestCaptureMode,
-    UpdateApiKeyInput, format_nano_to_usd, parse_nano_usd,
+    RequestCaptureRetention, UpdateApiKeyInput, format_nano_to_usd, parse_nano_usd,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -47,6 +47,8 @@ pub struct CreateApiKeyRequest {
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
     pub request_capture_mode: RequestCaptureMode,
+    #[serde(default)]
+    pub request_capture_retention: RequestCaptureRetention,
 }
 
 fn default_true() -> bool {
@@ -76,6 +78,7 @@ pub struct ApiKeyResponse {
     pub model_redirects: Vec<ModelRedirectRule>,
     pub reasoning_envelope_enabled: bool,
     pub request_capture_mode: RequestCaptureMode,
+    pub request_capture_retention: RequestCaptureRetention,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +102,7 @@ pub struct ApiKeyCreatedResponse {
     pub model_redirects: Vec<ModelRedirectRule>,
     pub reasoning_envelope_enabled: bool,
     pub request_capture_mode: RequestCaptureMode,
+    pub request_capture_retention: RequestCaptureRetention,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +121,7 @@ pub struct UpdateApiKeyRequest {
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_envelope_enabled: Option<bool>,
     pub request_capture_mode: Option<RequestCaptureMode>,
+    pub request_capture_retention: Option<RequestCaptureRetention>,
     pub expires_at: Option<String>,
 }
 
@@ -164,6 +169,7 @@ pub async fn list_my_api_keys(
                 model_redirects: k.model_redirects,
                 reasoning_envelope_enabled: k.reasoning_envelope_enabled,
                 request_capture_mode: k.request_capture_mode,
+                request_capture_retention: k.request_capture_retention,
             })
         })
         .collect::<Result<Vec<_>, String>>()
@@ -202,6 +208,7 @@ pub async fn create_api_key(
         model_redirects: body.model_redirects,
         reasoning_envelope_enabled: body.reasoning_envelope_enabled,
         request_capture_mode: body.request_capture_mode,
+        request_capture_retention: body.request_capture_retention,
     };
 
     let is_admin = user.role.can_manage_system();
@@ -244,6 +251,7 @@ pub async fn create_api_key(
             model_redirects: api_key.model_redirects,
             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
             request_capture_mode: api_key.request_capture_mode,
+            request_capture_retention: api_key.request_capture_retention,
         }),
     ))
 }
@@ -320,6 +328,7 @@ pub async fn get_api_key(
             model_redirects: api_key.model_redirects,
             reasoning_envelope_enabled: api_key.reasoning_envelope_enabled,
             request_capture_mode: api_key.request_capture_mode,
+            request_capture_retention: api_key.request_capture_retention,
         }
     }))
 }
@@ -362,6 +371,7 @@ pub async fn update_api_key(
         model_redirects: body.model_redirects,
         reasoning_envelope_enabled: body.reasoning_envelope_enabled,
         request_capture_mode: body.request_capture_mode,
+        request_capture_retention: body.request_capture_retention,
         expires_at: body.expires_at,
     };
 
@@ -396,6 +406,7 @@ pub async fn update_api_key(
         model_redirects: updated_key.model_redirects,
         reasoning_envelope_enabled: updated_key.reasoning_envelope_enabled,
         request_capture_mode: updated_key.request_capture_mode,
+        request_capture_retention: updated_key.request_capture_retention,
     }))
 }
 

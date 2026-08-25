@@ -4,7 +4,7 @@ use crate::db::DbPool;
 use crate::handlers::DownstreamProtocol;
 use crate::monoize_routing::MonoizeRuntimeConfig;
 use crate::transforms::TransformRuleConfig;
-use crate::users::RequestCaptureMode;
+use crate::users::{RequestCaptureMode, RequestCaptureRetention};
 use chrono::{SecondsFormat, Utc};
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
@@ -20,6 +20,14 @@ const DEFAULT_MAX_FRAME_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_SESSION_BYTES: usize = 16 * 1024 * 1024;
 const MIN_SESSION_BYTES: usize = 8 * 1024;
 const MAX_CAPTURE_IDENTIFIER_BYTES: usize = 256;
+/// RCD-Z1: dumps are zstd frames at this compression level.
+const ZSTD_COMPRESSION_LEVEL: i32 = 3;
+/// RCD-Z1/RCD-Z6: zstd frame magic number used for read-path format detection.
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+/// RCD-R5a: fixed deletion horizon for dump files without a metadata row.
+const ORPHAN_FILE_HORIZON_SECS: u64 = 86_400;
+/// RCD-R3/RCD-R5a/RCD-R7: bound for dynamic `IN` lists and victim batches.
+const CLEANUP_BATCH_SIZE: usize = 400;
 
 #[derive(Clone, Copy, Debug)]
 struct RequestCaptureLimits {
@@ -162,6 +170,7 @@ pub struct RequestCaptureStore {
     dump_dir: Arc<PathBuf>,
     limits: RequestCaptureLimits,
     db: Option<DbPool>,
+    runtime: Option<Arc<RwLock<MonoizeRuntimeConfig>>>,
 }
 
 /// One `request_capture_records` row (RCD-M1).
@@ -174,6 +183,25 @@ pub struct CaptureRecordRow {
     pub created_at: String,
     pub created_at_unix_ms: i64,
     pub size_bytes: i64,
+    pub expires_at_unix_ms: i64,
+}
+
+/// Dump read failure classification (RCD-Z7 / RCV-A9): `Unreadable` marks a
+/// zstd-prefixed file that cannot be decompressed within bounds, which the
+/// capture detail API maps to `capture_dump_unreadable`; `Io` is any other
+/// filesystem failure and maps to `internal_error`.
+#[derive(Debug)]
+pub enum DumpReadError {
+    Io(String),
+    Unreadable(String),
+}
+
+impl std::fmt::Display for DumpReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(message) | Self::Unreadable(message) => f.write_str(message),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -186,6 +214,7 @@ pub(crate) struct RequestCaptureSession {
     downstream_protocol: DownstreamProtocol,
     is_stream: bool,
     mode: RequestCaptureMode,
+    retention: RequestCaptureRetention,
     attempts: Arc<Mutex<Vec<Value>>>,
     limits: RequestCaptureLimits,
     truncation: Arc<Mutex<CaptureTruncation>>,
@@ -270,6 +299,7 @@ pub(crate) fn build_attempt_dump(
     transformed_urp_request: &crate::urp::UrpRequest,
     upstream_request: Value,
     downstream_response: Option<Value>,
+    reconstructed_urp_response: Option<Value>,
     downstream_sse_frames: Option<CapturedSseFrames>,
     transform_chain: Value,
     error: Option<Value>,
@@ -289,6 +319,7 @@ pub(crate) fn build_attempt_dump(
         "transformed_urp_request": transformed_urp_request,
         "upstream_request": upstream_request,
         "downstream_response": downstream_response,
+        "reconstructed_urp_response": reconstructed_urp_response,
         "downstream_sse_frames": downstream_sse_frames,
         "downstream_sse_frames_truncation": frame_truncation.to_json(),
         "transform_chain": transform_chain,
@@ -302,6 +333,7 @@ impl RequestCaptureStore {
             dump_dir: Arc::new(data_dir_from_database_dsn(database_dsn).join("dumps")),
             limits: RequestCaptureLimits::from_env(),
             db: None,
+            runtime: None,
         }
     }
 
@@ -310,6 +342,13 @@ impl RequestCaptureStore {
     /// is recorded, so the capture stays unreachable through the detail API.
     pub fn with_db(mut self, db: DbPool) -> Self {
         self.db = Some(db);
+        self
+    }
+
+    /// Attach the runtime config used to read the global size budget
+    /// (RCD-R6) at cleanup-pass and background-write execution time.
+    pub fn with_runtime(mut self, runtime: Arc<RwLock<MonoizeRuntimeConfig>>) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -352,55 +391,235 @@ impl RequestCaptureStore {
             downstream_protocol,
             is_stream,
             mode: auth.request_capture_mode,
+            retention: auth.request_capture_retention,
             attempts: Arc::new(Mutex::new(Vec::new())),
             limits: self.limits,
             truncation: Arc::new(Mutex::new(initial_truncation)),
         })
     }
 
-    pub fn spawn_cleanup_task(&self, runtime: Arc<RwLock<MonoizeRuntimeConfig>>) {
+    /// RCD-R2: one pass at startup, then hourly.
+    pub fn spawn_cleanup_task(&self) {
         let store = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = store.cleanup_expired(runtime.clone()).await {
-                tracing::warn!("failed to cleanup request capture dumps at startup: {err}");
-            }
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
             interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
-                if let Err(err) = store.cleanup_expired(runtime.clone()).await {
-                    tracing::warn!("failed to cleanup request capture dumps: {err}");
-                }
+                store.run_cleanup_pass().await;
             }
         });
     }
 
-    async fn cleanup_expired(
-        &self,
-        runtime: Arc<RwLock<MonoizeRuntimeConfig>>,
-    ) -> Result<(), String> {
-        let retention_days = runtime.read().await.request_capture_retention_days.max(1);
-        // RCD-R6: metadata-row deletion failure must not stop file cleanup.
-        if let Some(db) = self.db.as_ref() {
-            let cutoff_unix_ms = (Utc::now()
-                - chrono::Duration::days(i64::try_from(retention_days).unwrap_or(i64::MAX)))
-            .timestamp_millis();
-            if let Err(err) = db
-                .write()
-                .await
-                .execute(db.stmt(
-                    "DELETE FROM request_capture_records WHERE created_at_unix_ms < $1",
-                    vec![cutoff_unix_ms.into()],
+    /// RCD-R2 step ordering; RCD-R4: one failed step never stops the next.
+    async fn run_cleanup_pass(&self) {
+        if let Err(err) = self.cleanup_ttl_expired().await {
+            tracing::warn!("request capture TTL cleanup failed: {err}");
+        }
+        if let Err(err) = self.cleanup_orphan_files().await {
+            tracing::warn!("request capture orphan cleanup failed: {err}");
+        }
+        if let Err(err) = self.enforce_size_budget().await {
+            tracing::warn!("request capture size rotation failed: {err}");
+        }
+    }
+
+    /// RCD-R3: delete every dump whose metadata row has expired, file first,
+    /// then the rows, in batches of `CLEANUP_BATCH_SIZE`.
+    async fn cleanup_ttl_expired(&self) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let now_ms = Utc::now().timestamp_millis();
+        loop {
+            let rows = db
+                .read()
+                .query_all(db.stmt(
+                    &format!(
+                        "SELECT file_name FROM request_capture_records \
+                         WHERE expires_at_unix_ms <= $1 \
+                         ORDER BY expires_at_unix_ms ASC LIMIT {CLEANUP_BATCH_SIZE}"
+                    ),
+                    vec![now_ms.into()],
                 ))
                 .await
-            {
-                tracing::warn!("failed to cleanup request capture metadata rows: {err}");
+                .map_err(|err| err.to_string())?;
+            let file_names: Vec<String> = rows
+                .into_iter()
+                .map(|row| row.try_get("", "file_name").map_err(|e| e.to_string()))
+                .collect::<Result<_, _>>()?;
+            if file_names.is_empty() {
+                return Ok(());
+            }
+            let batch_len = file_names.len();
+            // RCD-R4: file-deletion failures are logged inside and never stop
+            // row deletion; a leftover file becomes an RCD-R5a orphan.
+            self.remove_dump_files(file_names.clone()).await;
+            self.delete_records_by_file_names(&file_names).await?;
+            if batch_len < CLEANUP_BATCH_SIZE {
+                return Ok(());
             }
         }
+    }
+
+    /// RCD-R5a: delete direct regular files older than the 24-hour horizon
+    /// that have no metadata row. Skipped without a database pool because
+    /// row existence cannot be evaluated.
+    async fn cleanup_orphan_files(&self) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
         let dump_dir = self.dump_dir.clone();
-        tokio::task::spawn_blocking(move || cleanup_expired_sync(&dump_dir, retention_days))
-            .await
-            .map_err(|err| err.to_string())?
+        let horizon = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(ORPHAN_FILE_HORIZON_SECS))
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let candidates = tokio::task::spawn_blocking(move || {
+            list_files_older_than(&dump_dir, horizon)
+        })
+        .await
+        .map_err(|err| err.to_string())??;
+        for chunk in candidates.chunks(CLEANUP_BATCH_SIZE) {
+            let placeholders = (0..chunk.len())
+                .map(|index| format!("${}", index + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let values: Vec<sea_orm::Value> =
+                chunk.iter().map(|name| name.as_str().into()).collect();
+            let rows = db
+                .read()
+                .query_all(db.stmt(
+                    &format!(
+                        "SELECT file_name FROM request_capture_records \
+                         WHERE file_name IN ({placeholders})"
+                    ),
+                    values,
+                ))
+                .await
+                .map_err(|err| err.to_string())?;
+            let registered: std::collections::HashSet<String> = rows
+                .into_iter()
+                .map(|row| row.try_get("", "file_name").map_err(|e| e.to_string()))
+                .collect::<Result<_, _>>()?;
+            let orphans: Vec<String> = chunk
+                .iter()
+                .filter(|name| !registered.contains(*name))
+                .cloned()
+                .collect();
+            self.remove_dump_files(orphans).await;
+        }
+        Ok(())
+    }
+
+    /// RCD-R6/RCD-R7: while registered dumps exceed the non-zero budget,
+    /// delete strictly oldest-first until the total fits.
+    async fn enforce_size_budget(&self) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let budget = match self.runtime.as_ref() {
+            Some(runtime) => runtime.read().await.request_capture_max_total_bytes,
+            None => crate::settings::DEFAULT_REQUEST_CAPTURE_MAX_TOTAL_BYTES,
+        };
+        if budget == 0 {
+            return Ok(());
+        }
+        let budget = i64::try_from(budget).unwrap_or(i64::MAX);
+        loop {
+            // Postgres SUM(bigint) yields NUMERIC, so cast back to BIGINT for
+            // a uniform i64 read on both backends.
+            let total: i64 = db
+                .read()
+                .query_one(db.stmt(
+                    "SELECT CAST(COALESCE(SUM(size_bytes), 0) AS BIGINT) AS total \
+                     FROM request_capture_records",
+                    vec![],
+                ))
+                .await
+                .map_err(|err| err.to_string())?
+                .map(|row| row.try_get("", "total").map_err(|e| e.to_string()))
+                .transpose()?
+                .unwrap_or(0);
+            if total <= budget {
+                return Ok(());
+            }
+            let excess = total - budget;
+            let rows = db
+                .read()
+                .query_all(db.stmt(
+                    &format!(
+                        "SELECT file_name, size_bytes FROM request_capture_records \
+                         ORDER BY created_at_unix_ms ASC, file_name ASC LIMIT {CLEANUP_BATCH_SIZE}"
+                    ),
+                    vec![],
+                ))
+                .await
+                .map_err(|err| err.to_string())?;
+            let mut victims: Vec<String> = Vec::new();
+            let mut freed: i64 = 0;
+            for row in rows {
+                let file_name: String =
+                    row.try_get("", "file_name").map_err(|e| e.to_string())?;
+                let size_bytes: i64 = row.try_get("", "size_bytes").map_err(|e| e.to_string())?;
+                victims.push(file_name);
+                freed = freed.saturating_add(size_bytes);
+                if freed >= excess {
+                    break;
+                }
+            }
+            if victims.is_empty() {
+                return Ok(());
+            }
+            self.remove_dump_files(victims.clone()).await;
+            self.delete_records_by_file_names(&victims).await?;
+        }
+    }
+
+    /// Best-effort file removal: a missing file is not an error (RCD-R3),
+    /// other failures are logged and skipped (RCD-R4).
+    async fn remove_dump_files(&self, file_names: Vec<String>) {
+        if file_names.is_empty() {
+            return;
+        }
+        let dump_dir = self.dump_dir.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            for file_name in file_names {
+                let path = dump_dir.join(&file_name);
+                if let Err(err) = std::fs::remove_file(&path)
+                    && err.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!("failed to delete capture dump {file_name}: {err}");
+                }
+            }
+        })
+        .await;
+        if let Err(err) = result {
+            tracing::warn!("capture dump deletion task failed: {err}");
+        }
+    }
+
+    async fn delete_records_by_file_names(&self, file_names: &[String]) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        for chunk in file_names.chunks(CLEANUP_BATCH_SIZE) {
+            let placeholders = (0..chunk.len())
+                .map(|index| format!("${}", index + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let values: Vec<sea_orm::Value> =
+                chunk.iter().map(|name| name.as_str().into()).collect();
+            db.write()
+                .await
+                .execute(db.stmt(
+                    &format!(
+                        "DELETE FROM request_capture_records WHERE file_name IN ({placeholders})"
+                    ),
+                    values,
+                ))
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(())
     }
 
     /// RCV-A1: candidate records for one request id, newest first. When
@@ -414,7 +633,8 @@ impl RequestCaptureStore {
             return Ok(Vec::new());
         };
         let mut sql = "SELECT file_name, request_id, user_id, api_key_id, created_at, \
-             created_at_unix_ms, size_bytes FROM request_capture_records WHERE request_id = $1"
+             created_at_unix_ms, size_bytes, expires_at_unix_ms \
+             FROM request_capture_records WHERE request_id = $1"
             .to_string();
         let mut values: Vec<sea_orm::Value> = vec![request_id.into()];
         if let Some(user_id) = user_id {
@@ -439,6 +659,9 @@ impl RequestCaptureStore {
                         .try_get("", "created_at_unix_ms")
                         .map_err(|e| e.to_string())?,
                     size_bytes: row.try_get("", "size_bytes").map_err(|e| e.to_string())?,
+                    expires_at_unix_ms: row
+                        .try_get("", "expires_at_unix_ms")
+                        .map_err(|e| e.to_string())?,
                 })
             })
             .collect()
@@ -446,20 +669,34 @@ impl RequestCaptureStore {
 
     /// RCV-A3: on-demand dump read on a blocking-capable executor. Returns
     /// `Ok(None)` when the file no longer exists (RCV-A8 stale record).
-    pub async fn read_dump_file(&self, file_name: &str) -> Result<Option<Vec<u8>>, String> {
+    /// RCD-Z6: a zstd magic prefix selects bounded decompression; any other
+    /// content is returned as raw bytes, which keeps legacy uncompressed
+    /// dumps readable.
+    pub async fn read_dump_file(&self, file_name: &str) -> Result<Option<Vec<u8>>, DumpReadError> {
         // Defense in depth: recorded file names never contain separators, but
         // reject any that would escape the dump directory.
         if file_name.contains('/') || file_name.contains('\\') || file_name.contains("..") {
-            return Err("invalid capture dump file name".to_string());
+            return Err(DumpReadError::Io(
+                "invalid capture dump file name".to_string(),
+            ));
         }
         let path = self.dump_dir.join(file_name);
-        tokio::task::spawn_blocking(move || match std::fs::read(&path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err.to_string()),
+        let max_decompressed_bytes = self.limits.max_session_bytes;
+        tokio::task::spawn_blocking(move || {
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(err) => return Err(DumpReadError::Io(err.to_string())),
+            };
+            if bytes.len() >= ZSTD_MAGIC.len() && bytes[..ZSTD_MAGIC.len()] == ZSTD_MAGIC {
+                return decompress_bounded(&bytes, max_decompressed_bytes)
+                    .map(Some)
+                    .map_err(DumpReadError::Unreadable);
+            }
+            Ok(Some(bytes))
         })
         .await
-        .map_err(|err| err.to_string())?
+        .map_err(|err| DumpReadError::Io(err.to_string()))?
     }
 
     /// RCV-A8: drop a stale metadata row whose dump file no longer exists.
@@ -487,12 +724,13 @@ impl RequestCaptureStore {
             .await
             .execute(db.stmt(
                 "INSERT INTO request_capture_records \
-                 (file_name, request_id, user_id, api_key_id, created_at, created_at_unix_ms, size_bytes) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 (file_name, request_id, user_id, api_key_id, created_at, created_at_unix_ms, size_bytes, expires_at_unix_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (file_name) DO UPDATE SET \
                  request_id = excluded.request_id, user_id = excluded.user_id, \
                  api_key_id = excluded.api_key_id, created_at = excluded.created_at, \
-                 created_at_unix_ms = excluded.created_at_unix_ms, size_bytes = excluded.size_bytes",
+                 created_at_unix_ms = excluded.created_at_unix_ms, size_bytes = excluded.size_bytes, \
+                 expires_at_unix_ms = excluded.expires_at_unix_ms",
                 vec![
                     record.file_name.as_str().into(),
                     record.request_id.as_str().into(),
@@ -501,6 +739,7 @@ impl RequestCaptureStore {
                     record.created_at.as_str().into(),
                     record.created_at_unix_ms.into(),
                     record.size_bytes.into(),
+                    record.expires_at_unix_ms.into(),
                 ],
             ))
             .await
@@ -619,20 +858,24 @@ impl RequestCaptureSession {
         attempts.push(retained_attempt);
     }
 
+    /// RCD-Z3: bounding and envelope encoding run synchronously here;
+    /// compression, the file write, the metadata insert, and the RCD-R8
+    /// size-budget step run in the returned background task. Request paths
+    /// ignore the handle; tests await it.
     pub(crate) async fn persist_with_result(
         &self,
         upstream_usage: Option<&crate::urp::Usage>,
         upstream_error_seen: bool,
-    ) {
+    ) -> Option<JoinHandle<()>> {
         let mut attempts = self.attempts.lock().await.clone();
         if attempts.is_empty() {
-            return;
+            return None;
         }
         if !self
             .mode
             .should_persist(upstream_usage, upstream_error_seen)
         {
-            return;
+            return None;
         }
         let mut truncation = self.truncation.lock().await.clone();
         let encoded = loop {
@@ -651,7 +894,7 @@ impl RequestCaptureSession {
                 Ok(encoded) => encoded,
                 Err(error) => {
                     tracing::warn!("failed to encode request capture dump: {error}");
-                    return;
+                    return None;
                 }
             };
             if encoded.len() <= self.limits.max_session_bytes {
@@ -666,7 +909,7 @@ impl RequestCaptureSession {
                         max_session_bytes = self.limits.max_session_bytes,
                         "bounded request capture envelope exceeds configured session byte limit"
                     );
-                    return;
+                    return None;
                 }
                 attempts[0] = placeholder;
                 truncation.omitted_bytes = truncation
@@ -683,70 +926,104 @@ impl RequestCaptureSession {
                     max_session_bytes = self.limits.max_session_bytes,
                     "request capture envelope exceeds configured session byte limit"
                 );
-                return;
+                return None;
             };
             let removed_bytes = serialized_len(&removed);
             truncation.omitted_attempts = truncation.omitted_attempts.saturating_add(1);
             truncation.omitted_bytes = truncation.omitted_bytes.saturating_add(removed_bytes);
             truncation.retained_bytes = truncation.retained_bytes.saturating_sub(removed_bytes);
         };
-        let size_bytes = encoded.len() as i64;
-        let file_name = match self
-            .store
-            .write_dump(self.request_id.as_deref(), self.created_at, encoded)
-            .await
-        {
-            Ok(file_name) => file_name,
-            Err(err) => {
-                tracing::warn!("failed to write request capture dump: {err}");
+        // RCD-Z3 step 2: everything from compression onward is detached from
+        // the HTTP response path.
+        let store = self.store.clone();
+        let request_id = self.request_id.clone();
+        let created_at = self.created_at;
+        let user_id = self.user_id.clone();
+        let api_key_id = self.api_key_id.clone();
+        // RCD-R1: the TTL deadline is fixed from the retention resolved at
+        // request-authentication time, not at write-completion time.
+        let expires_at_unix_ms = created_at.timestamp_millis().saturating_add(
+            i64::try_from(self.retention.duration_seconds().saturating_mul(1000))
+                .unwrap_or(i64::MAX),
+        );
+        Some(tokio::spawn(async move {
+            let (file_name, size_bytes) = match store
+                .write_dump(request_id.as_deref(), created_at, encoded)
+                .await
+            {
+                Ok(written) => written,
+                Err(err) => {
+                    tracing::warn!("failed to write request capture dump: {err}");
+                    return;
+                }
+            };
+            // RCD-M3: only sessions with a request id get a metadata row;
+            // RCD-M4: an insert failure keeps the dump file and the client
+            // response intact.
+            let Some(request_id) = request_id else {
                 return;
-            }
-        };
-        // RCD-M3: only sessions with a request id get a metadata row; RCD-M4:
-        // an insert failure keeps the dump file and the client response intact.
-        if let Some(request_id) = self.request_id.as_deref() {
+            };
             let record = CaptureRecordRow {
                 file_name,
-                request_id: request_id.to_string(),
-                user_id: self.user_id.clone(),
-                api_key_id: self.api_key_id.clone(),
-                created_at: self.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-                created_at_unix_ms: self.created_at.timestamp_millis(),
+                request_id,
+                user_id,
+                api_key_id,
+                created_at: created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                created_at_unix_ms: created_at.timestamp_millis(),
                 size_bytes,
+                expires_at_unix_ms,
             };
-            if let Err(err) = self.store.insert_capture_record(&record).await {
+            if let Err(err) = store.insert_capture_record(&record).await {
                 tracing::warn!("failed to record request capture metadata: {err}");
+                return;
             }
-        }
+            // RCD-R8: bound budget overshoot to the window between this write
+            // and the completion of this step.
+            if let Err(err) = store.enforce_size_budget().await {
+                tracing::warn!("request capture size rotation failed: {err}");
+            }
+        }))
     }
 }
 
 impl RequestCaptureStore {
+    /// RCD-Z1/RCD-Z4/RCD-S11: compress, then write via temporary file plus
+    /// atomic rename; compression failure falls back to the raw `.json`
+    /// shape. Returns the final file name and its on-disk byte length
+    /// (RCD-Z8).
     async fn write_dump(
         &self,
         request_id: Option<&str>,
         created_at: chrono::DateTime<Utc>,
         bytes: Vec<u8>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, i64), String> {
         let dump_dir = self.dump_dir.clone();
         let prefix = request_id_prefix(request_id);
         let timestamp = created_at.format("%Y%m%dT%H%M%S%3fZ").to_string();
-        let filename = format!("{prefix}_{timestamp}.json");
-        let written_filename = filename.clone();
+        let base_name = format!("{prefix}_{timestamp}");
         tokio::task::spawn_blocking(move || {
+            let (filename, payload) = match zstd::encode_all(&bytes[..], ZSTD_COMPRESSION_LEVEL) {
+                Ok(compressed) => (format!("{base_name}.json.zst"), compressed),
+                Err(err) => {
+                    tracing::warn!("zstd compression failed; storing raw capture dump: {err}");
+                    (format!("{base_name}.json"), bytes)
+                }
+            };
+            let size_bytes = payload.len() as i64;
             std::fs::create_dir_all(&*dump_dir).map_err(|err| err.to_string())?;
-            let final_path = dump_dir.join(filename);
-            let tmp_path = final_path.with_extension(format!(
-                "json.tmp.{}",
+            let final_path = dump_dir.join(&filename);
+            // Appended (not `with_extension`) so multi-dot names survive; an
+            // abandoned tmp file is bounded by RCD-R5a orphan cleanup.
+            let tmp_path = dump_dir.join(format!(
+                "{filename}.tmp.{}",
                 uuid::Uuid::new_v4().to_string().replace('-', "")
             ));
-            std::fs::write(&tmp_path, bytes).map_err(|err| err.to_string())?;
+            std::fs::write(&tmp_path, payload).map_err(|err| err.to_string())?;
             std::fs::rename(&tmp_path, &final_path).map_err(|err| err.to_string())?;
-            Ok::<(), String>(())
+            Ok::<(String, i64), String>((filename, size_bytes))
         })
         .await
-        .map_err(|err| err.to_string())??;
-        Ok(written_filename)
+        .map_err(|err| err.to_string())?
     }
 }
 
@@ -792,15 +1069,17 @@ fn provider_type_name(provider_type: ProviderType) -> &'static str {
     }
 }
 
-fn cleanup_expired_sync(dump_dir: &Path, retention_days: u64) -> Result<(), String> {
+/// RCD-R5/RCD-R5a: direct regular files with a modification time older than
+/// `horizon`. Subdirectories are never entered; entries without a valid UTF-8
+/// name cannot match a metadata row and are skipped.
+fn list_files_older_than(
+    dump_dir: &Path,
+    horizon: std::time::SystemTime,
+) -> Result<Vec<String>, String> {
     if !dump_dir.exists() {
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let cutoff = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(
-            retention_days.saturating_mul(86_400),
-        ))
-        .unwrap_or(std::time::UNIX_EPOCH);
+    let mut names = Vec::new();
     for entry in std::fs::read_dir(dump_dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
         let metadata = entry.metadata().map_err(|err| err.to_string())?;
@@ -810,11 +1089,35 @@ fn cleanup_expired_sync(dump_dir: &Path, retention_days: u64) -> Result<(), Stri
         let Ok(modified) = metadata.modified() else {
             continue;
         };
-        if modified < cutoff {
-            std::fs::remove_file(entry.path()).map_err(|err| err.to_string())?;
+        if modified >= horizon {
+            continue;
+        }
+        if let Ok(name) = entry.file_name().into_string() {
+            names.push(name);
         }
     }
-    Ok(())
+    Ok(names)
+}
+
+/// RCD-Z7: bounded zstd decompression. Fails when the frame is invalid or
+/// its decompressed size exceeds `max_bytes`.
+fn decompress_bounded(bytes: &[u8], max_bytes: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let decoder = zstd::stream::read::Decoder::new(bytes)
+        .map_err(|err| format!("invalid zstd frame: {err}"))?;
+    let mut out = Vec::new();
+    // Reading one byte past the bound distinguishes "exactly at the bound"
+    // from "over the bound" without decompressing the whole oversized frame.
+    decoder
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut out)
+        .map_err(|err| format!("zstd decompression failed: {err}"))?;
+    if out.len() > max_bytes {
+        return Err(format!(
+            "decompressed capture dump exceeds the {max_bytes}-byte session bound"
+        ));
+    }
+    Ok(out)
 }
 
 fn data_dir_from_database_dsn(dsn: &str) -> PathBuf {
@@ -940,6 +1243,7 @@ fn truncated_attempt_placeholder(attempt: &Value, original_bytes: usize) -> Valu
         "transformed_urp_request": null,
         "upstream_request": null,
         "downstream_response": null,
+        "reconstructed_urp_response": null,
         "downstream_sse_frames": null,
         "downstream_sse_frames_truncation": frame_truncation,
         "transform_chain": null,
@@ -1015,6 +1319,21 @@ mod tests {
             sub_account_balance_nano: "0".to_string(),
             reasoning_envelope_enabled: true,
             request_capture_mode,
+            request_capture_retention: RequestCaptureRetention::default(),
+        }
+    }
+
+    /// Test helper: persist and wait for the RCD-Z3 background write task.
+    async fn persist_and_wait(
+        session: &RequestCaptureSession,
+        upstream_usage: Option<&crate::urp::Usage>,
+        upstream_error_seen: bool,
+    ) {
+        if let Some(handle) = session
+            .persist_with_result(upstream_usage, upstream_error_seen)
+            .await
+        {
+            handle.await.expect("background dump write completes");
         }
     }
 
@@ -1151,6 +1470,7 @@ mod tests {
             dump_dir: Arc::new(temp.path().join("dumps")),
             limits: RequestCaptureLimits::from_env(),
             db: Some(db.clone()),
+            runtime: None,
         };
         let runtime = RwLock::new(MonoizeRuntimeConfig {
             request_capture_enabled: true,
@@ -1197,7 +1517,7 @@ mod tests {
                 "error": null
             }))
             .await;
-        session.persist_with_result(None, false).await;
+        persist_and_wait(&session, None, false).await;
 
         let records = store
             .list_capture_records("req_meta_1", None)
@@ -1209,13 +1529,25 @@ mod tests {
         assert_eq!(record.user_id, "user-1");
         assert_eq!(record.api_key_id, "key-1");
         assert!(record.size_bytes > 0);
+        // RCD-R1: default retention is 24 hours.
+        assert_eq!(
+            record.expires_at_unix_ms,
+            record.created_at_unix_ms + 86_400_000
+        );
+
+        // RCD-Z1/RCD-Z8: the file on disk is a zstd frame and `size_bytes`
+        // records its compressed length.
+        assert!(record.file_name.ends_with(".json.zst"));
+        let disk_bytes =
+            std::fs::read(store.dump_dir().join(&record.file_name)).expect("disk read");
+        assert_eq!(disk_bytes.len() as i64, record.size_bytes);
+        assert_eq!(disk_bytes[..4], ZSTD_MAGIC);
 
         let bytes = store
             .read_dump_file(&record.file_name)
             .await
             .expect("dump read succeeds")
             .expect("dump exists");
-        assert_eq!(bytes.len() as i64, record.size_bytes);
         let payload: Value = serde_json::from_slice(&bytes).expect("dump is JSON");
         assert_eq!(payload["version"], 2);
         // RCD-D3a: the recorded id is the canonical transform id, so the
@@ -1257,13 +1589,10 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn cleanup_deletes_expired_metadata_rows_with_dump_files() {
+    async fn store_with_migrated_db(temp: &TempDir) -> (RequestCaptureStore, crate::db::DbPool) {
         use crate::migration::Migrator;
-        use sea_orm::ConnectionTrait;
         use sea_orm_migration::MigratorTrait;
 
-        let temp = TempDir::new().expect("temporary directory");
         let db = crate::db::DbPool::connect("sqlite::memory:")
             .await
             .expect("db connects");
@@ -1275,34 +1604,223 @@ mod tests {
             dump_dir: Arc::new(temp.path().join("dumps")),
             limits: RequestCaptureLimits::from_env(),
             db: Some(db.clone()),
+            runtime: None,
         };
-        let old_ms = (Utc::now() - chrono::Duration::days(365)).timestamp_millis();
-        let fresh_ms = Utc::now().timestamp_millis();
-        for (file_name, created_ms) in [("old.json", old_ms), ("fresh.json", fresh_ms)] {
-            db.write()
-                .await
-                .execute(db.stmt(
-                    "INSERT INTO request_capture_records (file_name, request_id, user_id, api_key_id, created_at, created_at_unix_ms, size_bytes) VALUES ($1, 'req-x', 'user-1', 'key-1', '2026-01-01T00:00:00Z', $2, 1)",
-                    vec![file_name.into(), created_ms.into()],
-                ))
-                .await
-                .expect("row inserted");
-        }
-        let runtime = Arc::new(RwLock::new(MonoizeRuntimeConfig {
-            request_capture_enabled: true,
-            request_capture_retention_days: 7,
-            ..MonoizeRuntimeConfig::default()
-        }));
-        store
-            .cleanup_expired(runtime)
+        (store, db)
+    }
+
+    async fn insert_record(
+        db: &crate::db::DbPool,
+        file_name: &str,
+        created_ms: i64,
+        size_bytes: i64,
+        expires_ms: i64,
+    ) {
+        db.write()
             .await
-            .expect("cleanup succeeds");
+            .execute(db.stmt(
+                "INSERT INTO request_capture_records (file_name, request_id, user_id, api_key_id, created_at, created_at_unix_ms, size_bytes, expires_at_unix_ms) VALUES ($1, 'req-x', 'user-1', 'key-1', '2026-01-01T00:00:00Z', $2, $3, $4)",
+                vec![file_name.into(), created_ms.into(), size_bytes.into(), expires_ms.into()],
+            ))
+            .await
+            .expect("row inserted");
+    }
+
+    fn write_dump_file(store: &RequestCaptureStore, file_name: &str, contents: &[u8]) {
+        std::fs::create_dir_all(store.dump_dir()).expect("dump dir");
+        std::fs::write(store.dump_dir().join(file_name), contents).expect("file written");
+    }
+
+    #[tokio::test]
+    async fn ttl_cleanup_deletes_expired_rows_and_their_dump_files() {
+        let temp = TempDir::new().expect("temporary directory");
+        let (store, db) = store_with_migrated_db(&temp).await;
+        let now_ms = Utc::now().timestamp_millis();
+        insert_record(&db, "expired.json.zst", now_ms - 10_000, 1, now_ms - 1).await;
+        insert_record(&db, "live.json.zst", now_ms, 1, now_ms + 3_600_000).await;
+        write_dump_file(&store, "expired.json.zst", b"x");
+        write_dump_file(&store, "live.json.zst", b"x");
+
+        store.cleanup_ttl_expired().await.expect("TTL cleanup");
+
         let remaining = store
             .list_capture_records("req-x", None)
             .await
             .expect("records query succeeds");
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].file_name, "fresh.json");
+        assert_eq!(remaining[0].file_name, "live.json.zst");
+        assert!(!store.dump_dir().join("expired.json.zst").exists());
+        assert!(store.dump_dir().join("live.json.zst").exists());
+    }
+
+    #[tokio::test]
+    async fn orphan_cleanup_deletes_only_old_unregistered_files() {
+        let temp = TempDir::new().expect("temporary directory");
+        let (store, db) = store_with_migrated_db(&temp).await;
+        let now_ms = Utc::now().timestamp_millis();
+        insert_record(&db, "registered.json.zst", now_ms, 1, now_ms + 3_600_000).await;
+        write_dump_file(&store, "registered.json.zst", b"x");
+        write_dump_file(&store, "orphan_old.json", b"x");
+        write_dump_file(&store, "orphan_fresh.json", b"x");
+        let old_mtime = std::time::SystemTime::now()
+            - std::time::Duration::from_secs(ORPHAN_FILE_HORIZON_SECS + 60);
+        for name in ["registered.json.zst", "orphan_old.json"] {
+            std::fs::File::options()
+                .write(true)
+                .open(store.dump_dir().join(name))
+                .expect("file opens")
+                .set_modified(old_mtime)
+                .expect("mtime set");
+        }
+
+        store.cleanup_orphan_files().await.expect("orphan cleanup");
+
+        // RCD-R5a: only the old file without a metadata row is deleted.
+        assert!(store.dump_dir().join("registered.json.zst").exists());
+        assert!(store.dump_dir().join("orphan_fresh.json").exists());
+        assert!(!store.dump_dir().join("orphan_old.json").exists());
+    }
+
+    #[tokio::test]
+    async fn size_rotation_deletes_oldest_registered_dumps_until_budget_fits() {
+        let temp = TempDir::new().expect("temporary directory");
+        let (mut store, db) = store_with_migrated_db(&temp).await;
+        store.runtime = Some(Arc::new(RwLock::new(MonoizeRuntimeConfig {
+            // The clamped minimum does not apply to the runtime snapshot in
+            // tests; any non-zero budget exercises RCD-R7.
+            request_capture_max_total_bytes: 250,
+            ..MonoizeRuntimeConfig::default()
+        })));
+        let base_ms = Utc::now().timestamp_millis();
+        let far_expiry = base_ms + 86_400_000;
+        insert_record(&db, "a_oldest.json.zst", base_ms - 3_000, 100, far_expiry).await;
+        insert_record(&db, "b_middle.json.zst", base_ms - 2_000, 100, far_expiry).await;
+        insert_record(&db, "c_newest.json.zst", base_ms - 1_000, 100, far_expiry).await;
+        for name in ["a_oldest.json.zst", "b_middle.json.zst", "c_newest.json.zst"] {
+            write_dump_file(&store, name, b"x");
+        }
+
+        store.enforce_size_budget().await.expect("size rotation");
+
+        // 300 bytes registered against a 250-byte budget: exactly the oldest
+        // dump is deleted (100 freed, 200 <= 250).
+        let remaining = store
+            .list_capture_records("req-x", None)
+            .await
+            .expect("records query succeeds");
+        let names: Vec<&str> = remaining
+            .iter()
+            .map(|record| record.file_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["c_newest.json.zst", "b_middle.json.zst"]);
+        assert!(!store.dump_dir().join("a_oldest.json.zst").exists());
+        assert!(store.dump_dir().join("b_middle.json.zst").exists());
+
+        // A zero budget disables rotation (RCD-R6).
+        store
+            .runtime
+            .as_ref()
+            .expect("runtime set")
+            .write()
+            .await
+            .request_capture_max_total_bytes = 0;
+        store.enforce_size_budget().await.expect("size rotation");
+        assert_eq!(
+            store
+                .list_capture_records("req-x", None)
+                .await
+                .expect("records query succeeds")
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn per_key_retention_sets_the_record_expiry() {
+        let temp = TempDir::new().expect("temporary directory");
+        let (store, _db) = store_with_migrated_db(&temp).await;
+        let runtime = RwLock::new(MonoizeRuntimeConfig {
+            request_capture_enabled: true,
+            ..MonoizeRuntimeConfig::default()
+        });
+        let mut auth = test_auth(RequestCaptureMode::CaptureAll);
+        auth.request_capture_retention = RequestCaptureRetention::FiveMinutes;
+        let session = store
+            .maybe_start_session(
+                &runtime,
+                &auth,
+                Some("req_ttl_5m".to_string()),
+                DownstreamProtocol::Responses,
+                false,
+            )
+            .await
+            .expect("capture starts");
+        session
+            .push_attempt(json!({"attempt_number": 1, "provider_id": "p", "error": null}))
+            .await;
+        persist_and_wait(&session, None, false).await;
+
+        let records = store
+            .list_capture_records("req_ttl_5m", None)
+            .await
+            .expect("records query succeeds");
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].expires_at_unix_ms,
+            records[0].created_at_unix_ms + 300_000
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_raw_json_dumps_stay_readable() {
+        let temp = TempDir::new().expect("temporary directory");
+        let store = RequestCaptureStore {
+            dump_dir: Arc::new(temp.path().join("dumps")),
+            limits: RequestCaptureLimits::from_env(),
+            db: None,
+            runtime: None,
+        };
+        let raw = br#"{"version":2,"attempts":[]}"#;
+        write_dump_file(&store, "legacy_20250101T000000000Z.json", raw);
+
+        let bytes = store
+            .read_dump_file("legacy_20250101T000000000Z.json")
+            .await
+            .expect("read succeeds")
+            .expect("dump exists");
+        assert_eq!(bytes, raw);
+    }
+
+    #[tokio::test]
+    async fn zstd_dumps_exceeding_the_session_bound_fail_the_read() {
+        let temp = TempDir::new().expect("temporary directory");
+        let store = RequestCaptureStore {
+            dump_dir: Arc::new(temp.path().join("dumps")),
+            limits: RequestCaptureLimits {
+                max_attempts: 1,
+                max_frames: 8,
+                max_frame_bytes: 1024,
+                max_session_bytes: 64,
+            },
+            db: None,
+            runtime: None,
+        };
+        let oversized = vec![b'x'; 1024];
+        let compressed =
+            zstd::encode_all(&oversized[..], ZSTD_COMPRESSION_LEVEL).expect("compresses");
+        write_dump_file(&store, "big_20250101T000000000Z.json.zst", &compressed);
+
+        let result = store
+            .read_dump_file("big_20250101T000000000Z.json.zst")
+            .await;
+        assert!(matches!(result, Err(DumpReadError::Unreadable(_))));
+
+        // A corrupt frame with the zstd magic prefix also fails as unreadable.
+        write_dump_file(&store, "corrupt_20250101T000000000Z.json.zst", &ZSTD_MAGIC);
+        let result = store
+            .read_dump_file("corrupt_20250101T000000000Z.json.zst")
+            .await;
+        assert!(matches!(result, Err(DumpReadError::Unreadable(_))));
     }
 
     #[tokio::test]
@@ -1318,6 +1836,7 @@ mod tests {
             dump_dir: Arc::new(temp.path().join("dumps")),
             limits,
             db: None,
+            runtime: None,
         };
         let runtime = RwLock::new(MonoizeRuntimeConfig {
             request_capture_enabled: true,
@@ -1358,15 +1877,23 @@ mod tests {
                 "error": null
             }))
             .await;
-        session.persist_with_result(None, false).await;
+        persist_and_wait(&session, None, false).await;
 
-        let path = std::fs::read_dir(store.dump_dir())
+        let file_name = std::fs::read_dir(store.dump_dir())
             .expect("dump directory exists")
             .next()
             .expect("one dump exists")
             .expect("dump entry reads")
-            .path();
-        let bytes = std::fs::read(path).expect("dump reads");
+            .file_name()
+            .into_string()
+            .expect("utf-8 file name");
+        assert!(file_name.ends_with(".json.zst"));
+        // RCD-Z2: the session byte bound applies to the decompressed payload.
+        let bytes = store
+            .read_dump_file(&file_name)
+            .await
+            .expect("dump read succeeds")
+            .expect("dump exists");
         assert!(bytes.len() <= MIN_SESSION_BYTES);
         let payload: Value = serde_json::from_slice(&bytes).expect("dump is JSON");
         assert_eq!(bytes, serde_json::to_vec(&payload).unwrap());

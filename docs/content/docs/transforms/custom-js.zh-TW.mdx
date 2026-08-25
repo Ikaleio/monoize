@@ -1,0 +1,101 @@
+---
+title: 自訂 JS 變換
+description: 管理員撰寫、在內嵌 QuickJS 沙箱中執行的 JavaScript 變換。
+---
+
+## 什麼是自訂變換
+
+自訂變換是管理員在儀表板中撰寫的 JavaScript 指令碼。
+Monoize 在內嵌的 QuickJS 沙箱中執行指令碼，指令碼參與正常的變換管線。
+自訂變換像內建變換一樣掛載到 Provider 鏈、全域鏈和 API 金鑰鏈。
+
+每個自訂變換 ID 以固定前綴 `js:` 開頭。
+完整 ID 必須由 `js:` 加小寫字母、數字和單一連字號組成，例如 `js:strip-markers`。
+
+## 管理自訂變換
+
+在管理員側邊欄開啟**自訂變換**頁面。
+頁面為每個變換顯示一張卡片，包含名稱、ID、描述、作者、階段、範圍和可見性。
+
+- **新增變換**開啟具備語法標示、複製和格式化功能的程式碼編輯器。
+- 卡片上的啟用開關可啟用或停用該變換。
+- **複製撰寫技能**將完整的撰寫指南複製到剪貼簿。貼給 AI 助手即可產生指令碼。
+
+`visibility: user` 允許非管理員把該變換掛到 API 金鑰鏈。
+`visibility: admin`（預設值）只允許管理員掛載該變換。
+`GET /api/dashboard/transforms/registry` 需要管理員工作階段，並列出所有已啟用的自訂變換。
+停用或已刪除的變換不會執行。仍引用它的鏈會將其略過，不報錯。
+
+## Frontmatter
+
+每個指令碼以一個宣告中繼資料的區塊註解開頭：
+
+```js
+/**
+ * @monoize-transform
+ * id: js:example-rewrite
+ * name: Example Rewrite
+ * description: Rewrites request fields for demo.
+ * author: alice
+ * phase: request
+ * scopes: provider, global
+ * visibility: user
+ */
+```
+
+| 鍵 | 必填 | 允許的值 | 預設值 |
+| --- | --- | --- | --- |
+| `id` | 是 | `js:` 加小寫字母、數字、連字號 | — |
+| `name` | 是 | 純字串，最多 100 字元 | — |
+| `description` | 是 | 純字串，最多 500 字元 | — |
+| `author` | 是 | 純字串，最多 100 字元 | — |
+| `phase` | 否 | `request`、`response`、`both` | `both` |
+| `scopes` | 否 | 逗號分隔：`provider`、`global`、`api_key` | 全部三個 |
+| `visibility` | 否 | `admin`、`user` | `admin` |
+
+儲存時 Monoize 驗證 frontmatter 並執行一次指令碼。
+frontmatter 無效、指令碼有語法錯誤或缺少 `transform` 函式時，儲存會被拒絕。
+
+## transform 函式
+
+指令碼定義一個全域函式 `transform(ctx)`：
+
+```js
+function transform(ctx) {
+  if (ctx.config.target) {
+    ctx.data.model = ctx.config.target;
+  }
+}
+```
+
+- `ctx.phase` 為 `"request"` 或 `"response"`。
+- `ctx.kind` 為 `"request"`、`"response"` 或 `"stream"`。
+- `ctx.data` 是負載的 JSON 形式。可直接修改，也可回傳替換物件。
+- `ctx.config` 是規則設定。宣告全域 `configSchema` 物件後，鏈編輯器會渲染設定表單。
+- `ctx.state` 是請求層級物件，在串流事件之間保持。
+- 處理串流事件時，回傳 `null` 丟棄事件，回傳陣列則發出多個事件。
+
+`Monoize.fetch(url, options)` 發起 HTTP 請求並回傳 `{ status, headers, body }`。
+`console.log`、`console.info`、`console.warn` 和 `console.error` 寫入伺服器日誌。
+
+## 沙箱限制
+
+沙箱沒有檔案系統、行程、計時器和模組 API。
+網路存取只能透過 `Monoize.fetch`。
+指令碼錯誤使目前請求以變換執行錯誤失敗；代理行程繼續運作。
+
+| 環境變數 | 預設值 | 含義 |
+| --- | --- | --- |
+| `MONOIZE_CUSTOM_JS_MEMORY_LIMIT_BYTES` | `33554432` | 每次呼叫的記憶體上限 |
+| `MONOIZE_CUSTOM_JS_STACK_LIMIT_BYTES` | `1048576` | 每次呼叫的堆疊上限 |
+| `MONOIZE_CUSTOM_JS_TIMEOUT_MS` | `10000` | 每次呼叫的實際時間預算 |
+| `MONOIZE_CUSTOM_JS_MAX_CONCURRENCY` | `8` | 沙箱並行呼叫數 |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_BYTES` | `8388608` | fetch 回應本文最大位元組數 |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_CALLS` | `16` | 每次呼叫的 fetch 次數上限 |
+| `MONOIZE_CUSTOM_JS_SOURCE_MAX_BYTES` | `262144` | 指令碼最大位元組數 |
+
+## 掛載自訂變換
+
+已儲存且啟用的自訂變換出現在與內建變換相同的鏈編輯器中，依宣告的階段和範圍篩選。
+像其他規則一樣把它加入鏈、設定可選的模型萬用字元並進行設定。
+用[請求擷取](/zh-TW/docs/request-logs)驗證效果。

@@ -2,6 +2,7 @@ use crate::auth::AuthState;
 use crate::billing_rate_store::{BillingRateStore, DbBillingRateRecord};
 use crate::captcha::CapVerifier;
 use crate::client_ip::TrustedProxyConfig;
+use crate::custom_transforms::CustomTransformStore;
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
@@ -201,6 +202,7 @@ pub struct AppState {
     pub billing_rate_store: BillingRateStore,
     pub transform_registry: Arc<TransformRegistry>,
     pub cap_verifier: CapVerifier,
+    pub custom_transform_store: CustomTransformStore,
     pub log_broadcast: tokio::sync::broadcast::Sender<Vec<InsertRequestLog>>,
     pub pending_request_logs: Arc<DashMap<String, InsertRequestLog>>,
     pub request_log_admissions: Arc<DashMap<String, Arc<RequestLogLifecycle>>>,
@@ -365,6 +367,14 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
 
     let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(64);
 
+    let custom_transform_store = CustomTransformStore::new(db.clone()).await.map_err(|err| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "custom_transform_store_init_failed",
+            err,
+        )
+    })?;
+
     let pending_request_logs = Arc::new(DashMap::new());
     let user_store = UserStore::new_for_role(
         db.clone(),
@@ -380,7 +390,8 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             "user_store_init_failed",
             err,
         )
-    })?;
+    })?
+    .with_custom_transforms(custom_transform_store.snapshot_handle());
     let settings_store = if is_replica {
         SettingsStore::new_read_only(db.clone()).await
     } else {
@@ -480,11 +491,14 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
             db.clone(),
             settings_store.clone(),
             monoize_runtime.clone(),
+            custom_transform_store.clone(),
             runtime.node.config_poll_interval,
         );
     }
-    let request_capture = RequestCaptureStore::new(&runtime.database_dsn).with_db(db.clone());
-    request_capture.spawn_cleanup_task(monoize_runtime.clone());
+    let request_capture = RequestCaptureStore::new(&runtime.database_dsn)
+        .with_db(db.clone())
+        .with_runtime(monoize_runtime.clone());
+    request_capture.spawn_cleanup_task();
     let probe_runtime = monoize_runtime.clone();
     let probe_health = channel_health.clone();
     let probe_routing_config_revision = routing_config_revision.clone();
@@ -950,6 +964,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         billing_rate_store,
         transform_registry,
         cap_verifier,
+        custom_transform_store,
         log_broadcast,
         pending_request_logs,
         request_log_admissions: Arc::new(DashMap::new()),
@@ -1799,9 +1814,8 @@ pub(crate) fn runtime_config_from_settings(
     runtime.strip_cross_protocol_nested_extra =
         settings_snapshot.monoize_strip_cross_protocol_nested_extra;
     runtime.request_capture_enabled = settings_snapshot.monoize_request_capture_enabled;
-    runtime.request_capture_retention_days = settings_snapshot
-        .monoize_request_capture_retention_days
-        .max(1);
+    runtime.request_capture_max_total_bytes =
+        settings_snapshot.monoize_request_capture_max_total_bytes;
     runtime.mask_sensitive_info = settings_snapshot.monoize_mask_sensitive_info;
     runtime.affinity_enabled = settings_snapshot.monoize_affinity_enabled;
     runtime.affinity_idle_ttl_seconds = settings_snapshot.monoize_affinity_idle_ttl_seconds.max(1);
@@ -2131,6 +2145,16 @@ fn build_dashboard_api_router() -> Router<AppState> {
         .route(
             "/dashboard/transforms/registry",
             get(crate::dashboard_handlers::get_transform_registry),
+        )
+        .route(
+            "/dashboard/custom-transforms",
+            get(crate::dashboard_handlers::list_custom_transforms)
+                .post(crate::dashboard_handlers::create_custom_transform),
+        )
+        .route(
+            "/dashboard/custom-transforms/{id}",
+            put(crate::dashboard_handlers::update_custom_transform)
+                .delete(crate::dashboard_handlers::delete_custom_transform),
         )
         // Model registry API routes
         .route(

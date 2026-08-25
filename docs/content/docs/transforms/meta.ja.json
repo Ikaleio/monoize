@@ -41,6 +41,8 @@
     "role_system_to_developer",
     "---ストリーム---",
     "stream_force",
-    "stream_split_sse_frames"
+    "stream_split_sse_frames",
+    "---カスタム---",
+    "custom-js"
   ]
 }

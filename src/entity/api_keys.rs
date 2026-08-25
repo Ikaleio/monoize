@@ -41,6 +41,8 @@ pub struct Model {
     pub reasoning_envelope_enabled: i32,
     #[sea_orm(column_type = "Text")]
     pub request_capture_mode: String,
+    #[sea_orm(column_type = "Text")]
+    pub request_capture_retention: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

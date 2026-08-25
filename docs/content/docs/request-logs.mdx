@@ -31,16 +31,23 @@ Capture stores the exact payload of each upstream attempt on disk. Capture is of
    - `capture-all`: capture every request that reaches an upstream.
    - `capture-only-abnormal`: capture only failed or anomalous requests.
 
-Captured files follow a retention window. The default is 1 day. Set `monoize_request_capture_retention_days` in **Settings** to change it.
+### Retention and rotation
+
+Each API key sets `request_capture_retention`: `5m`, `1h`, `24h`, or `7d`. The default is `24h`. A capture expires after this period. A cleanup task removes expired captures at startup and then every hour.
+
+A `super_admin` can set `monoize_request_capture_max_total_bytes` in **Settings**. The dashboard shows the value in MiB. When the total size of all captures exceeds this cap, Monoize deletes the oldest captures first until the total fits. Set `0` to disable the cap.
+
+Monoize compresses new capture files with zstd in a background task. It still reads uncompressed files from earlier versions.
 
 ## Capture viewer
 
 Rows with a stored capture show a capture indicator. Click it to open the viewer. The viewer shows, for each attempt:
 
-- the original downstream request body;
-- the request after all transforms;
-- the exact encoded upstream request;
-- the raw upstream response or stream frames;
+- **Downstream request**: the original request body from the client;
+- **Upstream request**: the exact encoded request sent upstream;
+- **URP**: the request after all transforms;
+- **Response**: the non-streaming result. For a streaming attempt, Monoize shows the reconstructed final response;
+- **Output Stream**: the raw SSE frames of a streaming attempt, with syntax highlighting. This tab appears only when the attempt recorded stream frames;
 - the transform chain that ran, with scope and order.
 
 Users with the `user` role see their own captures only, and see only API-key-scope transform entries. Admins can view captures owned by `user`-role accounts.
@@ -50,5 +57,5 @@ Users with the `user` role see their own captures only, and see only API-key-sco
 | Symptom | Cause | Action |
 | --- | --- | --- |
 | No capture indicator on new rows | Capture persistence finishes after the live row arrives | Wait for the automatic list refresh, or reload once |
-| `capture_not_found` | The capture expired, or your role cannot view it | Raise retention days, or ask the owner |
+| `capture_not_found` | The capture expired, was rotated out, or your role cannot view it | Raise the key's capture retention, or ask the owner |
 | Rows missing for a key | The key belongs to another user | Sign in as the key owner or as an admin |

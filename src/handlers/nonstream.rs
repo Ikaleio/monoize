@@ -594,6 +594,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 upstream_body.clone(),
                                 value.clone(),
                                 None,
+                                None,
                                 capture_transform_chain.clone(),
                                 None,
                             ))
@@ -907,6 +908,7 @@ pub(super) async fn execute_nonstream_typed_with_validator(
                                 capture.raw_input.as_ref().clone(),
                                 &req_attempt,
                                 upstream_body.clone(),
+                                None,
                                 None,
                                 None,
                                 capture_transform_chain.clone(),

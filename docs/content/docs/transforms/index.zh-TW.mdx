@@ -55,6 +55,12 @@ Monoize 內建 33 個變換。本節為每個變換提供獨立頁面。
 | 角色 | 改寫或合併訊息角色 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
 | 串流 | 控制串流行為 | `stream_force`、`stream_split_sse_frames` |
 
+## 自訂變換
+
+管理員還可以撰寫以 `js:` 為 ID 前綴的 JavaScript 變換。
+它們在內嵌的 QuickJS 沙箱中執行，與內建變換掛載到相同的鏈。
+詳見[自訂 JS 變換](/zh-TW/docs/transforms/custom-js)。
+
 ## 驗證變換效果
 
 1. 為測試用 API 金鑰開啟[請求擷取](/zh-TW/docs/request-logs)。

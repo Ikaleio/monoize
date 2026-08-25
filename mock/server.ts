@@ -224,6 +224,127 @@ function imageResponse(prompt: string, b64: string) {
   };
 }
 
+// MU5: model ids containing "reasoning" activate reasoning output on the
+// streaming endpoints so downstream reasoning pipelines can be exercised
+// without a real reasoning upstream.
+function hasReasoningTrigger(body: any): boolean {
+  return String(body?.model ?? "").includes("reasoning");
+}
+
+function tokenize(text: string): string[] {
+  return text.match(/\S+\s*/g) ?? [];
+}
+
+function responsesEventFrame(type: string, data: Record<string, unknown>): string {
+  return `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+}
+
+// MU9: full OpenAI Responses lifecycle with a reasoning-summary item followed
+// by a message item, so Monoize's upstream decoder reconstructs a Reasoning
+// node with summary text.
+function reasoningResponsesStream(model: string, text: string): string[] {
+  const responseId = `resp_mock_${Date.now()}`;
+  const createdAt = Math.floor(Date.now() / 1000);
+  const summaryText = `Mock summary of: ${text}`;
+  const reasoningItemDone = {
+    type: "reasoning",
+    id: "rs_mock_1",
+    summary: [{ type: "summary_text", text: summaryText }],
+  };
+  const messageItemDone = {
+    type: "message",
+    id: "msg_mock_1",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+  return [
+    responsesEventFrame("response.created", {
+      response: { id: responseId, object: "response", created_at: createdAt, model, status: "in_progress", output: [] },
+    }),
+    responsesEventFrame("response.output_item.added", {
+      output_index: 0,
+      item: { type: "reasoning", id: "rs_mock_1", summary: [] },
+    }),
+    responsesEventFrame("response.reasoning_summary_part.added", {
+      item_id: "rs_mock_1",
+      output_index: 0,
+      summary_index: 0,
+      part: { type: "summary_text", text: "" },
+    }),
+    ...tokenize(summaryText).map((token) =>
+      responsesEventFrame("response.reasoning_summary_text.delta", {
+        item_id: "rs_mock_1",
+        output_index: 0,
+        summary_index: 0,
+        delta: token,
+      }),
+    ),
+    responsesEventFrame("response.reasoning_summary_text.done", {
+      item_id: "rs_mock_1",
+      output_index: 0,
+      summary_index: 0,
+      text: summaryText,
+    }),
+    responsesEventFrame("response.reasoning_summary_part.done", {
+      item_id: "rs_mock_1",
+      output_index: 0,
+      summary_index: 0,
+      part: { type: "summary_text", text: summaryText },
+    }),
+    responsesEventFrame("response.output_item.done", {
+      output_index: 0,
+      item: reasoningItemDone,
+    }),
+    responsesEventFrame("response.output_item.added", {
+      output_index: 1,
+      item: { type: "message", id: "msg_mock_1", role: "assistant", status: "in_progress", content: [] },
+    }),
+    responsesEventFrame("response.content_part.added", {
+      item_id: "msg_mock_1",
+      output_index: 1,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    }),
+    ...tokenize(text).map((token) =>
+      responsesEventFrame("response.output_text.delta", {
+        item_id: "msg_mock_1",
+        output_index: 1,
+        content_index: 0,
+        delta: token,
+      }),
+    ),
+    responsesEventFrame("response.output_text.done", {
+      item_id: "msg_mock_1",
+      output_index: 1,
+      content_index: 0,
+      text,
+    }),
+    responsesEventFrame("response.content_part.done", {
+      item_id: "msg_mock_1",
+      output_index: 1,
+      content_index: 0,
+      part: { type: "output_text", text, annotations: [] },
+    }),
+    responsesEventFrame("response.output_item.done", {
+      output_index: 1,
+      item: messageItemDone,
+    }),
+    responsesEventFrame("response.completed", {
+      response: {
+        id: responseId,
+        object: "response",
+        created_at: createdAt,
+        model,
+        status: "completed",
+        output: [reasoningItemDone, messageItemDone],
+        usage: { input_tokens: 8, output_tokens: 16, total_tokens: 24 },
+      },
+    }),
+    `data: [DONE]\n\n`,
+  ];
+}
+
 function responsesObject(model: string, text: string) {
   return {
     id: `resp_mock_${Date.now()}`,
@@ -254,6 +375,9 @@ Bun.serve({
       const text = `${collectResponsesText(body.input)}${echoSuffix(body)}`;
 
       if (body.stream === true) {
+        if (hasReasoningTrigger(body)) {
+          return sseResponse(reasoningResponsesStream(model, text), 30);
+        }
         const chunks = [
           `event: response.output_text.delta\n` +
             `data: ${JSON.stringify({ text })}\n\n`,
@@ -281,11 +405,25 @@ Bun.serve({
         // Word-level deltas plus a terminal finish_reason chunk: Monoize
         // rejects streams that hit [DONE] without a terminal finish_reason.
         const words = text.match(/\S+\s*/g) ?? [];
+        // MU12: reasoning-trigger models stream raw CoT via reasoning_content
+        // before any content delta, mimicking open-source reasoning upstreams.
+        const reasoningWords = hasReasoningTrigger(body)
+          ? tokenize(`Mock reasoning about: ${collectChatText(messages)}`)
+          : [];
         const chunks = [
           `data: ${JSON.stringify({
             ...base,
             choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
           })}\n\n`,
+          ...reasoningWords.map(
+            (word) =>
+              `data: ${JSON.stringify({
+                ...base,
+                choices: [
+                  { index: 0, delta: { reasoning_content: word }, finish_reason: null },
+                ],
+              })}\n\n`,
+          ),
           ...words.map(
             (word) =>
               `data: ${JSON.stringify({

@@ -1291,6 +1291,7 @@ async fn authenticate_playground_session(
         sub_account_balance_nano: "0".to_string(),
         reasoning_envelope_enabled: true,
         request_capture_mode: crate::users::RequestCaptureMode::Off,
+        request_capture_retention: crate::users::RequestCaptureRetention::default(),
     })
 }
 

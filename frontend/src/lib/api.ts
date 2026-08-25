@@ -116,6 +116,26 @@ export interface TransformRegistryItem {
   config_schema: Record<string, unknown>;
   name: Record<string, string>;
   description: Record<string, string>;
+  // Marker fields present only on custom js: items (custom-js-transforms.spec.md CJS-REG-2)
+  custom?: boolean;
+  visibility?: CustomTransformVisibility;
+}
+
+export type CustomTransformVisibility = "admin" | "user";
+
+export interface CustomTransform {
+  id: string;
+  name: string;
+  description: string;
+  author: string;
+  source: string;
+  enabled: boolean;
+  visibility: CustomTransformVisibility;
+  phases: Phase[];
+  scopes: TransformScope[];
+  config_schema: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ModelRedirectRule {
@@ -124,6 +144,9 @@ export interface ModelRedirectRule {
 }
 
 export type RequestCaptureMode = "off" | "capture-all" | "capture-only-abnormal";
+
+/** Per-key capture retention (RCD-C5a, `request-capture-dumps.spec.md`). */
+export type RequestCaptureRetention = "5m" | "1h" | "24h" | "7d";
 
 export interface ApiKey {
   id: string;
@@ -147,6 +170,7 @@ export interface ApiKey {
   model_redirects: ModelRedirectRule[];
   reasoning_envelope_enabled: boolean;
   request_capture_mode: RequestCaptureMode;
+  request_capture_retention: RequestCaptureRetention;
 }
 
 export type ApiKeyCreated = ApiKey;
@@ -166,6 +190,7 @@ export interface CreateApiKeyInput {
   model_redirects?: ModelRedirectRule[];
   reasoning_envelope_enabled?: boolean;
   request_capture_mode?: RequestCaptureMode;
+  request_capture_retention?: RequestCaptureRetention;
 }
 
 export interface UpdateApiKeyInput {
@@ -184,6 +209,7 @@ export interface UpdateApiKeyInput {
   model_redirects?: ModelRedirectRule[];
   reasoning_envelope_enabled?: boolean;
   request_capture_mode?: RequestCaptureMode;
+  request_capture_retention?: RequestCaptureRetention;
 }
 
 export interface SystemSettings {
@@ -218,7 +244,7 @@ export interface SystemSettings {
   monoize_extra_fields_whitelist: Record<string, string[]>;
   monoize_strip_cross_protocol_nested_extra: boolean;
   monoize_request_capture_enabled: boolean;
-  monoize_request_capture_retention_days: number;
+  monoize_request_capture_max_total_bytes: number;
   monoize_mask_sensitive_info: boolean;
   pricing_profile_model_patterns: PricingProfilePattern[];
   updated_at: string;
@@ -643,6 +669,8 @@ export interface CaptureAttempt {
   transformed_urp_request: unknown;
   upstream_request: unknown;
   downstream_response?: unknown;
+  /** URP non-stream reconstruction of a pass-through stream (RCD-D10a). */
+  reconstructed_urp_response?: unknown;
   downstream_sse_frames?: string[] | null;
   downstream_sse_frames_truncation?: CaptureFrameTruncation;
   transform_chain?: CaptureTransformChainEntry[] | null;
@@ -1097,6 +1125,36 @@ class ApiClient {
 
   async getTransformRegistry(): Promise<TransformRegistryItem[]> {
     return this.request("/transforms/registry");
+  }
+
+  async listCustomTransforms(): Promise<CustomTransform[]> {
+    const response = await this.request<{ transforms: CustomTransform[] }>(
+      "/custom-transforms"
+    );
+    return response.transforms;
+  }
+
+  async createCustomTransform(source: string): Promise<CustomTransform> {
+    return this.request("/custom-transforms", {
+      method: "POST",
+      body: JSON.stringify({ source }),
+    });
+  }
+
+  async updateCustomTransform(
+    id: string,
+    input: { source?: string; enabled?: boolean }
+  ): Promise<CustomTransform> {
+    return this.request(`/custom-transforms/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteCustomTransform(id: string): Promise<void> {
+    await this.request(`/custom-transforms/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   }
 
   async listModelMetadata(): Promise<ModelMetadataRecord[]> {

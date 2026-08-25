@@ -1,0 +1,101 @@
+---
+title: 自定义 JS 变换
+description: 管理员编写、在内嵌 QuickJS 沙箱中运行的 JavaScript 变换。
+---
+
+## 什么是自定义变换
+
+自定义变换是管理员在仪表盘中编写的 JavaScript 脚本。
+Monoize 在内嵌的 QuickJS 沙箱中运行脚本，脚本参与正常的变换管道。
+自定义变换像内置变换一样挂载到 Provider 链、全局链和 API 密钥链。
+
+每个自定义变换 ID 以固定前缀 `js:` 开头。
+完整 ID 必须由 `js:` 加小写字母、数字和单个连字符组成，例如 `js:strip-markers`。
+
+## 管理自定义变换
+
+在管理员侧边栏打开**自定义变换**页面。
+页面为每个变换显示一张卡片，包含名称、ID、描述、作者、阶段、范围和可见性。
+
+- **新建变换**打开带语法高亮、复制和格式化功能的代码编辑器。
+- 卡片上的启用开关可启用或禁用该变换。
+- **复制编写技能**将完整的编写指南复制到剪贴板。把它粘贴给 AI 助手即可生成脚本。
+
+`visibility: user` 允许非管理员把该变换挂到 API 密钥链。
+`visibility: admin`（默认值）只允许管理员挂载该变换。
+`GET /api/dashboard/transforms/registry` 需要管理员会话，并列出所有已启用的自定义变换。
+禁用或已删除的变换不会执行。仍引用它的链会将其跳过，不报错。
+
+## Frontmatter
+
+每个脚本以一个声明元数据的块注释开头：
+
+```js
+/**
+ * @monoize-transform
+ * id: js:example-rewrite
+ * name: Example Rewrite
+ * description: Rewrites request fields for demo.
+ * author: alice
+ * phase: request
+ * scopes: provider, global
+ * visibility: user
+ */
+```
+
+| 键 | 必填 | 允许的值 | 默认值 |
+| --- | --- | --- | --- |
+| `id` | 是 | `js:` 加小写字母、数字、连字符 | — |
+| `name` | 是 | 纯字符串，最多 100 字符 | — |
+| `description` | 是 | 纯字符串，最多 500 字符 | — |
+| `author` | 是 | 纯字符串，最多 100 字符 | — |
+| `phase` | 否 | `request`、`response`、`both` | `both` |
+| `scopes` | 否 | 逗号分隔：`provider`、`global`、`api_key` | 全部三个 |
+| `visibility` | 否 | `admin`、`user` | `admin` |
+
+保存时 Monoize 校验 frontmatter 并执行一次脚本。
+frontmatter 无效、脚本有语法错误或缺少 `transform` 函数时，保存被拒绝。
+
+## transform 函数
+
+脚本定义一个全局函数 `transform(ctx)`：
+
+```js
+function transform(ctx) {
+  if (ctx.config.target) {
+    ctx.data.model = ctx.config.target;
+  }
+}
+```
+
+- `ctx.phase` 为 `"request"` 或 `"response"`。
+- `ctx.kind` 为 `"request"`、`"response"` 或 `"stream"`。
+- `ctx.data` 是负载的 JSON 形式。可直接修改，也可返回替换对象。
+- `ctx.config` 是规则配置。声明全局 `configSchema` 对象后，链编辑器会渲染配置表单。
+- `ctx.state` 是请求级对象，在流事件之间保持。
+- 处理流事件时，返回 `null` 丢弃事件，返回数组则发出多个事件。
+
+`Monoize.fetch(url, options)` 发起 HTTP 请求并返回 `{ status, headers, body }`。
+`console.log`、`console.info`、`console.warn` 和 `console.error` 写入服务器日志。
+
+## 沙箱限制
+
+沙箱没有文件系统、进程、定时器和模块 API。
+网络访问只能通过 `Monoize.fetch`。
+脚本错误使当前请求以变换执行错误失败；代理进程继续运行。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `MONOIZE_CUSTOM_JS_MEMORY_LIMIT_BYTES` | `33554432` | 每次调用的内存上限 |
+| `MONOIZE_CUSTOM_JS_STACK_LIMIT_BYTES` | `1048576` | 每次调用的栈上限 |
+| `MONOIZE_CUSTOM_JS_TIMEOUT_MS` | `10000` | 每次调用的墙钟时间预算 |
+| `MONOIZE_CUSTOM_JS_MAX_CONCURRENCY` | `8` | 沙箱并发调用数 |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_BYTES` | `8388608` | fetch 响应体最大字节数 |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_CALLS` | `16` | 每次调用的 fetch 次数上限 |
+| `MONOIZE_CUSTOM_JS_SOURCE_MAX_BYTES` | `262144` | 脚本最大字节数 |
+
+## 挂载自定义变换
+
+已保存且启用的自定义变换出现在与内置变换相同的链编辑器中，按声明的阶段和范围过滤。
+像其他规则一样把它加入链、设置可选的模型通配符并配置。
+用[请求捕获](/zh/docs/request-logs)验证效果。

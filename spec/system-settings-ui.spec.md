@@ -27,11 +27,17 @@ these stable ids, in this order:
 | 05 | `redirects` | `settings.globalModelRedirects` | `global_model_redirects` |
 | 06 | `transforms` | `settings.globalTransforms` | `global_transforms` |
 | 07 | `affinity` | `settings.affinityRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds` |
-| 08 | `health` | `settings.healthMonitoring` | `monoize_active_probe_enabled`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_passive_min_samples`, `monoize_passive_failure_rate_threshold`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_capture_enabled`, `monoize_mask_sensitive_info`, `monoize_request_capture_retention_days`, `monoize_enable_estimated_billing`, `monoize_strip_cross_protocol_nested_extra`, `monoize_request_timeout_ms` |
+| 08 | `health` | `settings.healthMonitoring` | `monoize_active_probe_enabled`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_passive_min_samples`, `monoize_passive_failure_rate_threshold`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_capture_enabled`, `monoize_mask_sensitive_info`, `monoize_request_capture_max_total_bytes`, `monoize_enable_estimated_billing`, `monoize_strip_cross_protocol_nested_extra`, `monoize_request_timeout_ms` |
 | 09 | `extra` | `settings.extraFieldsWhitelist` | `monoize_extra_fields_whitelist` (sub-keys `chat_completion`, `responses`, `messages`, `gemini`) |
 
 SSU-2. Every field listed in SSU-1 MUST be editable through exactly one category panel.
 No field present in the pre-redesign page may become unreachable.
+
+SSU-2a. `monoize_request_capture_max_total_bytes` is edited through one integer input
+denominated in MiB: the displayed value is `round(bytes / 1048576)`, and an input value
+`v >= 0` writes `v * 1048576` to the draft. Input `0` writes `0` (no size budget,
+`request-capture-dumps.spec.md` RCD-C4). The field description MUST state that `0`
+disables the budget.
 
 SSU-3. `pricing_profile_model_patterns` and `updated_at` are not edited on this page.
 Save MUST pass them through unchanged from the current draft object.

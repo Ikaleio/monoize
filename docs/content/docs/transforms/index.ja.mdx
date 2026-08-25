@@ -55,6 +55,12 @@ Monoize には 33 個の組み込み変換があります。このセクショ�
 | ロール | メッセージロールの書き換え・結合 | `role_developer_to_system`、`role_merge_consecutive`、`role_system_to_developer` |
 | ストリーム | ストリーミング動作の制御 | `stream_force`、`stream_split_sse_frames` |
 
+## カスタム変換
+
+管理者は `js:` を ID プレフィックスとする JavaScript 変換も作成できます。
+組み込みの QuickJS サンドボックスで実行され、組み込み変換と同じチェーンに追加できます。
+詳細は[カスタム JS 変換](/ja/docs/transforms/custom-js)を参照してください。
+
 ## 変換の動作確認
 
 1. テスト用 API キーで[リクエストキャプチャ](/ja/docs/request-logs)を有効にします。

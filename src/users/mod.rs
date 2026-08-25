@@ -197,6 +197,8 @@ pub struct ApiKey {
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
     pub request_capture_mode: RequestCaptureMode,
+    #[serde(default)]
+    pub request_capture_retention: RequestCaptureRetention,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -206,6 +208,41 @@ pub enum RequestCaptureMode {
     Off,
     CaptureAll,
     CaptureOnlyAbnormal,
+}
+
+/// Per-key capture TTL (`request-capture-dumps.spec.md` RCD-C5a through RCD-C5c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RequestCaptureRetention {
+    #[serde(rename = "5m")]
+    FiveMinutes,
+    #[serde(rename = "1h")]
+    OneHour,
+    #[default]
+    #[serde(rename = "24h")]
+    OneDay,
+    #[serde(rename = "7d")]
+    SevenDays,
+}
+
+impl RequestCaptureRetention {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FiveMinutes => "5m",
+            Self::OneHour => "1h",
+            Self::OneDay => "24h",
+            Self::SevenDays => "7d",
+        }
+    }
+
+    /// RCD-C5c duration mapping.
+    pub fn duration_seconds(self) -> u64 {
+        match self {
+            Self::FiveMinutes => 300,
+            Self::OneHour => 3_600,
+            Self::OneDay => 86_400,
+            Self::SevenDays => 604_800,
+        }
+    }
 }
 
 impl RequestCaptureMode {
@@ -275,6 +312,8 @@ pub struct CreateApiKeyInput {
     pub reasoning_envelope_enabled: bool,
     #[serde(default)]
     pub request_capture_mode: RequestCaptureMode,
+    #[serde(default)]
+    pub request_capture_retention: RequestCaptureRetention,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,6 +475,7 @@ pub struct UpdateApiKeyInput {
     pub model_redirects: Option<Vec<ModelRedirectRule>>,
     pub reasoning_envelope_enabled: Option<bool>,
     pub request_capture_mode: Option<RequestCaptureMode>,
+    pub request_capture_retention: Option<RequestCaptureRetention>,
     pub expires_at: Option<String>, // RFC3339 format or null
 }
 
@@ -448,6 +488,10 @@ pub struct UserStore {
     pub(crate) balance_cache: crate::db_cache::BalanceCache,
     pub(crate) registration_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub(crate) api_key_creation_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// Enabled custom-transform snapshot used for CJS-AKV-2 rule checks.
+    /// The default handle resolves nothing, which rejects every `js:` rule
+    /// for non-admin callers.
+    pub(crate) custom_transforms: crate::custom_transforms::CustomTransformSnapshotHandle,
 }
 
 pub(crate) const RESERVED_INTERNAL_USER_PREFIX: &str = "_monoize_";

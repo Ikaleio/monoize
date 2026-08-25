@@ -61,7 +61,7 @@ pub struct SystemSettings {
     #[serde(default = "default_true")]
     pub monoize_strip_cross_protocol_nested_extra: bool,
     pub monoize_request_capture_enabled: bool,
-    pub monoize_request_capture_retention_days: u64,
+    pub monoize_request_capture_max_total_bytes: u64,
     #[serde(default = "default_true")]
     pub monoize_mask_sensitive_info: bool,
     pub monoize_affinity_enabled: bool,
@@ -124,6 +124,20 @@ pub fn normalize_pricing_model_key(
 
 fn default_true() -> bool {
     true
+}
+
+/// RCD-C4 (`request-capture-dumps.spec.md`): 1 GiB default capture size budget.
+pub const DEFAULT_REQUEST_CAPTURE_MAX_TOTAL_BYTES: u64 = 1_073_741_824;
+/// RCD-C4: smallest non-zero budget accepted by the settings store.
+pub const MIN_REQUEST_CAPTURE_MAX_TOTAL_BYTES: u64 = 1_048_576;
+
+/// RCD-C4: `0` disables the budget; non-zero values below 1 MiB persist 1 MiB.
+pub fn clamp_request_capture_max_total_bytes(value: u64) -> u64 {
+    if value == 0 {
+        0
+    } else {
+        value.max(MIN_REQUEST_CAPTURE_MAX_TOTAL_BYTES)
+    }
 }
 
 pub(crate) fn default_reasoning_suffix_map() -> HashMap<String, String> {
@@ -203,7 +217,7 @@ impl Default for SystemSettings {
             monoize_extra_fields_whitelist: HashMap::new(),
             monoize_strip_cross_protocol_nested_extra: true,
             monoize_request_capture_enabled: false,
-            monoize_request_capture_retention_days: 1,
+            monoize_request_capture_max_total_bytes: DEFAULT_REQUEST_CAPTURE_MAX_TOTAL_BYTES,
             monoize_mask_sensitive_info: true,
             monoize_affinity_enabled: true,
             monoize_affinity_idle_ttl_seconds: 30 * 60,
@@ -389,8 +403,8 @@ impl SettingsStore {
         )
         .await?;
         self.set_if_not_exists(
-            "monoize_request_capture_retention_days",
-            &defaults.monoize_request_capture_retention_days.to_string(),
+            "monoize_request_capture_max_total_bytes",
+            &defaults.monoize_request_capture_max_total_bytes.to_string(),
         )
         .await?;
         self.set_if_not_exists(
@@ -669,9 +683,13 @@ impl SettingsStore {
                 "monoize_request_capture_enabled" => {
                     settings.monoize_request_capture_enabled = row.value.parse().unwrap_or(false);
                 }
-                "monoize_request_capture_retention_days" => {
-                    settings.monoize_request_capture_retention_days =
-                        row.value.parse().unwrap_or(1);
+                "monoize_request_capture_max_total_bytes" => {
+                    settings.monoize_request_capture_max_total_bytes =
+                        clamp_request_capture_max_total_bytes(
+                            row.value
+                                .parse()
+                                .unwrap_or(DEFAULT_REQUEST_CAPTURE_MAX_TOTAL_BYTES),
+                        );
                 }
                 "monoize_mask_sensitive_info" => {
                     settings.monoize_mask_sensitive_info = row.value.parse().unwrap_or(true);
@@ -703,8 +721,8 @@ impl SettingsStore {
         let mut settings = settings.clone();
         canonicalize_transform_rules(&mut settings.global_transforms);
         canonicalize_codex_model_ids(&mut settings.codex_model_ids);
-        settings.monoize_request_capture_retention_days =
-            settings.monoize_request_capture_retention_days.max(1);
+        settings.monoize_request_capture_max_total_bytes =
+            clamp_request_capture_max_total_bytes(settings.monoize_request_capture_max_total_bytes);
         settings.monoize_affinity_idle_ttl_seconds =
             settings.monoize_affinity_idle_ttl_seconds.max(1);
         let values = vec![
@@ -817,11 +835,8 @@ impl SettingsStore {
                 settings.monoize_request_capture_enabled.to_string(),
             ),
             (
-                "monoize_request_capture_retention_days",
-                settings
-                    .monoize_request_capture_retention_days
-                    .max(1)
-                    .to_string(),
+                "monoize_request_capture_max_total_bytes",
+                settings.monoize_request_capture_max_total_bytes.to_string(),
             ),
             (
                 "monoize_mask_sensitive_info",

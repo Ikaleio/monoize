@@ -1,0 +1,101 @@
+---
+title: カスタム JS 変換
+description: 管理者が作成し、組み込み QuickJS サンドボックスで実行される JavaScript 変換。
+---
+
+## カスタム変換とは
+
+カスタム変換は、管理者がダッシュボードで作成する JavaScript スクリプトです。
+Monoize は組み込みの QuickJS サンドボックスでスクリプトを実行します。スクリプトは通常の変換パイプラインに参加します。
+カスタム変換は組み込み変換と同様に、Provider チェーン、グローバルチェーン、API キーチェーンに追加できます。
+
+すべてのカスタム変換 ID は固定プレフィックス `js:` で始まります。
+完全な ID は `js:` に小文字、数字、単一のハイフンを続けた形式です。例：`js:strip-markers`。
+
+## カスタム変換の管理
+
+管理者サイドバーの**カスタム変換**ページを開きます。
+ページは変換ごとに 1 枚のカードを表示します。カードには名前、ID、説明、作成者、フェーズ、スコープ、可視性が含まれます。
+
+- **新規変換**は、構文ハイライト、コピー、フォーマット機能付きのコードエディタを開きます。
+- カードの有効スイッチで変換を有効化または無効化します。
+- **作成スキルをコピー**は完全な作成ガイドをクリップボードにコピーします。AI アシスタントに貼り付けてスクリプトを生成できます。
+
+`visibility: user` は、非管理者がその変換を API キーチェーンに追加できることを意味します。
+`visibility: admin`（デフォルト）は、管理者だけが変換を追加できることを意味します。
+`GET /api/dashboard/transforms/registry` は管理者セッションを必須とし、有効なカスタム変換をすべて返します。
+無効化または削除された変換は実行されません。参照が残っているチェーンはエラーなしでスキップします。
+
+## Frontmatter
+
+各スクリプトは、メタデータを宣言するブロックコメントで始まります：
+
+```js
+/**
+ * @monoize-transform
+ * id: js:example-rewrite
+ * name: Example Rewrite
+ * description: Rewrites request fields for demo.
+ * author: alice
+ * phase: request
+ * scopes: provider, global
+ * visibility: user
+ */
+```
+
+| キー | 必須 | 許可される値 | デフォルト |
+| --- | --- | --- | --- |
+| `id` | はい | `js:` に小文字、数字、ハイフン | — |
+| `name` | はい | プレーン文字列、最大 100 文字 | — |
+| `description` | はい | プレーン文字列、最大 500 文字 | — |
+| `author` | はい | プレーン文字列、最大 100 文字 | — |
+| `phase` | いいえ | `request`、`response`、`both` | `both` |
+| `scopes` | いいえ | カンマ区切り：`provider`、`global`、`api_key` | 3 つすべて |
+| `visibility` | いいえ | `admin`、`user` | `admin` |
+
+保存時に Monoize は frontmatter を検証し、スクリプトを 1 回評価します。
+frontmatter が無効な場合、構文エラーがある場合、`transform` 関数がない場合、保存は拒否されます。
+
+## transform 関数
+
+スクリプトはグローバル関数 `transform(ctx)` を 1 つ定義します：
+
+```js
+function transform(ctx) {
+  if (ctx.config.target) {
+    ctx.data.model = ctx.config.target;
+  }
+}
+```
+
+- `ctx.phase` は `"request"` または `"response"` です。
+- `ctx.kind` は `"request"`、`"response"`、`"stream"` のいずれかです。
+- `ctx.data` はペイロードの JSON 形式です。直接変更するか、置換オブジェクトを返します。
+- `ctx.config` はルール設定です。グローバル `configSchema` オブジェクトを宣言すると、チェーンエディタが設定フォームを表示します。
+- `ctx.state` はリクエスト単位のオブジェクトで、ストリームイベント間で保持されます。
+- ストリームイベントでは、`null` を返すとイベントを破棄し、配列を返すと複数のイベントを送出します。
+
+`Monoize.fetch(url, options)` は HTTP リクエストを実行し、`{ status, headers, body }` を返します。
+`console.log`、`console.info`、`console.warn`、`console.error` はサーバーログに書き込みます。
+
+## サンドボックスの制限
+
+サンドボックスにはファイルシステム、プロセス、タイマー、モジュール API がありません。
+ネットワークアクセスは `Monoize.fetch` 経由のみです。
+スクリプトエラーは現在のリクエストを変換適用エラーで失敗させます。プロキシプロセスは継続します。
+
+| 環境変数 | デフォルト | 意味 |
+| --- | --- | --- |
+| `MONOIZE_CUSTOM_JS_MEMORY_LIMIT_BYTES` | `33554432` | 呼び出しごとのメモリ上限 |
+| `MONOIZE_CUSTOM_JS_STACK_LIMIT_BYTES` | `1048576` | 呼び出しごとのスタック上限 |
+| `MONOIZE_CUSTOM_JS_TIMEOUT_MS` | `10000` | 呼び出しごとの実時間バジェット |
+| `MONOIZE_CUSTOM_JS_MAX_CONCURRENCY` | `8` | サンドボックスの同時実行数 |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_BYTES` | `8388608` | fetch レスポンスの最大サイズ |
+| `MONOIZE_CUSTOM_JS_FETCH_MAX_CALLS` | `16` | 呼び出しごとの fetch 回数上限 |
+| `MONOIZE_CUSTOM_JS_SOURCE_MAX_BYTES` | `262144` | スクリプトの最大サイズ |
+
+## カスタム変換の追加
+
+保存済みで有効なカスタム変換は、組み込み変換と同じチェーンエディタに表示され、宣言したフェーズとスコープで絞り込まれます。
+他のルールと同様にチェーンへ追加し、任意のモデルグロブを設定し、設定を行います。
+[リクエストキャプチャ](/ja/docs/request-logs)で結果を確認します。

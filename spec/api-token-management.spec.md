@@ -31,6 +31,7 @@ An API key row has:
 - `max_multiplier: string?` (canonical positive base-10 decimal string)
 - `transforms: TransformRuleConfig[]`
 - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"`
+- `request_capture_retention: "5m" | "1h" | "24h" | "7d"` (capture TTL, `request-capture-dumps.spec.md` RCD-C5a)
 
 ### 1.2 Group-scoped routing fields
 
@@ -77,6 +78,8 @@ TM-STORAGE-3. `group_ids` compatibility is limited to TM-GRP-7. Any other malfor
 
 TM-STORAGE-4. A present, non-null `request_capture_mode` MUST equal `"off"`, `"capture-all"`, or `"capture-only-abnormal"`. Any other value or incompatible database type MUST fail the read instead of falling back to `request_capture_enabled` or `"off"`. An absent or null value retains the `"off"` compatibility behavior defined by `request-capture-dumps.spec.md` RCD-C8.
 
+TM-STORAGE-7. A present, non-null `request_capture_retention` MUST equal `"5m"`, `"1h"`, `"24h"`, or `"7d"`. Any other value or incompatible database type MUST fail the read. An absent or null value reads as `"24h"` (`request-capture-dumps.spec.md` RCD-C5b).
+
 TM-STORAGE-5. Every selected API-key and owning-user column MUST propagate an incompatible database type as a storage error. In particular, a failed `api_keys.key` decode MUST NOT become an empty token and a failed nullable `users.email` decode MUST NOT become null.
 
 TM-STORAGE-6. Every query that decodes a complete API-key record MUST select the owning user's role in the same point or set-based JOIN as `owner_role`. API-key row decoding MUST NOT issue a fallback user query when `owner_role` is absent, null, or malformed.
@@ -114,6 +117,7 @@ All endpoints in this spec require an authenticated dashboard session.
   - `max_multiplier: string?` (default null)
   - `transforms: TransformRuleConfig[]` (default empty)
   - `request_capture_mode: "off" | "capture-all" | "capture-only-abnormal"` (default `"off"`)
+  - `request_capture_retention: "5m" | "1h" | "24h" | "7d"` (default `"24h"`)
 - **Response:** The created key object including the full key string.
 
 TM-CREATE-1. The generated full key MUST start with the literal prefix `sk-`.
@@ -147,6 +151,7 @@ TM-CREATE-5. `POST /api/dashboard/tokens` MUST read only the `api_key_max_per_us
   - `max_multiplier`
   - `transforms`
   - `request_capture_mode`
+  - `request_capture_retention`
   - `expires_at` (RFC3339 string or null)
 - **Errors:** `404 not_found` if the key does not exist or is not owned by the user.
 
@@ -253,3 +258,5 @@ TM-Q2. Sub-account billing behavior is defined in `api-key-sub-account-billing.s
 TM-UI1. The create and edit dialogs MUST render `sub_account_balance_nano_usd` only when the authenticated user's role is `admin` or `super_admin`. The create control MUST accept only a non-negative integer; the edit control MUST accept a signed integer. The frontend MUST validate and submit its value as a decimal string using `BigInt`-equivalent integer arithmetic; it MUST NOT pass the value through JavaScript `Number`, `parseInt`, `parseFloat`, or `toFixed`. When an edit disables sub-account billing, the mutation MUST omit `sub_account_balance_nano_usd` so the server can consolidate the locked current balance.
 
 TM-UI2. A non-admin create or update mutation MUST omit `sub_account_balance_nano_usd` from its JSON request body.
+
+TM-UI3. The create and edit dialogs MUST render a `request_capture_retention` select with exactly the options `5m`, `1h`, `24h`, and `7d` (localized labels, stored values verbatim). The select MUST be rendered iff the dialog's `request_capture_mode` value is not `"off"`. When hidden, the mutation still submits the current draft value, so toggling the mode does not reset retention. The create dialog's initial value MUST be `"24h"`.

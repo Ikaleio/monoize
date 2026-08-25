@@ -329,7 +329,7 @@ pub struct MonoizeRuntimeConfig {
     pub extra_fields_whitelist: HashMap<String, Vec<String>>,
     pub strip_cross_protocol_nested_extra: bool,
     pub request_capture_enabled: bool,
-    pub request_capture_retention_days: u64,
+    pub request_capture_max_total_bytes: u64,
     pub mask_sensitive_info: bool,
     pub affinity_enabled: bool,
     pub affinity_idle_ttl_seconds: u64,
@@ -361,7 +361,8 @@ impl Default for MonoizeRuntimeConfig {
             extra_fields_whitelist: HashMap::new(),
             strip_cross_protocol_nested_extra: true,
             request_capture_enabled: false,
-            request_capture_retention_days: 1,
+            request_capture_max_total_bytes:
+                crate::settings::DEFAULT_REQUEST_CAPTURE_MAX_TOTAL_BYTES,
             mask_sensitive_info: true,
             affinity_enabled: true,
             affinity_idle_ttl_seconds: 30 * 60,
