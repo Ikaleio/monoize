@@ -236,6 +236,7 @@ Monoize can run as one writable primary plus read-only replicas. All nodes share
 | `MONOIZE_NODE_ROLE` | `primary` | `primary` or `replica` |
 | `MONOIZE_PRIMARY_INTERNAL_URL` | required on replicas | Base URL of the primary for metering shipment |
 | `MONOIZE_REPLICA_TOKEN` | unset | Shared secret: required on replicas; on a primary it enables the ingest endpoint |
+| `MONOIZE_REPLICA_ID` | auto-generated and persisted | Fixed replica identity (UUID v4). When unset, an identity is generated once and persisted as `replica-identity` inside the metering spool directory, so the ID survives restarts |
 | `MONOIZE_CONFIG_POLL_INTERVAL_SECONDS` | `5` | Replica config-epoch poll interval |
 | `MONOIZE_METERING_SHIP_INTERVAL_SECONDS` | `10` | Replica metering shipment interval |
 | `MONOIZE_METERING_SHIP_BATCH_MAX_ENTRIES` | `500` | Per-batch entry cap (hard cap 2000) |

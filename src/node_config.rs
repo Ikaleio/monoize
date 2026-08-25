@@ -23,6 +23,8 @@ pub struct NodeSettings {
     pub role: NodeRole,
     pub replica_primary_url: Option<String>,
     pub replica_token: Option<String>,
+    /// Optional fixed replica identity (`MONOIZE_REPLICA_ID`); validated per M9 on replicas.
+    pub replica_id: Option<String>,
     pub upstream_proxy_url: Option<String>,
     pub config_poll_interval: Duration,
     pub metering_ship_interval: Duration,
@@ -70,6 +72,7 @@ impl NodeSettings {
             role: NodeRole::Primary,
             replica_primary_url: None,
             replica_token: None,
+            replica_id: None,
             upstream_proxy_url: None,
             config_poll_interval: Duration::from_secs(DEFAULT_CONFIG_POLL_INTERVAL_SECONDS),
             metering_ship_interval: Duration::from_secs(DEFAULT_METERING_SHIP_INTERVAL_SECONDS),
@@ -107,6 +110,7 @@ impl NodeSettings {
 
         settings.replica_primary_url = get("MONOIZE_PRIMARY_INTERNAL_URL");
         settings.replica_token = get("MONOIZE_REPLICA_TOKEN");
+        settings.replica_id = get("MONOIZE_REPLICA_ID");
         settings.upstream_proxy_url = get("MONOIZE_UPSTREAM_PROXY_URL");
 
         if let Some(seconds) = positive_seconds(

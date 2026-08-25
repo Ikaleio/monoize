@@ -169,8 +169,14 @@ pub async fn get_admin_overview(
     }
     drop(health);
 
-    let stale_after_ms = (state.node.metering_ship_interval.as_millis() as i64).saturating_mul(3);
+    let stale_after_ms = (state.node.metering_ship_interval.as_millis() as i64)
+        .saturating_mul(crate::replica::metering::HEARTBEAT_STALE_INTERVALS as i64);
     let now_unix_ms = now.timestamp_millis();
+    crate::replica::metering::evict_expired_heartbeats(
+        &state.replica_heartbeats,
+        now_unix_ms,
+        state.node.metering_ship_interval,
+    );
     let mut replicas: Vec<Value> = state
         .replica_heartbeats
         .iter()
