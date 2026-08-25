@@ -47,10 +47,12 @@ RA-M2b. After each Linux build, the workflow MUST inspect the executable's ELF p
 RA-M2c. Each Linux build MUST select the matching musl GCC linker: `x86_64-unknown-linux-musl-gcc` for `x86_64-unknown-linux-musl`, or `aarch64-unknown-linux-musl-gcc` for `aarch64-unknown-linux-musl`. Cargo MUST use `scripts/musl-linker.sh` as the target linker and provide the matching GCC command through `MONOIZE_MUSL_LINKER`. The wrapper MUST apply these ordered rewrites and execute the selected GCC command:
 
 1. Replace every exact `-Wl,-Bdynamic` argument with `-Wl,-Bstatic`.
-2. Replace every exact `-lstdc++` argument with `-Wl,--start-group -lstdc++ -lc -Wl,--end-group`.
-3. Preserve the order and bytes of every other argument.
+2. On x86-64, replace every exact `-lstdc++` argument with `-Wl,--start-group -lstdc++ -lc -Wl,--end-group`.
+3. On ARM64, replace every exact `-lstdc++` argument with `-Wl,--start-group -lstdc++ -lc -lgcc -Wl,--end-group`.
+4. Reject `MONOIZE_MUSL_STATIC_LIBGCC` unless it equals `true` or `false` when present.
+5. Preserve the order and bytes of every other argument.
 
-The first rewrite MUST prevent a dependency build script from overriding static linkage by declaring a dynamic native library. The second rewrite MUST let the static C++ runtime resolve its musl libc references even when rustc placed the original libc input earlier in the link command.
+The first rewrite MUST prevent a dependency build script from overriding static linkage by declaring a dynamic native library. The second and third rewrites MUST let the static C++ runtime resolve its musl libc references even when rustc placed the original libc input earlier in the link command. The ARM64 group MUST provide the GCC outline-atomics helpers referenced by the builder image's static C++ runtime.
 
 RA-M2d. Each Linux build MUST pass `-C target-feature=+crt-static -C link-arg=-static -C link-arg=-static-libstdc++` through target Rust flags. Together with RA-M2c, these settings MUST prevent the executable from depending on a host GNU libc, musl libc, or `libstdc++.so.6` shared library.
 
