@@ -172,9 +172,9 @@ impl CustomTransformStore {
             .read()
             .query_all(self.db.stmt(
                 &format!(
-                    "SELECT {SELECT_COLUMNS} FROM custom_transforms WHERE enabled = 1 ORDER BY id ASC"
+                    "SELECT {SELECT_COLUMNS} FROM custom_transforms WHERE enabled = $1 ORDER BY id ASC"
                 ),
-                vec![],
+                vec![sea_orm::Value::from(true)],
             ))
             .await
             .map_err(|e| e.to_string())?;
@@ -236,7 +236,6 @@ impl CustomTransformStore {
     ) -> Result<CustomTransformRecord, CustomTransformError> {
         let validated = validate_source_for_save(&source, None).await?;
         let now = Utc::now().to_rfc3339();
-        let enabled_i: i32 = if enabled { 1 } else { 0 };
 
         let write_guard = self.db.write().await;
         let txn = write_guard
@@ -255,7 +254,7 @@ impl CustomTransformStore {
                     validated.meta.description.clone().into(),
                     validated.meta.author.clone().into(),
                     source.clone().into(),
-                    enabled_i.into(),
+                    sea_orm::Value::from(enabled),
                     validated.meta.visibility.as_str().into(),
                     validated.phases_json.clone().into(),
                     validated.scopes_json.clone().into(),
@@ -336,9 +335,8 @@ impl CustomTransformStore {
             }
         }
         if let Some(enabled) = enabled {
-            let enabled_i: i32 = if enabled { 1 } else { 0 };
             set_clauses.push(format!("enabled = ${idx}"));
-            values.push(enabled_i.into());
+            values.push(sea_orm::Value::from(enabled));
             idx += 1;
         }
         set_clauses.push(format!("updated_at = ${idx}"));
@@ -458,8 +456,23 @@ async fn validate_source_for_save(
     })
 }
 
+fn decode_enabled(row: &sea_orm::QueryResult) -> Result<bool, String> {
+    // CJS-DB-1 stores BOOLEAN. PostgreSQL returns bool; SQLite BOOLEAN is INTEGER 0/1.
+    if let Ok(value) = row.try_get::<bool>("", "enabled") {
+        return Ok(value);
+    }
+    match row.try_get::<i32>("", "enabled") {
+        Ok(0) => Ok(false),
+        Ok(1) => Ok(true),
+        Ok(value) => Err(format!(
+            "invalid persisted enabled: expected boolean or 0/1, got {value}"
+        )),
+        Err(error) => Err(format!("invalid persisted enabled: {error}")),
+    }
+}
+
 fn row_to_record(row: &sea_orm::QueryResult) -> Result<CustomTransformRecord, String> {
-    let enabled_i: i32 = row.try_get("", "enabled").map_err(|e| e.to_string())?;
+    let enabled = decode_enabled(row)?;
     let visibility_raw: String = row.try_get("", "visibility").map_err(|e| e.to_string())?;
     let visibility = CustomTransformVisibility::parse(&visibility_raw)
         .ok_or_else(|| format!("invalid persisted visibility: {visibility_raw:?}"))?;
@@ -484,7 +497,7 @@ fn row_to_record(row: &sea_orm::QueryResult) -> Result<CustomTransformRecord, St
         description: row.try_get("", "description").map_err(|e| e.to_string())?,
         author: row.try_get("", "author").map_err(|e| e.to_string())?,
         source: row.try_get("", "source").map_err(|e| e.to_string())?,
-        enabled: enabled_i == 1,
+        enabled,
         visibility,
         phases,
         scopes,
@@ -663,5 +676,22 @@ function transform(ctx) {
             .await
             .expect("creates");
         assert_eq!(record.config_schema, default_config_schema());
+    }
+
+    #[tokio::test]
+    async fn snapshot_reload_uses_boolean_enabled_predicate() {
+        let (_db, store) = test_store().await;
+        store
+            .create(VALID_SOURCE.to_string(), true)
+            .await
+            .expect("creates");
+        store.reload().await.expect("reloads enabled snapshot");
+        assert!(store.snapshot().get("js:test-rewrite").is_some());
+        store
+            .update("js:test-rewrite", None, Some(false))
+            .await
+            .expect("disables");
+        store.reload().await.expect("reloads after disable");
+        assert!(store.snapshot().get("js:test-rewrite").is_none());
     }
 }

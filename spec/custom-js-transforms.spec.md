@@ -137,6 +137,10 @@ the single source of truth; a save MUST rewrite every derived column.
 CJS-DB-3. `enabled` is store-level state toggled through the API and is not part of the
 frontmatter.
 
+CJS-DB-4. Runtime SQL MUST bind and compare `enabled` as a boolean. Integer literals
+`0` and `1` in an `enabled` predicate are forbidden: PostgreSQL `BOOLEAN` rejects
+`boolean = integer`.
+
 ## 5. Admin API
 
 All four endpoints require an authenticated session whose user role passes the same
